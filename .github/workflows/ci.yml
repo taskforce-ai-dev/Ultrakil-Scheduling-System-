@@ -139,7 +139,7 @@ jobs:
           echo "No environment files tracked."
       - name: Fail if the real workforce workbook is tracked
         run: |
-          tracked=$(git ls-files -- 'data/*.xlsx' 'data/*.xls' 'data/*.csv' | grep -v 'example' || true)
+          tracked=$(git ls-files -- 'data/*.xlsx' 'data/*.xls' 'data/*.csv' 'data/matrix-mapping.json' 'data/job-types.json' | grep -v 'example' || true)
           if [ -n "$tracked" ]; then
             echo "::error::Real workforce data is committed: $tracked"
             exit 1

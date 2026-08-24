@@ -1,3 +1,13 @@
+# Requires CPython 3.11 (3.12 and 3.13 also work).
+#
+# Do NOT use Python 3.14+. These pinned versions have no pre-built wheels for
+# it, so pip tries to compile pydantic-core from Rust source and fails with
+# "linker `link.exe` not found". Create the virtual environment with an
+# explicit version instead of whatever `python` happens to point at:
+#
+#   Windows:        py -3.11 -m venv .venv
+#   macOS / Linux:  python3.11 -m venv .venv
+#
 fastapi==0.115.12
 uvicorn[standard]==0.34.0
 pydantic==2.11.1

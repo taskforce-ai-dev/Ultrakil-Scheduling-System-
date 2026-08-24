@@ -1,0 +1,40 @@
+{
+  "_comment": [
+    "Copy to data/matrix-mapping.json and edit. The real file is git-ignored.",
+    "Every key is optional — anything omitted falls back to the defaults in",
+    "apps/api/src/workforce/matrix-import/mapping.ts.",
+    "Run `pnpm db:seed -- --inspect` to see how the workbook is being read."
+  ],
+
+  "sheetName": null,
+
+  "permanentSiteBranches": {
+    "_comment": [
+      "REQUIRED for permanently stationed staff. The workbook gives them a",
+      "site but never a branch, and the importer refuses to guess: staff may",
+      "only serve their own branch, so a wrong guess here puts the wrong crew",
+      "on a real job. Any site missing from this map is reported and skipped.",
+      "Confirm each one with UltraKIL before filling it in."
+    ],
+    "AuseeOats": "COLOMBO",
+    "Wattura resort": "COLOMBO",
+    "Jetwin Blue/Beach": "COLOMBO",
+    "Maththala Airport": "COLOMBO",
+    "Lion Brewery": "COLOMBO",
+    "Logipark International": "COLOMBO"
+  },
+
+  "columns": {
+    "fullName": ["NAME OF TECHNICIAN"],
+    "designation": ["DESIGNATION"],
+    "stationLocation": ["STATION LOCATION"],
+    "sourceNumber": ["NO"]
+  },
+
+  "vehicleGroups": [
+    "PUBLIC VEHICLES",
+    "PERSONAL",
+    "TRANSPORT COMPANY",
+    "RENT"
+  ]
+}

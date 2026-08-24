@@ -1,3 +1,23 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# Dependencies allowed to run install scripts.
+#
+# pnpm 10 blocks lifecycle scripts by default — a sensible guard, since an
+# install script runs arbitrary code from a transitive dependency. These four
+# genuinely need theirs: Prisma downloads its query engine binaries, esbuild
+# fetches its platform binary, and msgpackr-extract builds a native addon.
+# Without this, `prisma generate` fails with "@prisma/client did not initialize".
+#
+# Note @scarf/scarf is deliberately absent. It is install analytics and nothing
+# depends on its script running.
+#
+# This lives here rather than in package.json because pnpm 10.33 stopped
+# reading the "pnpm" field from package.json.
+onlyBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - esbuild
+  - msgpackr-extract
+  - prisma

@@ -13,6 +13,22 @@ services:
       - '${POSTGRES_PORT:-5432}:5432'
     volumes:
       - ultrakil_postgres_data:/var/lib/postgresql/data
+    # Tuned down for development laptops. PostgreSQL ships with server defaults
+    # that assume far more RAM than a dev machine can spare. Phase 1 uses a
+    # handful of connections and a small dataset, so these are generous.
+    command:
+      - postgres
+      - '-c'
+      - 'max_connections=20'
+      - '-c'
+      - 'shared_buffers=64MB'
+      - '-c'
+      - 'work_mem=2MB'
+      - '-c'
+      - 'maintenance_work_mem=32MB'
+      - '-c'
+      - 'effective_cache_size=256MB'
+    mem_limit: 384m
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ultrakil} -d ${POSTGRES_DB:-ultrakil}']
       interval: 5s
@@ -23,17 +39,32 @@ services:
     image: redis:7-alpine
     container_name: ultrakil-redis
     restart: unless-stopped
-    command: ['redis-server', '--appendonly', 'yes']
+    # noeviction is deliberate: Redis holds BullMQ's job state. Evicting keys
+    # under memory pressure would silently drop scheduling jobs. Better to fail
+    # loudly than to lose a schedule run.
+    command:
+      - redis-server
+      - '--appendonly'
+      - 'yes'
+      - '--maxmemory'
+      - '96mb'
+      - '--maxmemory-policy'
+      - 'noeviction'
     ports:
       - '${REDIS_PORT:-6379}:6379'
     volumes:
       - ultrakil_redis_data:/data
+    mem_limit: 128m
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # NOT started by `pnpm dev:infra` — that runs only postgres and redis, to keep
+  # laptop memory use down. Run the scheduler natively with `pnpm dev:scheduler`.
+  # This service is here for the server deployment (ULK-C08) and for anyone who
+  # prefers containers. Start it explicitly with `docker compose up scheduler`.
   scheduler:
     build:
       context: ./services/scheduler
