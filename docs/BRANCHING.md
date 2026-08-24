@@ -112,27 +112,68 @@ Delete the branch afterwards.
 
 ## Branch protection settings for `main`
 
-The Project Lead configures these once, under
-**Settings → Branches → Add branch ruleset** (or *Add classic branch protection rule*)
-for `main`:
+The Project Lead configures this once, under
+**Settings → Rules → Rulesets → New branch ruleset**.
 
-| Setting | Value |
+| Field | Value |
 | --- | --- |
+| Ruleset Name | `main-protection` |
+| Enforcement status | **Active** |
+| Bypass list | **leave empty** |
+| Target branches | Add target → **Include default branch** |
+
+> **The bypass list is the setting that matters most.** Every collaborator on
+> this repository has *admin* permission. An empty bypass list is the only thing
+> that makes these rules apply to admins as well — add anyone to it and they can
+> push straight to `main`, which makes the whole ruleset decorative.
+>
+> **Enforcement status is the one people forget.** A ruleset left *Disabled*
+> looks fully configured and enforces nothing.
+
+### Branch rules to enable
+
+| Rule | Setting |
+| --- | --- |
+| Restrict deletions | ✅ *(on by default)* |
+| Block force pushes | ✅ *(on by default)* |
 | Require a pull request before merging | ✅ |
-| Required approvals | **1** |
-| Dismiss stale approvals when new commits are pushed | ✅ |
-| Require review from Code Owners | ✅ |
-| Require status checks to pass before merging | ✅ |
-| Required checks | `API (build, test, contract)`, `Scheduler service (Python)`, `Secret scan` |
-| Require branches to be up to date before merging | ✅ |
-| Require conversation resolution before merging | ✅ |
-| Block force pushes | ✅ |
-| Restrict deletions | ✅ |
-| Do not allow bypassing the above settings | ✅ |
+| — Required approvals | **1** |
+| — Dismiss stale pull request approvals when new commits are pushed | ✅ |
+| — Require approval of the most recent reviewable push | ✅ |
+| — Require conversation resolution before merging | ✅ |
+| — Require review from Code Owners | ❌ **leave off** — see below |
+| Require status checks to pass | ✅ |
+| — Required checks | `API (build, test, contract)`, `Scheduler service (Python)`, `Secret scan` |
+| — Require branches to be up to date before merging | ✅ |
 
-> **Important:** every collaborator on this repository currently has *admin*
-> permission. Without **"Do not allow bypassing the above settings"** ticked,
-> admins can push straight to `main` and the protection is decorative. Tick it.
+The required status check names only appear in the picker after CI has run at
+least once, so create the ruleset once the first pull request has run its checks.
 
-The required status check names only appear in the dropdown after CI has run at
-least once, so configure protection right after the first pull request opens.
+### Why "Require review from Code Owners" stays off
+
+It sounds like exactly what we want, and it would deadlock the Project Lead's
+own pull requests.
+
+`CODEOWNERS` makes `@cha-she` the owner of `apps/api`, `services/scheduler`,
+`packages/api-contracts` and the repository root. GitHub does not accept a pull
+request's author as a valid code-owner reviewer. So on any pull request Chanya
+authors touching her own folders — which is most of them — the requirement can
+never be satisfied and the merge button stays disabled permanently.
+
+Nothing is lost by leaving it off. `CODEOWNERS` still requests the right
+reviewer automatically, and **Required approvals: 1** combined with **Require
+approval of the most recent reviewable push** already guarantees that somebody
+other than the author approved the work.
+
+Revisit this if a second owner is ever added to the backend paths.
+
+### Rules to leave off, and why
+
+| Rule | Reason |
+| --- | --- |
+| Restrict creations | Would block creating new branches |
+| **Restrict updates** | Does not mean what it sounds like — it would block merging pull requests too |
+| Require linear history | Unnecessary friction; squash-merge already keeps `main` clean |
+| Require signed commits | Needs GPG keys configured for everyone first |
+| Require merge queue / Require deployments to succeed | Overkill for a two-developer team |
+| Code scanning / code quality / code coverage / Copilot review | Not configured on this repository |
