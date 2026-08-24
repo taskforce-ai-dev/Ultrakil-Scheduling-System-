@@ -5,7 +5,7 @@
 - `main` is protected. Nobody pushes to it directly, ever.
 - One ClickUp task = one branch = one pull request.
 - Chanya reviews and merges Oshadi's pull requests.
-- Chanya's own pull requests need **Thivarrakesh's** approval before merge.
+- Chanya merges her own pull requests herself — no second approval needed.
 - No merge with failing checks, unresolved review comments, or undocumented
   schema/API changes.
 
@@ -91,8 +91,11 @@ staff names in a commit message.
 
 | Author | Reviewer | Merged by |
 | --- | --- | --- |
-| Oshadi | Chanya | Chanya |
-| Chanya | Thivarrakesh | Chanya, after approval |
+| Oshadi | **Chanya** — approval required before merge | Chanya |
+| Chanya | None required | Chanya |
+
+Chanya still opens a pull request for her own work and still waits for green
+CI. What she skips is the second pair of eyes, not the process.
 
 A pull request may only be merged when **all** of these hold:
 
@@ -112,60 +115,101 @@ Delete the branch afterwards.
 
 ## Branch protection settings for `main`
 
-The Project Lead configures this once, under
-**Settings → Rules → Rulesets → New branch ruleset**.
+Configured under **Settings → Rules → Rulesets → New branch ruleset**.
+
+We use **two rulesets**, not one. GitHub applies "Required approvals" to a
+*branch*, not to a particular author, so a single ruleset cannot say "one
+approval for Oshadi's pull requests, none for Chanya's". But a bypass list is
+evaluated **per ruleset**, and where several rulesets target the same branch
+GitHub applies the strictest combination of what is left. Splitting the rules
+across two rulesets is what lets Chanya skip the review requirement while
+staying bound by everything else.
+
+| | `main-baseline` | `main-review` |
+| --- | --- | --- |
+| Applies to | **everyone** | Oshadi (and anyone not bypassed) |
+| Bypass list | **empty** | `cha-she` |
+| Effect | Pull request required, CI must pass, no direct or force pushes | One approving review required |
+
+The result:
+
+| | Direct push to `main` | Green CI | Approval needed | Can merge own work |
+| --- | --- | --- | --- | --- |
+| Oshadi | blocked | required | **1 — from Chanya** | no |
+| Chanya | blocked | required | none | yes |
+
+### Ruleset 1 — `main-baseline`
 
 | Field | Value |
 | --- | --- |
-| Ruleset Name | `main-protection` |
+| Ruleset Name | `main-baseline` |
 | Enforcement status | **Active** |
 | Bypass list | **leave empty** |
 | Target branches | Add target → **Include default branch** |
 
-> **The bypass list is the setting that matters most.** Every collaborator on
-> this repository has *admin* permission. An empty bypass list is the only thing
-> that makes these rules apply to admins as well — add anyone to it and they can
-> push straight to `main`, which makes the whole ruleset decorative.
->
-> **Enforcement status is the one people forget.** A ruleset left *Disabled*
-> looks fully configured and enforces nothing.
-
-### Branch rules to enable
+Branch rules:
 
 | Rule | Setting |
 | --- | --- |
 | Restrict deletions | ✅ *(on by default)* |
 | Block force pushes | ✅ *(on by default)* |
 | Require a pull request before merging | ✅ |
-| — Required approvals | **1** |
-| — Dismiss stale pull request approvals when new commits are pushed | ✅ |
-| — Require approval of the most recent reviewable push | ✅ |
+| — Required approvals | **0** |
 | — Require conversation resolution before merging | ✅ |
 | — Require review from Code Owners | ❌ **leave off** — see below |
 | Require status checks to pass | ✅ |
 | — Required checks | `API (build, test, contract)`, `Scheduler service (Python)`, `Secret scan` |
 | — Require branches to be up to date before merging | ✅ |
 
-The required status check names only appear in the picker after CI has run at
-least once, so create the ruleset once the first pull request has run its checks.
+Required approvals is **0** here on purpose. This ruleset's job is "a pull
+request, with green checks, and no direct pushes" — the part that binds
+everybody including the Project Lead. Review is ruleset 2's job.
+
+> **The empty bypass list is the point.** Every collaborator on this repository
+> has *admin* permission. An empty bypass list is the only thing that makes
+> these rules apply to admins as well — put anyone in it and they can push
+> straight to `main`, which makes the whole ruleset decorative.
+>
+> **Enforcement status is the one people forget.** A ruleset left *Disabled*
+> looks fully configured and enforces nothing.
+
+### Ruleset 2 — `main-review`
+
+| Field | Value |
+| --- | --- |
+| Ruleset Name | `main-review` |
+| Enforcement status | **Active** |
+| Bypass list | **add `cha-she`** (Role/User → Chanya) |
+| Target branches | Add target → **Include default branch** |
+
+Branch rules — tick **only** this one:
+
+| Rule | Setting |
+| --- | --- |
+| Require a pull request before merging | ✅ |
+| — Required approvals | **1** |
+| — Dismiss stale pull request approvals when new commits are pushed | ✅ |
+| — Require approval of the most recent reviewable push | ✅ |
+
+Leave every other rule in this ruleset unticked. Anything ticked here is
+something Chanya would bypass, and the only thing she should bypass is the
+review requirement.
 
 ### Why "Require review from Code Owners" stays off
 
-It sounds like exactly what we want, and it would deadlock the Project Lead's
-own pull requests.
+It sounds like exactly what we want, and it would deadlock Chanya's own pull
+requests.
 
 `CODEOWNERS` makes `@cha-she` the owner of `apps/api`, `services/scheduler`,
 `packages/api-contracts` and the repository root. GitHub does not accept a pull
 request's author as a valid code-owner reviewer. So on any pull request Chanya
-authors touching her own folders — which is most of them — the requirement can
-never be satisfied and the merge button stays disabled permanently.
+authors touching her own folders — which is most of them — the requirement
+could never be satisfied.
 
 Nothing is lost by leaving it off. `CODEOWNERS` still requests the right
-reviewer automatically, and **Required approvals: 1** combined with **Require
-approval of the most recent reviewable push** already guarantees that somebody
-other than the author approved the work.
-
-Revisit this if a second owner is ever added to the backend paths.
+reviewer automatically, and on Oshadi's pull requests **Required approvals: 1**
+combined with **Require approval of the most recent reviewable push** already
+guarantees somebody other than the author approved the work.
 
 ### Rules to leave off, and why
 
@@ -177,3 +221,27 @@ Revisit this if a second owner is ever added to the backend paths.
 | Require signed commits | Needs GPG keys configured for everyone first |
 | Require merge queue / Require deployments to succeed | Overkill for a two-developer team |
 | Code scanning / code quality / code coverage / Copilot review | Not configured on this repository |
+
+### Checking it actually works
+
+After creating both rulesets, confirm the arrangement rather than assuming it:
+
+1. Open a throwaway pull request into `main` from any branch. It should show
+   **"Review required"** and a blocked merge button.
+2. On one of Chanya's own pull requests, the merge button should be enabled once
+   CI is green, with no reviewer needed.
+3. `git push origin main` from any account should be **rejected**. If it
+   succeeds, the bypass list on `main-baseline` is not empty, or a ruleset is
+   still *Disabled*.
+
+Step 3 is the one worth actually running. It is the difference between
+protection that works and protection that only looks configured.
+
+### If the review rule stops being followed
+
+The single-approval requirement on Oshadi's pull requests is enforced by
+GitHub. Chanya's self-merge is enforced by nothing but judgement — there is no
+second reviewer to catch a mistake in backend or scheduling code. If a change
+is large, touches a hard scheduling rule, or changes the database schema, ask
+Thivarrakesh for a review anyway. The ruleset permits self-merge; it does not
+require it.

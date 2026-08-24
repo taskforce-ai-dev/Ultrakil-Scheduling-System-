@@ -144,5 +144,7 @@ to the **Unassigned queue with a clear reason**.
 | **Oshadi Kumaravel** (@Oshadi2005) | Manager portal developer |
 | **Thivarrakesh Parthipan** (@thiva2k) | Project Supervisor |
 
-Chanya reviews and merges Oshadi's pull requests. Chanya's own pull requests
-require Thivarrakesh's approval before merge — no self-approved implementation work.
+Chanya reviews and merges Oshadi's pull requests. As Project Lead and
+repository owner, Chanya merges her own pull requests without a second
+approval — but they still go through a pull request and still need green CI.
+Nobody pushes to `main` directly.
