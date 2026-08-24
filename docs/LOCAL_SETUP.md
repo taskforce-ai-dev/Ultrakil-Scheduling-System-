@@ -148,6 +148,71 @@ local environment.
 
 ---
 
+## Running on a machine with limited RAM
+
+Docker is used for **two containers only** — PostgreSQL and Redis. `pnpm dev:infra`
+starts exactly those; the scheduler service is not containerised for development,
+it runs natively with `pnpm dev:scheduler`.
+
+Both containers are tuned down in `docker-compose.yml` rather than left on
+their defaults, which assume a server:
+
+| Container | Memory cap | Notes |
+| --- | --- | --- |
+| `postgres` | 384 MB | 20 connections, 64 MB shared buffers |
+| `redis` | 128 MB | 96 MB max data, `noeviction` |
+
+Together they idle at roughly **150–200 MB**. The larger cost on Windows is not
+the containers — it is the WSL2 virtual machine Docker Desktop runs them in,
+which will grow to consume half your RAM unless you cap it.
+
+### Cap WSL2 memory (the setting that actually matters)
+
+Create `C:\Users\<you>\.wslconfig`:
+
+```ini
+[wsl2]
+memory=3GB
+processors=2
+swap=2GB
+```
+
+Then apply it from PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Restart Docker Desktop. 3 GB is comfortable for both containers with room to
+spare; drop to 2 GB if you need to, and raise it if PostgreSQL starts refusing
+connections.
+
+### Trim Docker Desktop itself
+
+In **Settings**:
+
+- **General** → untick *Start Docker Desktop when you log in* (start it only when working)
+- **Kubernetes** → confirm it is **off** (it is by default; it costs ~1 GB if on)
+- **Extensions** → untick *Enable Docker Extensions*
+
+### Free memory while working
+
+- Stop the containers when you finish for the day: `pnpm dev:infra:down`
+- Quit Docker Desktop entirely when not developing
+- You do not need every service running at once. Working on the API alone?
+  Skip `pnpm dev:scheduler` — `/api/health/ready` will report `scheduler: down`,
+  which is correct and harmless.
+
+### If Docker still will not fit
+
+Install PostgreSQL 16 natively from postgresql.org and Redis via
+[Memurai](https://www.memurai.com/) (Redis has no official Windows build), then
+point `DATABASE_URL`, `REDIS_HOST` and `REDIS_PORT` in your `.env` at them.
+This uses less memory than Docker Desktop, at the cost of more setup and a
+higher chance that your machine and the server behave differently.
+
+---
+
 ## Common problems
 
 **`pnpm dev:infra` fails with "Cannot connect to the Docker daemon"**
