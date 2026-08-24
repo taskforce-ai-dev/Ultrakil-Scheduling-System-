@@ -11,7 +11,9 @@ constraint model lands with **ULK-C06**.
 ```bash
 cd services/scheduler
 
-python -m venv .venv
+# Use an explicit 3.11 — bare `python` may be a newer version that has no
+# pre-built wheels for our pinned dependencies. See requirements.txt.
+python3.11 -m venv .venv           # Windows: py -3.11 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt -r requirements-dev.txt

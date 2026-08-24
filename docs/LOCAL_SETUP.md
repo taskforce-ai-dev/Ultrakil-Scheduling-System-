@@ -12,7 +12,7 @@ preview in the browser. Written for Windows, with notes for macOS and Linux.
 | [Git](https://git-scm.com/downloads) | any recent | Git Bash on Windows is a comfortable shell for these commands |
 | [Node.js](https://nodejs.org/) | **22 LTS** | `node -v` should print `v22.x` |
 | pnpm | **10** | `npm install -g pnpm` |
-| [Python](https://www.python.org/downloads/) | **3.11** | Tick *"Add Python to PATH"* in the Windows installer |
+| [Python](https://www.python.org/downloads/) | **3.11** (3.12/3.13 ok, **not 3.14**) | Tick *"Add Python to PATH"* in the Windows installer. If you already have a newer Python, install 3.11 alongside it and use `py -3.11` |
 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | latest | Must be **running** before `pnpm dev:infra` |
 
 Verify everything at once:
@@ -62,8 +62,14 @@ For the Python scheduling service:
 
 ```bash
 cd services/scheduler
-python -m venv .venv
 
+# Create the environment with an EXPLICIT version, not bare `python`.
+# Windows
+py -3.11 -m venv .venv
+# macOS / Linux
+python3.11 -m venv .venv
+
+# Activate it
 # Windows
 .venv\Scripts\activate
 # macOS / Linux
@@ -72,6 +78,17 @@ source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 cd ../..
 ```
+
+> **Use Python 3.11, not 3.14.** Bare `python` points at whichever version you
+> installed last. Our pinned FastAPI and Pydantic versions ship pre-built wheels
+> only up to CPython 3.13; on 3.14 pip falls back to compiling `pydantic-core`
+> from Rust source and fails with ``linker `link.exe` not found``. That error
+> looks like a missing C++ compiler, but the real cause is the Python version.
+> CI and the server both run 3.11 — match them.
+>
+> Check what you created: `python --version` after activating should print
+> `3.11.x`. If it prints something else, delete `.venv` and recreate it with
+> `py -3.11`.
 
 ---
 

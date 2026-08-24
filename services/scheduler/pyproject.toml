@@ -2,7 +2,11 @@
 name = "ultrakil-scheduler"
 version = "0.1.0"
 description = "UltraKIL scheduling service — constraint solving for visit assignment"
-requires-python = ">=3.11"
+# Upper bound is deliberate. Our pinned FastAPI/Pydantic versions publish
+# pre-built wheels only up to CPython 3.13. On 3.14+, pip falls back to
+# compiling pydantic-core from Rust source, which needs the MSVC toolchain and
+# fails on a normal Windows dev machine. CI and the server both run 3.11.
+requires-python = ">=3.11,<3.14"
 
 [tool.ruff]
 line-length = 100
