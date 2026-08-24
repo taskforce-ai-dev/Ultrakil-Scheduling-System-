@@ -200,6 +200,42 @@ describe('parseMatrix — refusing to guess', () => {
   });
 });
 
+describe('permanently stationed staff use the confirmed site branches', () => {
+  // Confirmed by UltraKIL (24 Aug 2026): every stationed site in the current
+  // matrix is Colombo. These run against DEFAULT_MAPPING rather than the test
+  // mapping, so they fail if the built-in list is ever emptied.
+  const stationedGrid = (site: string): Grid => [
+    ['', '', '', '', '', 'Fumigations'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'MBr Fumigation'],
+    ['Station Technicians at Serveral Location at permanen', '1', 'Someone', site, 'SPMS', '✓'],
+  ];
+
+  it.each([
+    'AuseeOats',
+    'Wattura resort',
+    'Jetwin Blue/Beach',
+    'Maththala Airport',
+    'Lion Brewery',
+    'Logipark International',
+  ])('places %s in the Colombo branch', (site) => {
+    const result = parseMatrix(stationedGrid(site), DEFAULT_MAPPING);
+
+    expect(result.issues).toEqual([]);
+    expect(result.employees).toHaveLength(1);
+    expect(result.employees[0].branchCode).toBe(BranchCode.COLOMBO);
+    expect(result.employees[0].isPermanentlyStationed).toBe(true);
+    expect(result.employees[0].permanentSiteName).toBe(site);
+  });
+
+  it('still refuses to guess for a site nobody has confirmed', () => {
+    const result = parseMatrix(stationedGrid('Brand New Site'), DEFAULT_MAPPING);
+
+    expect(result.employees).toEqual([]);
+    expect(result.issues[0].code).toBe('MATRIX_BRANCH_UNKNOWN');
+    expect(result.issues[0].message).toContain('Brand New Site');
+  });
+});
+
 describe('buildSourceKey', () => {
   it('is stable across spacing and casing differences', () => {
     expect(buildSourceKey('A  Perera', BranchCode.COLOMBO)).toBe(

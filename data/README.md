@@ -19,27 +19,49 @@ in git history.
 | `matrix-mapping.example.json` | Yes | Template for the above, with comments. |
 | `job-types.json` | No (optional) | Job type reference data taken from the signed proposal. |
 
-## Two things the workbook does not say
+## Two things the workbook does not say — both now answered
 
-The importer reports these rather than guessing, because a wrong guess here
-becomes a wrong crew on a real job.
+The workbook leaves two questions open. The importer never guesses at either;
+it reports them. Both were confirmed with UltraKIL on **24 August 2026** and the
+answers are built into the defaults, so no configuration is needed for the
+current matrix.
 
 **1. Which branch a permanently stationed employee belongs to.** Rows under
-*"Station Technicians at Serveral Location at permanen"* give a site — AuseeOats,
-Wattura resort, Jetwin Blue/Beach, Maththala Airport, Lion Brewery, Logipark
-International — but never a branch. Staff may only serve their own branch, so
-the importer will not infer one. Map each site in `matrix-mapping.json` (see
-`matrix-mapping.example.json`); any site left unmapped is reported and skipped.
+*"Station Technicians at Serveral Location at permanen"* give a site but never a
+branch. **Confirmed: all of them are Colombo.** These sites are built in:
 
-**2. Whether every designation is a PMS grade.** The rule names Senior PMS, PMS,
+| Site | Branch |
+| --- | --- |
+| AuseeOats | COLOMBO |
+| Wattura resort | COLOMBO |
+| Jetwin Blue/Beach | COLOMBO |
+| Maththala Airport | COLOMBO |
+| Lion Brewery | COLOMBO |
+| Logipark International | COLOMBO |
+
+A **new** site added to the workbook is still reported and skipped until someone
+confirms its branch — staff may only serve their own branch, and a wrong guess
+puts the wrong crew on a real job. Add new sites to `permanentSiteBranches` in
+`matrix-mapping.json`, or to the defaults in
+`apps/api/src/workforce/matrix-import/mapping.ts`.
+
+**2. Whether every designation is a PMS grade.** The rules name Senior PMS, PMS,
 Assistant PMS, SPMS and APMS. The workbook also contains *"Pest Management
-Executive"*, which is not on that list, so it is currently treated as
-**non-supervisory**. If that person should be able to supervise a job, say so
-and it gets added — but promoting an unrecognised grade automatically would let
-a job pass the PMS-supervisor rule without a real supervisor on the crew.
+Executive"*. **Confirmed: the executive is not a PMS grade** — a crew still needs
+one of the five above, and the executive does not satisfy that requirement.
 
-Every run lists the designations it did not count as PMS grades, so this stays
-visible rather than buried.
+The workbook's own spellings are recognised, including its typo:
+
+| In the workbook | Counted as PMS? |
+| --- | --- |
+| `Senoir PMS` *(the workbook's spelling)* | ✅ yes |
+| `Pest Management Supervisor(PMS)` | ✅ yes |
+| `Assistant PMS`, `SPMS`, `APMS` | ✅ yes |
+| `Pest Management Executive` | ❌ no |
+| `Senior/Junior Pest Management Teschnician`, `PMT`, `JPMT`, `JPMT-New` | ❌ no |
+
+Every run still lists the designations it did not count, so a grade added to the
+workbook later cannot slip through unnoticed.
 
 ## Setting it up
 
