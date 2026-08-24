@@ -11,6 +11,12 @@
  * promoting an unknown grade to supervisor would weaken a hard rule.
  */
 
+/**
+ * Confirmed by UltraKIL (24 Aug 2026): "Pest Management Executive" is NOT a
+ * PMS grade. The executive does not satisfy a job's supervisor requirement —
+ * a crew still needs one of the five grades below. Do not add it here.
+ */
+
 /** Canonical grade labels, in the wording used by the project rules. */
 export const PMS_GRADE_LABELS = [
   'Senior PMS',

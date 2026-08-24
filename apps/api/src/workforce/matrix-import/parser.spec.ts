@@ -200,6 +200,122 @@ describe('parseMatrix — refusing to guess', () => {
   });
 });
 
+describe('a three-row header block, as in the real workbook', () => {
+  /**
+   * The real matrix stacks its header three rows deep: group names on the
+   * first ("Fumigations", "Transport"), a sub-group on the second ("Personal"),
+   * and the actual column names on the third. The identity columns are merged
+   * down all three, so once merges are resolved they repeat.
+   *
+   * Reading only the first row named every vehicle column "Transport" — so no
+   * vehicle was ever recognised — and treated rows 2 and 3 of the header as an
+   * employee called "Name Of Technician".
+   */
+  const grid: Grid = [
+    // Row 1 — identity headers (merged down), group names.
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Fumigations', 'Fumigations', 'Transport', 'Transport'],
+    // Row 2 — identity repeats (merged), vehicle ownership sub-groups.
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      '', '', 'Public Vehicles', 'Personal'],
+    // Row 3 — identity repeats, the real column names.
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'MBr Fumigation', 'Phosphin Fumigation',
+      'Van( 04 People) 253-4289', 'Motor Bike( 01 Person) BJG 4419'],
+    // Data.
+    ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓', '✓', ''],
+    ['', '2', 'B Silva', '', 'Junior PMT', '', '✓', '', '✓'],
+  ];
+
+  const result = parseMatrix(grid, DEFAULT_MAPPING);
+
+  it('treats the whole block as header, not as employees', () => {
+    expect(result.headerRowNumber).toBe(3);
+    expect(result.employees.map((e) => e.fullName)).toEqual([
+      'A Perera',
+      'B Silva',
+    ]);
+    expect(
+      result.employees.some((e) => e.fullName === 'Name Of Technician'),
+    ).toBe(false);
+  });
+
+  it('takes each column name from the deepest header row', () => {
+    expect(result.skillColumns.map((c) => c.label)).toEqual([
+      'MBr Fumigation',
+      'Phosphin Fumigation',
+    ]);
+  });
+
+  it('recognises the vehicle columns that the group row hid', () => {
+    expect(result.vehicleColumns.map((c) => c.label)).toEqual([
+      'Van( 04 People) 253-4289',
+      'Motor Bike( 01 Person) BJG 4419',
+    ]);
+    expect(result.vehicles.map((v) => [v.code, v.seatCapacity])).toEqual([
+      ['253-4289', 4],
+      ['BJG 4419', 1],
+    ]);
+  });
+
+  it('keeps the full group path for each vehicle', () => {
+    expect(result.vehicles[0].ownershipGroup).toContain('Transport');
+    expect(result.vehicles[0].ownershipGroup).toContain('Public Vehicles');
+  });
+
+  it('still reads checkmarks against the right people', () => {
+    const perera = result.employees.find((e) => e.fullName === 'A Perera');
+    expect(perera?.skills.map((s) => s.skillCode)).toEqual([
+      'MBR_FUMIGATION',
+      'PHOSPHIN_FUMIGATION',
+    ]);
+    expect(perera?.vehicles).toEqual([{ vehicleCode: '253-4289' }]);
+
+    const silva = result.employees.find((e) => e.fullName === 'B Silva');
+    expect(silva?.vehicles).toEqual([{ vehicleCode: 'BJG 4419' }]);
+  });
+
+  it('reports no issues for a well-formed workbook', () => {
+    expect(result.issues).toEqual([]);
+  });
+});
+
+describe('permanently stationed staff use the confirmed site branches', () => {
+  // Confirmed by UltraKIL (24 Aug 2026): every stationed site in the current
+  // matrix is Colombo. These run against DEFAULT_MAPPING rather than the test
+  // mapping, so they fail if the built-in list is ever emptied.
+  const stationedGrid = (site: string): Grid => [
+    ['', '', '', '', '', 'Fumigations'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'MBr Fumigation'],
+    ['Station Technicians at Serveral Location at permanen', '1', 'Someone', site, 'SPMS', '✓'],
+  ];
+
+  it.each([
+    'AuseeOats',
+    'Wattura resort',
+    'Jetwin Blue/Beach',
+    'Maththala Airport',
+    'Lion Brewery',
+    'Logipark International',
+  ])('places %s in the Colombo branch', (site) => {
+    const result = parseMatrix(stationedGrid(site), DEFAULT_MAPPING);
+
+    expect(result.issues).toEqual([]);
+    expect(result.employees).toHaveLength(1);
+    expect(result.employees[0].branchCode).toBe(BranchCode.COLOMBO);
+    expect(result.employees[0].isPermanentlyStationed).toBe(true);
+    expect(result.employees[0].permanentSiteName).toBe(site);
+  });
+
+  it('still refuses to guess for a site nobody has confirmed', () => {
+    const result = parseMatrix(stationedGrid('Brand New Site'), DEFAULT_MAPPING);
+
+    expect(result.employees).toEqual([]);
+    expect(result.issues[0].code).toBe('MATRIX_BRANCH_UNKNOWN');
+    expect(result.issues[0].message).toContain('Brand New Site');
+  });
+});
+
 describe('buildSourceKey', () => {
   it('is stable across spacing and casing differences', () => {
     expect(buildSourceKey('A  Perera', BranchCode.COLOMBO)).toBe(

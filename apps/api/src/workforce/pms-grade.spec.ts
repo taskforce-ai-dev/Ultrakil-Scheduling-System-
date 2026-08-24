@@ -55,6 +55,13 @@ describe('isPmsGradeLabel', () => {
     },
   );
 
+  it('does not treat Pest Management Executive as a PMS grade', () => {
+    // Confirmed by UltraKIL (24 Aug 2026). The executive does not satisfy a
+    // job's supervisor requirement — a crew still needs one of the five PMS
+    // grades. This test exists so the decision cannot be quietly reversed.
+    expect(isPmsGradeLabel('Pest Management Executive')).toBe(false);
+  });
+
   it('does not guess at unknown grades', () => {
     // An unfamiliar grade must not be promoted to supervisor — that would let a
     // job pass the "needs a PMS supervisor" rule without a real supervisor.

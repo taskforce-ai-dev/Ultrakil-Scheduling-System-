@@ -36,9 +36,10 @@ export interface MatrixMapping {
   /**
    * Branch for permanently stationed staff, keyed by their site name.
    *
-   * The workbook does not state a branch for these people — it only gives the
-   * site. Rather than guess, the importer reports any site missing from this
-   * map and skips those rows. Fill it in once the client confirms.
+   * The workbook gives these people a site but never a branch, and the importer
+   * will not infer one — staff may only serve their own branch, so a wrong
+   * guess puts the wrong crew on a real job. Any site missing from this map is
+   * reported and its rows skipped.
    */
   permanentSiteBranches: Record<string, BranchCode>;
 
@@ -76,9 +77,20 @@ export const DEFAULT_MAPPING: MatrixMapping = {
     permanentMarkers: ['PERMANEN', 'STATION TECHNICIA'],
   },
 
-  // Deliberately empty. See the doc comment above — these must be confirmed,
-  // not guessed. `data/matrix-mapping.json` is where they get filled in.
-  permanentSiteBranches: {},
+  // Confirmed by UltraKIL (24 Aug 2026): every permanently stationed site in
+  // the current matrix belongs to the Colombo branch. Spellings are taken
+  // verbatim from the workbook's "Station Location" column, typos included.
+  //
+  // A new site added to the workbook will NOT be guessed at — it will be
+  // reported and skipped until it is added here or to data/matrix-mapping.json.
+  permanentSiteBranches: {
+    AuseeOats: BranchCode.COLOMBO,
+    'Wattura resort': BranchCode.COLOMBO,
+    'Jetwin Blue/Beach': BranchCode.COLOMBO,
+    'Maththala Airport': BranchCode.COLOMBO,
+    'Lion Brewery': BranchCode.COLOMBO,
+    'Logipark International': BranchCode.COLOMBO,
+  },
 
   checkmarkValues: ['✓', '✔', 'V', 'X', 'YES', 'Y', 'TRUE', '1', '√'],
 };

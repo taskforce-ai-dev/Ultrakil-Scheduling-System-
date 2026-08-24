@@ -35,8 +35,8 @@ export function parseMatrix(
 ): ParsedMatrix {
   const issues: ImportIssue[] = [];
 
-  const headerRowIndex = findHeaderRow(grid, mapping);
-  if (headerRowIndex === -1) {
+  const identityRowIndex = findIdentityRow(grid, mapping);
+  if (identityRowIndex === -1) {
     return {
       employees: [],
       vehicles: [],
@@ -54,18 +54,29 @@ export function parseMatrix(
     };
   }
 
-  const headerRow = grid[headerRowIndex];
-  const groupLabels = buildGroupLabels(grid, headerRowIndex);
-
-  const identity = locateIdentityColumns(headerRow, mapping);
+  const identityRow = grid[identityRowIndex];
+  const identity = locateIdentityColumns(identityRow, mapping);
   if (identity.fullName === -1 || identity.designation === -1) {
     issues.push({
       code: 'MATRIX_COLUMN_MISSING',
-      message: `Header row ${headerRowIndex + 1} is missing a required column. Found: ${headerRow
+      message: `Header row ${identityRowIndex + 1} is missing a required column. Found: ${identityRow
         .filter(Boolean)
         .join(' | ')}`,
     });
   }
+
+  // The header is a block, not a line. In the real workbook the identity
+  // columns are merged down three rows while the group headings sit on the
+  // first of them and the actual column names on the last — so "Transport"
+  // sits above "Van( 04 People) 253-4289". Reading only the first row would
+  // name every vehicle column "Transport" and treat rows inside the header as
+  // employees.
+  const headerBottomIndex = findHeaderBottom(grid, identityRowIndex, identity);
+  const { headerRow, groupLabels } = buildHeaderBlock(
+    grid,
+    identityRowIndex,
+    headerBottomIndex,
+  );
 
   const { skillColumns, vehicleColumns } = classifyColumns(
     headerRow,
@@ -87,7 +98,7 @@ export function parseMatrix(
 
   let currentSection = '';
 
-  for (let r = headerRowIndex + 1; r < grid.length; r += 1) {
+  for (let r = headerBottomIndex + 1; r < grid.length; r += 1) {
     const row = grid[r] ?? [];
     const rowNumber = r + 1;
 
@@ -198,7 +209,7 @@ export function parseMatrix(
   if (employees.length === 0) {
     issues.push({
       code: 'MATRIX_NO_ROWS',
-      message: `No employee rows were read below header row ${headerRowIndex + 1}.`,
+      message: `No employee rows were read below header row ${headerBottomIndex + 1}.`,
     });
   }
 
@@ -209,7 +220,7 @@ export function parseMatrix(
     vehicleColumns,
     issues,
     unrecognisedGrades: [...unrecognisedGrades].sort(),
-    headerRowNumber: headerRowIndex + 1,
+    headerRowNumber: headerBottomIndex + 1,
   };
 }
 
@@ -224,7 +235,7 @@ export function buildSourceKey(fullName: string, branch: BranchCode): string {
   return `${branch}:${normalizeHeader(fullName).replace(/ /g, '_')}`;
 }
 
-function findHeaderRow(grid: Grid, mapping: MatrixMapping): number {
+function findIdentityRow(grid: Grid, mapping: MatrixMapping): number {
   const wanted = (candidates: string[], row: string[]) =>
     row.some((cell) => candidates.includes(normalizeHeader(cell)));
 
@@ -241,25 +252,84 @@ function findHeaderRow(grid: Grid, mapping: MatrixMapping): number {
 }
 
 /**
- * Group headings sit on the rows above the column headers and are merged across
- * their columns, so only the first cell carries text. Forward-fill so every
- * column knows which group it belongs to.
+ * Finds the last row of the header block.
+ *
+ * The identity columns are merged down the whole block, so once merges are
+ * resolved every row in it repeats the same "Name Of Technician" text. That
+ * repetition is the signal: keep descending while it holds. Capped so a
+ * workbook with a stray repeated value cannot swallow the data.
  */
-function buildGroupLabels(grid: Grid, headerRowIndex: number): string[] {
-  const width = Math.max(...grid.map((row) => row.length), 0);
-  const labels: string[] = new Array(width).fill('');
+function findHeaderBottom(
+  grid: Grid,
+  identityRowIndex: number,
+  identity: IdentityColumns,
+): number {
+  if (identity.fullName === -1) return identityRowIndex;
 
-  for (let r = Math.max(0, headerRowIndex - 3); r < headerRowIndex; r += 1) {
+  const headerText = normalizeHeader(
+    grid[identityRowIndex]?.[identity.fullName] ?? '',
+  );
+  if (!headerText) return identityRowIndex;
+
+  const maxDepth = Math.min(identityRowIndex + 5, grid.length - 1);
+  let bottom = identityRowIndex;
+
+  while (bottom < maxDepth) {
+    const next = normalizeHeader(grid[bottom + 1]?.[identity.fullName] ?? '');
+    if (next !== headerText) break;
+    bottom += 1;
+  }
+
+  return bottom;
+}
+
+/**
+ * Flattens the header block into one label per column, plus the group headings
+ * above each.
+ *
+ * The label is the *deepest* non-empty cell in the block — the most specific
+ * heading, which is the one that names the column. Everything above it is
+ * group context: "Transport" over "Personal" over the registration. Both are
+ * needed, because a column is recognised as a vehicle either by its group or by
+ * a capacity in its own title.
+ *
+ * Values are forward-filled across each row as a fallback for headings that are
+ * visually grouped but not actually merged, which the reader cannot resolve.
+ */
+function buildHeaderBlock(
+  grid: Grid,
+  topIndex: number,
+  bottomIndex: number,
+): { headerRow: string[]; groupLabels: string[] } {
+  const width = Math.max(...grid.map((row) => row.length), 0);
+  const startIndex = Math.max(0, topIndex - 2);
+
+  const filledRows: string[][] = [];
+  for (let r = startIndex; r <= bottomIndex; r += 1) {
     const row = grid[r] ?? [];
+    const filled: string[] = new Array(width).fill('');
     let carried = '';
     for (let c = 0; c < width; c += 1) {
       const cell = (row[c] ?? '').trim();
       if (cell) carried = cell;
-      if (carried) labels[c] = carried;
+      filled[c] = carried;
     }
+    filledRows.push(filled);
   }
 
-  return labels;
+  const headerRow: string[] = new Array(width).fill('');
+  const groupLabels: string[] = new Array(width).fill('');
+
+  for (let c = 0; c < width; c += 1) {
+    const stack = filledRows
+      .map((row) => row[c])
+      .filter((value, index, all) => value && value !== all[index - 1]);
+
+    headerRow[c] = stack.length ? stack[stack.length - 1] : '';
+    groupLabels[c] = stack.slice(0, -1).join(' / ');
+  }
+
+  return { headerRow, groupLabels };
 }
 
 interface IdentityColumns {
