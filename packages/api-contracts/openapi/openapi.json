@@ -1,0 +1,285 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/health/live": {
+      "get": {
+        "description": "Returns 200 as long as the API process is running. Checks no dependencies, so an orchestrator will not restart the API just because the database is briefly down.",
+        "operationId": "HealthController_live",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/health/ready": {
+      "get": {
+        "description": "Checks PostgreSQL, the BullMQ/Redis connection and the Python scheduling service. Returns 200 when all are up and 503 when any is down; the body names the failing dependency and how to fix it.",
+        "operationId": "HealthController_ready",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "At least one dependency is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/meta": {
+      "get": {
+        "description": "Single source of truth for the enums and error codes the manager portal needs. Consuming this endpoint means the portal never hard-codes a list that the backend might change.",
+        "operationId": "MetaController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetaResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Shared vocabulary for clients",
+        "tags": [
+          "meta"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "UltraKIL Scheduling API",
+    "description": "Phase 1 pilot API for UltraKIL scheduling and dispatching.\n\nHard rules enforced by this API:\n- Colombo staff serve Colombo work only; Kandy staff serve Kandy work only.\n- Permanently stationed staff are never moved away from their site.\n- Every job carries at least one PMS-grade supervisor.\n- A vehicle may only be driven by an employee authorised for it.\n- Allowed service days are hard constraints; preferred days are preferences.\n\nWork that cannot satisfy every hard rule stays in the Unassigned queue\nwith an explanation. Hard rules are never relaxed to fill a schedule.\n\nErrors always carry a stable `code`. Clients must branch on `code`,\nnever on `message`.",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes"
+    },
+    {
+      "name": "meta",
+      "description": "Shared vocabulary: enums, grades and error codes"
+    }
+  ],
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local development"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "LivenessResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ],
+            "example": "ok"
+          },
+          "checkedAt": {
+            "type": "string",
+            "example": "2026-08-24T04:15:00.000Z"
+          }
+        },
+        "required": [
+          "status",
+          "checkedAt"
+        ]
+      },
+      "DependencyHealthDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "example": "up",
+            "description": "Whether this dependency answered its probe."
+          },
+          "responseTimeMs": {
+            "type": "number",
+            "description": "Round-trip time of the probe, in milliseconds.",
+            "example": 4
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable error code when the dependency is down.",
+            "example": "DATABASE_UNAVAILABLE"
+          },
+          "message": {
+            "type": "string",
+            "description": "Actionable explanation of how to fix it.",
+            "example": "Cannot reach PostgreSQL. Start it with \"pnpm dev:infra\" and confirm DATABASE_URL in your .env."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Probe-specific extra information."
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "HealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ],
+            "example": "ok",
+            "description": "\"ok\" when every dependency is up; \"degraded\" when at least one is down. A degraded result is served with HTTP 503."
+          },
+          "checkedAt": {
+            "type": "string",
+            "example": "2026-08-24T04:15:00.000Z"
+          },
+          "uptimeSeconds": {
+            "type": "number",
+            "example": 1423.5,
+            "description": "Process uptime in seconds."
+          },
+          "dependencies": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DependencyHealthDto"
+            },
+            "description": "One entry per checked dependency: \"database\", \"queue\" and \"scheduler\"."
+          }
+        },
+        "required": [
+          "status",
+          "checkedAt",
+          "uptimeSeconds",
+          "dependencies"
+        ]
+      },
+      "MetaResponseDto": {
+        "type": "object",
+        "properties": {
+          "apiVersion": {
+            "type": "string",
+            "example": "0.1.0",
+            "description": "API package version."
+          },
+          "timezone": {
+            "type": "string",
+            "example": "Asia/Colombo",
+            "description": "Timezone all scheduling dates and service windows are expressed in."
+          },
+          "branchCodes": {
+            "example": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Branches. Staff may only serve work in their own branch — this is a hard rule.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "weekdays": {
+            "example": [
+              "MONDAY",
+              "TUESDAY"
+            ],
+            "description": "Weekday vocabulary used by allowed and preferred day rules.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pmsGradeLabels": {
+            "example": [
+              "Senior PMS",
+              "PMS",
+              "Assistant PMS",
+              "SPMS",
+              "APMS"
+            ],
+            "description": "Grades that satisfy the \"every job needs at least one PMS-grade supervisor\" rule.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "frequencyUnits": {
+            "type": "object",
+            "example": {
+              "WEEK": "visits per week",
+              "MONTH": "visits per month"
+            },
+            "description": "Frequency units available on a service agreement.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "errorCodes": {
+            "example": [
+              "VALIDATION_FAILED",
+              "NO_PMS_SUPERVISOR_AVAILABLE"
+            ],
+            "description": "Every stable error code the API can return. Clients must branch on these, never on message text.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "apiVersion",
+          "timezone",
+          "branchCodes",
+          "weekdays",
+          "pmsGradeLabels",
+          "frequencyUnits",
+          "errorCodes"
+        ]
+      }
+    }
+  }
+}
