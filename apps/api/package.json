@@ -17,7 +17,7 @@
     "lint": "eslint \"{src,test,scripts,prisma}/**/*.ts\" --max-warnings 0",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --config jest.config.js --selectProjects unit",
-    "test:integration": "jest --config jest.config.js --selectProjects integration --runInBand",
+    "test:integration": "node scripts/with-env.mjs jest --config jest.config.js --selectProjects integration --runInBand",
     "db:status": "node scripts/with-env.mjs prisma migrate status"
   },
   "prisma": {

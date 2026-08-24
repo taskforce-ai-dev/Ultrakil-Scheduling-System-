@@ -6,7 +6,10 @@ module.exports = {
       preset: 'ts-jest',
       testEnvironment: 'node',
       rootDir: '.',
-      testMatch: ['<rootDir>/src/**/*.spec.ts', '<rootDir>/test/unit/**/*.spec.ts'],
+      testMatch: [
+        '<rootDir>/src/**/*.spec.ts',
+        '<rootDir>/test/unit/**/*.spec.ts',
+      ],
       moduleFileExtensions: ['ts', 'js', 'json'],
     },
     {
@@ -16,7 +19,7 @@ module.exports = {
       rootDir: '.',
       testMatch: ['<rootDir>/test/integration/**/*.spec.ts'],
       moduleFileExtensions: ['ts', 'js', 'json'],
-      testTimeout: 60000,
+      setupFilesAfterEnv: ['<rootDir>/test/integration/jest.setup.ts'],
     },
   ],
 };
