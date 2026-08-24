@@ -63,6 +63,46 @@ describe('parseVehicleHeader', () => {
       seatCapacity: null,
     });
   });
+
+  it('rejects a heading with no registration in it', () => {
+    // "Public Vehicles" is a tick column in the real workbook, not a vehicle.
+    // Accepting it would create a vehicle record named after a group heading.
+    expect(parseVehicleHeader('Public Vehicles')).toEqual({
+      code: null,
+      seatCapacity: null,
+    });
+    expect(parseVehicleHeader('Transport')).toEqual({
+      code: null,
+      seatCapacity: null,
+    });
+  });
+});
+
+describe('a vehicle group column with no registration', () => {
+  const grid: Grid = [
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Transport', 'Transport'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Public Vehicles', 'Van( 04 People) 253-4289'],
+    ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓'],
+  ];
+
+  const result = parseMatrix(grid, DEFAULT_MAPPING);
+
+  it('does not invent a vehicle from the group heading', () => {
+    expect(result.vehicles.map((v) => v.code)).toEqual(['253-4289']);
+  });
+
+  it('says which column it ignored, rather than dropping it silently', () => {
+    const issue = result.issues.find(
+      (i) => i.code === 'MATRIX_VEHICLE_NO_REGISTRATION',
+    );
+    expect(issue?.message).toContain('Public Vehicles');
+  });
+
+  it('still authorises the employee for the real vehicle', () => {
+    expect(result.employees[0].vehicles).toEqual([{ vehicleCode: '253-4289' }]);
+  });
 });
 
 describe('parseMatrix', () => {

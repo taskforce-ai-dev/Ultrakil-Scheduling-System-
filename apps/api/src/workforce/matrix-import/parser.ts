@@ -304,16 +304,23 @@ function buildHeaderBlock(
   const width = Math.max(...grid.map((row) => row.length), 0);
   const startIndex = Math.max(0, topIndex - 2);
 
+  const rawRows: string[][] = [];
   const filledRows: string[][] = [];
+
   for (let r = startIndex; r <= bottomIndex; r += 1) {
     const row = grid[r] ?? [];
+    const raw: string[] = new Array(width).fill('');
     const filled: string[] = new Array(width).fill('');
     let carried = '';
+
     for (let c = 0; c < width; c += 1) {
       const cell = (row[c] ?? '').trim();
+      raw[c] = cell;
       if (cell) carried = cell;
       filled[c] = carried;
     }
+
+    rawRows.push(raw);
     filledRows.push(filled);
   }
 
@@ -321,12 +328,22 @@ function buildHeaderBlock(
   const groupLabels: string[] = new Array(width).fill('');
 
   for (let c = 0; c < width; c += 1) {
-    const stack = filledRows
-      .map((row) => row[c])
-      .filter((value, index, all) => value && value !== all[index - 1]);
+    // The label comes from the raw block only. The reader has already resolved
+    // merged cells, so a column blank all the way down really is blank — and
+    // taking a forward-filled value here would give it its neighbour's name,
+    // silently duplicating a column.
+    const rawStack = rawRows.map((row) => row[c]).filter(Boolean);
+    headerRow[c] = rawStack.length ? rawStack[rawStack.length - 1] : '';
 
-    headerRow[c] = stack.length ? stack[stack.length - 1] : '';
-    groupLabels[c] = stack.slice(0, -1).join(' / ');
+    // Group context tolerates the forward fill: it is only used to help spot
+    // vehicle columns, and headings that are visually grouped but not actually
+    // merged are common in this workbook.
+    const groupStack = filledRows
+      .map((row) => row[c])
+      .filter((value, index, all) => value && value !== all[index - 1])
+      .filter((value) => value !== headerRow[c]);
+
+    groupLabels[c] = groupStack.join(' / ');
   }
 
   return { headerRow, groupLabels };
