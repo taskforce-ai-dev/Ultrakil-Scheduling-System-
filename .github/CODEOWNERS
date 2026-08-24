@@ -1,0 +1,23 @@
+# UltraKIL Phase 1 — code ownership
+#
+# A pull request touching a path below automatically requests a review from its
+# owner. Do not modify another developer's owned paths without the Project Lead
+# recording the reason in the ClickUp task and approving the change.
+#
+#   Chanya Shehani      @cha-she     Project Lead, backend, scheduler, contract
+#   Oshadi Kumaravel    @Oshadi2005  Manager portal
+#   Thivarrakesh        @thiva2k     Project Supervisor
+
+# Default owner: Project Lead
+*                           @cha-she
+
+# Backend, scheduling service, migrations and the shared contract — Chanya
+/apps/api/                  @cha-she
+/services/scheduler/        @cha-she
+/packages/api-contracts/    @cha-she
+/docker-compose.yml         @cha-she
+/.github/                   @cha-she
+
+# Manager portal — Oshadi
+/apps/manager-web/          @Oshadi2005
+/docs/manager/              @Oshadi2005

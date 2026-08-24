@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment — never commit real secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Prisma
+apps/api/prisma/*.db
+apps/api/prisma/*.db-journal
+
+# Test / coverage
+coverage/
+.nyc_output/
+junit.xml
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local workforce data — real staff data must not be committed
+data/*.xlsx
+data/*.xls
+data/*.csv
+!data/README.md
+!data/technician-matrix.example.csv
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*

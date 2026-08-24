@@ -1,0 +1,55 @@
+name: ultrakil
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ultrakil-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ultrakil}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ultrakil_local_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-ultrakil}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - ultrakil_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ultrakil} -d ${POSTGRES_DB:-ultrakil}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ultrakil-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - ultrakil_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scheduler:
+    build:
+      context: ./services/scheduler
+      dockerfile: Dockerfile
+    container_name: ultrakil-scheduler
+    restart: unless-stopped
+    environment:
+      SCHEDULER_PORT: 8000
+    ports:
+      - '${SCHEDULER_PORT:-8000}:8000'
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ultrakil_postgres_data:
+  ultrakil_redis_data:
