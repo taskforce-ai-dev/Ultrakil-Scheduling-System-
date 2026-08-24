@@ -1,0 +1,692 @@
+// =============================================================================
+// UltraKIL Phase 1 — data model
+//
+// Design rules encoded here (see docs/DATA_MODEL.md for the narrative version):
+//  * Every entity uses a stable UUID primary key and created/updated timestamps.
+//  * Branch separation (Colombo / Kandy) is carried on every operational row so
+//    the eligibility engine (ULK-C05) can filter without multi-hop joins.
+//  * A vehicle checkmark in the workforce matrix means "authorised to drive".
+//    There is deliberately no ownership or primary-driver concept.
+//  * Values imported from the workforce matrix keep their source spelling in
+//    `*Label` / `sourceKey` columns so nothing is silently normalised away.
+//  * Phase 2 (PMS tablet, worker app, notifications) is not built here, but
+//    Assignment carries acknowledgement/completion timestamps and AuditEvent is
+//    generic, so those features can be added without reshaping Phase 1 data.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// UltraKIL operates two branches. Staff may only serve work in their own branch.
+enum BranchCode {
+  COLOMBO
+  KANDY
+}
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+/// Whether an employee can be dispatched to varying sites, or is permanently
+/// stationed at one customer site and may not be moved away from it.
+enum DeploymentType {
+  MOBILE
+  PERMANENTLY_STATIONED
+}
+
+/// Frequency is expressed as N visits per week or per month.
+enum FrequencyUnit {
+  WEEK
+  MONTH
+}
+
+/// Allowed days are hard constraints; preferred days are soft preferences.
+enum DayRuleKind {
+  ALLOWED
+  PREFERRED
+}
+
+enum VisitStatus {
+  PENDING
+  SCHEDULED
+  UNASSIGNED
+  COMPLETED
+  CANCELLED
+}
+
+enum AssignmentStatus {
+  DRAFT
+  PROPOSED
+  PUBLISHED
+  ACKNOWLEDGED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum CrewRole {
+  SUPERVISOR
+  TECHNICIAN
+  DRIVER
+  HELPER
+}
+
+/// What a manager has pinned. Locks survive re-runs of the scheduler.
+enum LockScope {
+  FULL
+  CREW
+  VEHICLE
+  TIME
+}
+
+enum ScheduleRunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum ScheduleRunTrigger {
+  MANUAL
+  AGREEMENT_CHANGE
+  SCHEDULED_JOB
+  MANAGER_OVERRIDE
+}
+
+// ---------------------------------------------------------------------------
+// Organisation
+// ---------------------------------------------------------------------------
+
+model Branch {
+  id        String     @id @default(uuid()) @db.Uuid
+  code      BranchCode @unique
+  name      String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  employees         Employee[]
+  vehicles          Vehicle[]
+  customers         Customer[]
+  serviceSites      ServiceSite[]
+  serviceAgreements ServiceAgreement[]
+  generatedVisits   GeneratedVisit[]
+  assignments       Assignment[]
+
+  @@map("branches")
+}
+
+// ---------------------------------------------------------------------------
+// Workforce
+// ---------------------------------------------------------------------------
+
+model Employee {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Stable natural key derived from the workforce matrix row. The seed importer
+  /// upserts on this, which is what makes re-importing idempotent.
+  sourceKey String @unique
+
+  /// Employee number from the matrix when the source provides one.
+  employeeCode String? @unique
+
+  /// Name exactly as spelled in the source workbook.
+  fullName String
+
+  /// Grade exactly as spelled in the source workbook (e.g. "Senior PMS", "APMS").
+  gradeLabel String
+
+  /// True when gradeLabel is one of the PMS-grade supervisor grades:
+  /// Senior PMS, PMS, Assistant PMS, SPMS, APMS. Every job needs at least one.
+  isPmsGrade Boolean @default(false)
+
+  branchId String     @db.Uuid
+  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  deploymentType DeploymentType @default(MOBILE)
+
+  isActive Boolean @default(true)
+
+  /// Untouched copy of the source row, for traceability of the import.
+  sourceRow Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  skills                 EmployeeSkill[]
+  permanentAssignments   PermanentAssignment[]
+  vehicleAuthorizations  VehicleAuthorization[]
+  crewMemberships        AssignmentCrewMember[]
+  drivenAssignmentVehicles AssignmentVehicle[]  @relation("AssignmentVehicleDriver")
+
+  @@index([branchId, isActive])
+  @@index([isPmsGrade, branchCode])
+  @@map("employees")
+}
+
+model EmployeeSkill {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Normalised code used for matching, e.g. FUMIGATION.
+  skillCode String
+  /// Label exactly as spelled in the source workbook.
+  skillLabel String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, skillCode])
+  @@index([skillCode])
+  @@map("employee_skills")
+}
+
+/// An employee permanently stationed at one customer site. Such an employee is
+/// never dispatched elsewhere, and never counts towards mobile crew capacity.
+model PermanentAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  serviceSiteId String      @db.Uuid
+  serviceSite   ServiceSite @relation(fields: [serviceSiteId], references: [id], onDelete: Cascade)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, serviceSiteId, effectiveFrom])
+  @@index([serviceSiteId])
+  @@map("permanent_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Vehicles
+// ---------------------------------------------------------------------------
+
+model Vehicle {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// Vehicle identifier as it appears as a column header in the matrix.
+  code  String @unique
+  label String
+
+  branchId String? @db.Uuid
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  /// Number of crew the vehicle can carry. Null when the source does not say.
+  seatCapacity Int?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorizations       VehicleAuthorization[]
+  assignmentVehicles   AssignmentVehicle[]
+
+  @@map("vehicles")
+}
+
+/// A checkmark in the matrix: this employee is authorised to drive this vehicle.
+/// This is an authorisation only — it implies no ownership and no primary driver.
+model VehicleAuthorization {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  vehicleId String  @db.Uuid
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, vehicleId])
+  @@index([vehicleId])
+  @@map("vehicle_authorizations")
+}
+
+// ---------------------------------------------------------------------------
+// Customers and sites
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id String @id @default(uuid()) @db.Uuid
+
+  name         String
+  customerCode String? @unique
+
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  contactName  String?
+  contactPhone String?
+  contactEmail String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  serviceSites      ServiceSite[]
+  serviceAgreements ServiceAgreement[]
+
+  @@index([branchId, isActive])
+  @@map("customers")
+}
+
+model ServiceSite {
+  id String @id @default(uuid()) @db.Uuid
+
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  name        String
+  addressLine String?
+  city        String?
+
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  operatingHours       SiteOperatingHours[]
+  permanentAssignments PermanentAssignment[]
+  serviceAgreements    ServiceAgreement[]
+
+  @@index([customerId])
+  @@index([branchId, isActive])
+  @@map("service_sites")
+}
+
+/// Opening / service hours vary per site and per weekday. A weekday with no row
+/// is closed. Minutes are stored as minutes-from-midnight to keep comparisons
+/// timezone-free.
+model SiteOperatingHours {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceSiteId String      @db.Uuid
+  serviceSite   ServiceSite @relation(fields: [serviceSiteId], references: [id], onDelete: Cascade)
+
+  weekday Weekday
+
+  opensAtMinute  Int
+  closesAtMinute Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serviceSiteId, weekday])
+  @@map("site_operating_hours")
+}
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+model JobType {
+  id String @id @default(uuid()) @db.Uuid
+
+  code String @unique
+  name String
+
+  defaultDurationMinutes Int     @default(60)
+  defaultCrewSize        Int     @default(2)
+  /// Phase 1 rule: every job needs a PMS-grade supervisor. Kept as a column so a
+  /// future job type can be configured without a migration.
+  requiresPmsSupervisor  Boolean @default(true)
+  /// Normalised skill code a crew member must hold, when the job type needs one.
+  requiredSkillCode      String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  serviceAgreements ServiceAgreement[]
+
+  @@map("job_types")
+}
+
+model ServiceAgreement {
+  id String @id @default(uuid()) @db.Uuid
+
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  serviceSiteId String      @db.Uuid
+  serviceSite   ServiceSite @relation(fields: [serviceSiteId], references: [id], onDelete: Cascade)
+
+  jobTypeId String  @db.Uuid
+  jobType   JobType @relation(fields: [jobTypeId], references: [id], onDelete: Restrict)
+
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  /// N visits per frequencyUnit.
+  frequencyCount Int
+  frequencyUnit  FrequencyUnit
+
+  /// Crew size is variable per agreement.
+  crewSize        Int
+  durationMinutes Int
+
+  /// Service window within the day, as minutes from midnight. Null falls back to
+  /// the site's operating hours for that weekday.
+  serviceWindowStartMinute Int?
+  serviceWindowEndMinute   Int?
+
+  startDate DateTime  @db.Date
+  endDate   DateTime? @db.Date
+
+  isActive Boolean @default(true)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dayRules        ServiceAgreementDayRule[]
+  generatedVisits GeneratedVisit[]
+
+  @@index([customerId])
+  @@index([serviceSiteId])
+  @@index([branchId, isActive])
+  @@map("service_agreements")
+}
+
+/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
+/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
+model ServiceAgreementDayRule {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  weekday Weekday
+  kind    DayRuleKind
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serviceAgreementId, weekday, kind])
+  @@map("service_agreement_day_rules")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+/// One concrete visit generated from a service agreement's frequency rules.
+/// A visit exists whether or not it can be staffed; an unstaffable visit stays
+/// UNASSIGNED with explanatory reasons rather than being quietly dropped.
+model GeneratedVisit {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  /// Calendar date of the visit, in Asia/Colombo terms.
+  visitDate DateTime @db.Date
+
+  /// Permitted window on that date, minutes from midnight.
+  windowStartMinute Int
+  windowEndMinute   Int
+
+  durationMinutes  Int
+  requiredCrewSize Int
+
+  status VisitStatus @default(PENDING)
+
+  /// Which generation run produced this visit.
+  generatedByRunId String?      @db.Uuid
+  generatedByRun   ScheduleRun? @relation("ScheduleRunGeneratedVisits", fields: [generatedByRunId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignments      Assignment[]
+  unassignedReasons VisitUnassignedReason[]
+
+  @@unique([serviceAgreementId, visitDate, windowStartMinute])
+  @@index([branchId, visitDate, status])
+  @@index([status])
+  @@map("generated_visits")
+}
+
+/// Why a visit could not be staffed. Populated by the eligibility and conflict
+/// engine (ULK-C05); defined here so the queue has a stable shape from day one.
+model VisitUnassignedReason {
+  id String @id @default(uuid()) @db.Uuid
+
+  generatedVisitId String         @db.Uuid
+  generatedVisit   GeneratedVisit @relation(fields: [generatedVisitId], references: [id], onDelete: Cascade)
+
+  /// Stable machine-readable code, e.g. NO_PMS_SUPERVISOR_AVAILABLE.
+  code String
+  /// Manager-facing explanation.
+  message String
+  details Json?
+
+  scheduleRunId String?      @db.Uuid
+  scheduleRun   ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([generatedVisitId])
+  @@index([code])
+  @@map("visit_unassigned_reasons")
+}
+
+/// A crew and vehicle proposal for one visit.
+model Assignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  generatedVisitId String         @db.Uuid
+  generatedVisit   GeneratedVisit @relation(fields: [generatedVisitId], references: [id], onDelete: Cascade)
+
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode BranchCode
+
+  status AssignmentStatus @default(DRAFT)
+
+  plannedStart DateTime
+  plannedEnd   DateTime
+
+  scheduleRunId String?      @db.Uuid
+  scheduleRun   ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+
+  publishedAt DateTime?
+
+  /// Phase 2 hooks — the worker app will populate these. Unused in Phase 1.
+  acknowledgedAt DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  crewMembers AssignmentCrewMember[]
+  vehicles    AssignmentVehicle[]
+  locks       AssignmentLock[]
+
+  @@index([branchId, status])
+  @@index([generatedVisitId])
+  @@index([plannedStart])
+  @@map("assignments")
+}
+
+model AssignmentCrewMember {
+  id String @id @default(uuid()) @db.Uuid
+
+  assignmentId String     @db.Uuid
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  role CrewRole @default(TECHNICIAN)
+
+  /// Denormalised at assignment time so the "at least one PMS supervisor" rule
+  /// can be checked without joining Employee, and so history stays truthful if a
+  /// grade changes later.
+  isPmsSupervisor Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assignmentId, employeeId])
+  @@index([employeeId])
+  @@map("assignment_crew_members")
+}
+
+model AssignmentVehicle {
+  id String @id @default(uuid()) @db.Uuid
+
+  assignmentId String     @db.Uuid
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  vehicleId String  @db.Uuid
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  /// The crew member who will drive. Must hold a VehicleAuthorization for this
+  /// vehicle — enforced by the eligibility engine, not by the database.
+  driverEmployeeId String?   @db.Uuid
+  driverEmployee   Employee? @relation("AssignmentVehicleDriver", fields: [driverEmployeeId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assignmentId, vehicleId])
+  @@index([vehicleId])
+  @@map("assignment_vehicles")
+}
+
+/// A manager pin. Re-running the scheduler must preserve locked decisions.
+/// A lock can never make an invalid assignment valid — hard rules still apply.
+model AssignmentLock {
+  id String @id @default(uuid()) @db.Uuid
+
+  assignmentId String     @db.Uuid
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  scope LockScope @default(FULL)
+
+  lockedByUserId String?
+  reason         String?
+
+  releasedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assignmentId, scope])
+  @@index([assignmentId])
+  @@map("assignment_locks")
+}
+
+/// One invocation of visit generation or of the scheduling optimizer.
+model ScheduleRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  status  ScheduleRunStatus  @default(QUEUED)
+  trigger ScheduleRunTrigger @default(MANUAL)
+
+  branchCode BranchCode?
+
+  /// Inclusive date range the run covers.
+  rangeStart DateTime @db.Date
+  rangeEnd   DateTime @db.Date
+
+  requestedByUserId String?
+
+  /// Counters filled in as the run progresses.
+  visitsConsidered Int @default(0)
+  visitsScheduled  Int @default(0)
+  visitsUnassigned Int @default(0)
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  errorCode    String?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  generatedVisits   GeneratedVisit[]        @relation("ScheduleRunGeneratedVisits")
+  assignments       Assignment[]
+  unassignedReasons VisitUnassignedReason[]
+  auditEvents       AuditEvent[]
+
+  @@index([status, createdAt])
+  @@map("schedule_runs")
+}
+
+/// Append-only operations history. Every manager override, lock and publish is
+/// recorded here so the dispatch board can show who changed what and when.
+model AuditEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// e.g. "Assignment", "GeneratedVisit", "ServiceAgreement".
+  entityType String
+  entityId   String  @db.Uuid
+  /// e.g. "assignment.published", "assignment.crew_replaced".
+  action     String
+
+  actorUserId String?
+  actorLabel  String?
+
+  before Json?
+  after  Json?
+
+  scheduleRunId String?      @db.Uuid
+  scheduleRun   ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+
+  correlationId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_events")
+}
