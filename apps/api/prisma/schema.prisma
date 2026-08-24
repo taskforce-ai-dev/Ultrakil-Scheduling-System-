@@ -162,6 +162,13 @@ model Employee {
 
   deploymentType DeploymentType @default(MOBILE)
 
+  /// Site name as written in the workforce matrix for permanently stationed
+  /// staff, e.g. "Lion Brewery". The matrix names the site but not the customer
+  /// it belongs to, so the import cannot create a ServiceSite without inventing
+  /// a customer. This holds the label until the real site exists (ULK-C03), at
+  /// which point a PermanentAssignment links them properly.
+  permanentSiteLabel String?
+
   isActive Boolean @default(true)
 
   /// Untouched copy of the source row, for traceability of the import.

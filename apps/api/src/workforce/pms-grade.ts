@@ -27,13 +27,25 @@ export type PmsGradeLabel = (typeof PMS_GRADE_LABELS)[number];
  * client belong here — never a guess.
  */
 const PMS_GRADE_ALIASES = new Set<string>([
+  // Senior PMS. "SENOIR" is not a typo here — it is how the current workforce
+  // matrix spells it, for two real supervisors. Correcting the workbook is the
+  // client's call; until then we must read what it actually says.
   'SENIOR PMS',
+  'SENOIR PMS',
   'SENIOR P M S',
   'SR PMS',
+
+  // PMS. The matrix writes this out in full as "Pest Management
+  // Supervisor(PMS)" for three people.
   'PMS',
+  'PEST MANAGEMENT SUPERVISOR PMS',
+  'PEST MANAGEMENT SUPERVISOR',
+
+  // Assistant PMS.
   'ASSISTANT PMS',
   'ASST PMS',
   'APMS',
+
   'SPMS',
 ]);
 
