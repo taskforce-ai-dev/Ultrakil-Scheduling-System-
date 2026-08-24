@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   History,
   Menu,
+  LogOut,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -68,6 +70,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const { user, logout } = useAuth();
 
   return (
     <div className="flex min-h-screen">
@@ -77,6 +80,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="flex-1 overflow-y-auto p-3">
           <NavLinks />
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t p-3">
+          <span className="truncate text-sm text-muted-foreground">{user?.name}</span>
+          <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
+            <LogOut className="h-4 w-4" />
+          </Button>
         </div>
       </aside>
 
@@ -94,8 +103,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <SheetTitle className="flex h-14 items-center border-b px-4 text-base">
                 UltraKIL
               </SheetTitle>
-              <div className="p-3">
+              <div className="flex-1 p-3">
                 <NavLinks onNavigate={() => setMobileNavOpen(false)} />
+              </div>
+              <div className="flex items-center justify-between gap-2 border-t p-3">
+                <span className="truncate text-sm text-muted-foreground">{user?.name}</span>
+                <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
+                  <LogOut className="h-4 w-4" />
+                </Button>
               </div>
             </SheetContent>
           </Sheet>
