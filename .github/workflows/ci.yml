@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  guard-secrets:
+    name: No .env files committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if a real .env file is tracked
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.[^example].*$)'; then
+            echo "::error::A .env file appears to be committed. Only .env.example is allowed."
+            exit 1
+          fi
+          echo "No committed .env files found."
+
+  # Placeholder — extend with real lint/build/test jobs per app/service as code lands.
+  # e.g. a job for apps/api, one for services/scheduler, one for apps/manager-web,
+  # each triggered on changes under its own path.
+  build:
+    name: Build & test (placeholder)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No build steps yet
+        run: echo "Add lint/build/test steps here as apps/api, services/scheduler and apps/manager-web are implemented."

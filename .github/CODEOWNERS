@@ -1,0 +1,18 @@
+# UltraKIL code ownership
+#
+# Do not modify another developer's owned folders without the Project Lead
+# recording the reason and approving the change.
+#
+# Chanya (Project Lead) reviews and merges Oshadi's PRs.
+# Chanya's own PRs require Thivarrakesh's approval before she merges them.
+
+/apps/api/                 @cha-she
+/services/scheduler/       @cha-she
+/packages/api-contracts/   @cha-she
+
+/apps/manager-web/         @Oshadi
+
+# Repository-wide settings, CI and docs are maintained by the Project Lead.
+/.github/                  @cha-she
+/README.md                 @cha-she
+/CONTRIBUTING.md           @cha-she
