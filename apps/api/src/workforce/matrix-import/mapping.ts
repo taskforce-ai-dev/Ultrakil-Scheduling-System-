@@ -130,7 +130,12 @@ export function parseVehicleHeader(label: string): {
     ? label.slice(label.indexOf(')', capacityMatch.index ?? 0) + 1)
     : label;
 
-  const code = afterBracket.trim().replace(/\s+/g, ' ') || null;
+  const candidate = afterBracket.trim().replace(/\s+/g, ' ');
+
+  // A registration always contains digits. Without this, a grouping column such
+  // as "Public Vehicles" — a tick column with no registration — would become a
+  // vehicle record named after the group heading.
+  const code = candidate && /\d/.test(candidate) ? candidate : null;
 
   return { code, seatCapacity };
 }

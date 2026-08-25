@@ -12,6 +12,7 @@
     "dev:infra": "docker compose up -d postgres redis",
     "dev:infra:down": "docker compose down",
     "dev:api": "pnpm --filter @ultrakil/api start:dev",
+    "dev:web": "pnpm --filter @ultrakil/manager-web dev",
     "dev:scheduler": "node scripts/dev-scheduler.mjs",
     "build": "pnpm --filter @ultrakil/api build && pnpm --filter @ultrakil/api-contracts build",
     "test": "pnpm --filter @ultrakil/api test",
