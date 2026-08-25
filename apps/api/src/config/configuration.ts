@@ -33,6 +33,19 @@ export const schedulerConfig = registerAs('scheduler', () => {
   };
 });
 
+export const authConfig = registerAs('auth', () => {
+  const env = process.env as unknown as Env;
+  return {
+    jwtSecret: env.JWT_SECRET,
+    jwtExpiresIn: env.JWT_EXPIRES_IN,
+    seedAdmin: {
+      email: env.SEED_ADMIN_EMAIL,
+      password: env.SEED_ADMIN_PASSWORD,
+      fullName: env.SEED_ADMIN_NAME,
+    },
+  };
+});
+
 export const importConfig = registerAs('import', () => {
   const env = process.env as unknown as Env;
   return {

@@ -1,6 +1,63 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/api/auth/login": {
+      "post": {
+        "description": "Exchanges an email and password for an access token. Send the token as `Authorization: Bearer <token>` on every other endpoint.",
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong email, wrong password, or a deactivated account — all return the same `INVALID_CREDENTIALS`, so the response cannot be used to discover which emails exist."
+          }
+        },
+        "summary": "Sign in",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "description": "Returns the signed-in user. Useful for the portal to restore a session and decide which actions to show.",
+        "operationId": "AuthController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticatedUserDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid or expired token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Who am I",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/health/live": {
       "get": {
         "description": "Returns 200 as long as the API process is running. Checks no dependencies, so an orchestrator will not restart the API just because the database is briefly down.",
@@ -79,15 +136,531 @@
           "meta"
         ]
       }
+    },
+    "/api/employees": {
+      "get": {
+        "description": "Filter by branch, PMS eligibility, deployment, skill, vehicle authorization, availability on a date and public-transport capability. PMS eligibility is decided by the API from the grade — never infer it in the client from the job title.",
+        "operationId": "EmployeesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List employees",
+        "tags": [
+          "workforce"
+        ]
+      },
+      "post": {
+        "description": "Admin only. PMS eligibility is derived from the grade.",
+        "operationId": "EmployeesController_create",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "403": {
+            "description": "Requires the ADMIN role."
+          },
+          "409": {
+            "description": "Same name already exists in that branch."
+          },
+          "422": {
+            "description": "PERMANENT_SITE_REQUIRED — a stationed employee must name a site."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add an employee",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}": {
+      "get": {
+        "description": "Includes skills, driving authorizations, recorded absences and the permanent site if there is one.",
+        "operationId": "EmployeesController_findOne",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such employee."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One employee",
+        "tags": [
+          "workforce"
+        ]
+      },
+      "patch": {
+        "description": "Changing the grade re-derives PMS eligibility. A permanently stationed employee cannot be moved to the other branch.",
+        "operationId": "EmployeesController_update",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "422": {
+            "description": "PERMANENT_EMPLOYEE_CANNOT_CHANGE_BRANCH or PERMANENT_SITE_REQUIRED."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update an employee",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/deactivate": {
+      "post": {
+        "description": "Admin only. Records are never deleted — completed assignments reference them, and history that loses its crew is worse than a disabled record.",
+        "operationId": "EmployeesController_deactivate",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate an employee",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/reactivate": {
+      "post": {
+        "description": "Admin only.",
+        "operationId": "EmployeesController_reactivate",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate an employee",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/permanent-assignment": {
+      "put": {
+        "description": "Naming a site marks the employee PERMANENTLY_STATIONED; passing null makes them MOBILE again. Sites are held as labels until customer sites exist (ULK-C03).",
+        "operationId": "EmployeesController_setPermanentAssignment",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Set or clear the permanent site",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/skills": {
+      "put": {
+        "description": "The list given becomes the complete set. Anything omitted is removed.",
+        "operationId": "EmployeesController_replaceSkills",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Replace an employee’s skills",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/vehicle-authorizations/{vehicleId}": {
+      "post": {
+        "description": "Authorization only — this records nothing about ownership or who normally drives.",
+        "operationId": "EmployeesController_authorize",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "Already authorised."
+          },
+          "422": {
+            "description": "Employee or vehicle is deactivated."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Authorise an employee to drive a vehicle",
+        "tags": [
+          "workforce"
+        ]
+      },
+      "delete": {
+        "operationId": "EmployeesController_revoke",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Withdraw a driving authorization",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/availability": {
+      "post": {
+        "description": "Absences are recorded, not availabilities — staff are available unless something says otherwise. Overlapping periods are rejected.",
+        "operationId": "EmployeesController_addAvailability",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "AVAILABILITY_OVERLAPS with an existing absence."
+          },
+          "422": {
+            "description": "AVAILABILITY_RANGE_INVALID — end before start."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Record an absence",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/employees/{id}/availability/{availabilityId}": {
+      "delete": {
+        "operationId": "EmployeesController_removeAvailability",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove a recorded absence",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/vehicles": {
+      "get": {
+        "operationId": "VehiclesController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List vehicles",
+        "tags": [
+          "workforce"
+        ]
+      },
+      "post": {
+        "description": "Admin only.",
+        "operationId": "VehiclesController_create",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "VEHICLE_CODE_TAKEN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add a vehicle",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/vehicles/{id}": {
+      "get": {
+        "operationId": "VehiclesController_findOne",
+        "parameters": [],
+        "responses": {
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such vehicle."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One vehicle",
+        "tags": [
+          "workforce"
+        ]
+      },
+      "patch": {
+        "description": "Admin only.",
+        "operationId": "VehiclesController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a vehicle",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/vehicles/{id}/authorized-drivers": {
+      "get": {
+        "description": "Straight from the workforce matrix checkmarks. Says nothing about who owns the vehicle or who usually drives it — the matrix does not record that.",
+        "operationId": "VehiclesController_authorizedDrivers",
+        "parameters": [
+          {
+            "name": "includeInactive",
+            "required": false,
+            "in": "query",
+            "description": "Include deactivated employees. Defaults to false.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Everyone authorised to drive this vehicle",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/vehicles/{id}/deactivate": {
+      "post": {
+        "description": "Admin only. Never deleted — published assignments reference it.",
+        "operationId": "VehiclesController_deactivate",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate a vehicle",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/vehicles/{id}/reactivate": {
+      "post": {
+        "description": "Admin only.",
+        "operationId": "VehiclesController_reactivate",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate a vehicle",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/branches": {
+      "get": {
+        "description": "Colombo and Kandy, with how many active staff each has. Staff may only serve work in their own branch.",
+        "operationId": "ReferenceController_branches",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Branches",
+        "tags": [
+          "workforce"
+        ]
+      }
+    },
+    "/api/skills": {
+      "get": {
+        "description": "Distinct skills held by at least one employee, with how many hold each. Sourced from the workforce matrix column headings.",
+        "operationId": "ReferenceController_skills",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Skills in use",
+        "tags": [
+          "workforce"
+        ]
+      }
     }
   },
   "info": {
     "title": "UltraKIL Scheduling API",
-    "description": "Phase 1 pilot API for UltraKIL scheduling and dispatching.\n\nHard rules enforced by this API:\n- Colombo staff serve Colombo work only; Kandy staff serve Kandy work only.\n- Permanently stationed staff are never moved away from their site.\n- Every job carries at least one PMS-grade supervisor.\n- A vehicle may only be driven by an employee authorised for it.\n- Allowed service days are hard constraints; preferred days are preferences.\n\nWork that cannot satisfy every hard rule stays in the Unassigned queue\nwith an explanation. Hard rules are never relaxed to fill a schedule.\n\nErrors always carry a stable `code`. Clients must branch on `code`,\nnever on `message`.",
+    "description": "Phase 1 pilot API for UltraKIL scheduling and dispatching.\n\nHard rules enforced by this API:\n- Colombo staff serve Colombo work only; Kandy staff serve Kandy work only.\n- Permanently stationed staff are never moved away from their site.\n- Every job carries at least one PMS-grade supervisor.\n- A vehicle may only be driven by an employee authorised for it.\n- Allowed service days are hard constraints; preferred days are preferences.\n\nWork that cannot satisfy every hard rule stays in the Unassigned queue\nwith an explanation. Hard rules are never relaxed to fill a schedule.\n\nErrors always carry a stable `code`. Clients must branch on `code`,\nnever on `message`.\n\nEvery endpoint requires a bearer token except sign-in, the health\nprobes and /meta.",
     "version": "0.1.0",
     "contact": {}
   },
   "tags": [
+    {
+      "name": "auth",
+      "description": "Sign in and session"
+    },
     {
       "name": "health",
       "description": "Liveness and readiness probes"
@@ -104,7 +677,67 @@
     }
   ],
   "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http",
+        "description": "Sign in via POST /api/auth/login, then paste the accessToken here."
+      }
+    },
     "schemas": {
+      "AuthenticatedUserDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "example": "admin@taskforceai.tech"
+          },
+          "fullName": {
+            "type": "string",
+            "example": "UltraKIL Administrator"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ADMIN",
+              "MANAGER"
+            ],
+            "example": "MANAGER"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "fullName",
+          "role"
+        ]
+      },
+      "LoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Send as `Authorization: Bearer <token>` on every request."
+          },
+          "expiresIn": {
+            "type": "string",
+            "example": "12h"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthenticatedUserDto"
+          }
+        },
+        "required": [
+          "accessToken",
+          "expiresIn",
+          "user"
+        ]
+      },
       "LivenessResponseDto": {
         "type": "object",
         "properties": {

@@ -103,6 +103,23 @@ enum ScheduleRunStatus {
   CANCELLED
 }
 
+/// Who a portal account is. Phase 1 needs only these two: a manager runs the
+/// day-to-day board, an admin may also change the workforce records themselves.
+enum UserRole {
+  ADMIN
+  MANAGER
+}
+
+/// Why an employee is unavailable. Recorded as absence periods rather than
+/// "available" ones: staff are available by default, and absence is the
+/// exception worth writing down.
+enum AvailabilityKind {
+  LEAVE
+  SICK
+  TRAINING
+  OTHER
+}
+
 enum ScheduleRunTrigger {
   MANUAL
   AGREEMENT_CHANGE
@@ -130,6 +147,35 @@ model Branch {
   assignments       Assignment[]
 
   @@map("branches")
+}
+
+// ---------------------------------------------------------------------------
+// Portal accounts
+// ---------------------------------------------------------------------------
+
+/// A person who signs in to the manager portal.
+///
+/// Deliberately separate from Employee. Most of the 37 people in the workforce
+/// matrix will never log in, and the handful who do are identified by an email
+/// and a password rather than by a row in a spreadsheet. Conflating the two
+/// would mean every technician needed an account.
+model User {
+  id String @id @default(uuid()) @db.Uuid
+
+  email        String @unique
+  passwordHash String
+  fullName     String
+
+  role UserRole @default(MANAGER)
+
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@map("users")
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +208,12 @@ model Employee {
 
   deploymentType DeploymentType @default(MOBILE)
 
+  /// True when the matrix check-marks this employee under "Public Vehicles",
+  /// meaning they can reach a site by bus or other public transport. Relevant
+  /// to scheduling: such a crew can be sent somewhere with no company vehicle.
+  /// This is not a vehicle authorization — there is no vehicle to authorise.
+  canUsePublicTransport Boolean @default(false)
+
   /// Site name as written in the workforce matrix for permanently stationed
   /// staff, e.g. "Lion Brewery". The matrix names the site but not the customer
   /// it belongs to, so the import cannot create a ServiceSite without inventing
@@ -178,6 +230,7 @@ model Employee {
   updatedAt DateTime @updatedAt
 
   skills                 EmployeeSkill[]
+  availability           EmployeeAvailability[]
   permanentAssignments   PermanentAssignment[]
   vehicleAuthorizations  VehicleAuthorization[]
   crewMemberships        AssignmentCrewMember[]
@@ -205,6 +258,34 @@ model EmployeeSkill {
   @@unique([employeeId, skillCode])
   @@index([skillCode])
   @@map("employee_skills")
+}
+
+/// A period during which an employee is NOT available for work.
+///
+/// Stored as absences rather than availabilities because staff are available by
+/// default; recording every working day for 37 people would be thousands of
+/// rows saying "yes". Both dates are inclusive.
+model EmployeeAvailability {
+  id String @id @default(uuid()) @db.Uuid
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Inclusive. A single day off has startDate == endDate.
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  kind   AvailabilityKind @default(LEAVE)
+  reason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Overlapping periods for one employee are rejected in the service layer —
+  // PostgreSQL can express that with an exclusion constraint, but Prisma cannot
+  // declare one, and a silent partial guard is worse than an explicit check.
+  @@index([employeeId, startDate, endDate])
+  @@map("employee_availability")
 }
 
 /// An employee permanently stationed at one customer site. Such an employee is

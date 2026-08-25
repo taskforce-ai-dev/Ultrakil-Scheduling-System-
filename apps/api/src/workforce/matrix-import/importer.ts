@@ -13,6 +13,7 @@ export interface ImportSummary {
   authorizationsRemoved: number;
   pmsSupervisors: number;
   permanentlyStationed: number;
+  publicTransportUsers: number;
 }
 
 const BRANCH_NAMES: Record<BranchCode, string> = {
@@ -48,6 +49,7 @@ export async function importMatrix(
     authorizationsRemoved: 0,
     pmsSupervisors: 0,
     permanentlyStationed: 0,
+    publicTransportUsers: 0,
   };
 
   await prisma.$transaction(
@@ -112,6 +114,7 @@ export async function importMatrix(
             branchCode: employee.branchCode,
             deploymentType,
             permanentSiteLabel: employee.permanentSiteName,
+            canUsePublicTransport: employee.canUsePublicTransport,
             isActive: true,
             sourceRow: employee.sourceRow,
           },
@@ -123,6 +126,7 @@ export async function importMatrix(
             branchCode: employee.branchCode,
             deploymentType,
             permanentSiteLabel: employee.permanentSiteName,
+            canUsePublicTransport: employee.canUsePublicTransport,
             isActive: true,
             sourceRow: employee.sourceRow,
           },
@@ -132,6 +136,7 @@ export async function importMatrix(
         else summary.employeesCreated += 1;
         if (employee.isPmsGrade) summary.pmsSupervisors += 1;
         if (employee.isPermanentlyStationed) summary.permanentlyStationed += 1;
+        if (employee.canUsePublicTransport) summary.publicTransportUsers += 1;
 
         // --- Skills -------------------------------------------------------
         const wantedSkillCodes = employee.skills.map((s) => s.skillCode);

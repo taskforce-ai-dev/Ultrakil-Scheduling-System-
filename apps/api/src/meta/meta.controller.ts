@@ -3,6 +3,7 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { BranchCode, FrequencyUnit, Weekday } from '@prisma/client';
 import { ErrorCode } from '../common/errors/error-codes';
 import { PMS_GRADE_LABELS } from '../workforce/pms-grade';
+import { Public } from '../auth/decorators/public.decorator';
 import { MetaResponseDto } from './meta.types';
 
 // Kept in sync with apps/api/package.json by the release process.
@@ -11,6 +12,9 @@ const API_VERSION = '0.1.0';
 @ApiTags('meta')
 @Controller('meta')
 export class MetaController {
+  // Public on purpose: the portal reads this to build its login screen and
+  // error messages, before anyone has signed in.
+  @Public()
   @Get()
   @ApiOperation({
     summary: 'Shared vocabulary for clients',

@@ -78,18 +78,64 @@ describe('parseVehicleHeader', () => {
   });
 });
 
-describe('a vehicle group column with no registration', () => {
+describe('the "Public Vehicles" column', () => {
+  // Confirmed by UltraKIL: this column means the employee can travel by bus or
+  // other public transport. It sits under the same Transport group as the real
+  // vehicles, but nobody is "authorised to drive" a bus — so it is a capability
+  // on the employee, not a vehicle.
   const grid: Grid = [
     ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
       'Transport', 'Transport'],
     ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
       'Public Vehicles', 'Van( 04 People) 253-4289'],
     ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓'],
+    ['', '2', 'B Silva', '', 'Junior PMT', '', '✓'],
   ];
 
   const result = parseMatrix(grid, DEFAULT_MAPPING);
 
-  it('does not invent a vehicle from the group heading', () => {
+  it('is not treated as a vehicle', () => {
+    expect(result.vehicles.map((v) => v.code)).toEqual(['253-4289']);
+    expect(result.vehicleColumns.map((c) => c.label)).toEqual([
+      'Van( 04 People) 253-4289',
+    ]);
+  });
+
+  it('is not treated as a skill either', () => {
+    expect(result.skillColumns).toEqual([]);
+  });
+
+  it('is recorded against the employees who are check-marked', () => {
+    expect(result.publicTransportColumn?.label).toBe('Public Vehicles');
+
+    const perera = result.employees.find((e) => e.fullName === 'A Perera');
+    const silva = result.employees.find((e) => e.fullName === 'B Silva');
+    expect(perera?.canUsePublicTransport).toBe(true);
+    expect(silva?.canUsePublicTransport).toBe(false);
+  });
+
+  it('does not become a driving authorization', () => {
+    const perera = result.employees.find((e) => e.fullName === 'A Perera');
+    expect(perera?.vehicles).toEqual([{ vehicleCode: '253-4289' }]);
+  });
+
+  it('produces no issue, because nothing was skipped', () => {
+    expect(result.issues).toEqual([]);
+  });
+});
+
+describe('a vehicle column that really is unidentifiable', () => {
+  const grid: Grid = [
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Transport', 'Transport'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Spare Van( 04 People)', 'Van( 04 People) 253-4289'],
+    ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓'],
+  ];
+
+  const result = parseMatrix(grid, DEFAULT_MAPPING);
+
+  it('is skipped, because there is no registration to identify it by', () => {
     expect(result.vehicles.map((v) => v.code)).toEqual(['253-4289']);
   });
 
@@ -97,10 +143,10 @@ describe('a vehicle group column with no registration', () => {
     const issue = result.issues.find(
       (i) => i.code === 'MATRIX_VEHICLE_NO_REGISTRATION',
     );
-    expect(issue?.message).toContain('Public Vehicles');
+    expect(issue?.message).toContain('Spare Van');
   });
 
-  it('still authorises the employee for the real vehicle', () => {
+  it('still authorises the employee for the identifiable vehicle', () => {
     expect(result.employees[0].vehicles).toEqual([{ vehicleCode: '253-4289' }]);
   });
 });

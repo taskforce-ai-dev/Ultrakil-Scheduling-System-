@@ -43,6 +43,13 @@ export interface MatrixMapping {
    */
   permanentSiteBranches: Record<string, BranchCode>;
 
+  /**
+   * Headings that mean "can travel by public transport" rather than naming a
+   * vehicle. A checkmark here is a capability, not a driving authorization —
+   * there is no vehicle to be authorised for.
+   */
+  publicTransportColumns: string[];
+
   /** Cell values that count as a checkmark. */
   checkmarkValues: string[];
 }
@@ -91,6 +98,8 @@ export const DEFAULT_MAPPING: MatrixMapping = {
     'Lion Brewery': BranchCode.COLOMBO,
     'Logipark International': BranchCode.COLOMBO,
   },
+
+  publicTransportColumns: ['PUBLIC VEHICLES', 'PUBLIC TRANSPORT', 'PUBLIC'],
 
   checkmarkValues: ['✓', '✔', 'V', 'X', 'YES', 'Y', 'TRUE', '1', '√'],
 };

@@ -14,7 +14,8 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { BranchCode, PrismaClient } from '@prisma/client';
+import { BranchCode, PrismaClient, UserRole } from '@prisma/client';
+import { AuthService } from '../src/auth/auth.service';
 import { DEFAULT_MAPPING, MatrixMapping } from '../src/workforce/matrix-import/mapping';
 import { importMatrix } from '../src/workforce/matrix-import/importer';
 import { parseMatrix } from '../src/workforce/matrix-import/parser';
@@ -50,6 +51,40 @@ function loadMapping(): MatrixMapping {
       ...(overrides.permanentSiteBranches ?? {}),
     },
   };
+}
+
+/**
+ * Creates the first administrator, once.
+ *
+ * Only runs when the users table is empty: re-seeding must never resurrect a
+ * deleted account or silently reset a password that someone has changed.
+ */
+async function seedAdminUser(): Promise<void> {
+  const existing = await prisma.user.count();
+  if (existing > 0) {
+    log(`Users already exist (${existing}) — leaving accounts untouched.`);
+    return;
+  }
+
+  const email = (process.env.SEED_ADMIN_EMAIL ?? 'admin@taskforceai.tech')
+    .trim()
+    .toLowerCase();
+  const password = process.env.SEED_ADMIN_PASSWORD ?? 'ultrakil-change-me';
+  const fullName = process.env.SEED_ADMIN_NAME ?? 'UltraKIL Administrator';
+
+  await prisma.user.create({
+    data: {
+      email,
+      fullName,
+      role: UserRole.ADMIN,
+      passwordHash: await AuthService.hashPassword(password),
+    },
+  });
+
+  log(`Created the first admin account: ${email}`);
+  if (password === 'ultrakil-change-me') {
+    log('  WARNING: this is the default password. Change SEED_ADMIN_PASSWORD.');
+  }
 }
 
 async function seedBranches(): Promise<void> {
@@ -103,6 +138,9 @@ function report(parsed: ReturnType<typeof parseMatrix>): void {
   for (const [branch, count] of byBranch) log(`  ${branch.padEnd(12)} ${count}`);
   log(`PMS-grade supervisors : ${pms}`);
   log(`Permanently stationed : ${stationed}`);
+  log(
+    `Can use public transport: ${parsed.employees.filter((e) => e.canUsePublicTransport).length}`,
+  );
 
   log();
   log('Vehicles found:');
@@ -147,7 +185,10 @@ async function main(): Promise<void> {
   if (!existsSync(matrixPath)) {
     log(`No workforce matrix at ${matrixPath} — skipping the workforce import.`);
     log('See data/README.md for how to supply it. Seeding reference data only.');
-    if (!dryRun && !inspectOnly) await seedBranches();
+    if (!dryRun && !inspectOnly) {
+      await seedBranches();
+      await seedAdminUser();
+    }
     return;
   }
 
@@ -175,6 +216,7 @@ async function main(): Promise<void> {
   }
 
   await seedBranches();
+  await seedAdminUser();
   const summary = await importMatrix(prisma, parsed);
 
   log();
@@ -183,6 +225,7 @@ async function main(): Promise<void> {
   log(`  vehicles       ${summary.vehiclesCreated} created, ${summary.vehiclesUpdated} updated`);
   log(`  skills         ${summary.skillsLinked} linked, ${summary.skillsRemoved} removed`);
   log(`  authorizations ${summary.authorizationsLinked} linked, ${summary.authorizationsRemoved} removed`);
+  log(`  public transport ${summary.publicTransportUsers} employees can travel by bus`);
   log();
   log('Run this again any time — it updates rather than duplicating.');
 }

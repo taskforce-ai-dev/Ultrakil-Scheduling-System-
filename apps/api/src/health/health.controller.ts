@@ -1,6 +1,7 @@
 import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { Public } from '../auth/decorators/public.decorator';
 import { HealthService } from './health.service';
 import { HealthResponseDto, LivenessResponseDto } from './health.types';
 
@@ -9,6 +10,9 @@ import { HealthResponseDto, LivenessResponseDto } from './health.types';
 export class HealthController {
   constructor(private readonly health: HealthService) {}
 
+  // Public on purpose. A probe that needs a token cannot tell you the API is
+  // up when the database holding the accounts is the thing that is down.
+  @Public()
   @Get('live')
   @ApiOperation({
     summary: 'Liveness probe',
@@ -20,6 +24,7 @@ export class HealthController {
     return { status: 'ok', checkedAt: new Date().toISOString() };
   }
 
+  @Public()
   @Get('ready')
   @ApiOperation({
     summary: 'Readiness probe',

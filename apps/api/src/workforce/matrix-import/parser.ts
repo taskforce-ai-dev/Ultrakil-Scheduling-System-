@@ -42,6 +42,7 @@ export function parseMatrix(
       vehicles: [],
       skillColumns: [],
       vehicleColumns: [],
+      publicTransportColumn: null,
       unrecognisedGrades: [],
       headerRowNumber: -1,
       issues: [
@@ -78,12 +79,8 @@ export function parseMatrix(
     headerBottomIndex,
   );
 
-  const { skillColumns, vehicleColumns } = classifyColumns(
-    headerRow,
-    groupLabels,
-    identity,
-    mapping,
-  );
+  const { skillColumns, vehicleColumns, publicTransportColumn } =
+    classifyColumns(headerRow, groupLabels, identity, mapping);
 
   const vehicles = buildVehicles(vehicleColumns, groupLabels, issues);
   const vehicleCodeByColumn = new Map<number, string>();
@@ -175,6 +172,10 @@ export function parseMatrix(
         skillLabel: column.label,
       }));
 
+    const canUsePublicTransport = publicTransportColumn
+      ? isCheckmark(row[publicTransportColumn.index] ?? '', mapping)
+      : false;
+
     const vehicleRefs = vehicleColumns
       .filter((column) => isCheckmark(row[column.index] ?? '', mapping))
       .map((column) => vehicleCodeByColumn.get(column.index))
@@ -201,6 +202,7 @@ export function parseMatrix(
       permanentSiteName: isPermanentlyStationed ? stationLocation || null : null,
       isPermanentlyStationed,
       skills,
+      canUsePublicTransport,
       vehicles: vehicleRefs,
       sourceRow,
     });
@@ -218,6 +220,7 @@ export function parseMatrix(
     vehicles,
     skillColumns,
     vehicleColumns,
+    publicTransportColumn,
     issues,
     unrecognisedGrades: [...unrecognisedGrades].sort(),
     headerRowNumber: headerBottomIndex + 1,
@@ -376,12 +379,18 @@ function classifyColumns(
   groupLabels: string[],
   identity: IdentityColumns,
   mapping: MatrixMapping,
-): { skillColumns: ColumnSpec[]; vehicleColumns: ColumnSpec[] } {
+): {
+  skillColumns: ColumnSpec[];
+  vehicleColumns: ColumnSpec[];
+  publicTransportColumn: ColumnSpec | null;
+} {
   const identityIndexes = new Set(Object.values(identity));
   const vehicleGroups = mapping.vehicleGroups.map(normalizeHeader);
+  const publicTransport = mapping.publicTransportColumns.map(normalizeHeader);
 
   const skillColumns: ColumnSpec[] = [];
   const vehicleColumns: ColumnSpec[] = [];
+  let publicTransportColumn: ColumnSpec | null = null;
 
   headerRow.forEach((rawLabel, index) => {
     const label = rawLabel.trim();
@@ -390,6 +399,14 @@ function classifyColumns(
     if (index < identity.designation) return;
 
     const group = groupLabels[index]?.trim() || null;
+
+    // Checked before the vehicle test: it sits under the same "Transport"
+    // group, but a bus is not a vehicle anyone is authorised to drive.
+    if (publicTransport.includes(normalizeHeader(label))) {
+      publicTransportColumn = { index, label, group };
+      return;
+    }
+
     const normalizedGroup = group ? normalizeHeader(group) : '';
 
     const groupSaysVehicle = vehicleGroups.some(
@@ -406,7 +423,7 @@ function classifyColumns(
     }
   });
 
-  return { skillColumns, vehicleColumns };
+  return { skillColumns, vehicleColumns, publicTransportColumn };
 }
 
 function buildVehicles(

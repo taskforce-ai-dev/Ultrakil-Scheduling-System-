@@ -37,6 +37,12 @@ export interface ParsedEmployee {
   permanentSiteName: string | null;
   isPermanentlyStationed: boolean;
   skills: ParsedSkill[];
+  /**
+   * True when the row is check-marked under "Public Vehicles" — the employee
+   * can reach a site by bus or other public transport. A capability, not a
+   * driving authorization: there is no vehicle to be authorised for.
+   */
+  canUsePublicTransport: boolean;
   vehicles: ParsedVehicleRef[];
   /** Untouched copy of the row, keyed by header. */
   sourceRow: Record<string, string>;
@@ -65,6 +71,8 @@ export interface ParsedMatrix {
   vehicles: ParsedVehicle[];
   skillColumns: ColumnSpec[];
   vehicleColumns: ColumnSpec[];
+  /** The "Public Vehicles" column, when the workbook has one. */
+  publicTransportColumn: ColumnSpec | null;
   /** Rows the parser refused to guess at. These are never imported. */
   issues: ImportIssue[];
   /** Designations not recognised as PMS-grade, for human review. */
