@@ -9,6 +9,7 @@ module.exports = {
       testMatch: [
         '<rootDir>/src/**/*.spec.ts',
         '<rootDir>/test/unit/**/*.spec.ts',
+        '<rootDir>/prisma/**/*.spec.ts',
       ],
       moduleFileExtensions: ['ts', 'js', 'json'],
     },

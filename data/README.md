@@ -4,6 +4,14 @@ This folder holds the source workbooks the seed importer reads. **Nothing real
 in here is committed.** `.gitignore` blocks `*.xlsx`, `*.xls` and `*.csv`, and CI
 fails the build if a real workbook is ever tracked.
 
+## No copy of the matrix?
+
+You do not need one to work on the app. Run `pnpm db:seed:demo` for a
+fabricated workforce — fourteen invented employees across both branches, with
+supervisors, stationed staff, vehicles and authorizations. It refuses to run
+against a database holding real imported staff, so it cannot overwrite this
+folder's data by accident.
+
 ## Why it is not committed
 
 The technician matrix contains real staff names and grades. It is operational
