@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AppException, AppErrorBody } from '../errors/app.exception';
-import { ErrorCode } from '../errors/error-codes';
+import { ErrorCode, type ErrorCodeValue } from '../errors/error-codes';
 
 /**
  * Turns every thrown error into one predictable envelope:
@@ -81,16 +81,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const message = Array.isArray(messages)
           ? messages.join('; ')
           : String(messages);
-        return {
-          status,
-          body: {
-            code:
-              status === HttpStatus.BAD_REQUEST
-                ? ErrorCode.VALIDATION_FAILED
-                : ErrorCode.RESOURCE_CONFLICT,
-            message,
-          },
-        };
+        return { status, body: { code: codeForStatus(status), message } };
       }
 
       return {
@@ -107,5 +98,30 @@ export class AllExceptionsFilter implements ExceptionFilter {
           'Something went wrong on the server. The team has been notified — please retry, and report the timestamp if it persists.',
       },
     };
+  }
+}
+
+/**
+ * Fallback code for a Nest exception that carried no code of its own.
+ *
+ * Derived from the status, not guessed: a 404 reported as RESOURCE_CONFLICT
+ * sent the portal down the wrong branch, since it keys off `code` alone.
+ */
+function codeForStatus(status: number): ErrorCodeValue {
+  switch (status) {
+    case HttpStatus.BAD_REQUEST:
+      return ErrorCode.VALIDATION_FAILED;
+    case HttpStatus.UNAUTHORIZED:
+      return ErrorCode.AUTHENTICATION_REQUIRED;
+    case HttpStatus.FORBIDDEN:
+      return ErrorCode.INSUFFICIENT_ROLE;
+    case HttpStatus.NOT_FOUND:
+      return ErrorCode.RESOURCE_NOT_FOUND;
+    case HttpStatus.CONFLICT:
+      return ErrorCode.RESOURCE_CONFLICT;
+    default:
+      return status >= HttpStatus.INTERNAL_SERVER_ERROR
+        ? ErrorCode.INTERNAL_ERROR
+        : ErrorCode.RESOURCE_CONFLICT;
   }
 }

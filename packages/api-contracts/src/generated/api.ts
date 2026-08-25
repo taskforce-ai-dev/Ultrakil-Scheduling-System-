@@ -568,6 +568,159 @@ export interface components {
              */
             errorCodes: string[];
         };
+        BranchSummaryDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            code: "COLOMBO" | "KANDY";
+            /** @example Colombo Branch */
+            name: string;
+        };
+        EmployeeSkillDto: {
+            /** @example MBR_FUMIGATION */
+            skillCode: string;
+            /**
+             * @description Exactly as spelled in the workforce matrix.
+             * @example MBr Fumigation
+             */
+            skillLabel: string;
+        };
+        AuthorizedVehicleDto: {
+            /** Format: uuid */
+            id: string;
+            /** @example 253-4289 */
+            code: string;
+            /** @example Van( 04 People) 253-4289 */
+            label: string;
+            /** @example 4 */
+            seatCapacity?: number | null;
+        };
+        AvailabilityDto: {
+            /** Format: uuid */
+            id: string;
+            /**
+             * Format: date
+             * @example 2026-09-01
+             */
+            startDate: string;
+            /**
+             * Format: date
+             * @description Inclusive.
+             * @example 2026-09-05
+             */
+            endDate: string;
+            /** @enum {string} */
+            kind: "LEAVE" | "SICK" | "TRAINING" | "OTHER";
+            reason?: string | null;
+        };
+        EmployeeDto: {
+            /** Format: uuid */
+            id: string;
+            employeeCode?: string | null;
+            /** @example A Perera */
+            fullName: string;
+            /**
+             * @description Exactly as spelled in the workforce matrix, typos included. Never parse this to decide seniority — use isPmsGrade.
+             * @example Senoir PMS
+             */
+            gradeLabel: string;
+            /** @description Whether this person satisfies the "every job needs a PMS-grade supervisor" rule. Decided by the API from the grade; clients must not infer it from the label. */
+            isPmsGrade: boolean;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            branch: components["schemas"]["BranchSummaryDto"];
+            /** @enum {string} */
+            deploymentType: "MOBILE" | "PERMANENTLY_STATIONED";
+            /**
+             * @description Set only for permanently stationed staff, who are never dispatched elsewhere.
+             * @example Lion Brewery
+             */
+            permanentSiteLabel?: string | null;
+            /** @description Can reach a site by bus or other public transport, so a crew can be sent without a company vehicle. */
+            canUsePublicTransport: boolean;
+            isActive: boolean;
+            skills: components["schemas"]["EmployeeSkillDto"][];
+            /** @description Vehicles this person may drive. Authorization only — nothing here implies ownership or a usual driver. */
+            authorizedVehicles: components["schemas"]["AuthorizedVehicleDto"][];
+            /** @description Convenience list of the same vehicle ids, for filtering in the UI. */
+            authorizedVehicleIds: string[];
+            /** @description Recorded absences. */
+            availability: components["schemas"]["AvailabilityDto"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PaginatedEmployeesDto: {
+            items: components["schemas"]["EmployeeDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        VehicleDto: {
+            /** Format: uuid */
+            id: string;
+            /** @example 253-4289 */
+            code: string;
+            /** @example Van( 04 People) 253-4289 */
+            label: string;
+            /** @example 4 */
+            seatCapacity?: number | null;
+            /** @enum {string|null} */
+            branchCode?: "COLOMBO" | "KANDY" | null;
+            isActive: boolean;
+            /** @description How many employees are authorised to drive it. */
+            authorizedDriverCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PaginatedVehiclesDto: {
+            items: components["schemas"]["VehicleDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        AuthorizedDriverDto: {
+            /** Format: uuid */
+            id: string;
+            fullName: string;
+            gradeLabel: string;
+            isPmsGrade: boolean;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** @enum {string} */
+            deploymentType: "MOBILE" | "PERMANENTLY_STATIONED";
+            isActive: boolean;
+        };
+        AuthorizedDriversResponseDto: {
+            vehicle: components["schemas"]["AuthorizedVehicleDto"];
+            drivers: components["schemas"]["AuthorizedDriverDto"][];
+            total: number;
+        };
+        BranchListItemDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            code: "COLOMBO" | "KANDY";
+            /** @example Colombo Branch */
+            name: string;
+            employeeCount: number;
+            vehicleCount: number;
+            /** @description Active PMS-grade supervisors. A branch with zero cannot be scheduled at all — every job needs one. */
+            pmsSupervisorCount: number;
+        };
+        SkillListItemDto: {
+            /** @example MBR_FUMIGATION */
+            skillCode: string;
+            /**
+             * @description Exactly as spelled in the workforce matrix.
+             * @example MBr Fumigation
+             */
+            skillLabel: string;
+            employeeCount: number;
+        };
     };
     responses: never;
     parameters: never;
@@ -697,7 +850,30 @@ export interface operations {
     };
     EmployeesController_list: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 1-based page number. */
+                page?: number;
+                /** @description Up to 200 per page. */
+                pageSize?: number;
+                /** @description Only employees of this branch. */
+                branch?: "COLOMBO" | "KANDY";
+                /** @description true returns only PMS-grade supervisors. Decided by the API from the grade — do not infer it from the job title. */
+                pmsGrade?: boolean;
+                /** @description PERMANENTLY_STATIONED for staff fixed to one site, MOBILE for dispatchable staff. */
+                deployment?: "MOBILE" | "PERMANENTLY_STATIONED";
+                /** @description Normalised skill code. See GET /api/skills. */
+                skill?: string;
+                /** @description Only employees authorised to drive this vehicle. */
+                vehicleId?: string;
+                /** @description Only employees with no recorded absence covering this date. Staff are available unless an absence says otherwise. */
+                availableOn?: string;
+                /** @description Only employees who can reach a site by bus or other public transport. */
+                canUsePublicTransport?: boolean;
+                /** @description Defaults to true. Pass false to see deactivated staff. */
+                active?: boolean;
+                /** @description Case-insensitive match on name or grade. */
+                search?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -708,7 +884,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["PaginatedEmployeesDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -728,6 +906,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -767,6 +953,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -792,6 +986,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -821,7 +1023,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -845,7 +1049,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -869,7 +1075,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -893,7 +1101,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -913,6 +1123,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -969,6 +1187,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -1018,7 +1244,17 @@ export interface operations {
     };
     VehiclesController_list: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 1-based page number. */
+                page?: number;
+                /** @description Up to 200 per page. */
+                pageSize?: number;
+                branch?: "COLOMBO" | "KANDY";
+                /** @description Defaults to true. */
+                active?: boolean;
+                /** @description Match on registration or label. */
+                search?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1029,7 +1265,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["PaginatedVehiclesDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1049,6 +1287,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -1074,6 +1320,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VehicleDto"];
+                };
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
@@ -1103,7 +1357,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["VehicleDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1130,7 +1386,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AuthorizedDriversResponseDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1154,7 +1412,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["VehicleDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1178,7 +1438,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["VehicleDto"];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1202,7 +1464,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["BranchListItemDto"][];
+                };
             };
             /** @description Missing or invalid token. */
             401: {
@@ -1226,7 +1490,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["SkillListItemDto"][];
+                };
             };
             /** @description Missing or invalid token. */
             401: {

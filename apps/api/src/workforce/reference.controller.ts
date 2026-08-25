@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { BranchListItemDto, SkillListItemDto } from './dto/responses.dto';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -18,7 +19,8 @@ export class ReferenceController {
     description:
       'Colombo and Kandy, with how many active staff each has. Staff may only serve work in their own branch.',
   })
-  async branches() {
+  @ApiResponse({ status: 200, type: [BranchListItemDto] })
+  async branches(): Promise<BranchListItemDto[]> {
     const branches = await this.prisma.branch.findMany({
       orderBy: { code: 'asc' },
       include: {
@@ -51,7 +53,8 @@ export class ReferenceController {
     description:
       'Distinct skills held by at least one employee, with how many hold each. Sourced from the workforce matrix column headings.',
   })
-  async skills() {
+  @ApiResponse({ status: 200, type: [SkillListItemDto] })
+  async skills(): Promise<SkillListItemDto[]> {
     const grouped = await this.prisma.employeeSkill.groupBy({
       by: ['skillCode', 'skillLabel'],
       _count: { _all: true },

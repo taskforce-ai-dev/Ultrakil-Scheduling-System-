@@ -35,3 +35,23 @@ if (typeof window.matchMedia === "undefined") {
     dispatchEvent: () => false,
   }) as unknown as MediaQueryList;
 }
+
+// jsdom ships no PointerEvent. Base UI's checkbox re-dispatches its activation
+// click as one (to carry modifier keys), so without this every checkbox click
+// throws "PointerEvent is not a constructor" mid-test.
+if (typeof window.PointerEvent === "undefined") {
+  class JsdomPointerEvent extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    readonly isPrimary: boolean;
+
+    constructor(type: string, params: PointerEventInit = {}) {
+      super(type, params);
+      this.pointerId = params.pointerId ?? 0;
+      this.pointerType = params.pointerType ?? "";
+      this.isPrimary = params.isPrimary ?? false;
+    }
+  }
+  window.PointerEvent = JsdomPointerEvent as unknown as typeof PointerEvent;
+  globalThis.PointerEvent = window.PointerEvent;
+}

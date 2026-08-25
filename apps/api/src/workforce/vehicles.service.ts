@@ -129,7 +129,15 @@ export class VehiclesService {
         { entityType: 'Vehicle', entityId: created.id, action: 'vehicle.created', actor, after: created },
         tx,
       );
-      return created;
+      // Re-read with the branch and authorization count, so every vehicle
+      // response has the same shape whatever produced it.
+      return tx.vehicle.findUniqueOrThrow({
+        where: { id: created.id },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          _count: { select: { authorizations: true } },
+        },
+      });
     });
   }
 
@@ -171,7 +179,13 @@ export class VehiclesService {
         { entityType: 'Vehicle', entityId: id, action: 'vehicle.updated', actor, before, after: updated },
         tx,
       );
-      return updated;
+      return tx.vehicle.findUniqueOrThrow({
+        where: { id },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          _count: { select: { authorizations: true } },
+        },
+      });
     });
   }
 
@@ -193,7 +207,13 @@ export class VehiclesService {
         },
         tx,
       );
-      return updated;
+      return tx.vehicle.findUniqueOrThrow({
+        where: { id },
+        include: {
+          branch: { select: { id: true, code: true, name: true } },
+          _count: { select: { authorizations: true } },
+        },
+      });
     });
   }
 

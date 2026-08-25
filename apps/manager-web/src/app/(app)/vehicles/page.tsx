@@ -21,34 +21,52 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
+import { LoadingState } from "@/components/shared/loading-state";
 import { BranchBadge, ActiveStatusBadge } from "@/components/shared/workforce-badges";
-import { mockEmployees, mockVehicles } from "@/lib/mock-data";
-import type { BranchCode } from "@/lib/mock-data/types";
+import { ApiError, fetchVehicles, type Vehicle } from "@/lib/api-client";
 
+type BranchCode = NonNullable<Vehicle["branchCode"]>;
+
+/** Live fleet from the API. Driver counts come with each vehicle. */
 export default function VehiclesPage() {
+  const [vehicles, setVehicles] = React.useState<Vehicle[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<ApiError | null>(null);
+
   const [search, setSearch] = React.useState("");
   const [branch, setBranch] = React.useState<BranchCode | "ALL">("ALL");
 
-  const driverCountByVehicle = React.useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const employee of mockEmployees) {
-      for (const vehicleId of employee.authorizedVehicleIds) {
-        counts.set(vehicleId, (counts.get(vehicleId) ?? 0) + 1);
-      }
-    }
-    return counts;
+  const load = React.useCallback(() => {
+    setIsLoading(true);
+    setError(null);
+    fetchVehicles({ pageSize: 200 })
+      .then((page) => setVehicles(page.items))
+      .catch((caught: unknown) => {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+        );
+      })
+      .finally(() => setIsLoading(false));
   }, []);
+
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
 
   const filteredVehicles = React.useMemo(() => {
     const query = search.trim().toLowerCase();
-    return mockVehicles.filter((vehicle) => {
+    return vehicles.filter((vehicle) => {
       if (query && !vehicle.label.toLowerCase().includes(query) && !vehicle.code.toLowerCase().includes(query)) {
         return false;
       }
       if (branch !== "ALL" && vehicle.branchCode !== branch) return false;
       return true;
     });
-  }, [search, branch]);
+  }, [vehicles, search, branch]);
 
   const hasActiveFilters = search !== "" || branch !== "ALL";
 
@@ -92,7 +110,16 @@ export default function VehiclesPage() {
         </div>
       </div>
 
-      {filteredVehicles.length === 0 ? (
+      {isLoading ? (
+        <LoadingState rows={6} />
+      ) : error ? (
+        <ErrorState
+          title="Couldn't load vehicles"
+          description={error.message}
+          code={error.code}
+          onRetry={load}
+        />
+      ) : filteredVehicles.length === 0 ? (
         <EmptyState
           title="No vehicles match these filters"
           description="Try clearing a filter or searching a different code."
@@ -122,10 +149,12 @@ export default function VehiclesPage() {
                   </Link>
                 </TableCell>
                 <TableCell>
-                  <BranchBadge branchCode={vehicle.branchCode} />
+                  {/* The contract marks branchCode optional (a vehicle need
+                      not be based anywhere), so normalise undefined to null. */}
+                  <BranchBadge branchCode={vehicle.branchCode ?? null} />
                 </TableCell>
                 <TableCell>{vehicle.seatCapacity ?? "—"}</TableCell>
-                <TableCell>{driverCountByVehicle.get(vehicle.id) ?? 0}</TableCell>
+                <TableCell>{vehicle.authorizedDriverCount}</TableCell>
                 <TableCell>
                   <ActiveStatusBadge isActive={vehicle.isActive} />
                 </TableCell>
