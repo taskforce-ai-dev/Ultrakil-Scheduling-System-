@@ -128,6 +128,25 @@ The seed needs the technician matrix workbook. See [`../data/README.md`](../data
 still succeeds; it loads the branches and skips the workforce import with a warning,
 so you are never blocked waiting for the file.
 
+### No matrix? Load the demo workforce
+
+The matrix holds real staff names, so it is not in the repository and most
+people will not have it. Without it every workforce screen is empty — correct
+behaviour that looks exactly like a bug. Load fabricated staff instead:
+
+```bash
+pnpm db:seed:demo
+```
+
+Fourteen invented employees across both branches, with PMS-grade supervisors,
+permanently stationed staff, seven vehicles and shared driving authorizations.
+Nothing in it refers to a real person. Re-run it whenever you like: it updates
+rather than duplicating.
+
+It refuses to run against a database that already holds real imported staff, so
+it cannot overwrite your matrix by accident. Use `pnpm db:seed:demo -- --force`
+only if you genuinely want both.
+
 ---
 
 ## 7. Run the services
@@ -293,6 +312,7 @@ Run `pnpm --filter @ultrakil/api prisma:generate`.
 | `pnpm db:migrate` | Apply new migrations |
 | `pnpm db:reset` | Drop, recreate, migrate and re-seed — wipes local data |
 | `pnpm db:seed` | Re-run the seed and matrix import (safe to repeat) |
+| `pnpm db:seed:demo` | Load a fabricated workforce when you have no matrix |
 | `pnpm test` | Unit tests |
 | `pnpm contracts:generate` | Regenerate the OpenAPI contract and TS client |
 | `pnpm lint` / `pnpm typecheck` | The same checks CI runs |
