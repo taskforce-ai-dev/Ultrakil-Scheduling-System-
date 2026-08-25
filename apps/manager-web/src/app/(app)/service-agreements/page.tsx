@@ -90,7 +90,7 @@ export default function ServiceAgreementsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Service Agreements</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Service Agreements</h1>
           <p className="text-muted-foreground">
             Recurring visit frequency, allowed days and crew requirements per customer.
           </p>

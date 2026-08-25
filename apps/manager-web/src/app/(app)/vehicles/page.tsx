@@ -78,13 +78,13 @@ export default function VehiclesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Vehicles</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Vehicles</h1>
         <p className="text-muted-foreground">
           Fleet vehicles and which employees are authorized to drive them.
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-4 rounded-lg border p-4">
+      <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
         <div className="min-w-48 flex-1 space-y-1.5">
           <Label htmlFor="vehicles-search">Search</Label>
           <Input

@@ -68,7 +68,7 @@ export default function CustomersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Customers</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
           <p className="text-muted-foreground">Manage customer accounts and their sites.</p>
         </div>
         <Button onClick={() => setDrawerOpen(true)}>

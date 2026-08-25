@@ -37,11 +37,22 @@ const NAV_ITEMS = [
   { href: "/schedule-history", label: "Schedule History", icon: History },
 ];
 
+function Brand() {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
+        U
+      </span>
+      <span className="text-base font-semibold tracking-tight text-white">UltraKIL</span>
+    </div>
+  );
+}
+
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <nav className="flex flex-col gap-1">
+    <nav className="flex flex-col gap-0.5">
       {NAV_ITEMS.map((item) => {
         const isActive = pathname === item.href;
         const Icon = item.icon;
@@ -51,20 +62,45 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
             key={item.href}
             href={item.href}
             onClick={onNavigate}
+            aria-current={isActive ? "page" : undefined}
             className={cn(
-              "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
               isActive
-                ? "bg-secondary text-secondary-foreground"
-                : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
+                : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
             )}
           >
-            <Icon className="h-4 w-4" aria-hidden="true" />
-            {item.label}
+            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{item.label}</span>
           </Link>
         );
       })}
     </nav>
+  );
+}
+
+function UserFooter({ name, onSignOut }: { name?: string; onSignOut: () => void }) {
+  const initial = name?.trim().charAt(0).toUpperCase() || "U";
+
+  return (
+    <div className="flex items-center justify-between gap-2 border-t border-sidebar-border p-3">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-semibold text-sidebar-foreground">
+          {initial}
+        </span>
+        <span className="truncate text-sm font-medium text-sidebar-foreground">{name}</span>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="Sign out"
+        onClick={onSignOut}
+        className="shrink-0 text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+      >
+        <LogOut className="h-4 w-4" />
+      </Button>
+    </div>
   );
 }
 
@@ -73,48 +109,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="hidden w-64 shrink-0 border-r bg-background lg:flex lg:flex-col">
-        <div className="flex h-14 items-center border-b px-4">
-          <span className="font-semibold">UltraKIL</span>
+    <div className="flex min-h-screen bg-background">
+      <aside className="hidden w-64 shrink-0 bg-sidebar lg:flex lg:flex-col">
+        <div className="flex h-14 items-center px-4">
+          <Brand />
         </div>
-        <div className="flex-1 overflow-y-auto p-3">
+        <div className="flex-1 overflow-y-auto px-3 py-4">
           <NavLinks />
         </div>
-        <div className="flex items-center justify-between gap-2 border-t p-3">
-          <span className="truncate text-sm text-muted-foreground">{user?.fullName}</span>
-          <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
-            <LogOut className="h-4 w-4" />
-          </Button>
-        </div>
+        <UserFooter name={user?.fullName} onSignOut={logout} />
       </aside>
 
       <div className="flex flex-1 flex-col">
-        <header className="flex h-14 items-center gap-3 border-b px-4 lg:hidden">
+        <header className="flex h-14 items-center gap-3 bg-sidebar px-4 lg:hidden">
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
             <SheetTrigger
               render={
-                <Button variant="ghost" size="icon" aria-label="Open navigation menu">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Open navigation menu"
+                  className="text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                >
                   <Menu className="h-5 w-5" />
                 </Button>
               }
             />
-            <SheetContent side="left" className="w-64 p-0">
-              <SheetTitle className="flex h-14 items-center border-b px-4 text-base">
-                UltraKIL
+            <SheetContent side="left" className="w-64 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
+              <SheetTitle className="flex h-14 items-center px-4">
+                <Brand />
               </SheetTitle>
-              <div className="flex-1 p-3">
+              <div className="flex-1 px-3 py-4">
                 <NavLinks onNavigate={() => setMobileNavOpen(false)} />
               </div>
-              <div className="flex items-center justify-between gap-2 border-t p-3">
-                <span className="truncate text-sm text-muted-foreground">{user?.fullName}</span>
-                <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              </div>
+              <UserFooter name={user?.fullName} onSignOut={logout} />
             </SheetContent>
           </Sheet>
-          <span className="font-semibold">UltraKIL</span>
+          <Brand />
         </header>
 
         <main className="flex-1 p-6">{children}</main>

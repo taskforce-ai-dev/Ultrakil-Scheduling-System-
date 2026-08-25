@@ -28,7 +28,7 @@ export default async function VehicleDetailPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">{vehicle.label}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{vehicle.label}</h1>
         <p className="text-sm text-muted-foreground">Vehicle code: {vehicle.code}</p>
       </div>
 
@@ -37,12 +37,12 @@ export default async function VehicleDetailPage({
         <ActiveStatusBadge isActive={vehicle.isActive} />
       </div>
 
-      <section className="space-y-2 rounded-lg border p-4">
+      <section className="space-y-2 rounded-xl border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-medium text-muted-foreground">Seat capacity</h2>
         <p className="text-lg">{vehicle.seatCapacity ?? "Not recorded"}</p>
       </section>
 
-      <section className="space-y-3 rounded-lg border p-4">
+      <section className="space-y-3 rounded-xl border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-medium text-muted-foreground">Authorized drivers</h2>
         <p className="text-sm text-muted-foreground">
           Every employee listed here is authorized to drive this vehicle — this is not an ownership or
