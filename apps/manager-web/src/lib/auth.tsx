@@ -2,63 +2,80 @@
 
 import * as React from "react";
 
-/**
- * Chanya's API has no auth endpoint yet. Every component talks to `useAuth()`
- * only, so swapping the placeholder below for a real session check is a
- * one-file change when that endpoint exists.
- */
-export type ManagerRole = "MANAGER" | "SUPERVISOR" | "ADMIN";
+import {
+  ApiError,
+  fetchCurrentUser,
+  login as loginRequest,
+  type CurrentUser,
+} from "./api-client";
+import { clearToken, readToken, writeToken } from "./session-token";
 
-export interface AuthUser {
-  id: string;
-  name: string;
-  role: ManagerRole;
-}
+/**
+ * Real sessions, backed by the API's `/api/auth/*` endpoints.
+ *
+ * The role list comes from the backend's UserRole enum. There is deliberately
+ * no SUPERVISOR here: the API knows ADMIN and MANAGER, and inventing a third
+ * role in the UI would mean the portal offering actions the API refuses.
+ */
+export type ManagerRole = CurrentUser["role"];
+
+export type AuthUser = CurrentUser;
 
 interface AuthContextValue {
   user: AuthUser | null;
   isAuthenticated: boolean;
+  /** True until the stored token has been checked against the API. */
   isLoading: boolean;
-  login: (name: string) => void;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = React.createContext<AuthContextValue | undefined>(undefined);
-
-const SESSION_STORAGE_KEY = "ultrakil.manager-web.session";
-
-function readStoredSession(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
-  } catch {
-    return null;
-  }
-}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
 
   React.useEffect(() => {
-    // Reads browser storage (an external system), which is exactly the case
-    // React's effect docs recommend an effect for. Runs once, deferred until
-    // after the client mount, so SSR and the first client render agree
-    // before this reconciles with the real session.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setUser(readStoredSession());
-    setIsLoading(false);
+    let cancelled = false;
+
+    async function restore() {
+      // A token in storage is not proof of a session: it may have expired, or
+      // the account may have been deactivated since. Ask the API rather than
+      // trusting what the browser kept.
+      if (!readToken()) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+
+      try {
+        const current = await fetchCurrentUser();
+        if (!cancelled) setUser(current);
+      } catch {
+        // api-client already dropped the token for session-ended codes.
+        clearToken();
+        if (!cancelled) setUser(null);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    // Talks to an external system on mount, which is what effects are for.
+    void restore();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const login = React.useCallback((name: string) => {
-    const nextUser: AuthUser = { id: "placeholder-user", name, role: "MANAGER" };
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
-    setUser(nextUser);
+  const login = React.useCallback(async (email: string, password: string) => {
+    const result = await loginRequest(email, password);
+    writeToken(result.accessToken);
+    setUser(result.user);
   }, []);
 
   const logout = React.useCallback(() => {
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    clearToken();
     setUser(null);
   }, []);
 
@@ -76,4 +93,10 @@ export function useAuth(): AuthContextValue {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return context;
+}
+
+/** Turns a failed sign-in into something worth showing a manager. */
+export function describeLoginError(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  return "Could not sign in. Please try again.";
 }

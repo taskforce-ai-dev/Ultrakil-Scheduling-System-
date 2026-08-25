@@ -82,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <NavLinks />
         </div>
         <div className="flex items-center justify-between gap-2 border-t p-3">
-          <span className="truncate text-sm text-muted-foreground">{user?.name}</span>
+          <span className="truncate text-sm text-muted-foreground">{user?.fullName}</span>
           <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
             <LogOut className="h-4 w-4" />
           </Button>
@@ -107,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <NavLinks onNavigate={() => setMobileNavOpen(false)} />
               </div>
               <div className="flex items-center justify-between gap-2 border-t p-3">
-                <span className="truncate text-sm text-muted-foreground">{user?.name}</span>
+                <span className="truncate text-sm text-muted-foreground">{user?.fullName}</span>
                 <Button variant="ghost" size="icon" aria-label="Sign out" onClick={logout}>
                   <LogOut className="h-4 w-4" />
                 </Button>

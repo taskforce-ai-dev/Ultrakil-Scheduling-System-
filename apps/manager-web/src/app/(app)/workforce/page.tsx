@@ -21,6 +21,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
+import { LoadingState } from "@/components/shared/loading-state";
 import {
   BranchBadge,
   PmsBadge,
@@ -28,18 +30,31 @@ import {
   ActiveStatusBadge,
   VehicleAuthCount,
 } from "@/components/shared/workforce-badges";
-import { mockEmployees, mockVehicles } from "@/lib/mock-data";
-import type { BranchCode } from "@/lib/mock-data/types";
+import {
+  ApiError,
+  fetchEmployees,
+  fetchVehicles,
+  type Employee,
+  type Vehicle,
+} from "@/lib/api-client";
 
+type BranchCode = Employee["branchCode"];
 type TriState = "ALL" | "YES" | "NO";
 
 /**
- * Low-fidelity screen consuming mock data grounded in the real Employee
- * schema (ULK-C02 hasn't published real endpoints yet — see the PR
- * description). Filtering here is pure display convenience, not a
- * business-rule decision: it never decides what's schedulable.
+ * Live workforce from the API.
+ *
+ * Filtering stays client-side over the loaded page: there are 37 employees,
+ * so a round trip per keystroke would be slower and no more correct. It is
+ * display convenience only and never decides what is schedulable — every
+ * scheduling rule, `isPmsGrade` included, is the API's answer, not the UI's.
  */
 export default function WorkforcePage() {
+  const [employees, setEmployees] = React.useState<Employee[]>([]);
+  const [vehicles, setVehicles] = React.useState<Vehicle[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<ApiError | null>(null);
+
   const [search, setSearch] = React.useState("");
   const [branch, setBranch] = React.useState<BranchCode | "ALL">("ALL");
   const [pmsOnly, setPmsOnly] = React.useState<TriState>("ALL");
@@ -47,20 +62,52 @@ export default function WorkforcePage() {
   const [skillCode, setSkillCode] = React.useState<string>("ALL");
   const [vehicleId, setVehicleId] = React.useState<string>("ALL");
 
+  const load = React.useCallback(() => {
+    setIsLoading(true);
+    setError(null);
+    // pageSize covers the whole workforce in one call; the API caps it at 200
+    // and there are 37 people. Revisit if UltraKIL grows past that.
+    Promise.all([
+      fetchEmployees({ pageSize: 200 }),
+      fetchVehicles({ pageSize: 200 }),
+    ])
+      .then(([employeePage, vehiclePage]) => {
+        setEmployees(employeePage.items);
+        setVehicles(vehiclePage.items);
+      })
+      .catch((caught: unknown) => {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+        );
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    // Fetching from the API on mount — an external system, which is what
+    // effects are for.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
   const skillOptions = React.useMemo(() => {
     const seen = new Map<string, string>();
-    for (const employee of mockEmployees) {
+    for (const employee of employees) {
       for (const skill of employee.skills) {
         seen.set(skill.skillCode, skill.skillLabel);
       }
     }
-    return Array.from(seen, ([code, label]) => ({ code, label }));
-  }, []);
+    return Array.from(seen, ([code, label]) => ({ code, label })).sort((a, b) =>
+      a.label.localeCompare(b.label)
+    );
+  }, [employees]);
 
   const filteredEmployees = React.useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return mockEmployees.filter((employee) => {
+    return employees.filter((employee) => {
       if (query && !employee.fullName.toLowerCase().includes(query)) return false;
       if (branch !== "ALL" && employee.branchCode !== branch) return false;
       if (pmsOnly === "YES" && !employee.isPmsGrade) return false;
@@ -71,7 +118,7 @@ export default function WorkforcePage() {
       if (vehicleId !== "ALL" && !employee.authorizedVehicleIds.includes(vehicleId)) return false;
       return true;
     });
-  }, [search, branch, pmsOnly, permanentOnly, skillCode, vehicleId]);
+  }, [employees, search, branch, pmsOnly, permanentOnly, skillCode, vehicleId]);
 
   const hasActiveFilters =
     search !== "" || branch !== "ALL" || pmsOnly !== "ALL" || permanentOnly !== "ALL" || skillCode !== "ALL" || vehicleId !== "ALL";
@@ -172,7 +219,7 @@ export default function WorkforcePage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">Any vehicle</SelectItem>
-              {mockVehicles.map((vehicle) => (
+              {vehicles.map((vehicle) => (
                 <SelectItem key={vehicle.id} value={vehicle.id}>
                   {vehicle.label}
                 </SelectItem>
@@ -182,7 +229,16 @@ export default function WorkforcePage() {
         </div>
       </div>
 
-      {filteredEmployees.length === 0 ? (
+      {isLoading ? (
+        <LoadingState rows={6} />
+      ) : error ? (
+        <ErrorState
+          title="Couldn't load the workforce"
+          description={error.message}
+          code={error.code}
+          onRetry={load}
+        />
+      ) : filteredEmployees.length === 0 ? (
         <EmptyState
           title="No employees match these filters"
           description="Try clearing a filter or searching a different name."

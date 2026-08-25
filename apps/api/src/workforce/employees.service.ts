@@ -364,7 +364,6 @@ export class EmployeesService {
     return this.prisma.$transaction(async (tx) => {
       const created = await tx.vehicleAuthorization.create({
         data: { employeeId: id, vehicleId },
-        include: { vehicle: true },
       });
 
       await this.audit.record(
@@ -377,7 +376,13 @@ export class EmployeesService {
         },
         tx,
       );
-      return created;
+
+      // Return the employee, not the join row: the caller is showing a person
+      // and can replace that one row instead of refetching the list.
+      return tx.employee.findUniqueOrThrow({
+        where: { id },
+        include: EMPLOYEE_INCLUDE,
+      });
     });
   }
 
@@ -478,7 +483,11 @@ export class EmployeesService {
         },
         tx,
       );
-      return created;
+
+      return tx.employee.findUniqueOrThrow({
+        where: { id },
+        include: EMPLOYEE_INCLUDE,
+      });
     });
   }
 

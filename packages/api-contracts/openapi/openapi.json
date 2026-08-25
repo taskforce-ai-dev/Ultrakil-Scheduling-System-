@@ -141,10 +141,131 @@
       "get": {
         "description": "Filter by branch, PMS eligibility, deployment, skill, vehicle authorization, availability on a date and public-transport capability. PMS eligibility is decided by the API from the grade — never infer it in the client from the job title.",
         "operationId": "EmployeesController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "description": "Up to 200 per page.",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "branch",
+            "required": false,
+            "in": "query",
+            "description": "Only employees of this branch.",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "pmsGrade",
+            "required": false,
+            "in": "query",
+            "description": "true returns only PMS-grade supervisors. Decided by the API from the grade — do not infer it from the job title.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "deployment",
+            "required": false,
+            "in": "query",
+            "description": "PERMANENTLY_STATIONED for staff fixed to one site, MOBILE for dispatchable staff.",
+            "schema": {
+              "enum": [
+                "MOBILE",
+                "PERMANENTLY_STATIONED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "skill",
+            "required": false,
+            "in": "query",
+            "description": "Normalised skill code. See GET /api/skills.",
+            "schema": {
+              "example": "MBR_FUMIGATION",
+              "type": "string"
+            }
+          },
+          {
+            "name": "vehicleId",
+            "required": false,
+            "in": "query",
+            "description": "Only employees authorised to drive this vehicle.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "availableOn",
+            "required": false,
+            "in": "query",
+            "description": "Only employees with no recorded absence covering this date. Staff are available unless an absence says otherwise.",
+            "schema": {
+              "format": "date",
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "canUsePublicTransport",
+            "required": false,
+            "in": "query",
+            "description": "Only employees who can reach a site by bus or other public transport.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Defaults to true. Pass false to see deactivated staff.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Case-insensitive match on name or grade.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedEmployeesDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -165,6 +286,16 @@
         "operationId": "EmployeesController_create",
         "parameters": [],
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -195,6 +326,16 @@
         "operationId": "EmployeesController_findOne",
         "parameters": [],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -217,6 +358,16 @@
         "operationId": "EmployeesController_update",
         "parameters": [],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -242,7 +393,14 @@
         "parameters": [],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -266,7 +424,14 @@
         "parameters": [],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -290,7 +455,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -314,7 +486,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -337,6 +516,16 @@
         "operationId": "EmployeesController_authorize",
         "parameters": [],
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -385,6 +574,16 @@
         "operationId": "EmployeesController_addAvailability",
         "parameters": [],
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -432,10 +631,68 @@
     "/api/vehicles": {
       "get": {
         "operationId": "VehiclesController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "description": "Up to 200 per page.",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "branch",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Defaults to true.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Match on registration or label.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedVehiclesDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -456,6 +713,16 @@
         "operationId": "VehiclesController_create",
         "parameters": [],
         "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -479,6 +746,16 @@
         "operationId": "VehiclesController_findOne",
         "parameters": [],
         "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleDto"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid token."
           },
@@ -502,7 +779,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -536,7 +820,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizedDriversResponseDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -560,7 +851,14 @@
         "parameters": [],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -584,7 +882,14 @@
         "parameters": [],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VehicleDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -608,7 +913,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BranchListItemDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -632,7 +947,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SkillListItemDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid token."
@@ -911,6 +1236,455 @@
           "pmsGradeLabels",
           "frequencyUnits",
           "errorCodes"
+        ]
+      },
+      "BranchSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "example": "Colombo Branch"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name"
+        ]
+      },
+      "EmployeeSkillDto": {
+        "type": "object",
+        "properties": {
+          "skillCode": {
+            "type": "string",
+            "example": "MBR_FUMIGATION"
+          },
+          "skillLabel": {
+            "type": "string",
+            "example": "MBr Fumigation",
+            "description": "Exactly as spelled in the workforce matrix."
+          }
+        },
+        "required": [
+          "skillCode",
+          "skillLabel"
+        ]
+      },
+      "AuthorizedVehicleDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "example": "253-4289"
+          },
+          "label": {
+            "type": "string",
+            "example": "Van( 04 People) 253-4289"
+          },
+          "seatCapacity": {
+            "type": "number",
+            "nullable": true,
+            "example": 4
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "label"
+        ]
+      },
+      "AvailabilityDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-09-01"
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-09-05",
+            "description": "Inclusive."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "LEAVE",
+              "SICK",
+              "TRAINING",
+              "OTHER"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "startDate",
+          "endDate",
+          "kind"
+        ]
+      },
+      "EmployeeDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "employeeCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "fullName": {
+            "type": "string",
+            "example": "A Perera"
+          },
+          "gradeLabel": {
+            "type": "string",
+            "example": "Senoir PMS",
+            "description": "Exactly as spelled in the workforce matrix, typos included. Never parse this to decide seniority — use isPmsGrade."
+          },
+          "isPmsGrade": {
+            "type": "boolean",
+            "description": "Whether this person satisfies the \"every job needs a PMS-grade supervisor\" rule. Decided by the API from the grade; clients must not infer it from the label."
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "branch": {
+            "$ref": "#/components/schemas/BranchSummaryDto"
+          },
+          "deploymentType": {
+            "type": "string",
+            "enum": [
+              "MOBILE",
+              "PERMANENTLY_STATIONED"
+            ]
+          },
+          "permanentSiteLabel": {
+            "type": "string",
+            "nullable": true,
+            "example": "Lion Brewery",
+            "description": "Set only for permanently stationed staff, who are never dispatched elsewhere."
+          },
+          "canUsePublicTransport": {
+            "type": "boolean",
+            "description": "Can reach a site by bus or other public transport, so a crew can be sent without a company vehicle."
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmployeeSkillDto"
+            }
+          },
+          "authorizedVehicles": {
+            "description": "Vehicles this person may drive. Authorization only — nothing here implies ownership or a usual driver.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizedVehicleDto"
+            }
+          },
+          "authorizedVehicleIds": {
+            "description": "Convenience list of the same vehicle ids, for filtering in the UI.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "availability": {
+            "description": "Recorded absences.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvailabilityDto"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "fullName",
+          "gradeLabel",
+          "isPmsGrade",
+          "branchCode",
+          "branch",
+          "deploymentType",
+          "canUsePublicTransport",
+          "isActive",
+          "skills",
+          "authorizedVehicles",
+          "authorizedVehicleIds",
+          "availability",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedEmployeesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmployeeDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "VehicleDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "example": "253-4289"
+          },
+          "label": {
+            "type": "string",
+            "example": "Van( 04 People) 253-4289"
+          },
+          "seatCapacity": {
+            "type": "number",
+            "nullable": true,
+            "example": 4
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "authorizedDriverCount": {
+            "type": "number",
+            "description": "How many employees are authorised to drive it."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "label",
+          "isActive",
+          "authorizedDriverCount",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedVehiclesDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VehicleDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "AuthorizedDriverDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "gradeLabel": {
+            "type": "string"
+          },
+          "isPmsGrade": {
+            "type": "boolean"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "deploymentType": {
+            "type": "string",
+            "enum": [
+              "MOBILE",
+              "PERMANENTLY_STATIONED"
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "fullName",
+          "gradeLabel",
+          "isPmsGrade",
+          "branchCode",
+          "deploymentType",
+          "isActive"
+        ]
+      },
+      "AuthorizedDriversResponseDto": {
+        "type": "object",
+        "properties": {
+          "vehicle": {
+            "$ref": "#/components/schemas/AuthorizedVehicleDto"
+          },
+          "drivers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthorizedDriverDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "vehicle",
+          "drivers",
+          "total"
+        ]
+      },
+      "BranchListItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "example": "Colombo Branch"
+          },
+          "employeeCount": {
+            "type": "number"
+          },
+          "vehicleCount": {
+            "type": "number"
+          },
+          "pmsSupervisorCount": {
+            "type": "number",
+            "description": "Active PMS-grade supervisors. A branch with zero cannot be scheduled at all — every job needs one."
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "employeeCount",
+          "vehicleCount",
+          "pmsSupervisorCount"
+        ]
+      },
+      "SkillListItemDto": {
+        "type": "object",
+        "properties": {
+          "skillCode": {
+            "type": "string",
+            "example": "MBR_FUMIGATION"
+          },
+          "skillLabel": {
+            "type": "string",
+            "example": "MBr Fumigation",
+            "description": "Exactly as spelled in the workforce matrix."
+          },
+          "employeeCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "skillCode",
+          "skillLabel",
+          "employeeCount"
         ]
       }
     }

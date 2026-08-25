@@ -24,14 +24,20 @@ import {
   PermanentBadge,
   ActiveStatusBadge,
 } from "@/components/shared/workforce-badges";
-import { mockVehicles } from "@/lib/mock-data";
-import type { Employee } from "@/lib/mock-data/types";
-import { submitVehicleAuthorizations } from "@/lib/mock-data/actions";
-import { ApiError } from "@/lib/api-client";
+import { ApiError, type Employee, type Vehicle } from "@/lib/api-client";
+import { submitVehicleAuthorizations } from "@/lib/workforce-actions";
 import { notify } from "@/lib/notify";
 
-export function EmployeeDetailView({ employee }: { employee: Employee }) {
-  const [authorizedVehicleIds, setAuthorizedVehicleIds] = React.useState(employee.authorizedVehicleIds);
+export function EmployeeDetailView({
+  employee,
+  vehicles,
+}: {
+  employee: Employee;
+  vehicles: Vehicle[];
+}) {
+  const [authorizedVehicleIds, setAuthorizedVehicleIds] = React.useState(
+    employee.authorizedVehicleIds
+  );
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [draftVehicleIds, setDraftVehicleIds] = React.useState<string[]>(authorizedVehicleIds);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -55,8 +61,14 @@ export function EmployeeDetailView({ employee }: { employee: Employee }) {
     setIsSaving(true);
     setSaveError(null);
     try {
-      await submitVehicleAuthorizations(employee.id, draftVehicleIds);
-      setAuthorizedVehicleIds(draftVehicleIds);
+      // Trust what comes back rather than the draft: a later call in the
+      // sequence may have failed after earlier ones succeeded.
+      const saved = await submitVehicleAuthorizations(
+        employee.id,
+        authorizedVehicleIds,
+        draftVehicleIds
+      );
+      setAuthorizedVehicleIds(saved.authorizedVehicleIds);
       notify.success("Vehicle authorizations updated.");
       setDrawerOpen(false);
     } catch (caught) {
@@ -70,7 +82,9 @@ export function EmployeeDetailView({ employee }: { employee: Employee }) {
     }
   }
 
-  const authorizedVehicles = mockVehicles.filter((vehicle) => authorizedVehicleIds.includes(vehicle.id));
+  const authorizedVehicles = vehicles.filter((vehicle) =>
+    authorizedVehicleIds.includes(vehicle.id)
+  );
 
   return (
     <div className="space-y-6">
@@ -146,7 +160,7 @@ export function EmployeeDetailView({ employee }: { employee: Employee }) {
                     Authorized to drive — not the vehicle&apos;s owner or primary driver.
                   </p>
                 </div>
-                <BranchBadge branchCode={vehicle.branchCode} />
+                <BranchBadge branchCode={vehicle.branchCode ?? null} />
               </li>
             ))}
           </ul>
@@ -175,7 +189,7 @@ export function EmployeeDetailView({ employee }: { employee: Employee }) {
           )}
 
           <div className="space-y-3">
-            {mockVehicles.map((vehicle) => {
+            {vehicles.map((vehicle) => {
               const checkboxId = `vehicle-auth-${vehicle.id}`;
               return (
                 <div key={vehicle.id} className="flex items-center gap-3">
@@ -187,7 +201,7 @@ export function EmployeeDetailView({ employee }: { employee: Employee }) {
                   <Label htmlFor={checkboxId} className="flex-1 font-normal">
                     {vehicle.label}
                   </Label>
-                  <BranchBadge branchCode={vehicle.branchCode} />
+                  <BranchBadge branchCode={vehicle.branchCode ?? null} />
                 </div>
               );
             })}

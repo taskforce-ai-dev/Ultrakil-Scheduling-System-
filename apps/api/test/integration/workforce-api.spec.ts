@@ -543,6 +543,17 @@ describe('vehicle authorization', () => {
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('AUTHORIZATION_NOT_FOUND');
   });
+
+  // The portal branches on `code` alone, so an unrouted URL must not come back
+  // wearing a code that means something else. It used to report a conflict.
+  it('gives an unknown route a not-found code, not a conflict', async () => {
+    const res = await request(http)
+      .get('/api/employees/no-such-sub-resource/nowhere')
+      .set(auth(adminToken));
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('RESOURCE_NOT_FOUND');
+  });
 });
 
 describe('deactivation instead of deletion', () => {

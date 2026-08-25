@@ -30,7 +30,10 @@ import {
   UpdateEmployeeDto,
 } from './dto/employee.dto';
 import { EmployeeQueryDto } from './dto/query.dto';
+import { ApiEmployeeQuery } from './dto/query.swagger';
+import { EmployeeDto, PaginatedEmployeesDto } from './dto/responses.dto';
 import { EmployeesService } from './employees.service';
+import { toEmployeeDto } from './workforce.mapper';
 
 @ApiTags('workforce')
 @ApiBearerAuth('bearer')
@@ -45,8 +48,11 @@ export class EmployeesController {
     description:
       'Filter by branch, PMS eligibility, deployment, skill, vehicle authorization, availability on a date and public-transport capability. PMS eligibility is decided by the API from the grade — never infer it in the client from the job title.',
   })
-  list(@Query() query: EmployeeQueryDto) {
-    return this.employees.list(query);
+  @ApiEmployeeQuery()
+  @ApiResponse({ status: 200, type: PaginatedEmployeesDto })
+  async list(@Query() query: EmployeeQueryDto): Promise<PaginatedEmployeesDto> {
+    const result = await this.employees.list(query);
+    return { ...result, items: result.items.map(toEmployeeDto) };
   }
 
   @Get(':id')
@@ -55,9 +61,10 @@ export class EmployeesController {
     description:
       'Includes skills, driving authorizations, recorded absences and the permanent site if there is one.',
   })
+  @ApiResponse({ status: 200, type: EmployeeDto })
   @ApiResponse({ status: 404, description: 'No such employee.' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.employees.findOne(id);
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.findOne(id));
   }
 
   @Post()
@@ -72,8 +79,12 @@ export class EmployeesController {
     status: 422,
     description: 'PERMANENT_SITE_REQUIRED — a stationed employee must name a site.',
   })
-  create(@Body() dto: CreateEmployeeDto, @CurrentUser() actor: AuthenticatedUser) {
-    return this.employees.create(dto, actor);
+  @ApiResponse({ status: 201, type: EmployeeDto })
+  async create(
+    @Body() dto: CreateEmployeeDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.create(dto, actor));
   }
 
   @Patch(':id')
@@ -87,12 +98,13 @@ export class EmployeesController {
     description:
       'PERMANENT_EMPLOYEE_CANNOT_CHANGE_BRANCH or PERMANENT_SITE_REQUIRED.',
   })
-  update(
+  @ApiResponse({ status: 200, type: EmployeeDto })
+  async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEmployeeDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.update(id, dto, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.update(id, dto, actor));
   }
 
   @Post(':id/deactivate')
@@ -102,21 +114,23 @@ export class EmployeesController {
     description:
       'Admin only. Records are never deleted — completed assignments reference them, and history that loses its crew is worse than a disabled record.',
   })
-  deactivate(
+  @ApiResponse({ status: 201, type: EmployeeDto })
+  async deactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.setActive(id, false, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.setActive(id, false, actor));
   }
 
   @Post(':id/reactivate')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Reactivate an employee', description: 'Admin only.' })
-  reactivate(
+  @ApiResponse({ status: 201, type: EmployeeDto })
+  async reactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.setActive(id, true, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.setActive(id, true, actor));
   }
 
   @Put(':id/permanent-assignment')
@@ -125,12 +139,15 @@ export class EmployeesController {
     description:
       'Naming a site marks the employee PERMANENTLY_STATIONED; passing null makes them MOBILE again. Sites are held as labels until customer sites exist (ULK-C03).',
   })
-  setPermanentAssignment(
+  @ApiResponse({ status: 200, type: EmployeeDto })
+  async setPermanentAssignment(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetPermanentAssignmentDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.setPermanentAssignment(id, dto.siteLabel, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(
+      await this.employees.setPermanentAssignment(id, dto.siteLabel, actor),
+    );
   }
 
   @Put(':id/skills')
@@ -138,12 +155,13 @@ export class EmployeesController {
     summary: 'Replace an employee’s skills',
     description: 'The list given becomes the complete set. Anything omitted is removed.',
   })
-  replaceSkills(
+  @ApiResponse({ status: 200, type: EmployeeDto })
+  async replaceSkills(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReplaceSkillsDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.replaceSkills(id, dto.skills, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.replaceSkills(id, dto.skills, actor));
   }
 
   @Post(':id/vehicle-authorizations/:vehicleId')
@@ -154,12 +172,13 @@ export class EmployeesController {
   })
   @ApiResponse({ status: 409, description: 'Already authorised.' })
   @ApiResponse({ status: 422, description: 'Employee or vehicle is deactivated.' })
-  authorize(
+  @ApiResponse({ status: 201, type: EmployeeDto })
+  async authorize(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('vehicleId', ParseUUIDPipe) vehicleId: string,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.authorizeVehicle(id, vehicleId, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.authorizeVehicle(id, vehicleId, actor));
   }
 
   @Delete(':id/vehicle-authorizations/:vehicleId')
@@ -181,12 +200,13 @@ export class EmployeesController {
   })
   @ApiResponse({ status: 409, description: 'AVAILABILITY_OVERLAPS with an existing absence.' })
   @ApiResponse({ status: 422, description: 'AVAILABILITY_RANGE_INVALID — end before start.' })
-  addAvailability(
+  @ApiResponse({ status: 201, type: EmployeeDto })
+  async addAvailability(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateAvailabilityDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.employees.addAvailability(id, dto, actor);
+  ): Promise<EmployeeDto> {
+    return toEmployeeDto(await this.employees.addAvailability(id, dto, actor));
   }
 
   @Delete(':id/availability/:availabilityId')

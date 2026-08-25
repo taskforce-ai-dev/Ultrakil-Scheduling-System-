@@ -14,8 +14,15 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { VehicleQueryDto } from './dto/query.dto';
+import { ApiVehicleQuery } from './dto/query.swagger';
+import {
+  AuthorizedDriversResponseDto,
+  PaginatedVehiclesDto,
+  VehicleDto,
+} from './dto/responses.dto';
 import { CreateVehicleDto, UpdateVehicleDto } from './dto/vehicle.dto';
 import { VehiclesService } from './vehicles.service';
+import { toVehicleDto } from './workforce.mapper';
 
 @ApiTags('workforce')
 @ApiBearerAuth('bearer')
@@ -26,15 +33,19 @@ export class VehiclesController {
 
   @Get()
   @ApiOperation({ summary: 'List vehicles' })
-  list(@Query() query: VehicleQueryDto) {
-    return this.vehicles.list(query);
+  @ApiVehicleQuery()
+  @ApiResponse({ status: 200, type: PaginatedVehiclesDto })
+  async list(@Query() query: VehicleQueryDto): Promise<PaginatedVehiclesDto> {
+    const result = await this.vehicles.list(query);
+    return { ...result, items: result.items.map(toVehicleDto) };
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'One vehicle' })
+  @ApiResponse({ status: 200, type: VehicleDto })
   @ApiResponse({ status: 404, description: 'No such vehicle.' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.vehicles.findOne(id);
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<VehicleDto> {
+    return toVehicleDto(await this.vehicles.findOne(id));
   }
 
   @Get(':id/authorized-drivers')
@@ -49,10 +60,11 @@ export class VehiclesController {
     type: Boolean,
     description: 'Include deactivated employees. Defaults to false.',
   })
+  @ApiResponse({ status: 200, type: AuthorizedDriversResponseDto })
   authorizedDrivers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query('includeInactive') includeInactive?: string,
-  ) {
+  ): Promise<AuthorizedDriversResponseDto> {
     return this.vehicles.authorizedDrivers(id, includeInactive === 'true');
   }
 
@@ -60,19 +72,24 @@ export class VehiclesController {
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Add a vehicle', description: 'Admin only.' })
   @ApiResponse({ status: 409, description: 'VEHICLE_CODE_TAKEN.' })
-  create(@Body() dto: CreateVehicleDto, @CurrentUser() actor: AuthenticatedUser) {
-    return this.vehicles.create(dto, actor);
+  @ApiResponse({ status: 201, type: VehicleDto })
+  async create(
+    @Body() dto: CreateVehicleDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<VehicleDto> {
+    return toVehicleDto(await this.vehicles.create(dto, actor));
   }
 
   @Patch(':id')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Update a vehicle', description: 'Admin only.' })
-  update(
+  @ApiResponse({ status: 200, type: VehicleDto })
+  async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateVehicleDto,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.vehicles.update(id, dto, actor);
+  ): Promise<VehicleDto> {
+    return toVehicleDto(await this.vehicles.update(id, dto, actor));
   }
 
   @Post(':id/deactivate')
@@ -81,20 +98,22 @@ export class VehiclesController {
     summary: 'Deactivate a vehicle',
     description: 'Admin only. Never deleted — published assignments reference it.',
   })
-  deactivate(
+  @ApiResponse({ status: 201, type: VehicleDto })
+  async deactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.vehicles.setActive(id, false, actor);
+  ): Promise<VehicleDto> {
+    return toVehicleDto(await this.vehicles.setActive(id, false, actor));
   }
 
   @Post(':id/reactivate')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Reactivate a vehicle', description: 'Admin only.' })
-  reactivate(
+  @ApiResponse({ status: 201, type: VehicleDto })
+  async reactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
-  ) {
-    return this.vehicles.setActive(id, true, actor);
+  ): Promise<VehicleDto> {
+    return toVehicleDto(await this.vehicles.setActive(id, true, actor));
   }
 }
