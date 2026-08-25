@@ -8,11 +8,55 @@ export type MetaResponse =
 export type HealthResponse =
   paths["/api/health/ready"]["get"]["responses"]["200"]["content"]["application/json"];
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`);
-  if (!response.ok) {
-    throw new Error(`Request to ${path} failed with status ${response.status}`);
+/**
+ * Every error response from Chanya's API carries this envelope
+ * (`apps/api/src/common/errors` — `AllExceptionsFilter`). Not published by
+ * the generated contract yet (only health/meta are), so mirrored here from
+ * the documented shape in `packages/api-contracts/README.md`'s "Error
+ * handling" section. Branch on `code`, never on `message`.
+ */
+export interface ApiErrorBody {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+  path?: string;
+  timestamp?: string;
+}
+
+export class ApiError extends Error {
+  readonly code: string;
+  readonly details?: Record<string, unknown>;
+
+  constructor(body: ApiErrorBody) {
+    super(body.message);
+    this.name = "ApiError";
+    this.code = body.code;
+    this.details = body.details;
   }
+}
+
+async function getJson<T>(path: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`);
+  } catch {
+    throw new ApiError({
+      code: "NETWORK_UNAVAILABLE",
+      message: `Could not reach the API at ${API_BASE_URL}. Confirm it is running and NEXT_PUBLIC_API_BASE_URL is correct.`,
+    });
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ApiErrorBody | null;
+    if (body && typeof body.code === "string") {
+      throw new ApiError(body);
+    }
+    throw new ApiError({
+      code: "UNKNOWN_ERROR",
+      message: `Request to ${path} failed with status ${response.status}.`,
+    });
+  }
+
   return response.json() as Promise<T>;
 }
 

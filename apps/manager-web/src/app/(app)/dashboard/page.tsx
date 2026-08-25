@@ -4,11 +4,11 @@ import * as React from "react";
 
 import { LoadingState } from "@/components/shared/loading-state";
 import { ErrorState } from "@/components/shared/error-state";
-import { fetchMeta, type MetaResponse } from "@/lib/api-client";
+import { ApiError, fetchMeta, type MetaResponse } from "@/lib/api-client";
 
 export default function DashboardPage() {
   const [meta, setMeta] = React.useState<MetaResponse | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<ApiError | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
 
   const loadMeta = React.useCallback(() => {
@@ -16,7 +16,13 @@ export default function DashboardPage() {
     setError(null);
     fetchMeta()
       .then((response) => setMeta(response))
-      .catch(() => setError("Could not reach the API."))
+      .catch((caught: unknown) => {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+        );
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
@@ -40,7 +46,12 @@ export default function DashboardPage() {
         {isLoading ? (
           <LoadingState rows={2} />
         ) : error ? (
-          <ErrorState title="Couldn't load API metadata" description={error} onRetry={loadMeta} />
+          <ErrorState
+            title="Couldn't load API metadata"
+            description={error.message}
+            code={error.code}
+            onRetry={loadMeta}
+          />
         ) : meta ? (
           <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <div>
