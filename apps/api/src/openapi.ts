@@ -26,9 +26,23 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
         '',
         'Errors always carry a stable `code`. Clients must branch on `code`,',
         'never on `message`.',
+        '',
+        'Every endpoint requires a bearer token except sign-in, the health',
+        'probes and /meta.',
       ].join('\n'),
     )
     .setVersion('0.1.0')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description:
+          'Sign in via POST /api/auth/login, then paste the accessToken here.',
+      },
+      'bearer',
+    )
+    .addTag('auth', 'Sign in and session')
     .addTag('health', 'Liveness and readiness probes')
     .addTag('meta', 'Shared vocabulary: enums, grades and error codes')
     .addServer('http://localhost:3001', 'Local development')

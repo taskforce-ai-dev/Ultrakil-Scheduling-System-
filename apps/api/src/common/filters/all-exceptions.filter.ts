@@ -62,6 +62,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const status = exception.getStatus();
       const raw = exception.getResponse();
 
+      // A thrown Nest exception may already carry our envelope — the auth
+      // guards throw UnauthorizedException({ code, message }) rather than
+      // subclassing AppException. Honour the code it chose; overwriting it
+      // here is how AUTHENTICATION_REQUIRED came back as RESOURCE_CONFLICT.
+      if (
+        typeof raw === 'object' &&
+        raw !== null &&
+        'code' in raw &&
+        typeof (raw as { code: unknown }).code === 'string'
+      ) {
+        return { status, body: raw as AppErrorBody };
+      }
+
       // Nest's ValidationPipe returns { message: string[] , error, statusCode }.
       if (typeof raw === 'object' && raw !== null && 'message' in raw) {
         const messages = (raw as { message: unknown }).message;
