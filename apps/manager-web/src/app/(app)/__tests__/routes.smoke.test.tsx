@@ -6,20 +6,25 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
-// Dashboard calls the real API client on mount — stub it so this smoke test
-// stays fast and deterministic instead of making a real network request.
-vi.mock("@/lib/api-client", () => ({
-  fetchMeta: vi.fn().mockResolvedValue({
-    apiVersion: "0.1.0",
-    timezone: "Asia/Colombo",
-    branchCodes: ["COLOMBO", "KANDY"],
-    weekdays: [],
-    pmsGradeLabels: [],
-    frequencyUnits: {},
-    errorCodes: [],
-  }),
-  fetchHealth: vi.fn(),
-}));
+// Dashboard calls the real API client on mount — stub the requests so this
+// smoke test stays fast and deterministic, but keep the real ApiError class
+// (Dashboard's catch block does `instanceof ApiError`).
+vi.mock("@/lib/api-client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
+  return {
+    ...actual,
+    fetchMeta: vi.fn().mockResolvedValue({
+      apiVersion: "0.1.0",
+      timezone: "Asia/Colombo",
+      branchCodes: ["COLOMBO", "KANDY"],
+      weekdays: [],
+      pmsGradeLabels: [],
+      frequencyUnits: {},
+      errorCodes: [],
+    }),
+    fetchHealth: vi.fn(),
+  };
+});
 
 import DashboardPage from "../dashboard/page";
 import CustomersPage from "../customers/page";
