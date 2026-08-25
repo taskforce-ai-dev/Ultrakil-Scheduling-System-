@@ -58,8 +58,11 @@ pnpm db:migrate               # create the schema
 pnpm db:seed                  # reference data + technician matrix (see data/README.md)
 
 pnpm dev:api                  # http://localhost:3001/api
+pnpm dev:web                  # http://localhost:3000   (manager portal)
 pnpm dev:scheduler            # http://localhost:8000
 ```
+
+Each in its own terminal.
 
 | What | Where |
 | --- | --- |
@@ -67,7 +70,7 @@ pnpm dev:scheduler            # http://localhost:8000
 | Interactive API docs | http://localhost:3001/api/docs |
 | API readiness check | http://localhost:3001/api/health/ready |
 | Scheduling service | http://localhost:8000/docs |
-| Manager portal | http://localhost:3000 *(from ULK-O01)* |
+| Manager portal | http://localhost:3000 |
 
 Full walkthrough, including Windows notes and common errors:
 **[`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)**.

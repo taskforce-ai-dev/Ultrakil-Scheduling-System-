@@ -139,11 +139,18 @@ pnpm dev:api            # NestJS API   -> http://localhost:3001/api
 pnpm dev:scheduler      # Python       -> http://localhost:8000
 ```
 
-Once ULK-O01 lands, the manager portal runs alongside them:
+And a third for the manager portal:
 
 ```bash
-pnpm --filter @ultrakil/manager-web dev    # -> http://localhost:3000
+pnpm dev:web            # Next.js     -> http://localhost:3000
 ```
+
+That is three terminals, one per service. They are separate processes on
+purpose: restarting the portal should not restart your database connection.
+
+> **After pulling changes that add a new package, run `pnpm install` again.**
+> The portal arrived with ULK-O01; if you pulled it without reinstalling,
+> `pnpm dev:web` fails because Next.js was never installed.
 
 ---
 
@@ -158,6 +165,7 @@ Open these in your browser:
 | Interactive API docs | http://localhost:3001/api/docs | Swagger UI listing every endpoint |
 | Shared vocabulary | http://localhost:3001/api/meta | Branch codes, weekdays, PMS grades, error codes |
 | Scheduling service | http://localhost:8000/docs | FastAPI docs |
+| **Manager portal** | **http://localhost:3000** | The actual manager screens |
 
 `/health/ready` returns **HTTP 503** when something is down, and the body names
 which dependency and how to fix it. That is the fastest way to diagnose a broken
@@ -251,6 +259,24 @@ dependency, not reporting a bug.
 **`pnpm: command not found`**
 Run `npm install -g pnpm`, then reopen the terminal.
 
+**http://localhost:3000 does not load**
+The portal is a separate process — `pnpm dev:api` does not start it. Run
+`pnpm dev:web` in its own terminal. If that fails with something like
+`next: not found`, you pulled the portal without reinstalling: run
+`pnpm install` from the repository root first.
+
+**http://localhost:8000/docs does not load**
+Two different causes:
+
+1. *Nothing responds at all* — the scheduling service is not running. Start it
+   with `pnpm dev:scheduler`. If that reports a missing virtual environment, it
+   prints the exact commands to create one; note it must be Python 3.11.
+2. *The page loads but stays blank* — the page itself is served by the service,
+   but Swagger UI pulls its JavaScript and CSS from a public CDN. On a
+   restricted network those requests are blocked and you get an empty page.
+   `http://localhost:8000/openapi.json` still works and is the same information
+   in raw form.
+
 **Prisma complains that the client is out of date**
 Run `pnpm --filter @ultrakil/api prisma:generate`.
 
@@ -262,6 +288,7 @@ Run `pnpm --filter @ultrakil/api prisma:generate`.
 | --- | --- |
 | `pnpm dev:infra` / `pnpm dev:infra:down` | Start / stop PostgreSQL and Redis |
 | `pnpm dev:api` | API in watch mode |
+| `pnpm dev:web` | Manager portal in watch mode |
 | `pnpm dev:scheduler` | Scheduling service in reload mode |
 | `pnpm db:migrate` | Apply new migrations |
 | `pnpm db:reset` | Drop, recreate, migrate and re-seed — wipes local data |
