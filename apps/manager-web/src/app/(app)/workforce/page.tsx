@@ -135,13 +135,13 @@ export default function WorkforcePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Workforce</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Workforce</h1>
         <p className="text-muted-foreground">
           Employees, branch assignment, PMS grade and vehicle authorizations.
         </p>
       </div>
 
-      <div className="flex flex-wrap items-end gap-4 rounded-lg border p-4">
+      <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
         <div className="min-w-48 flex-1 space-y-1.5">
           <Label htmlFor="workforce-search">Search</Label>
           <Input

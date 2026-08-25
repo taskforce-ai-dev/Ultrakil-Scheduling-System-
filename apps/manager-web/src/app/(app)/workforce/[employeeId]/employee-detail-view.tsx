@@ -90,7 +90,7 @@ export function EmployeeDetailView({
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">{employee.fullName}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{employee.fullName}</h1>
           {employee.employeeCode && (
             <p className="text-sm text-muted-foreground">Employee code: {employee.employeeCode}</p>
           )}
@@ -120,12 +120,12 @@ export function EmployeeDetailView({
       )}
 
       <div className="grid gap-6 sm:grid-cols-2">
-        <section className="space-y-2 rounded-lg border p-4">
+        <section className="space-y-2 rounded-xl border bg-card p-4 shadow-sm">
           <h2 className="text-sm font-medium text-muted-foreground">Position</h2>
           <p className="text-lg">{employee.gradeLabel}</p>
         </section>
 
-        <section className="space-y-2 rounded-lg border p-4">
+        <section className="space-y-2 rounded-xl border bg-card p-4 shadow-sm">
           <h2 className="text-sm font-medium text-muted-foreground">Skills</h2>
           {employee.skills.length === 0 ? (
             <p className="text-sm text-muted-foreground">No skills on record.</p>
@@ -141,7 +141,7 @@ export function EmployeeDetailView({
         </section>
       </div>
 
-      <section className="space-y-3 rounded-lg border p-4">
+      <section className="space-y-3 rounded-xl border bg-card p-4 shadow-sm">
         <h2 className="text-sm font-medium text-muted-foreground">Vehicle authorizations</h2>
         {authorizedVehicles.length === 0 ? (
           <p className="text-sm text-muted-foreground">Not authorized to drive any vehicle yet.</p>
