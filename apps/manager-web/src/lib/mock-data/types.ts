@@ -9,110 +9,12 @@
 
 export type BranchCode = "COLOMBO" | "KANDY";
 
-/**
- * Grounded in the real `Customer` / `ServiceSite` / `SiteOperatingHours` /
- * `JobType` / `ServiceAgreement` / `ServiceAgreementDayRule` models
- * (`apps/api/prisma/schema.prisma`) — ULK-C03 hasn't published endpoints for
- * these yet, so field names match the schema deliberately, the same way the
- * workforce types did before ULK-C02 landed.
- */
-export type Weekday =
-  | "MONDAY"
-  | "TUESDAY"
-  | "WEDNESDAY"
-  | "THURSDAY"
-  | "FRIDAY"
-  | "SATURDAY"
-  | "SUNDAY";
-
-export const WEEKDAYS: Weekday[] = [
-  "MONDAY",
-  "TUESDAY",
-  "WEDNESDAY",
-  "THURSDAY",
-  "FRIDAY",
-  "SATURDAY",
-  "SUNDAY",
-];
-
-export type FrequencyUnit = "WEEK" | "MONTH";
-
-/** ALLOWED is a hard constraint; PREFERRED is a soft ranking preference only. */
-export type DayRuleKind = "ALLOWED" | "PREFERRED";
-
-/**
- * One weekday's opening window. A weekday with no entry is closed — the
- * schema has no "closed" flag, absence of a row *is* closed. Only one window
- * per weekday: the schema (`SiteOperatingHours`) has no support for a second
- * window on the same day, so the UI does not invent one either.
- */
-export interface SiteOperatingHours {
-  weekday: Weekday;
-  opensAtMinute: number;
-  closesAtMinute: number;
-}
-
-export interface ServiceSite {
-  id: string;
-  customerId: string;
-  name: string;
-  addressLine: string | null;
-  city: string | null;
-  branchCode: BranchCode;
-  isActive: boolean;
-  operatingHours: SiteOperatingHours[];
-}
-
-export interface Customer {
-  id: string;
-  name: string;
-  customerCode: string | null;
-  branchCode: BranchCode;
-  contactName: string | null;
-  contactPhone: string | null;
-  contactEmail: string | null;
-  isActive: boolean;
-  sites: ServiceSite[];
-}
-
-export interface JobType {
-  id: string;
-  code: string;
-  name: string;
-  defaultDurationMinutes: number;
-  defaultCrewSize: number;
-  requiresPmsSupervisor: boolean;
-  requiredSkillCode: string | null;
-  isActive: boolean;
-}
-
-export interface ServiceAgreementDayRule {
-  weekday: Weekday;
-  kind: DayRuleKind;
-}
-
-export interface ServiceAgreement {
-  id: string;
-  customerId: string;
-  customerName: string;
-  serviceSiteId: string;
-  siteName: string;
-  jobTypeId: string;
-  jobTypeName: string;
-  branchCode: BranchCode;
-  frequencyCount: number;
-  frequencyUnit: FrequencyUnit;
-  crewSize: number;
-  durationMinutes: number;
-  /** Null falls back to the site's operating hours for that weekday. */
-  serviceWindowStartMinute: number | null;
-  serviceWindowEndMinute: number | null;
-  startDate: string;
-  endDate: string | null;
-  isActive: boolean;
-  notes: string | null;
-  dayRules: ServiceAgreementDayRule[];
-}
+// Customer / ServiceSite / JobType / ServiceAgreement used to live here as
+// temporary mock types (grounded in the Prisma schema before ULK-C03 shipped
+// an API for them). ULK-C03 is live now — those types come from the
+// generated `@ultrakil/api-contracts` client instead (see api-client.ts).
+// Weekday/FrequencyUnit/DayRuleKind moved to lib/weekdays.ts, since they're
+// shared UI vocabulary rather than mock stand-ins.
 
 /**
  * Grounded in the real `Employee` model (`apps/api/prisma/schema.prisma`),

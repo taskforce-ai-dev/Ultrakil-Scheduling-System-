@@ -1,4 +1,4 @@
-import type { paths } from "@ultrakil/api-contracts";
+import type { components, paths } from "@ultrakil/api-contracts";
 
 import { clearToken, readToken } from "./session-token";
 
@@ -48,6 +48,86 @@ export type EmployeeQuery = NonNullable<
 export type VehicleQuery = NonNullable<
   paths["/api/vehicles"]["get"]["parameters"]["query"]
 >;
+
+export type PaginatedCustomers = Json<
+  paths["/api/customers"]["get"]["responses"]["200"]
+>;
+export type Customer = PaginatedCustomers["items"][number];
+export type ServiceSite = Customer["sites"][number];
+export type SiteOperatingHoursEntry = ServiceSite["operatingHours"][number];
+export type JobType = Json<paths["/api/job-types"]["get"]["responses"]["200"]>[number];
+export type PaginatedServiceAgreements = Json<
+  paths["/api/service-agreements"]["get"]["responses"]["200"]
+>;
+export type ServiceAgreement = PaginatedServiceAgreements["items"][number];
+export type SchedulePreview = Json<
+  paths["/api/service-agreements/{id}/schedule-preview"]["get"]["responses"]["200"]
+>;
+export type AgreementStatus = ServiceAgreement["status"];
+
+export type CustomerQuery = NonNullable<
+  paths["/api/customers"]["get"]["parameters"]["query"]
+>;
+export type ServiceAgreementQuery = NonNullable<
+  paths["/api/service-agreements"]["get"]["parameters"]["query"]
+>;
+
+/**
+ * The API's Swagger setup doesn't run the NestJS CLI plugin
+ * (`apps/api/nest-cli.json` has no `plugins` entry) and none of the
+ * customer/site/agreement `create`/`update` handlers carry an explicit
+ * `@ApiBody(...)`, so the published OpenAPI document has no request-body
+ * schema for these endpoints — `paths[...]["post"]["requestBody"]` types as
+ * `never`. Flagged to Chanya (either enables the CLI plugin, or adds
+ * `@ApiBody({ type: CreateCustomerDto })` etc.) so these can come from the
+ * generated contract like every response type already does. Until then,
+ * these interfaces are hand-written to match
+ * `apps/api/src/catalog/dto/customer.dto.ts` and `agreement.dto.ts` exactly.
+ */
+export interface CreateCustomerRequest {
+  name: string;
+  customerCode?: string | null;
+  branchCode: "COLOMBO" | "KANDY";
+  contactName?: string | null;
+  contactPhone?: string | null;
+  contactEmail?: string | null;
+}
+
+export interface SiteOperatingHoursInput {
+  weekday: components["schemas"]["SiteOperatingHoursResponseDto"]["weekday"];
+  opensAtMinute: number;
+  closesAtMinute: number;
+}
+
+export interface CreateServiceSiteRequest {
+  name: string;
+  addressLine?: string | null;
+  city?: string | null;
+  branchCode?: "COLOMBO" | "KANDY";
+  operatingHours?: SiteOperatingHoursInput[];
+}
+
+export interface CreateServiceAgreementRequest {
+  serviceSiteId: string;
+  jobTypeId: string;
+  frequencyCount: number;
+  frequencyUnit: "WEEK" | "MONTH";
+  crewSize?: number;
+  durationMinutes?: number;
+  allowedDays: SiteOperatingHoursInput["weekday"][];
+  preferredDays?: SiteOperatingHoursInput["weekday"][];
+  serviceWindowStartMinute?: number | null;
+  serviceWindowEndMinute?: number | null;
+  startDate: string;
+  endDate?: string | null;
+  requiredSkillCodes?: string[];
+  notes?: string | null;
+}
+
+export interface ChangeAgreementStatusRequest {
+  status: AgreementStatus;
+  reason?: string | null;
+}
 
 /**
  * Every error response from the API carries this envelope
@@ -219,4 +299,64 @@ export function fetchBranches(): Promise<BranchListItem[]> {
 
 export function fetchSkills(): Promise<SkillListItem[]> {
   return request<SkillListItem[]>("/skills");
+}
+
+export function fetchCustomers(query?: CustomerQuery): Promise<PaginatedCustomers> {
+  return request<PaginatedCustomers>(`/customers${buildQuery(query)}`);
+}
+
+export function createCustomer(dto: CreateCustomerRequest): Promise<Customer> {
+  return request<Customer>("/customers", { method: "POST", body: dto });
+}
+
+export function createServiceSite(
+  customerId: string,
+  dto: CreateServiceSiteRequest
+): Promise<ServiceSite> {
+  return request<ServiceSite>(`/customers/${customerId}/sites`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+export function fetchJobTypes(): Promise<JobType[]> {
+  return request<JobType[]>("/job-types");
+}
+
+export function fetchServiceAgreements(
+  query?: ServiceAgreementQuery
+): Promise<PaginatedServiceAgreements> {
+  return request<PaginatedServiceAgreements>(`/service-agreements${buildQuery(query)}`);
+}
+
+export function createServiceAgreement(
+  dto: CreateServiceAgreementRequest
+): Promise<ServiceAgreement> {
+  return request<ServiceAgreement>("/service-agreements", { method: "POST", body: dto });
+}
+
+export function changeAgreementStatus(
+  agreementId: string,
+  dto: ChangeAgreementStatusRequest
+): Promise<ServiceAgreement> {
+  return request<ServiceAgreement>(`/service-agreements/${agreementId}/status`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+/**
+ * Not a schedule — it assigns nobody and books nothing. Only callable once
+ * an agreement exists (it's `GET /service-agreements/{id}/schedule-preview`),
+ * so a manager sees this right after creating the agreement, not before —
+ * there's no dry-run endpoint. See the Service Agreements page for how that
+ * shapes the create flow.
+ */
+export function fetchSchedulePreview(
+  agreementId: string,
+  options?: { from?: string; horizonWeeks?: number }
+): Promise<SchedulePreview> {
+  return request<SchedulePreview>(
+    `/service-agreements/${agreementId}/schedule-preview${buildQuery(options)}`
+  );
 }

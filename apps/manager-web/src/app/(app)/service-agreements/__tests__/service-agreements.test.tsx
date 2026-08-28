@@ -1,63 +1,112 @@
-import { describe, expect, it } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+vi.mock("@/lib/api-client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
+  return {
+    ...actual,
+    fetchServiceAgreements: vi.fn(),
+    fetchCustomers: vi.fn(),
+    fetchJobTypes: vi.fn(),
+    fetchSkills: vi.fn(),
+    createServiceAgreement: vi.fn(),
+    fetchSchedulePreview: vi.fn(),
+    changeAgreementStatus: vi.fn(),
+  };
+});
+
 import ServiceAgreementsPage from "../page";
+import {
+  ApiError,
+  changeAgreementStatus,
+  createServiceAgreement,
+  fetchCustomers,
+  fetchJobTypes,
+  fetchSchedulePreview,
+  fetchServiceAgreements,
+  fetchSkills,
+} from "@/lib/api-client";
+import {
+  buildCustomer,
+  buildJobType,
+  buildSchedulePreview,
+  buildServiceAgreement,
+  buildServiceSite,
+} from "@/test/fixtures";
+
+// The site is open Mon 06:00-22:00 and Wed 08:00-18:00 — deliberately
+// different hours, so the read-only summary can prove it shows each
+// weekday's own window rather than one hardcoded value.
+const site = buildServiceSite({ id: "site-1", customerId: "customer-1" });
+const customer = buildCustomer({ id: "customer-1", name: "Cinnamon Grand Colombo", sites: [site] });
+const jobType = buildJobType({ id: "job-1", name: "Termite Control" });
+const existingAgreement = buildServiceAgreement({ id: "agreement-1", status: "ACTIVE" });
+
+beforeEach(() => {
+  vi.mocked(fetchServiceAgreements).mockResolvedValue({
+    items: [existingAgreement],
+    total: 1,
+    page: 1,
+    pageSize: 200,
+  });
+  vi.mocked(fetchCustomers).mockResolvedValue({
+    items: [customer],
+    total: 1,
+    page: 1,
+    pageSize: 200,
+  });
+  vi.mocked(fetchJobTypes).mockResolvedValue([jobType]);
+  vi.mocked(fetchSkills).mockResolvedValue([]);
+  vi.mocked(createServiceAgreement).mockReset();
+  vi.mocked(fetchSchedulePreview).mockReset();
+  vi.mocked(changeAgreementStatus).mockReset();
+});
 
 async function openForm() {
   const user = userEvent.setup();
   render(<ServiceAgreementsPage />);
+  await screen.findByText("Cinnamon Grand Colombo");
   await user.click(screen.getByRole("button", { name: "Add agreement" }));
   return user;
 }
 
 describe("ServiceAgreementsPage", () => {
+  it("lists agreements from the API", async () => {
+    render(<ServiceAgreementsPage />);
+    expect(await screen.findByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    expect(screen.getByText("Termite Control")).toBeInTheDocument();
+  });
+
   it("is reachable by keyboard and exposes accessible labels for every field", async () => {
     await openForm();
 
-    // Every field below is only findable via its associated <label>, so this
-    // doubles as the accessible-labelling check.
     expect(screen.getByLabelText("Customer")).toBeInTheDocument();
     expect(screen.getByLabelText("Site")).toBeInTheDocument();
     expect(screen.getByLabelText("Job type")).toBeInTheDocument();
     expect(screen.getByLabelText("Visits")).toBeInTheDocument();
     expect(screen.getByLabelText("Crew size")).toBeInTheDocument();
     expect(screen.getByLabelText("Start date")).toBeInTheDocument();
-
-    // Opening the drawer moves focus inside it (a focus trap, so keyboard
-    // users never land back on the page behind it) — straight onto the
-    // first field, with no wasted tab stops.
     expect(screen.getByLabelText("Customer")).toHaveFocus();
   });
 
-  it("requires a start date and at least one allowed day before saving", async () => {
+  it("requires a start date before saving", async () => {
     const user = await openForm();
 
-    // Save is disabled with no allowed day selected at all.
-    expect(screen.getByRole("button", { name: "Save agreement" })).toBeDisabled();
-
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    expect(screen.getByRole("button", { name: "Save agreement" })).toBeEnabled();
-
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
     expect(await screen.findByText("Start date is required")).toBeInTheDocument();
-    // The drawer is still open — submission was blocked, not completed.
-    expect(screen.getByLabelText("Customer")).toBeInTheDocument();
+    expect(createServiceAgreement).not.toHaveBeenCalled();
   });
 
   it("prevents marking a day preferred before it is allowed (subset enforcement)", async () => {
-    await openForm();
+    const user = await openForm();
 
-    const fridayPreferred = document.getElementById("preferred-FRIDAY");
-    expect(fridayPreferred).toBeDisabled();
+    expect(document.getElementById("preferred-FRIDAY")).toBeDisabled();
 
-    const user = userEvent.setup();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-
-    // Once Monday is allowed, Monday becomes selectable as preferred...
-    const mondayPreferred = document.getElementById("preferred-MONDAY");
-    expect(mondayPreferred).toBeEnabled();
-    // ...but Friday, still not allowed, stays disabled.
+    expect(document.getElementById("preferred-MONDAY")).toBeEnabled();
     expect(document.getElementById("preferred-FRIDAY")).toBeDisabled();
   });
 
@@ -73,51 +122,100 @@ describe("ServiceAgreementsPage", () => {
     expect(document.getElementById("preferred-MONDAY")).toBeDisabled();
   });
 
-  it("warns when visits per week exceed the number of allowed days, and blocks saving", async () => {
-    const user = await openForm();
+  it("shows each weekday's own opening hours in the read-only summary", async () => {
+    await openForm();
 
-    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    const visits = screen.getByLabelText("Visits");
-    await user.clear(visits);
-    await user.type(visits, "3");
-
-    expect(
-      await screen.findByText(/3 visits\/week requested, but only 1 day\(s\) are allowed/i)
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save agreement" })).toBeDisabled();
+    // Monday: 06:00-22:00, Wednesday: 08:00-18:00 — different windows, both visible.
+    const summary = await screen.findByText(/opening hours \(read-only/i);
+    const list = summary.closest("div")?.querySelector("ul");
+    expect(list?.textContent).toContain("Mon: 6:00 AM–10:00 PM");
+    expect(list?.textContent).toContain("Wed: 8:00 AM–6:00 PM");
+    expect(list?.textContent).toContain("Tue: Closed");
   });
 
-  it("shows an error when previewing without a start date", async () => {
-    const user = await openForm();
-
-    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.click(screen.getByRole("button", { name: "Preview" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Set a start date to preview the schedule."
+  it("saves the agreement, then shows a loading state and the real preview, including shortfalls", async () => {
+    const created = buildServiceAgreement({ id: "agreement-2" });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+    // A deliberate delay, so the loading state is actually observable here
+    // instead of resolving in the same tick as the assertion below.
+    vi.mocked(fetchSchedulePreview).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve(
+                buildSchedulePreview({
+                  shortfalls: [
+                    {
+                      periodStart: "2026-09-07",
+                      periodEnd: "2026-09-13",
+                      requested: 2,
+                      scheduled: 1,
+                      reason: "NOT_ENOUGH_ALLOWED_DAYS",
+                      message: "Only 1 of the 2 requested visits could be placed this week.",
+                    },
+                  ],
+                })
+              ),
+            30
+          )
+        )
     );
-  });
 
-  it("shows a loading state then the computed preview on success", async () => {
     const user = await openForm();
-
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-01-05");
-    await user.click(screen.getByRole("button", { name: "Preview" }));
-
-    expect(screen.getByRole("button", { name: "Loading…" })).toBeInTheDocument();
-    expect(await screen.findByText(/2026-01-05/)).toBeInTheDocument();
-  });
-
-  it("adds a new agreement to the table on save", async () => {
-    const user = await openForm();
-
-    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-01-05");
+    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
-    const rows = await screen.findAllByRole("row");
-    expect(rows).toHaveLength(3); // header + seeded row + the new one
-    expect(within(rows[2]).getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Calculating preview…");
+
+    expect(
+      await screen.findByText("Only 1 of the 2 requested visits could be placed this week.")
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2026-09-07/)).toBeInTheDocument();
+  });
+
+  it("shows an error if the preview fails to load, without losing the created agreement", async () => {
+    vi.mocked(createServiceAgreement).mockResolvedValue(buildServiceAgreement());
+    vi.mocked(fetchSchedulePreview).mockRejectedValue(
+      new ApiError({ code: "UNKNOWN_ERROR", message: "Could not load the preview." })
+    );
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
+    expect(await screen.findByText("Could not load the preview.")).toBeInTheDocument();
+  });
+
+  it("surfaces a backend rejection (e.g. an unsatisfiable agreement) without closing the form", async () => {
+    vi.mocked(createServiceAgreement).mockRejectedValue(
+      new ApiError({ code: "AGREEMENT_UNSATISFIABLE", message: "No visit can be placed at all." })
+    );
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("No visit can be placed at all.")).toBeInTheDocument();
+    // Still in the form, not the confirmation view.
+    expect(screen.getByLabelText("Customer")).toBeInTheDocument();
+  });
+
+  it("pauses an active agreement from the table", async () => {
+    vi.mocked(changeAgreementStatus).mockResolvedValue(
+      buildServiceAgreement({ status: "PAUSED" })
+    );
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+
+    expect(changeAgreementStatus).toHaveBeenCalledWith("agreement-1", { status: "PAUSED" });
   });
 });

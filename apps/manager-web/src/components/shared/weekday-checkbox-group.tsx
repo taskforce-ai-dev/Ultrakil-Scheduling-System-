@@ -1,6 +1,6 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { WEEKDAYS, type Weekday } from "@/lib/mock-data/types";
+import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 
 const WEEKDAY_LABELS: Record<Weekday, string> = {
   MONDAY: "Mon",

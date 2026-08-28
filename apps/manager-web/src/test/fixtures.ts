@@ -1,4 +1,13 @@
-import type { Employee, Vehicle } from "@/lib/api-client";
+import type {
+  Customer,
+  JobType,
+  ServiceAgreement,
+  ServiceSite,
+  SchedulePreview,
+  SkillListItem,
+  Employee,
+  Vehicle,
+} from "@/lib/api-client";
 
 /**
  * Test fixtures shaped by the generated contract.
@@ -42,6 +51,118 @@ export function buildEmployee(overrides: Partial<Employee> = {}): Employee {
     availability: [],
     createdAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildServiceSite(overrides: Partial<ServiceSite> = {}): ServiceSite {
+  return {
+    id: "site-1",
+    customerId: "customer-1",
+    name: "Main Kitchen",
+    addressLine: "77 Galle Road",
+    city: "Colombo 03",
+    branchCode: "COLOMBO",
+    isActive: true,
+    operatingHours: [
+      { id: "hours-1", weekday: "MONDAY", opensAtMinute: 6 * 60, closesAtMinute: 22 * 60 },
+      { id: "hours-2", weekday: "WEDNESDAY", opensAtMinute: 8 * 60, closesAtMinute: 18 * 60 },
+    ],
+    serviceAgreementCount: 0,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildCustomer(overrides: Partial<Customer> = {}): Customer {
+  return {
+    id: "customer-1",
+    name: "Cinnamon Grand Colombo",
+    customerCode: "C-001",
+    branchCode: "COLOMBO",
+    contactName: "R. Gunawardena",
+    contactPhone: "011 123 4567",
+    contactEmail: "facilities@example.com",
+    isActive: true,
+    sites: [buildServiceSite()],
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildJobType(overrides: Partial<JobType> = {}): JobType {
+  return {
+    id: "job-1",
+    code: "TERMITE_CONTROL",
+    name: "Termite Control",
+    defaultDurationMinutes: 90,
+    defaultCrewSize: 2,
+    requiresPmsSupervisor: true,
+    requiredSkillCode: "TERMITE",
+    isActive: true,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildServiceAgreement(
+  overrides: Partial<ServiceAgreement> = {}
+): ServiceAgreement {
+  return {
+    id: "agreement-1",
+    customerId: "customer-1",
+    customerName: "Cinnamon Grand Colombo",
+    serviceSiteId: "site-1",
+    siteName: "Main Kitchen",
+    jobTypeId: "job-1",
+    jobTypeName: "Termite Control",
+    branchCode: "COLOMBO",
+    frequencyCount: 2,
+    frequencyUnit: "WEEK",
+    crewSize: 2,
+    durationMinutes: 90,
+    serviceWindowStartMinute: null,
+    serviceWindowEndMinute: null,
+    startDate: "2026-09-07",
+    endDate: null,
+    status: "ACTIVE",
+    isActive: true,
+    currentVersion: 1,
+    dayRules: [
+      { weekday: "MONDAY", kind: "ALLOWED" },
+      { weekday: "WEDNESDAY", kind: "ALLOWED" },
+    ],
+    allowedDays: ["MONDAY", "WEDNESDAY"],
+    preferredDays: ["MONDAY"],
+    requiredSkillCodes: [],
+    notes: null,
+    createdAt: "2026-08-24T00:00:00.000Z",
+    updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
+  return { skillCode: "TERMITE", skillLabel: "Termite Control", employeeCount: 3, ...overrides };
+}
+
+export function buildSchedulePreview(overrides: Partial<SchedulePreview> = {}): SchedulePreview {
+  return {
+    visits: [
+      {
+        date: "2026-09-07",
+        weekday: "MONDAY",
+        windowStartMinute: 6 * 60,
+        windowEndMinute: 22 * 60,
+        isPreferredDay: true,
+      },
+    ],
+    shortfalls: [],
+    horizonStart: "2026-09-07",
+    horizonEnd: "2026-10-05",
     ...overrides,
   };
 }
