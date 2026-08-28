@@ -42,14 +42,16 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 | --- | --- |
 | `customers` | Customer with its branch. |
 | `service_sites` | A physical location belonging to a customer. |
-| `site_operating_hours` | Opening hours per weekday. A weekday with no row is closed. |
+| `site_operating_hours` | Opening windows by weekday. A weekday with no row is closed. Several rows per weekday are allowed — a site that shuts over lunch is two windows, not one long one. |
 
 ### Services
 
 | Table | Purpose |
 | --- | --- |
 | `job_types` | Type of work, with default duration, default crew size and whether a PMS supervisor is required. |
-| `service_agreements` | The contract: frequency (N per week/month), crew size, duration, optional service window, date range. |
+| `service_agreements` | The contract: frequency (N per week/month), crew size, duration, optional service window, date range, and lifecycle `status`. |
+| `service_agreement_required_skills` | Skills a crew member must hold for this agreement, on top of the job type's own requirement. |
+| `service_agreement_versions` | Append-only snapshot per version. A generated visit records the version it came from, so a schedule stays explainable after the agreement changes. |
 | `service_agreement_day_rules` | `ALLOWED` rows are hard constraints; `PREFERRED` rows only affect ranking. Kept as rows rather than a bitmask so the reason for a rejected day is explainable. |
 
 ### Scheduling
@@ -68,6 +70,23 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 ---
 
 ## Design decisions worth knowing
+
+**`ServiceAgreement.status`** — `ACTIVE`, `PAUSED` or `ARCHIVED`, rather than a
+boolean. Paused and archived are genuinely different: a paused agreement stops
+generating visits but is expected back, while an archived one is finished and
+kept only because past visits still reference it. Archiving is one-way, and an
+archived agreement can no longer be edited — visits already generated are
+explained by it as it stands.
+
+**`service_agreement_versions`** — visits are generated from an agreement that
+may later change. Without a snapshot, "why was this visit on a Tuesday?" becomes
+unanswerable the moment someone edits the allowed days. Every change that could
+alter the visits produced bumps `currentVersion` and writes a row.
+
+**Preferred days are a subset of allowed days, enforced** — a preferred day
+outside the allowed set is not a harmless contradiction. The scheduler would
+rank a day it is forbidden to use, so the preference would silently do nothing
+and nobody would learn why.
 
 **`Employee.sourceKey`** — the workforce matrix has no reliable employee number,
 so the importer derives a stable key from the normalised name plus branch and

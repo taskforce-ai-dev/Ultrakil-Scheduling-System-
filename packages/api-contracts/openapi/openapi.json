@@ -973,6 +973,981 @@
           "workforce"
         ]
       }
+    },
+    "/api/customers": {
+      "get": {
+        "description": "Each customer carries its sites and their opening hours, because a site is never useful on its own.",
+        "operationId": "CustomersController_list",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Matches customer name, code, or a site name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Defaults to active customers only.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "branch",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedCustomersDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List customers with their sites",
+        "tags": [
+          "customers"
+        ]
+      },
+      "post": {
+        "operationId": "CustomersController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "CUSTOMER_CODE_TAKEN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/customers/{id}": {
+      "get": {
+        "operationId": "CustomersController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such customer."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One customer",
+        "tags": [
+          "customers"
+        ]
+      },
+      "patch": {
+        "operationId": "CustomersController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "CUSTOMER_CODE_TAKEN, or SITE_BRANCH_MISMATCH when it still has sites."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/customers/{id}/deactivate": {
+      "post": {
+        "description": "Hidden from the default list but kept, because past visits and agreements reference it.",
+        "operationId": "CustomersController_deactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/customers/{id}/reactivate": {
+      "post": {
+        "operationId": "CustomersController_reactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate a customer",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/customers/{id}/sites": {
+      "get": {
+        "operationId": "CustomersController_listSites",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceSiteDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "A customer's service sites",
+        "tags": [
+          "customers"
+        ]
+      },
+      "post": {
+        "description": "Inherits the customer's branch unless one is given, and may never sit in the other branch.",
+        "operationId": "CustomersController_createSite",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSiteDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OPERATING_HOURS_INVALID or OPERATING_HOURS_OVERLAP."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "SITE_BRANCH_MISMATCH or CUSTOMER_INACTIVE."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add a service site",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/service-sites/{id}": {
+      "get": {
+        "operationId": "ServiceSitesController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSiteDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such site."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One service site",
+        "tags": [
+          "customers"
+        ]
+      },
+      "patch": {
+        "description": "Opening hours are replaced wholesale when given: send the week you want, and a weekday you omit means closed.",
+        "operationId": "ServiceSitesController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSiteDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "OPERATING_HOURS_INVALID or OPERATING_HOURS_OVERLAP."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a service site",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/service-sites/{id}/deactivate": {
+      "post": {
+        "operationId": "ServiceSitesController_deactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSiteDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate a site",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/service-sites/{id}/reactivate": {
+      "post": {
+        "operationId": "ServiceSitesController_reactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSiteDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate a site",
+        "tags": [
+          "customers"
+        ]
+      }
+    },
+    "/api/service-agreements": {
+      "get": {
+        "description": "Archived agreements are hidden unless status=ARCHIVED is asked for.",
+        "operationId": "AgreementsController_list",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "activeOn",
+            "required": false,
+            "in": "query",
+            "description": "Only agreements in force on this date.",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "name": "frequencyUnit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "WEEK",
+                "MONTH"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "ACTIVE",
+                "PAUSED",
+                "ARCHIVED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "jobTypeId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceSiteId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedServiceAgreementsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List service agreements",
+        "tags": [
+          "service-agreements"
+        ]
+      },
+      "post": {
+        "description": "Branch and customer are taken from the site. Rejected if it could never produce a visit — an unschedulable commitment is caught here, not discovered later as a silent gap.",
+        "operationId": "AgreementsController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "PREFERRED_DAYS_NOT_ALLOWED, ALLOWED_DAYS_REQUIRED, SERVICE_WINDOW_INVALID or AGREEMENT_DATES_INVALID."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "422": {
+            "description": "AGREEMENT_UNSATISFIABLE — no visit can be placed at all."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a service agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}": {
+      "get": {
+        "operationId": "AgreementsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such agreement."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One service agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      },
+      "patch": {
+        "description": "Bumps the version, so visits already generated stay explainable against the agreement as it was.",
+        "operationId": "AgreementsController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "AGREEMENT_ARCHIVED."
+          },
+          "422": {
+            "description": "AGREEMENT_UNSATISFIABLE."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a service agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}/status": {
+      "post": {
+        "description": "PAUSED stops visit generation but expects it back. ARCHIVED is final — past visits are explained by it, so it can never be revived or edited.",
+        "operationId": "AgreementsController_changeStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "AGREEMENT_ARCHIVED."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pause, resume or archive an agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}/versions": {
+      "get": {
+        "description": "Newest first. A generated visit records the version it came from, so a schedule can still be explained after the agreement changes.",
+        "operationId": "AgreementsController_versions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgreementVersionDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Every version of this agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}/schedule-preview": {
+      "get": {
+        "description": "A preview of the required visits, not a schedule: it assigns nobody and books nothing. Periods that cannot hold the promised number of visits come back as shortfalls rather than being quietly dropped.",
+        "operationId": "AgreementsController_preview",
+        "parameters": [
+          {
+            "name": "horizonWeeks",
+            "required": false,
+            "in": "query",
+            "description": "How far ahead to look. Defaults to 4.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Defaults to the agreement's start date.",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePreviewDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Which dates this agreement asks for",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/job-types": {
+      "get": {
+        "operationId": "JobTypesController_list",
+        "parameters": [
+          {
+            "name": "active",
+            "required": false,
+            "in": "query",
+            "description": "Defaults to active job types only.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobTypeDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List job types",
+        "tags": [
+          "service-agreements"
+        ]
+      },
+      "post": {
+        "operationId": "JobTypesController_create",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTypeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "JOB_TYPE_CODE_TAKEN."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a job type",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/job-types/{id}": {
+      "get": {
+        "operationId": "JobTypesController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTypeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "No such job type."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One job type",
+        "tags": [
+          "service-agreements"
+        ]
+      },
+      "patch": {
+        "operationId": "JobTypesController_update",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTypeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update a job type",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/job-types/{id}/deactivate": {
+      "post": {
+        "description": "Kept, not deleted — existing agreements still reference it.",
+        "operationId": "JobTypesController_deactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTypeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate a job type",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/job-types/{id}/reactivate": {
+      "post": {
+        "operationId": "JobTypesController_reactivate",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobTypeDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate a job type",
+        "tags": [
+          "service-agreements"
+        ]
+      }
     }
   },
   "info": {
@@ -1685,6 +2660,632 @@
           "skillCode",
           "skillLabel",
           "employeeCount"
+        ]
+      },
+      "SiteOperatingHoursResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "weekday": {
+            "type": "string",
+            "enum": [
+              "MONDAY",
+              "TUESDAY",
+              "WEDNESDAY",
+              "THURSDAY",
+              "FRIDAY",
+              "SATURDAY",
+              "SUNDAY"
+            ]
+          },
+          "opensAtMinute": {
+            "type": "number",
+            "example": 540,
+            "description": "540 is 09:00."
+          },
+          "closesAtMinute": {
+            "type": "number",
+            "example": 1020,
+            "description": "1020 is 17:00."
+          }
+        },
+        "required": [
+          "id",
+          "weekday",
+          "opensAtMinute",
+          "closesAtMinute"
+        ]
+      },
+      "ServiceSiteDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Starbucks Newark Penn Station"
+          },
+          "addressLine": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "operatingHours": {
+            "description": "Opening windows. A weekday with no window is closed; several windows on one weekday mean the site shuts in between.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SiteOperatingHoursResponseDto"
+            }
+          },
+          "serviceAgreementCount": {
+            "type": "number",
+            "description": "Agreements referencing this site."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "customerId",
+          "name",
+          "addressLine",
+          "city",
+          "branchCode",
+          "isActive",
+          "operatingHours",
+          "serviceAgreementCount",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "CustomerDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "example": "Starbucks New Jersey"
+          },
+          "customerCode": {
+            "type": "string",
+            "nullable": true,
+            "example": "SBUX-NJ"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "contactName": {
+            "type": "string",
+            "nullable": true
+          },
+          "contactPhone": {
+            "type": "string",
+            "nullable": true
+          },
+          "contactEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "sites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceSiteDto"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "customerCode",
+          "branchCode",
+          "contactName",
+          "contactPhone",
+          "contactEmail",
+          "isActive",
+          "sites",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedCustomersDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "ServiceAgreementDayRuleDto": {
+        "type": "object",
+        "properties": {
+          "weekday": {
+            "type": "string",
+            "enum": [
+              "MONDAY",
+              "TUESDAY",
+              "WEDNESDAY",
+              "THURSDAY",
+              "FRIDAY",
+              "SATURDAY",
+              "SUNDAY"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ALLOWED",
+              "PREFERRED"
+            ]
+          }
+        },
+        "required": [
+          "weekday",
+          "kind"
+        ]
+      },
+      "ServiceAgreementDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "serviceSiteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "frequencyCount": {
+            "type": "number",
+            "description": "Visits per frequencyUnit."
+          },
+          "frequencyUnit": {
+            "type": "string",
+            "enum": [
+              "WEEK",
+              "MONTH"
+            ]
+          },
+          "crewSize": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "serviceWindowStartMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "Narrows the site's hours. Null falls back to them entirely."
+          },
+          "serviceWindowEndMinute": {
+            "type": "number",
+            "nullable": true
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "endDate": {
+            "type": "string",
+            "nullable": true,
+            "format": "date"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "PAUSED",
+              "ARCHIVED"
+            ]
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "True only when status is ACTIVE."
+          },
+          "currentVersion": {
+            "type": "number",
+            "description": "Increments whenever a change would alter the visits produced."
+          },
+          "dayRules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceAgreementDayRuleDto"
+            }
+          },
+          "allowedDays": {
+            "type": "array",
+            "description": "Hard constraint. A visit never lands outside these weekdays.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "MONDAY",
+                "TUESDAY",
+                "WEDNESDAY",
+                "THURSDAY",
+                "FRIDAY",
+                "SATURDAY",
+                "SUNDAY"
+              ]
+            }
+          },
+          "preferredDays": {
+            "type": "array",
+            "description": "Soft ranking preference. Always a subset of allowedDays.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "MONDAY",
+                "TUESDAY",
+                "WEDNESDAY",
+                "THURSDAY",
+                "FRIDAY",
+                "SATURDAY",
+                "SUNDAY"
+              ]
+            }
+          },
+          "requiredSkillCodes": {
+            "example": [
+              "MBR_FUMIGATION"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "customerId",
+          "customerName",
+          "serviceSiteId",
+          "siteName",
+          "jobTypeId",
+          "jobTypeName",
+          "branchCode",
+          "frequencyCount",
+          "frequencyUnit",
+          "crewSize",
+          "durationMinutes",
+          "serviceWindowStartMinute",
+          "serviceWindowEndMinute",
+          "startDate",
+          "endDate",
+          "status",
+          "isActive",
+          "currentVersion",
+          "dayRules",
+          "allowedDays",
+          "preferredDays",
+          "requiredSkillCodes",
+          "notes",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedServiceAgreementsDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceAgreementDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "AgreementVersionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "versionNumber": {
+            "type": "number"
+          },
+          "changedByLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "changeSummary": {
+            "type": "string",
+            "nullable": true
+          },
+          "snapshot": {
+            "type": "object",
+            "description": "The agreement as it stood at this version — the scheduling-relevant fields only."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "versionNumber",
+          "changedByLabel",
+          "changeSummary",
+          "snapshot",
+          "createdAt"
+        ]
+      },
+      "PreviewVisitDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "weekday": {
+            "type": "string",
+            "enum": [
+              "MONDAY",
+              "TUESDAY",
+              "WEDNESDAY",
+              "THURSDAY",
+              "FRIDAY",
+              "SATURDAY",
+              "SUNDAY"
+            ]
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "isPreferredDay": {
+            "type": "boolean",
+            "description": "Fell on a preferred weekday, not merely an allowed one."
+          }
+        },
+        "required": [
+          "date",
+          "weekday",
+          "windowStartMinute",
+          "windowEndMinute",
+          "isPreferredDay"
+        ]
+      },
+      "PreviewShortfallDto": {
+        "type": "object",
+        "properties": {
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested": {
+            "type": "number"
+          },
+          "scheduled": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "NOT_ENOUGH_ALLOWED_DAYS",
+              "SITE_CLOSED_ON_ALLOWED_DAYS",
+              "WINDOW_TOO_SHORT_FOR_VISIT"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Actionable explanation for a manager."
+          }
+        },
+        "required": [
+          "periodStart",
+          "periodEnd",
+          "requested",
+          "scheduled",
+          "reason",
+          "message"
+        ]
+      },
+      "SchedulePreviewDto": {
+        "type": "object",
+        "properties": {
+          "visits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewVisitDto"
+            }
+          },
+          "shortfalls": {
+            "description": "Periods that cannot hold the promised number of visits. Reported, never silently dropped.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreviewShortfallDto"
+            }
+          },
+          "horizonStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "horizonEnd": {
+            "type": "string",
+            "format": "date"
+          }
+        },
+        "required": [
+          "visits",
+          "shortfalls",
+          "horizonStart",
+          "horizonEnd"
+        ]
+      },
+      "JobTypeDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "example": "TERMITE_CONTROL"
+          },
+          "name": {
+            "type": "string",
+            "example": "Termite Control"
+          },
+          "defaultDurationMinutes": {
+            "type": "number"
+          },
+          "defaultCrewSize": {
+            "type": "number"
+          },
+          "requiresPmsSupervisor": {
+            "type": "boolean",
+            "description": "Phase 1 requires a PMS-grade supervisor on every job."
+          },
+          "requiredSkillCode": {
+            "type": "string",
+            "nullable": true,
+            "example": "MBR_FUMIGATION"
+          },
+          "isActive": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "defaultDurationMinutes",
+          "defaultCrewSize",
+          "requiresPmsSupervisor",
+          "requiredSkillCode",
+          "isActive",
+          "createdAt",
+          "updatedAt"
         ]
       }
     }

@@ -24,7 +24,7 @@
  *   - one inactive-looking edge: a grade that is deliberately NOT PMS-grade
  *     ("Pest Management Executive"), matching the real exclusion.
  */
-import { BranchCode } from '@prisma/client';
+import { BranchCode, DayRuleKind, FrequencyUnit, Weekday } from '@prisma/client';
 
 import {
   parseVehicleHeader,
@@ -273,4 +273,240 @@ export function buildDemoMatrix(): ParsedMatrix {
     unrecognisedGrades: ['Pest Management Executive'],
     headerRowNumber: 1,
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Customers, sites and service agreements (ULK-C03)
+// ---------------------------------------------------------------------------
+
+export interface DemoJobType {
+  code: string;
+  name: string;
+  defaultDurationMinutes: number;
+  defaultCrewSize: number;
+  requiredSkillCode: string | null;
+}
+
+export const DEMO_JOB_TYPES: DemoJobType[] = [
+  {
+    code: 'GENERAL_PEST_CONTROL',
+    name: 'General Pest Control',
+    defaultDurationMinutes: 60,
+    defaultCrewSize: 2,
+    requiredSkillCode: 'GENERAL_PEST_CONTROL',
+  },
+  {
+    code: 'TERMITE_CONTROL',
+    name: 'Termite Control',
+    defaultDurationMinutes: 120,
+    defaultCrewSize: 3,
+    requiredSkillCode: 'ANTI_TERMITE_POST_CONSTRUCTION_SOIL_TREATMENT',
+  },
+  {
+    code: 'FUMIGATION',
+    name: 'Fumigation',
+    defaultDurationMinutes: 180,
+    defaultCrewSize: 3,
+    requiredSkillCode: 'MBR_FUMIGATION',
+  },
+  {
+    code: 'RODENT_MANAGEMENT',
+    name: 'Rodent Management',
+    defaultDurationMinutes: 45,
+    defaultCrewSize: 1,
+    requiredSkillCode: 'RODENT_MANAGEMENT',
+  },
+];
+
+interface DemoWindow {
+  weekday: Weekday;
+  opensAtMinute: number;
+  closesAtMinute: number;
+}
+
+export interface DemoSite {
+  name: string;
+  addressLine: string;
+  city: string;
+  operatingHours: DemoWindow[];
+}
+
+export interface DemoAgreement {
+  siteName: string;
+  jobTypeCode: string;
+  frequencyCount: number;
+  frequencyUnit: FrequencyUnit;
+  allowedDays: Weekday[];
+  preferredDays: Weekday[];
+  startDate: string;
+  durationMinutes?: number;
+  crewSize?: number;
+  requiredSkillCodes?: string[];
+  notes?: string;
+}
+
+export interface DemoCustomer {
+  name: string;
+  customerCode: string;
+  branchCode: BranchCode;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+  sites: DemoSite[];
+  agreements: DemoAgreement[];
+}
+
+const hours = (
+  weekdays: Weekday[],
+  opensAtMinute: number,
+  closesAtMinute: number,
+): DemoWindow[] => weekdays.map((weekday) => ({ weekday, opensAtMinute, closesAtMinute }));
+
+const WEEKDAYS = [
+  Weekday.MONDAY,
+  Weekday.TUESDAY,
+  Weekday.WEDNESDAY,
+  Weekday.THURSDAY,
+  Weekday.FRIDAY,
+];
+
+/**
+ * Invented customers, chosen to show the shapes the scheduler has to cope with:
+ * a site open before dawn, a site that shuts over lunch, a weekly commitment
+ * and a monthly one, and a Kandy customer so branch isolation is visible.
+ */
+export const DEMO_CUSTOMERS: DemoCustomer[] = [
+  {
+    name: 'Harbour View Hotel',
+    customerCode: 'HVH-001',
+    branchCode: BranchCode.COLOMBO,
+    contactName: 'Ravi Fernando',
+    contactPhone: '+94 11 234 5678',
+    contactEmail: 'facilities@harbourview.example',
+    sites: [
+      {
+        name: 'Harbour View — Main Building',
+        addressLine: '14 Marine Drive',
+        city: 'Colombo 03',
+        // Shuts over lunch: two windows on the same weekday.
+        operatingHours: [
+          ...hours(WEEKDAYS, 8 * 60, 12 * 60),
+          ...hours(WEEKDAYS, 13 * 60, 17 * 60),
+        ],
+      },
+      {
+        name: 'Harbour View — Kitchens',
+        addressLine: '14 Marine Drive (rear)',
+        city: 'Colombo 03',
+        operatingHours: hours(
+          [...WEEKDAYS, Weekday.SATURDAY, Weekday.SUNDAY],
+          5 * 60,
+          7 * 60 + 30,
+        ),
+      },
+    ],
+    agreements: [
+      {
+        siteName: 'Harbour View — Main Building',
+        jobTypeCode: 'GENERAL_PEST_CONTROL',
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.WEEK,
+        allowedDays: [Weekday.MONDAY, Weekday.TUESDAY, Weekday.WEDNESDAY],
+        preferredDays: [Weekday.TUESDAY],
+        startDate: '2026-09-07',
+        notes: 'Guest areas only. Avoid the lunch service.',
+      },
+      {
+        siteName: 'Harbour View — Kitchens',
+        jobTypeCode: 'RODENT_MANAGEMENT',
+        frequencyCount: 2,
+        frequencyUnit: FrequencyUnit.WEEK,
+        allowedDays: [
+          Weekday.MONDAY,
+          Weekday.WEDNESDAY,
+          Weekday.FRIDAY,
+          Weekday.SATURDAY,
+        ],
+        preferredDays: [Weekday.WEDNESDAY, Weekday.SATURDAY],
+        startDate: '2026-09-07',
+        durationMinutes: 45,
+        notes: 'Before service only — kitchens close at 07:30.',
+      },
+    ],
+  },
+  {
+    name: 'Greenfield Brewery',
+    customerCode: 'GFB-002',
+    branchCode: BranchCode.COLOMBO,
+    contactName: 'Anusha Silva',
+    contactPhone: '+94 11 555 0199',
+    contactEmail: 'plant@greenfield.example',
+    sites: [
+      {
+        name: 'Greenfield Brewery — Plant',
+        addressLine: 'Industrial Estate, Unit 7',
+        city: 'Colombo 15',
+        operatingHours: hours(WEEKDAYS, 7 * 60, 19 * 60),
+      },
+    ],
+    agreements: [
+      {
+        siteName: 'Greenfield Brewery — Plant',
+        jobTypeCode: 'FUMIGATION',
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.MONTH,
+        allowedDays: [Weekday.THURSDAY, Weekday.FRIDAY],
+        preferredDays: [Weekday.FRIDAY],
+        startDate: '2026-09-01',
+        crewSize: 3,
+        requiredSkillCodes: ['MBR_FUMIGATION'],
+        notes: 'Monthly deep fumigation. Plant must be notified 48h ahead.',
+      },
+    ],
+  },
+  {
+    name: 'Hill Country Tea Factory',
+    customerCode: 'HCT-003',
+    branchCode: BranchCode.KANDY,
+    contactName: 'Sarath Bandara',
+    contactPhone: '+94 81 222 3344',
+    contactEmail: 'estate@hillcountry.example',
+    sites: [
+      {
+        name: 'Hill Country — Drying Floor',
+        addressLine: 'Estate Road',
+        city: 'Kandy',
+        operatingHours: hours([...WEEKDAYS, Weekday.SATURDAY], 6 * 60, 14 * 60),
+      },
+    ],
+    agreements: [
+      {
+        siteName: 'Hill Country — Drying Floor',
+        jobTypeCode: 'TERMITE_CONTROL',
+        frequencyCount: 2,
+        frequencyUnit: FrequencyUnit.MONTH,
+        allowedDays: [Weekday.TUESDAY, Weekday.THURSDAY, Weekday.SATURDAY],
+        preferredDays: [Weekday.SATURDAY],
+        startDate: '2026-09-01',
+        notes: 'Kandy branch only. Timber structures around the drying floor.',
+      },
+    ],
+  },
+];
+
+/** Day rules in the shape the database stores them. */
+export function toDemoDayRules(
+  agreement: DemoAgreement,
+): { weekday: Weekday; kind: DayRuleKind }[] {
+  return [
+    ...agreement.allowedDays.map((weekday) => ({
+      weekday,
+      kind: DayRuleKind.ALLOWED,
+    })),
+    ...agreement.preferredDays.map((weekday) => ({
+      weekday,
+      kind: DayRuleKind.PREFERRED,
+    })),
+  ];
 }
