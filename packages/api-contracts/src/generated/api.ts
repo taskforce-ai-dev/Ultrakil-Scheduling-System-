@@ -432,6 +432,336 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/customers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List customers with their sites
+         * @description Each customer carries its sites and their opening hours, because a site is never useful on its own.
+         */
+        get: operations["CustomersController_list"];
+        put?: never;
+        /** Create a customer */
+        post: operations["CustomersController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One customer */
+        get: operations["CustomersController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a customer */
+        patch: operations["CustomersController_update"];
+        trace?: never;
+    };
+    "/api/customers/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate a customer
+         * @description Hidden from the default list but kept, because past visits and agreements reference it.
+         */
+        post: operations["CustomersController_deactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reactivate a customer */
+        post: operations["CustomersController_reactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/{id}/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A customer's service sites */
+        get: operations["CustomersController_listSites"];
+        put?: never;
+        /**
+         * Add a service site
+         * @description Inherits the customer's branch unless one is given, and may never sit in the other branch.
+         */
+        post: operations["CustomersController_createSite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-sites/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One service site */
+        get: operations["ServiceSitesController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update a service site
+         * @description Opening hours are replaced wholesale when given: send the week you want, and a weekday you omit means closed.
+         */
+        patch: operations["ServiceSitesController_update"];
+        trace?: never;
+    };
+    "/api/service-sites/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deactivate a site */
+        post: operations["ServiceSitesController_deactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-sites/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reactivate a site */
+        post: operations["ServiceSitesController_reactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-agreements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List service agreements
+         * @description Archived agreements are hidden unless status=ARCHIVED is asked for.
+         */
+        get: operations["AgreementsController_list"];
+        put?: never;
+        /**
+         * Create a service agreement
+         * @description Branch and customer are taken from the site. Rejected if it could never produce a visit — an unschedulable commitment is caught here, not discovered later as a silent gap.
+         */
+        post: operations["AgreementsController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-agreements/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One service agreement */
+        get: operations["AgreementsController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update a service agreement
+         * @description Bumps the version, so visits already generated stay explainable against the agreement as it was.
+         */
+        patch: operations["AgreementsController_update"];
+        trace?: never;
+    };
+    "/api/service-agreements/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause, resume or archive an agreement
+         * @description PAUSED stops visit generation but expects it back. ARCHIVED is final — past visits are explained by it, so it can never be revived or edited.
+         */
+        post: operations["AgreementsController_changeStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-agreements/{id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every version of this agreement
+         * @description Newest first. A generated visit records the version it came from, so a schedule can still be explained after the agreement changes.
+         */
+        get: operations["AgreementsController_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-agreements/{id}/schedule-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Which dates this agreement asks for
+         * @description A preview of the required visits, not a schedule: it assigns nobody and books nothing. Periods that cannot hold the promised number of visits come back as shortfalls rather than being quietly dropped.
+         */
+        get: operations["AgreementsController_preview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/job-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List job types */
+        get: operations["JobTypesController_list"];
+        put?: never;
+        /** Create a job type */
+        post: operations["JobTypesController_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/job-types/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One job type */
+        get: operations["JobTypesController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a job type */
+        patch: operations["JobTypesController_update"];
+        trace?: never;
+    };
+    "/api/job-types/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deactivate a job type
+         * @description Kept, not deleted — existing agreements still reference it.
+         */
+        post: operations["JobTypesController_deactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/job-types/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reactivate a job type */
+        post: operations["JobTypesController_reactivate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -720,6 +1050,191 @@ export interface components {
              */
             skillLabel: string;
             employeeCount: number;
+        };
+        SiteOperatingHoursResponseDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            weekday: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+            /**
+             * @description 540 is 09:00.
+             * @example 540
+             */
+            opensAtMinute: number;
+            /**
+             * @description 1020 is 17:00.
+             * @example 1020
+             */
+            closesAtMinute: number;
+        };
+        ServiceSiteDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            customerId: string;
+            /** @example Starbucks Newark Penn Station */
+            name: string;
+            addressLine: string | null;
+            city: string | null;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            isActive: boolean;
+            /** @description Opening windows. A weekday with no window is closed; several windows on one weekday mean the site shuts in between. */
+            operatingHours: components["schemas"]["SiteOperatingHoursResponseDto"][];
+            /** @description Agreements referencing this site. */
+            serviceAgreementCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CustomerDto: {
+            /** Format: uuid */
+            id: string;
+            /** @example Starbucks New Jersey */
+            name: string;
+            /** @example SBUX-NJ */
+            customerCode: string | null;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            contactName: string | null;
+            contactPhone: string | null;
+            contactEmail: string | null;
+            isActive: boolean;
+            sites: components["schemas"]["ServiceSiteDto"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PaginatedCustomersDto: {
+            items: components["schemas"]["CustomerDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        ServiceAgreementDayRuleDto: {
+            /** @enum {string} */
+            weekday: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+            /** @enum {string} */
+            kind: "ALLOWED" | "PREFERRED";
+        };
+        ServiceAgreementDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            customerId: string;
+            customerName: string;
+            /** Format: uuid */
+            serviceSiteId: string;
+            siteName: string;
+            /** Format: uuid */
+            jobTypeId: string;
+            jobTypeName: string;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** @description Visits per frequencyUnit. */
+            frequencyCount: number;
+            /** @enum {string} */
+            frequencyUnit: "WEEK" | "MONTH";
+            crewSize: number;
+            durationMinutes: number;
+            /** @description Narrows the site's hours. Null falls back to them entirely. */
+            serviceWindowStartMinute: number | null;
+            serviceWindowEndMinute: number | null;
+            /** Format: date */
+            startDate: string;
+            /** Format: date */
+            endDate: string | null;
+            /** @enum {string} */
+            status: "ACTIVE" | "PAUSED" | "ARCHIVED";
+            /** @description True only when status is ACTIVE. */
+            isActive: boolean;
+            /** @description Increments whenever a change would alter the visits produced. */
+            currentVersion: number;
+            dayRules: components["schemas"]["ServiceAgreementDayRuleDto"][];
+            /** @description Hard constraint. A visit never lands outside these weekdays. */
+            allowedDays: ("MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY")[];
+            /** @description Soft ranking preference. Always a subset of allowedDays. */
+            preferredDays: ("MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY")[];
+            /**
+             * @example [
+             *       "MBR_FUMIGATION"
+             *     ]
+             */
+            requiredSkillCodes: string[];
+            notes: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PaginatedServiceAgreementsDto: {
+            items: components["schemas"]["ServiceAgreementDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        AgreementVersionDto: {
+            /** Format: uuid */
+            id: string;
+            versionNumber: number;
+            changedByLabel: string | null;
+            changeSummary: string | null;
+            /** @description The agreement as it stood at this version — the scheduling-relevant fields only. */
+            snapshot: Record<string, never>;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        PreviewVisitDto: {
+            /** Format: date */
+            date: string;
+            /** @enum {string} */
+            weekday: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
+            windowStartMinute: number;
+            windowEndMinute: number;
+            /** @description Fell on a preferred weekday, not merely an allowed one. */
+            isPreferredDay: boolean;
+        };
+        PreviewShortfallDto: {
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            requested: number;
+            scheduled: number;
+            /** @enum {string} */
+            reason: "NOT_ENOUGH_ALLOWED_DAYS" | "SITE_CLOSED_ON_ALLOWED_DAYS" | "WINDOW_TOO_SHORT_FOR_VISIT";
+            /** @description Actionable explanation for a manager. */
+            message: string;
+        };
+        SchedulePreviewDto: {
+            visits: components["schemas"]["PreviewVisitDto"][];
+            /** @description Periods that cannot hold the promised number of visits. Reported, never silently dropped. */
+            shortfalls: components["schemas"]["PreviewShortfallDto"][];
+            /** Format: date */
+            horizonStart: string;
+            /** Format: date */
+            horizonEnd: string;
+        };
+        JobTypeDto: {
+            /** Format: uuid */
+            id: string;
+            /** @example TERMITE_CONTROL */
+            code: string;
+            /** @example Termite Control */
+            name: string;
+            defaultDurationMinutes: number;
+            defaultCrewSize: number;
+            /** @description Phase 1 requires a PMS-grade supervisor on every job. */
+            requiresPmsSupervisor: boolean;
+            /** @example MBR_FUMIGATION */
+            requiredSkillCode: string | null;
+            isActive: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
     };
     responses: never;
@@ -1492,6 +2007,789 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillListItemDto"][];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_list: {
+        parameters: {
+            query?: {
+                /** @description Matches customer name, code, or a site name. */
+                search?: string;
+                /** @description Defaults to active customers only. */
+                active?: boolean;
+                branch?: "COLOMBO" | "KANDY";
+                pageSize?: number;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedCustomersDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CUSTOMER_CODE_TAKEN. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such customer. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CUSTOMER_CODE_TAKEN, or SITE_BRANCH_MISMATCH when it still has sites. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_deactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_reactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_listSites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"][];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CustomersController_createSite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"];
+                };
+            };
+            /** @description OPERATING_HOURS_INVALID or OPERATING_HOURS_OVERLAP. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description SITE_BRANCH_MISMATCH or CUSTOMER_INACTIVE. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ServiceSitesController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such site. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ServiceSitesController_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"];
+                };
+            };
+            /** @description OPERATING_HOURS_INVALID or OPERATING_HOURS_OVERLAP. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ServiceSitesController_deactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ServiceSitesController_reactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSiteDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_list: {
+        parameters: {
+            query?: {
+                search?: string;
+                /** @description Only agreements in force on this date. */
+                activeOn?: string;
+                frequencyUnit?: "WEEK" | "MONTH";
+                status?: "ACTIVE" | "PAUSED" | "ARCHIVED";
+                jobTypeId?: string;
+                serviceSiteId?: string;
+                customerId?: string;
+                branch?: "COLOMBO" | "KANDY";
+                pageSize?: number;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedServiceAgreementsDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAgreementDto"];
+                };
+            };
+            /** @description PREFERRED_DAYS_NOT_ALLOWED, ALLOWED_DAYS_REQUIRED, SERVICE_WINDOW_INVALID or AGREEMENT_DATES_INVALID. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AGREEMENT_UNSATISFIABLE — no visit can be placed at all. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAgreementDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such agreement. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAgreementDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AGREEMENT_ARCHIVED. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AGREEMENT_UNSATISFIABLE. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_changeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAgreementDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AGREEMENT_ARCHIVED. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgreementVersionDto"][];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_preview: {
+        parameters: {
+            query?: {
+                /** @description How far ahead to look. Defaults to 4. */
+                horizonWeeks?: number;
+                /** @description Defaults to the agreement's start date. */
+                from?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SchedulePreviewDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_list: {
+        parameters: {
+            query?: {
+                /** @description Defaults to active job types only. */
+                active?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"][];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description JOB_TYPE_CODE_TAKEN. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such job type. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_deactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    JobTypesController_reactivate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobTypeDto"];
                 };
             };
             /** @description Missing or invalid token. */

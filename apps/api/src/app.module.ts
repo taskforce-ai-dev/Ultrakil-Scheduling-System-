@@ -14,6 +14,7 @@ import { HealthModule } from './health/health.module';
 import { MetaModule } from './meta/meta.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { WorkforceModule } from './workforce/workforce.module';
 
 @Module({
@@ -32,6 +33,7 @@ import { WorkforceModule } from './workforce/workforce.module';
     HealthModule,
     MetaModule,
     WorkforceModule,
+    CatalogModule,
   ],
 })
 export class AppModule {}

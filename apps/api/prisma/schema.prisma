@@ -62,6 +62,18 @@ enum DayRuleKind {
   PREFERRED
 }
 
+/// Lifecycle of a service agreement.
+///
+/// PAUSED is not the same as ARCHIVED: a paused agreement stops generating
+/// visits but is expected back, while an archived one is finished and kept
+/// only because past visits still reference it. Neither is a deletion —
+/// generated visits must always be explainable.
+enum AgreementStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
 enum VisitStatus {
   PENDING
   SCHEDULED
@@ -202,8 +214,8 @@ model Employee {
   /// Senior PMS, PMS, Assistant PMS, SPMS, APMS. Every job needs at least one.
   isPmsGrade Boolean @default(false)
 
-  branchId String     @db.Uuid
-  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchId   String     @db.Uuid
+  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
   branchCode BranchCode
 
   deploymentType DeploymentType @default(MOBILE)
@@ -229,12 +241,12 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  skills                 EmployeeSkill[]
-  availability           EmployeeAvailability[]
-  permanentAssignments   PermanentAssignment[]
-  vehicleAuthorizations  VehicleAuthorization[]
-  crewMemberships        AssignmentCrewMember[]
-  drivenAssignmentVehicles AssignmentVehicle[]  @relation("AssignmentVehicleDriver")
+  skills                   EmployeeSkill[]
+  availability             EmployeeAvailability[]
+  permanentAssignments     PermanentAssignment[]
+  vehicleAuthorizations    VehicleAuthorization[]
+  crewMemberships          AssignmentCrewMember[]
+  drivenAssignmentVehicles AssignmentVehicle[]    @relation("AssignmentVehicleDriver")
 
   @@index([branchId, isActive])
   @@index([isPmsGrade, branchCode])
@@ -248,7 +260,7 @@ model EmployeeSkill {
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   /// Normalised code used for matching, e.g. FUMIGATION.
-  skillCode String
+  skillCode  String
   /// Label exactly as spelled in the source workbook.
   skillLabel String
 
@@ -334,8 +346,8 @@ model Vehicle {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  authorizations       VehicleAuthorization[]
-  assignmentVehicles   AssignmentVehicle[]
+  authorizations     VehicleAuthorization[]
+  assignmentVehicles AssignmentVehicle[]
 
   @@map("vehicles")
 }
@@ -437,7 +449,12 @@ model SiteOperatingHours {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([serviceSiteId, weekday])
+  // A weekday may have several windows — a site that closes over lunch is two
+  // rows, not one long one. Absence of any row for a weekday still means
+  // closed. Non-overlap within a weekday is enforced in the service layer:
+  // Prisma cannot declare the exclusion constraint that would express it, and
+  // a half-expressed guard is worse than an explicit check.
+  @@index([serviceSiteId, weekday])
   @@map("site_operating_hours")
 }
 
@@ -501,7 +518,12 @@ model ServiceAgreement {
   startDate DateTime  @db.Date
   endDate   DateTime? @db.Date
 
-  isActive Boolean @default(true)
+  status AgreementStatus @default(ACTIVE)
+
+  /// Bumped on every change that alters what visits this agreement produces.
+  /// A generated visit records the version it came from, so a schedule stays
+  /// explainable after the agreement moves on.
+  currentVersion Int @default(1)
 
   notes String?
 
@@ -509,16 +531,70 @@ model ServiceAgreement {
   updatedAt DateTime @updatedAt
 
   dayRules        ServiceAgreementDayRule[]
+  requiredSkills  ServiceAgreementRequiredSkill[]
+  versions        ServiceAgreementVersion[]
   generatedVisits GeneratedVisit[]
 
   @@index([customerId])
   @@index([serviceSiteId])
-  @@index([branchId, isActive])
+  @@index([branchId, status])
   @@map("service_agreements")
 }
 
 /// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
 /// PREFERRED rows are soft preferences used for ranking, never for exclusion.
+/// A skill a crew member must hold for this agreement's work.
+///
+/// The job type carries a default, but a particular customer can need more —
+/// a site that also wants fumigation cover, say. Held per agreement so the
+/// requirement travels with the commitment, not the category.
+model ServiceAgreementRequiredSkill {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  /// Normalised code, matching EmployeeSkill.skillCode.
+  skillCode String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serviceAgreementId, skillCode])
+  @@index([skillCode])
+  @@map("service_agreement_required_skills")
+}
+
+/// An immutable snapshot of an agreement as it stood at one version.
+///
+/// Visits are generated from an agreement that may later change. Without a
+/// snapshot, "why was this visit on a Tuesday?" becomes unanswerable the
+/// moment someone edits the allowed days. Append-only: rows are never updated.
+model ServiceAgreementVersion {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  versionNumber Int
+
+  /// The agreement's scheduling-relevant fields as they were at this version.
+  snapshot Json
+
+  /// Who caused this version, for the same reason the audit log records it.
+  changedByUserId String?
+  changedByLabel  String?
+  changeSummary   String?
+
+  createdAt DateTime @default(now())
+
+  generatedVisits GeneratedVisit[]
+
+  @@unique([serviceAgreementId, versionNumber])
+  @@index([serviceAgreementId, createdAt])
+  @@map("service_agreement_versions")
+}
+
 model ServiceAgreementDayRule {
   id String @id @default(uuid()) @db.Uuid
 
@@ -568,10 +644,15 @@ model GeneratedVisit {
   generatedByRunId String?      @db.Uuid
   generatedByRun   ScheduleRun? @relation("ScheduleRunGeneratedVisits", fields: [generatedByRunId], references: [id], onDelete: SetNull)
 
+  /// The agreement version this visit was generated from, so the visit stays
+  /// explainable after the agreement changes. Populated by ULK-C04.
+  agreementVersionId String?                  @db.Uuid
+  agreementVersion   ServiceAgreementVersion? @relation(fields: [agreementVersionId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignments      Assignment[]
+  assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
 
   @@unique([serviceAgreementId, visitDate, windowStartMinute])
@@ -589,7 +670,7 @@ model VisitUnassignedReason {
   generatedVisit   GeneratedVisit @relation(fields: [generatedVisitId], references: [id], onDelete: Cascade)
 
   /// Stable machine-readable code, e.g. NO_PMS_SUPERVISOR_AVAILABLE.
-  code String
+  code    String
   /// Manager-facing explanation.
   message String
   details Json?
@@ -757,7 +838,7 @@ model AuditEvent {
 
   /// e.g. "Assignment", "GeneratedVisit", "ServiceAgreement".
   entityType String
-  entityId   String  @db.Uuid
+  entityId   String @db.Uuid
   /// e.g. "assignment.published", "assignment.crew_replaced".
   action     String
 
