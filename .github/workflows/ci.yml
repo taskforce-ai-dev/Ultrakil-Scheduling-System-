@@ -94,6 +94,38 @@ jobs:
           git diff --exit-code -- packages/api-contracts/src/generated \
             || (echo "::error::Generated API client is stale. Run 'pnpm contracts:generate' and commit the result." && exit 1)
 
+  manager-web:
+    name: Manager portal (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` here on purpose, for the same reason as the api job:
+      # pnpm/action-setup errors out when the version is given both in the
+      # workflow and in package.json's "packageManager" field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter @ultrakil/manager-web lint
+
+      - name: Typecheck
+        run: pnpm --filter @ultrakil/manager-web typecheck
+
+      - name: Tests
+        run: pnpm --filter @ultrakil/manager-web test
+
+      - name: Build
+        run: pnpm --filter @ultrakil/manager-web build
+
   scheduler:
     name: Scheduler service (Python)
     runs-on: ubuntu-latest

@@ -24,17 +24,25 @@ import {
 import { AppDrawer } from "@/components/shared/app-drawer";
 import { FormField } from "@/components/shared/form-field";
 import { EmptyState } from "@/components/shared/empty-state";
-import { SiteHoursEditor } from "@/components/shared/site-hours-editor";
+import { ErrorState } from "@/components/shared/error-state";
+import { LoadingState } from "@/components/shared/loading-state";
+import { SiteHoursEditor, type SiteOperatingHours } from "@/components/shared/site-hours-editor";
 import { Badge } from "@/components/ui/badge";
-import { mockCustomers } from "@/lib/mock-data";
-import type { BranchCode, Customer, SiteOperatingHours } from "@/lib/mock-data/types";
+import {
+  ApiError,
+  createCustomer,
+  createServiceSite,
+  fetchCustomers,
+  type Customer,
+} from "@/lib/api-client";
 import { notify } from "@/lib/notify";
+
+type BranchCode = "COLOMBO" | "KANDY";
 
 interface SiteFormValues {
   name: string;
   addressLine: string;
   city: string;
-  branchCode: BranchCode;
   operatingHours: SiteOperatingHours[];
 }
 
@@ -48,73 +56,110 @@ interface CustomerFormValues {
   sites: SiteFormValues[];
 }
 
-const EMPTY_SITE: SiteFormValues = {
+const EMPTY_SITE: SiteFormValues = { name: "", addressLine: "", city: "", operatingHours: [] };
+
+const defaultValues: CustomerFormValues = {
   name: "",
-  addressLine: "",
-  city: "",
+  customerCode: "",
   branchCode: "COLOMBO",
-  operatingHours: [],
+  contactName: "",
+  contactPhone: "",
+  contactEmail: "",
+  sites: [EMPTY_SITE],
 };
 
 /**
  * No business-rule validation lives here on purpose — hard rules
  * (service-area matching, PMS supervisor coverage, etc.) are enforced by
- * Chanya's API, not duplicated in the UI. Field shape mirrors the real
- * `Customer` / `ServiceSite` / `SiteOperatingHours` Prisma models — see
- * `lib/mock-data/types.ts` — since ULK-C03 hasn't published endpoints yet.
+ * the API, not duplicated in the UI. A site always inherits its customer's
+ * branch (the API's default) rather than offering a separate branch picker,
+ * since a site is never allowed to sit in the other branch anyway.
  */
 export default function CustomersPage() {
-  const [customers, setCustomers] = React.useState<Customer[]>(mockCustomers);
+  const [customers, setCustomers] = React.useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<ApiError | null>(null);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+
   const {
     register,
     control,
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<CustomerFormValues>({
-    defaultValues: {
-      name: "",
-      customerCode: "",
-      branchCode: "COLOMBO",
-      contactName: "",
-      contactPhone: "",
-      contactEmail: "",
-      sites: [EMPTY_SITE],
-    },
-  });
+  } = useForm<CustomerFormValues>({ defaultValues });
   const { fields, append, remove } = useFieldArray({ control, name: "sites" });
 
-  function onSubmit(values: CustomerFormValues) {
-    const customerId = `cust-${customers.length + 1}`;
-    const sites = values.sites.map((site, index) => ({
-      id: `site-${customerId}-${index + 1}`,
-      customerId,
-      name: site.name,
-      addressLine: site.addressLine || null,
-      city: site.city || null,
-      branchCode: site.branchCode,
-      isActive: true,
-      operatingHours: site.operatingHours,
-    }));
+  const load = React.useCallback(() => {
+    setIsLoading(true);
+    setError(null);
+    fetchCustomers({ pageSize: 200 })
+      .then((response) => setCustomers(response.items))
+      .catch((caught: unknown) => {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+        );
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
 
-    setCustomers((current) => [
-      ...current,
-      {
-        id: customerId,
+  React.useEffect(() => {
+    // Fetching from the API on mount — an external system, which is what
+    // effects are for.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
+  async function onSubmit(values: CustomerFormValues) {
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const customer = await createCustomer({
         name: values.name,
         customerCode: values.customerCode || null,
         branchCode: values.branchCode,
         contactName: values.contactName || null,
         contactPhone: values.contactPhone || null,
         contactEmail: values.contactEmail || null,
-        isActive: true,
-        sites,
-      },
-    ]);
-    notify.success(`${values.name} added with ${sites.length} site${sites.length === 1 ? "" : "s"}.`);
-    reset({ ...values, name: "", customerCode: "", contactName: "", contactPhone: "", contactEmail: "", sites: [EMPTY_SITE] });
-    setDrawerOpen(false);
+      });
+
+      const failedSites: string[] = [];
+      for (const site of values.sites) {
+        try {
+          await createServiceSite(customer.id, {
+            name: site.name,
+            addressLine: site.addressLine || null,
+            city: site.city || null,
+            operatingHours: site.operatingHours,
+          });
+        } catch (caught) {
+          failedSites.push(
+            `${site.name || "(unnamed site)"} — ${
+              caught instanceof ApiError ? caught.message : "something went wrong"
+            }`
+          );
+        }
+      }
+
+      if (failedSites.length > 0) {
+        notify.error(
+          `${customer.name} was created, but ${failedSites.length} site(s) could not be added: ${failedSites.join("; ")}`
+        );
+      } else {
+        notify.success(`${customer.name} added with ${values.sites.length} site(s).`);
+      }
+      reset(defaultValues);
+      setDrawerOpen(false);
+      load();
+    } catch (caught) {
+      setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -130,7 +175,16 @@ export default function CustomersPage() {
         </Button>
       </div>
 
-      {customers.length === 0 ? (
+      {isLoading ? (
+        <LoadingState rows={3} />
+      ) : error ? (
+        <ErrorState
+          title="Couldn't load customers"
+          description={error.message}
+          code={error.code}
+          onRetry={load}
+        />
+      ) : customers.length === 0 ? (
         <EmptyState
           title="No customers yet"
           description="Add your first customer to start building service agreements."
@@ -172,8 +226,8 @@ export default function CustomersPage() {
         title="Add customer"
         description="A customer needs at least one site before a service agreement can be created for it."
         footer={
-          <Button type="submit" form="customer-form" className="w-full">
-            Save customer
+          <Button type="submit" form="customer-form" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : "Save customer"}
           </Button>
         }
       >
@@ -222,12 +276,7 @@ export default function CustomersPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium">Sites</h2>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => append(EMPTY_SITE)}
-              >
+              <Button type="button" variant="outline" size="sm" onClick={() => append(EMPTY_SITE)}>
                 <Plus className="h-4 w-4" />
                 Add site
               </Button>
@@ -270,24 +319,6 @@ export default function CustomersPage() {
                   </FormField>
                 </div>
 
-                <FormField id={`sites.${index}.branchCode`} label="Branch">
-                  <Controller
-                    control={control}
-                    name={`sites.${index}.branchCode`}
-                    render={({ field: branchField }) => (
-                      <Select value={branchField.value} onValueChange={branchField.onChange}>
-                        <SelectTrigger id={`sites.${index}.branchCode`} className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="COLOMBO">Colombo</SelectItem>
-                          <SelectItem value="KANDY">Kandy</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  />
-                </FormField>
-
                 <Controller
                   control={control}
                   name={`sites.${index}.operatingHours`}
@@ -302,6 +333,12 @@ export default function CustomersPage() {
               </div>
             ))}
           </div>
+
+          {submitError && (
+            <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {submitError}
+            </p>
+          )}
         </form>
       </AppDrawer>
     </div>
