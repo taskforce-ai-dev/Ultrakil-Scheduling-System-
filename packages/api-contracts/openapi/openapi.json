@@ -1948,6 +1948,71 @@
           "service-agreements"
         ]
       }
+    },
+    "/api/visit-generation/preview": {
+      "post": {
+        "description": "Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.",
+        "operationId": "VisitGenerationController_preview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationImpactDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AGREEMENT_DATES_INVALID, or a horizon longer than a year."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "What generating this horizon would change",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/confirm": {
+      "post": {
+        "description": "Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.",
+        "operationId": "VisitGenerationController_confirm",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationImpactDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Generate the visits",
+        "tags": [
+          "visit-generation"
+        ]
+      }
     }
   },
   "info": {
@@ -3298,6 +3363,354 @@
           "isActive",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "PlannedVisitDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "isPreferredDay": {
+            "type": "boolean",
+            "description": "Fell on a preferred weekday rather than a merely allowed one."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "branchCode",
+          "isPreferredDay"
+        ]
+      },
+      "VisitChangeDto": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "from",
+          "to"
+        ]
+      },
+      "PlannedUpdateDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "isPreferredDay": {
+            "type": "boolean",
+            "description": "Fell on a preferred weekday rather than a merely allowed one."
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitChangeDto"
+            }
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "branchCode",
+          "isPreferredDay",
+          "visitId",
+          "changes"
+        ]
+      },
+      "PlannedRemovalDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "NO_LONGER_REQUIRED"
+            ]
+          }
+        },
+        "required": [
+          "visitId",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "reason"
+        ]
+      },
+      "ProtectedVisitDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "protection": {
+            "type": "string",
+            "enum": [
+              "LOCKED",
+              "MANUALLY_ADJUSTED",
+              "HAS_ASSIGNMENT",
+              "ALREADY_SCHEDULED",
+              "ALREADY_COMPLETED",
+              "CANCELLED"
+            ],
+            "description": "Why generation left this visit alone."
+          },
+          "wouldHave": {
+            "type": "string",
+            "enum": [
+              "UPDATE",
+              "REMOVE"
+            ],
+            "description": "What generation would have done, had it been allowed to."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitChangeDto"
+            }
+          }
+        },
+        "required": [
+          "visitId",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "protection",
+          "wouldHave"
+        ]
+      },
+      "GenerationShortfallDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested": {
+            "type": "number"
+          },
+          "scheduled": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "periodStart",
+          "periodEnd",
+          "requested",
+          "scheduled",
+          "reason",
+          "message"
+        ]
+      },
+      "GenerationImpactDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date"
+          },
+          "agreementsConsidered": {
+            "type": "number"
+          },
+          "additions": {
+            "description": "Visits that would be created.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedVisitDto"
+            }
+          },
+          "updates": {
+            "description": "Untouched visits that would be brought in line with the agreement.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedUpdateDto"
+            }
+          },
+          "removals": {
+            "description": "Untouched visits the agreements no longer ask for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedRemovalDto"
+            }
+          },
+          "protectedVisits": {
+            "description": "Visits a manager owns. Left exactly as they are, and listed so the change is never a surprise.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProtectedVisitDto"
+            }
+          },
+          "unchangedCount": {
+            "type": "number",
+            "description": "Already correct; nothing to do."
+          },
+          "shortfalls": {
+            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationShortfallDto"
+            }
+          },
+          "isPreview": {
+            "type": "boolean",
+            "description": "True when this was a preview. Nothing was written."
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The schedule run recorded, when this was confirmed."
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "agreementsConsidered",
+          "additions",
+          "updates",
+          "removals",
+          "protectedVisits",
+          "unchangedCount",
+          "shortfalls",
+          "isPreview"
         ]
       }
     }

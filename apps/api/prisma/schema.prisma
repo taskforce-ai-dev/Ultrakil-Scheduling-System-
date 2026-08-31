@@ -647,6 +647,19 @@ model GeneratedVisit {
 
   status VisitStatus @default(PENDING)
 
+  /// True once a manager has changed this visit by hand — moved its date,
+  /// widened its window, altered the crew size. Regeneration must never
+  /// overwrite one: the manager knows something the agreement does not.
+  isManuallyAdjusted Boolean   @default(false)
+  manuallyAdjustedAt DateTime?
+  manuallyAdjustedBy String?
+
+  /// A manager's pin. A locked visit survives regeneration untouched, whatever
+  /// the agreement now says. Null means unlocked.
+  lockedAt       DateTime?
+  lockedByUserId String?
+  lockReason     String?
+
   /// Which generation run produced this visit.
   generatedByRunId String?      @db.Uuid
   generatedByRun   ScheduleRun? @relation("ScheduleRunGeneratedVisits", fields: [generatedByRunId], references: [id], onDelete: SetNull)
@@ -662,9 +675,12 @@ model GeneratedVisit {
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
 
+  // Idempotency: one visit per agreement, date and start time. Generating the
+  // same horizon twice therefore updates rather than duplicating.
   @@unique([serviceAgreementId, visitDate, windowStartMinute])
   @@index([branchId, visitDate, status])
   @@index([status])
+  @@index([serviceAgreementId, visitDate])
   @@map("generated_visits")
 }
 

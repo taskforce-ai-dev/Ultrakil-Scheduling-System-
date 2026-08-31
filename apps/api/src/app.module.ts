@@ -15,6 +15,7 @@ import { MetaModule } from './meta/meta.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { QueueModule } from './queue/queue.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
 import { WorkforceModule } from './workforce/workforce.module';
 
 @Module({
@@ -34,6 +35,7 @@ import { WorkforceModule } from './workforce/workforce.module';
     MetaModule,
     WorkforceModule,
     CatalogModule,
+    SchedulingModule,
   ],
 })
 export class AppModule {}

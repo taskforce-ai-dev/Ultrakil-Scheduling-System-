@@ -762,6 +762,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visit-generation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What generating this horizon would change
+         * @description Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.
+         */
+        post: operations["VisitGenerationController_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visit-generation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate the visits
+         * @description Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.
+         */
+        post: operations["VisitGenerationController_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1245,6 +1285,117 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        PlannedVisitDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            branchCode: string;
+            /** @description Fell on a preferred weekday rather than a merely allowed one. */
+            isPreferredDay: boolean;
+        };
+        VisitChangeDto: {
+            field: string;
+            from: string;
+            to: string;
+        };
+        PlannedUpdateDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            branchCode: string;
+            /** @description Fell on a preferred weekday rather than a merely allowed one. */
+            isPreferredDay: boolean;
+            /** Format: uuid */
+            visitId: string;
+            changes: components["schemas"]["VisitChangeDto"][];
+        };
+        PlannedRemovalDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            /** @enum {string} */
+            reason: "NO_LONGER_REQUIRED";
+        };
+        ProtectedVisitDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            /**
+             * @description Why generation left this visit alone.
+             * @enum {string}
+             */
+            protection: "LOCKED" | "MANUALLY_ADJUSTED" | "HAS_ASSIGNMENT" | "ALREADY_SCHEDULED" | "ALREADY_COMPLETED" | "CANCELLED";
+            /**
+             * @description What generation would have done, had it been allowed to.
+             * @enum {string}
+             */
+            wouldHave: "UPDATE" | "REMOVE";
+            changes?: components["schemas"]["VisitChangeDto"][];
+        };
+        GenerationShortfallDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            requested: number;
+            scheduled: number;
+            reason: string;
+            message: string;
+        };
+        GenerationImpactDto: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            agreementsConsidered: number;
+            /** @description Visits that would be created. */
+            additions: components["schemas"]["PlannedVisitDto"][];
+            /** @description Untouched visits that would be brought in line with the agreement. */
+            updates: components["schemas"]["PlannedUpdateDto"][];
+            /** @description Untouched visits the agreements no longer ask for. */
+            removals: components["schemas"]["PlannedRemovalDto"][];
+            /** @description Visits a manager owns. Left exactly as they are, and listed so the change is never a surprise. */
+            protectedVisits: components["schemas"]["ProtectedVisitDto"][];
+            /** @description Already correct; nothing to do. */
+            unchangedCount: number;
+            /** @description Periods that cannot hold the promised number of visits. Reported, never quietly dropped. */
+            shortfalls: components["schemas"]["GenerationShortfallDto"][];
+            /** @description True when this was a preview. Nothing was written. */
+            isPreview: boolean;
+            /**
+             * Format: uuid
+             * @description The schedule run recorded, when this was confirmed.
+             */
+            scheduleRunId?: string;
         };
     };
     responses: never;
@@ -2800,6 +2951,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationImpactDto"];
+                };
+            };
+            /** @description AGREEMENT_DATES_INVALID, or a horizon longer than a year. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationImpactDto"];
                 };
             };
             /** @description Missing or invalid token. */
