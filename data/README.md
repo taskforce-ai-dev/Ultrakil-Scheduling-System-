@@ -26,6 +26,8 @@ in git history.
 | `matrix-mapping.json` | No | Column mapping overrides, and the branch for each permanently stationed site. Start from `matrix-mapping.example.json`. |
 | `matrix-mapping.example.json` | Yes | Template for the above, with comments. |
 | `job-types.json` | No (optional) | Job type reference data taken from the signed proposal. |
+| `master-schedule-2026.xlsx` | No | UltraKIL's real master schedule: customers, sites, addresses and the visits planned for the year. Ask the Project Lead. |
+| `master-schedule-import-report.json` | No | Written by the import. Quotes real customer and site names back at you, so it is ignored too. |
 
 ## Two things the workbook does not say — both now answered
 
@@ -104,3 +106,54 @@ workbook later cannot slip through unnoticed.
 
 The import is idempotent — running it twice produces no duplicate employees and
 no duplicate vehicle authorizations.
+
+
+## Importing the master schedule
+
+```bash
+pnpm schedule:import -- --dry-run   # read and report, write nothing
+pnpm schedule:import                # import what fits
+```
+
+Twenty sheets kept by hand over years, so most columns are free text. The
+importer loads what the data model can hold faithfully and reports everything
+else, with the words the workbook actually used, rather than guessing. A
+customer quietly given the wrong visit frequency looks right on screen and
+delivers the wrong service all year.
+
+From the 2026 workbook that means **212 customers and 872 sites import
+cleanly**, and 56 of 220 agreement rows become agreements. The rest are listed
+in the report for UltraKIL to answer. Safe to re-run: every write upserts on a
+natural key, so a second run updates rather than duplicating.
+
+### Three things the import cannot decide on its own
+
+**Which branch serves a site.** The workbook never says. Its own "Region"
+columns are the customer's regions, not Colombo and Kandy. Every site is
+therefore created in **Colombo** and listed in the report — moving the Kandy
+ones is a deliberate decision, because branch isolation is a hard scheduling
+rule and a wrong branch assigned quietly is exactly the kind of error that
+survives to the pilot.
+
+**Frequencies the model cannot express.** Fortnightly, quarterly, once in two
+months and on-request are real commitments UltraKIL has made, but
+`ServiceAgreement` only has weekly and monthly units. Those rows are reported,
+not approximated. Supporting them is a data-model change.
+
+**Day rules that name an occurrence.** "Every 2nd and Last Friday", "9th and
+29th", "2nd Week Saturday" — the model stores which weekdays are allowed, not
+which occurrence of them.
+
+### Allowed days read from past bookings
+
+Most rows leave the Day column empty but fill the month columns with the dates
+actually planned. Where that happens the importer counts the weekdays of those
+dates and uses them, which is why 105 agreements have days at all. This is
+evidence — it is what UltraKIL demonstrably does — but it is not a stated rule,
+so every such agreement says so in its notes:
+
+> The allowed days were not stated — they were read from the 6 visit dates
+> already booked (FRI×6). Confirm with the customer.
+
+A weekday appearing only once among many is dropped, and fewer than three dates
+yields nothing.
