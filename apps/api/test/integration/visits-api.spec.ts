@@ -184,8 +184,10 @@ describe('listing the calendar', () => {
     expect(dates).toEqual([...dates].sort());
     expect(res.body.items[0]).toMatchObject({
       branchCode: BranchCode.COLOMBO,
+      jobTypeName: 'C04 Visits Job',
       isProtected: false,
       protectionReason: null,
+      manuallyAdjustedAt: null,
       assignmentCount: 0,
     });
     expect(res.body.items[0].customerName).toContain('C04 Visits Customer');
@@ -220,6 +222,43 @@ describe('listing the calendar', () => {
       search: 'a customer that does not exist',
     });
     expect(noMatch.body.total).toBe(0);
+  });
+
+  it('narrows by job type', async () => {
+    const agreement = await agreementWithVisits();
+
+    const match = await listVisits({ serviceAgreementId: agreement.id, jobTypeId });
+    expect(match.body.total).toBe(4);
+
+    const otherJobType = await request(http)
+      .post('/api/job-types')
+      .set(auth(adminToken))
+      .send({ code: `C04V_OTHER_${suffix}`, name: 'Other Job', defaultCrewSize: 1 });
+
+    const noMatch = await listVisits({
+      serviceAgreementId: agreement.id,
+      jobTypeId: otherJobType.body.id,
+    });
+    expect(noMatch.body.total).toBe(0);
+  });
+
+  it('applies customer and job type together rather than only the last one', async () => {
+    const agreement = await agreementWithVisits();
+
+    const otherJobType = await request(http)
+      .post('/api/job-types')
+      .set(auth(adminToken))
+      .send({ code: `C04V_BOTH_${suffix}`, name: 'Both Job', defaultCrewSize: 1 });
+
+    // The customer matches but the job type does not. If the two filters
+    // overwrote each other this would wrongly return all four visits.
+    const res = await listVisits({
+      serviceAgreementId: agreement.id,
+      customerId,
+      jobTypeId: otherJobType.body.id,
+    });
+
+    expect(res.body.total).toBe(0);
   });
 
   it('excludes the other branch', async () => {

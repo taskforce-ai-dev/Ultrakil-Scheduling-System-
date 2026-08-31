@@ -1,5 +1,8 @@
 import type {
   Customer,
+  GenerationImpact,
+  Visit,
+  VisitDetail,
   JobType,
   ServiceAgreement,
   ServiceSite,
@@ -166,6 +169,70 @@ export function buildSchedulePreview(overrides: Partial<SchedulePreview> = {}): 
     shortfalls: [],
     horizonStart: "2026-09-07",
     horizonEnd: "2026-10-05",
+    ...overrides,
+  };
+}
+
+export function buildVisit(overrides: Partial<Visit> = {}): Visit {
+  return {
+    id: "visit-1",
+    visitDate: "2026-09-09",
+    windowStartMinute: 540,
+    windowEndMinute: 1020,
+    durationMinutes: 90,
+    requiredCrewSize: 2,
+    status: "UNASSIGNED",
+    branchCode: "COLOMBO",
+    serviceAgreementId: "agreement-1",
+    customerName: "Cinnamon Grand Colombo",
+    siteName: "Main Kitchen",
+    jobTypeName: "Termite Control",
+    isProtected: false,
+    protectionReason: null,
+    isManuallyAdjusted: false,
+    manuallyAdjustedAt: null,
+    isLocked: false,
+    lockReason: null,
+    assignmentCount: 0,
+    createdAt: "2026-08-31T00:00:00.000Z",
+    updatedAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildVisitDetail(overrides: Partial<VisitDetail> = {}): VisitDetail {
+  return {
+    ...buildVisit(),
+    origin: {
+      serviceAgreementId: "agreement-1",
+      customerName: "Cinnamon Grand Colombo",
+      siteName: "Main Kitchen",
+      jobTypeName: "Termite Control",
+      agreementVersionNumber: 1,
+      frequencyLabel: "Fortnightly",
+      allowedDaysAtGeneration: ["WEDNESDAY"],
+      generatedAt: "2026-08-31T00:00:00.000Z",
+      generatedByRunId: "run-1",
+    },
+    ...overrides,
+  };
+}
+
+export function buildGenerationImpact(
+  overrides: Partial<GenerationImpact> = {}
+): GenerationImpact {
+  return {
+    from: "2026-08-31",
+    to: "2026-10-04",
+    agreementsConsidered: 1,
+    additions: [],
+    updates: [],
+    removals: [],
+    protectedVisits: [],
+    unchangedCount: 0,
+    shortfalls: [],
+    isPreview: true,
+    scheduleRunId: null,
     ...overrides,
   };
 }

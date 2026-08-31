@@ -24,6 +24,7 @@ import {
   VisitDto,
   VisitQueryDto,
 } from './dto';
+import { ApiVisitQuery } from './query.swagger';
 import { VisitsService } from './visits.service';
 
 @ApiTags('visits')
@@ -34,6 +35,7 @@ export class VisitsController {
   constructor(private readonly visits: VisitsService) {}
 
   @Get()
+  @ApiVisitQuery()
   @ApiOperation({
     summary: 'The generated calendar',
     description:

@@ -54,6 +54,23 @@ export class VisitsService {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 100;
 
+    // Every agreement-side filter has to be merged into one object. Spreading
+    // `serviceAgreement` more than once would silently drop all but the last,
+    // so narrowing by customer *and* job type would quietly widen the result.
+    const agreement: Prisma.ServiceAgreementWhereInput = {
+      ...(query.serviceSiteId ? { serviceSiteId: query.serviceSiteId } : {}),
+      ...(query.customerId ? { customerId: query.customerId } : {}),
+      ...(query.jobTypeId ? { jobTypeId: query.jobTypeId } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { customer: { name: { contains: query.search, mode: 'insensitive' } } },
+              { serviceSite: { name: { contains: query.search, mode: 'insensitive' } } },
+            ],
+          }
+        : {}),
+    };
+
     const where: Prisma.GeneratedVisitWhereInput = {
       ...(query.from || query.to
         ? {
@@ -68,22 +85,7 @@ export class VisitsService {
       ...(query.serviceAgreementId
         ? { serviceAgreementId: query.serviceAgreementId }
         : {}),
-      ...(query.serviceSiteId
-        ? { serviceAgreement: { serviceSiteId: query.serviceSiteId } }
-        : {}),
-      ...(query.customerId
-        ? { serviceAgreement: { customerId: query.customerId } }
-        : {}),
-      ...(query.search
-        ? {
-            serviceAgreement: {
-              OR: [
-                { customer: { name: { contains: query.search, mode: 'insensitive' } } },
-                { serviceSite: { name: { contains: query.search, mode: 'insensitive' } } },
-              ],
-            },
-          }
-        : {}),
+      ...(Object.keys(agreement).length > 0 ? { serviceAgreement: agreement } : {}),
       // Protection is several columns rather than one flag, so the filter has
       // to spell out the same rule the planner applies.
       ...(query.protectedOnly
@@ -307,9 +309,11 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     serviceAgreementId: visit.serviceAgreementId,
     customerName: visit.serviceAgreement.customer.name,
     siteName: visit.serviceAgreement.serviceSite.name,
+    jobTypeName: visit.serviceAgreement.jobType.name,
     isProtected: protection !== null,
     protectionReason: protection,
     isManuallyAdjusted: visit.isManuallyAdjusted,
+    manuallyAdjustedAt: visit.manuallyAdjustedAt?.toISOString() ?? null,
     isLocked: visit.lockedAt !== null,
     lockReason: visit.lockReason,
     assignmentCount: visit._count.assignments,

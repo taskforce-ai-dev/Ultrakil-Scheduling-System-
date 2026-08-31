@@ -1477,9 +1477,9 @@ export interface components {
             isPreview: boolean;
             /**
              * Format: uuid
-             * @description The schedule run recorded, when this was confirmed.
+             * @description The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.
              */
-            scheduleRunId?: string;
+            scheduleRunId: string | null;
         };
         VisitDto: {
             /** Format: uuid */
@@ -1498,11 +1498,14 @@ export interface components {
             serviceAgreementId: string;
             customerName: string;
             siteName: string;
+            jobTypeName: string;
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
             protectionReason: string | null;
             isManuallyAdjusted: boolean;
+            /** Format: date-time */
+            manuallyAdjustedAt: string | null;
             isLocked: boolean;
             lockReason: string | null;
             assignmentCount: number;
@@ -1551,11 +1554,14 @@ export interface components {
             serviceAgreementId: string;
             customerName: string;
             siteName: string;
+            jobTypeName: string;
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
             protectionReason: string | null;
             isManuallyAdjusted: boolean;
+            /** Format: date-time */
+            manuallyAdjustedAt: string | null;
             isLocked: boolean;
             lockReason: string | null;
             assignmentCount: number;
@@ -3192,7 +3198,30 @@ export interface operations {
     };
     VisitsController_list: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 1-based page number. */
+                page?: number;
+                /** @description Up to 500 per page — a month of real work runs to hundreds. */
+                pageSize?: number;
+                /** @description Visits on or after this date. */
+                from?: string;
+                /** @description Visits on or before this date. */
+                to?: string;
+                /** @description Colombo and Kandy workloads are never mixed. */
+                branchCode?: "COLOMBO" | "KANDY";
+                /** @description SCHEDULED means a crew is assigned; UNASSIGNED means nobody is going yet. */
+                status?: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
+                /** @description Only visits generated from this agreement. */
+                serviceAgreementId?: string;
+                serviceSiteId?: string;
+                customerId?: string;
+                /** @description Only visits for this treatment. */
+                jobTypeId?: string;
+                /** @description Only visits a manager owns — locked, hand-edited, scheduled or done. */
+                protectedOnly?: boolean;
+                /** @description Matches customer or site name. */
+                search?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;

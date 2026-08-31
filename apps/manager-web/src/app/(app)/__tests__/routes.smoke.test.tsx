@@ -23,6 +23,9 @@ vi.mock("@/lib/api-client", async () => {
       errorCodes: [],
     }),
     fetchHealth: vi.fn(),
+    fetchVisits: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 500 }),
+    fetchCustomers: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 }),
+    fetchJobTypes: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -34,12 +37,14 @@ import VehiclesPage from "../vehicles/page";
 import DispatchBoardPage from "../dispatch-board/page";
 import UnassignedVisitsPage from "../unassigned-visits/page";
 import ScheduleHistoryPage from "../schedule-history/page";
+import VisitsPage from "../visits/page";
 
 describe("route smoke tests", () => {
   it.each([
     ["Dashboard", DashboardPage],
     ["Customers", CustomersPage],
     ["Service Agreements", ServiceAgreementsPage],
+    ["Visit Calendar", VisitsPage],
     ["Workforce", WorkforcePage],
     ["Vehicles", VehiclesPage],
     ["Dispatch Board", DispatchBoardPage],

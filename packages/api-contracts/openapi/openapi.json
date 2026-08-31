@@ -2018,7 +2018,133 @@
       "get": {
         "description": "Visits in date order. Filter by branch, date range, status, customer or site. Each row says whether regeneration would leave it alone, and why.",
         "operationId": "VisitsController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "description": "Up to 500 per page — a month of real work runs to hundreds.",
+            "schema": {
+              "example": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Visits on or after this date.",
+            "schema": {
+              "example": "2026-09-07",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Visits on or before this date.",
+            "schema": {
+              "example": "2026-10-04",
+              "type": "string"
+            }
+          },
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "description": "Colombo and Kandy workloads are never mixed.",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "SCHEDULED means a crew is assigned; UNASSIGNED means nobody is going yet.",
+            "schema": {
+              "enum": [
+                "PENDING",
+                "SCHEDULED",
+                "UNASSIGNED",
+                "COMPLETED",
+                "CANCELLED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceAgreementId",
+            "required": false,
+            "in": "query",
+            "description": "Only visits generated from this agreement.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceSiteId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "jobTypeId",
+            "required": false,
+            "in": "query",
+            "description": "Only visits for this treatment.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "protectedOnly",
+            "required": false,
+            "in": "query",
+            "description": "Only visits a manager owns — locked, hand-edited, scheduled or done.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Matches customer or site name.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -3859,7 +3985,8 @@
           "scheduleRunId": {
             "type": "string",
             "format": "uuid",
-            "description": "The schedule run recorded, when this was confirmed."
+            "nullable": true,
+            "description": "The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing."
           }
         },
         "required": [
@@ -3872,7 +3999,8 @@
           "protectedVisits",
           "unchangedCount",
           "shortfalls",
-          "isPreview"
+          "isPreview",
+          "scheduleRunId"
         ]
       },
       "VisitDto": {
@@ -3925,6 +4053,9 @@
           "siteName": {
             "type": "string"
           },
+          "jobTypeName": {
+            "type": "string"
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -3936,6 +4067,11 @@
           },
           "isManuallyAdjusted": {
             "type": "boolean"
+          },
+          "manuallyAdjustedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
           },
           "isLocked": {
             "type": "boolean"
@@ -3968,9 +4104,11 @@
           "serviceAgreementId",
           "customerName",
           "siteName",
+          "jobTypeName",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
+          "manuallyAdjustedAt",
           "isLocked",
           "lockReason",
           "assignmentCount",
@@ -4109,6 +4247,9 @@
           "siteName": {
             "type": "string"
           },
+          "jobTypeName": {
+            "type": "string"
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -4120,6 +4261,11 @@
           },
           "isManuallyAdjusted": {
             "type": "boolean"
+          },
+          "manuallyAdjustedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
           },
           "isLocked": {
             "type": "boolean"
@@ -4160,9 +4306,11 @@
           "serviceAgreementId",
           "customerName",
           "siteName",
+          "jobTypeName",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
+          "manuallyAdjustedAt",
           "isLocked",
           "lockReason",
           "assignmentCount",
