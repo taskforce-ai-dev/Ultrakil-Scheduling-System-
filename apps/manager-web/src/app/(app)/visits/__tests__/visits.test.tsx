@@ -250,6 +250,60 @@ describe("filters", () => {
   });
 });
 
+describe("an empty month", () => {
+  it("points at the month that actually holds the work", async () => {
+    // The calendar opens on today's month. If the generated work starts next
+    // month, a blank grid reads as broken — this is the case a manager hits
+    // on the very first visit to the screen.
+    vi.mocked(fetchVisits).mockImplementation(async (query) =>
+      query?.pageSize === 1
+        ? { items: [buildVisit({ visitDate: "2026-10-07" })], total: 206, page: 1, pageSize: 1 }
+        : { items: [], total: 0, page: 1, pageSize: 500 }
+    );
+    const user = await renderCalendar();
+
+    expect(
+      await screen.findByText("No visits in September 2026")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/206 visits have been generated. The earliest is Wednesday 7 October 2026/)
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Go to the first visit" }));
+
+    expect(screen.getByTestId("calendar-range")).toHaveTextContent("October 2026");
+  });
+
+  it("offers generation when nothing has been generated at all", async () => {
+    mockVisits([]);
+    await renderCalendar();
+
+    expect(
+      await screen.findByText("No visits have been generated yet")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "See what the agreements ask for" })
+    ).toBeInTheDocument();
+  });
+
+  it("says so when the filters are what emptied the grid", async () => {
+    const user = await renderCalendar();
+
+    await chooseOption(user, "Customer", "Union Bank Kadawatha");
+    await chooseOption(user, "Treatment", "Termite Control");
+
+    // Union Bank's visit is Rodent Control, so the pair matches nothing.
+    expect(screen.getByText("Nothing matches these filters")).toBeInTheDocument();
+    expect(
+      screen.getByText(/3 visits fall in this range, but the filters exclude all of them/)
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear the filters" }));
+
+    expect(screen.getByText("3 visits")).toBeInTheDocument();
+  });
+});
+
 describe("a busy day", () => {
   it("caps a month cell and drills into the week instead of growing the grid", async () => {
     const busy = Array.from({ length: 7 }, (_, index) =>
@@ -309,6 +363,43 @@ describe("state badges", () => {
     expect(within(drawer).getByText("No crew yet")).toBeInTheDocument();
     expect(within(drawer).getByText("Unassigned")).toBeInTheDocument();
     expect(within(drawer).queryByText("Crew assigned")).not.toBeInTheDocument();
+  });
+
+  it("marks a visit whose site has no recorded opening hours", async () => {
+    // An assumption that looks like a fact is how a crew ends up at a locked
+    // gate, so this has to be visible without opening the visit.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({ id: "visit-unknown-hours", hoursUnconfirmed: true })
+    );
+    mockVisits([
+      generated,
+      buildVisit({
+        id: "visit-unknown-hours",
+        visitDate: "2026-09-10",
+        hoursUnconfirmed: true,
+      }),
+    ]);
+    const user = await renderCalendar();
+
+    expect(screen.getByText("1 with opening hours unconfirmed")).toBeInTheDocument();
+    // Legible from the grid itself.
+    const flagged = within(grid()).getByRole("button", {
+      name: "Cinnamon Grand Colombo at 09:00 on 2026-09-10, opening hours unconfirmed",
+    });
+
+    await user.click(flagged);
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Hours unconfirmed")).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/placed on an assumed/)
+    ).toBeInTheDocument();
+  });
+
+  it("stays silent when the site's hours are known", async () => {
+    await renderCalendar();
+
+    expect(screen.queryByText(/opening hours unconfirmed/)).not.toBeInTheDocument();
   });
 
   it("counts locked and manually modified work separately", async () => {

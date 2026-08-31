@@ -4056,6 +4056,10 @@
           "jobTypeName": {
             "type": "string"
           },
+          "hoursUnconfirmed": {
+            "type": "boolean",
+            "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -4105,6 +4109,7 @@
           "customerName",
           "siteName",
           "jobTypeName",
+          "hoursUnconfirmed",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
@@ -4250,6 +4255,10 @@
           "jobTypeName": {
             "type": "string"
           },
+          "hoursUnconfirmed": {
+            "type": "boolean",
+            "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -4307,6 +4316,7 @@
           "customerName",
           "siteName",
           "jobTypeName",
+          "hoursUnconfirmed",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",

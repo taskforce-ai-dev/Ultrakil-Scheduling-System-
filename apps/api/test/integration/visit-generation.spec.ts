@@ -518,6 +518,42 @@ describe('regeneration never loses manager-controlled work', () => {
   });
 });
 
+describe('a site with no recorded opening hours', () => {
+  it('schedules anyway and flags the visit, rather than refusing', async () => {
+    // The master schedule workbook has no opening-hours column, so imported
+    // sites arrive with none. Reading that as "never open" refused to schedule
+    // work UltraKIL demonstrably performs — 0 visits and a wall of shortfalls.
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 No-Hours ${suffix}`, branchCode: BranchCode.COLOMBO });
+
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({ name: `C04 No-Hours Site ${suffix}`, operatingHours: [] });
+
+    const agreement = await createAgreement({ serviceSiteId: site.body.id });
+
+    const res = await confirm({ serviceAgreementIds: [agreement.id] });
+
+    expect(res.body.additions).toHaveLength(4);
+    expect(res.body.shortfalls).toEqual([]);
+    // Placed on the assumed working day, and said so.
+    expect(res.body.additions[0]).toMatchObject({
+      windowStartMinute: 8 * 60,
+      windowEndMinute: 17 * 60,
+    });
+
+    const listed = await request(http)
+      .get('/api/visits')
+      .set(auth(adminToken))
+      .query({ serviceAgreementId: agreement.id });
+    expect(listed.body.items[0].hoursUnconfirmed).toBe(true);
+  });
+
+});
+
 describe('the run is recorded', () => {
   it('writes a schedule run and an audit entry', async () => {
     const agreement = await createAgreement();

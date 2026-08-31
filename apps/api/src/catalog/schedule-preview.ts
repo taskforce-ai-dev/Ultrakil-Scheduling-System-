@@ -16,6 +16,16 @@ import { FrequencyUnit, Weekday } from '@prisma/client';
  * is worse than one that admits the gap.
  */
 
+/**
+ * The window assumed when a site's opening hours are unknown.
+ *
+ * Only used when a site has *no* recorded hours whatsoever. It is always
+ * disclosed — every visit placed on it is flagged "hours unconfirmed" — so a
+ * manager can tell an assumption from a fact, and the flag clears itself the
+ * moment real hours are entered.
+ */
+export const ASSUMED_DAY_WINDOW = { startMinute: 8 * 60, endMinute: 17 * 60 };
+
 /** One window inside a day, as minutes from midnight. */
 export interface DayWindow {
   startMinute: number;
@@ -41,7 +51,14 @@ export interface SchedulePreviewInput {
   startDate: string;
   /** Inclusive, YYYY-MM-DD. Null means open-ended. */
   endDate: string | null;
-  /** The site's opening windows. A weekday with no window is closed. */
+  /**
+   * The site's opening windows. A weekday with no window is closed —
+   * *provided the site has some hours recorded at all*. An empty list means
+   * nobody has told us the hours, which is not the same as "never open": the
+   * master schedule workbook has no opening-hours column, so 907 of 999
+   * imported sites arrive with none, and treating that as closed refuses to
+   * schedule work UltraKIL demonstrably performs. See `ASSUMED_DAY_WINDOW`.
+   */
   siteWindows: SiteWindow[];
   /** Optional narrowing of the site's hours, applied to every day. */
   agreementWindowStartMinute: number | null;
@@ -180,6 +197,9 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   const lastDate =
     agreementEnd && agreementEnd < horizonEnd ? agreementEnd : horizonEnd;
 
+  // No hours anywhere for this site means unknown, not shut.
+  const hoursUnconfirmed = input.siteWindows.length === 0;
+
   const windowsByWeekday = new Map<Weekday, DayWindow[]>();
   for (const window of input.siteWindows) {
     const list = windowsByWeekday.get(window.weekday) ?? [];
@@ -211,7 +231,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     periodsWithAllowedDay.add(period);
 
     const windows = effectiveWindows(
-      windowsByWeekday.get(weekday) ?? [],
+      hoursUnconfirmed ? [ASSUMED_DAY_WINDOW] : (windowsByWeekday.get(weekday) ?? []),
       input.agreementWindowStartMinute,
       input.agreementWindowEndMinute,
     );

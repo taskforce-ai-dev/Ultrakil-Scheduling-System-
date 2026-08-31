@@ -31,6 +31,7 @@ import {
   addMonths,
   daysInView,
   formatMinuteOfDay,
+  formatLongDate,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
@@ -95,7 +96,9 @@ function VisitChip({ visit, onOpen }: { visit: Visit; onOpen: () => void }) {
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}`}
+      aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
+        visit.hoursUnconfirmed ? ", opening hours unconfirmed" : ""
+      }`}
       className={cn(
         "w-full truncate rounded border px-1.5 py-1 text-left text-xs transition-colors",
         "hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -113,6 +116,11 @@ function VisitChip({ visit, onOpen }: { visit: Visit; onOpen: () => void }) {
           {formatMinuteOfDay(visit.windowStartMinute)}
         </span>
         <span className="truncate">{visit.customerName}</span>
+        {visit.hoursUnconfirmed && (
+          <span aria-hidden="true" className="shrink-0 text-destructive" title="Opening hours unconfirmed">
+            ⟡
+          </span>
+        )}
       </span>
     </button>
   );
@@ -146,6 +154,14 @@ export default function VisitsPage() {
   const [jobTypes, setJobTypes] = React.useState<JobType[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+
+  // When the visible range is empty, where the work actually is. Opening on
+  // today's month and showing a blank grid reads as "broken" rather than
+  // "look in September", which is the single most confusing thing this screen
+  // can do on first use.
+  const [nearest, setNearest] = React.useState<{ date: string; total: number } | null>(
+    null
+  );
 
   const [openVisitId, setOpenVisitId] = React.useState<string | null>(null);
   const [generateOpen, setGenerateOpen] = React.useState(false);
@@ -186,6 +202,25 @@ export default function VisitsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  const findNearest = React.useCallback(() => {
+    if (isLoading || visits.length > 0) return;
+    // Results come back in date order, so the first row is the earliest visit
+    // anywhere. Deliberately unfiltered — this is a "where is the work?" hint.
+    fetchVisits({ pageSize: 1 })
+      .then((page) => {
+        setNearest(
+          page.total === 0 || !page.items[0]
+            ? { date: "", total: 0 }
+            : { date: page.items[0].visitDate, total: page.total }
+        );
+      })
+      .catch(() => setNearest(null));
+  }, [isLoading, visits.length]);
+
+  React.useEffect(() => {
+    findNearest();
+  }, [findNearest]);
 
   const visible = React.useMemo(() => {
     return visits.filter((visit) => {
@@ -245,6 +280,7 @@ export default function VisitsPage() {
   const lockedCount = visible.filter((visit) => visit.isLocked).length;
   const adjustedCount = visible.filter((visit) => visit.isManuallyAdjusted).length;
   const unstaffedCount = visible.filter((visit) => visit.assignmentCount === 0).length;
+  const unconfirmedHoursCount = visible.filter((visit) => visit.hoursUnconfirmed).length;
 
   return (
     <div className="space-y-6">
@@ -403,6 +439,11 @@ export default function VisitsPage() {
             {adjustedCount > 0 && (
               <Badge variant="secondary">{adjustedCount} manually modified</Badge>
             )}
+            {unconfirmedHoursCount > 0 && (
+              <Badge variant="destructive">
+                {unconfirmedHoursCount} with opening hours unconfirmed
+              </Badge>
+            )}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
                 {unstaffedCount} with no crew assigned yet
@@ -411,10 +452,33 @@ export default function VisitsPage() {
           </div>
 
           {visible.length === 0 ? (
-            <EmptyState
-              title="No visits in this range"
-              description="Either nothing has been generated for these dates yet, or the filters exclude everything. Use Generate visits to see what the agreements ask for."
-            />
+            visits.length > 0 ? (
+              <EmptyState
+                title="Nothing matches these filters"
+                description={`${visits.length} visits fall in this range, but the filters exclude all of them.`}
+                actionLabel="Clear the filters"
+                onAction={() => {
+                  setCustomerId("ALL");
+                  setJobTypeId("ALL");
+                  setState("ALL");
+                  setBranch("ALL");
+                }}
+              />
+            ) : nearest && nearest.total > 0 ? (
+              <EmptyState
+                title={`No visits in ${view === "month" ? formatMonthYear(anchor) : formatWeekRange(anchor)}`}
+                description={`${nearest.total} visits have been generated. The earliest is ${formatLongDate(nearest.date)}.`}
+                actionLabel="Go to the first visit"
+                onAction={() => setAnchor(nearest.date)}
+              />
+            ) : (
+              <EmptyState
+                title="No visits have been generated yet"
+                description="Service agreements say what work is due; generation turns that into dated visits. Nothing is written until you confirm."
+                actionLabel="See what the agreements ask for"
+                onAction={() => setGenerateOpen(true)}
+              />
+            )
           ) : (
             <div
               className="overflow-x-auto rounded-lg border border-border"
