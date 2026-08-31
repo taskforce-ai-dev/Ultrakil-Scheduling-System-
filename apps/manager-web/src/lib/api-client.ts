@@ -65,6 +65,28 @@ export type SchedulePreview = Json<
 >;
 export type AgreementStatus = ServiceAgreement["status"];
 
+export type PaginatedVisits = Json<
+  paths["/api/visits"]["get"]["responses"]["200"]
+>;
+export type Visit = PaginatedVisits["items"][number];
+export type VisitDetail = Json<
+  paths["/api/visits/{id}"]["get"]["responses"]["200"]
+>;
+export type VisitOrigin = VisitDetail["origin"];
+export type VisitStatus = Visit["status"];
+export type GenerationImpact = Json<
+  paths["/api/visit-generation/preview"]["post"]["responses"]["200"]
+>;
+export type PlannedVisit = GenerationImpact["additions"][number];
+export type PlannedUpdate = GenerationImpact["updates"][number];
+export type PlannedRemoval = GenerationImpact["removals"][number];
+export type ProtectedVisit = GenerationImpact["protectedVisits"][number];
+export type GenerationShortfall = GenerationImpact["shortfalls"][number];
+
+export type VisitQuery = NonNullable<
+  paths["/api/visits"]["get"]["parameters"]["query"]
+>;
+
 export type CustomerQuery = NonNullable<
   paths["/api/customers"]["get"]["parameters"]["query"]
 >;
@@ -122,6 +144,32 @@ export interface CreateServiceAgreementRequest {
   endDate?: string | null;
   requiredSkillCodes?: string[];
   notes?: string | null;
+}
+
+/**
+ * Request bodies for the visit endpoints. Hand-written for the same reason as
+ * the customer/agreement ones above — the API publishes no request-body schema
+ * without the NestJS Swagger CLI plugin. Matches
+ * `apps/api/src/scheduling/visits/dto.ts`.
+ */
+export interface AdjustVisitRequest {
+  visitDate?: string;
+  windowStartMinute?: number;
+  windowEndMinute?: number;
+  durationMinutes?: number;
+  requiredCrewSize?: number;
+  reason?: string;
+}
+
+export interface LockVisitRequest {
+  reason?: string;
+}
+
+export interface GenerateVisitsRequest {
+  from: string;
+  to: string;
+  branchCode?: "COLOMBO" | "KANDY";
+  serviceAgreementIds?: string[];
 }
 
 export interface ChangeAgreementStatusRequest {
@@ -359,4 +407,62 @@ export function fetchSchedulePreview(
   return request<SchedulePreview>(
     `/service-agreements/${agreementId}/schedule-preview${buildQuery(options)}`
   );
+}
+
+/* -------------------------------------------------------------------------
+ * Visits — the generated calendar (ULK-C04)
+ * ---------------------------------------------------------------------- */
+
+export function fetchVisits(query?: VisitQuery): Promise<PaginatedVisits> {
+  return request<PaginatedVisits>(`/visits${buildQuery(query)}`);
+}
+
+/**
+ * One visit plus its `origin` — the agreement, the version it was generated
+ * from and the allowed days as they stood at that moment. That snapshot is
+ * why a visit can still be explained after its agreement has moved on.
+ */
+export function fetchVisit(id: string): Promise<VisitDetail> {
+  return request<VisitDetail>(`/visits/${id}`);
+}
+
+/**
+ * A manager's hand edit. The API marks the visit manually adjusted, which is
+ * what stops the next generation run from putting it back.
+ */
+export function adjustVisit(id: string, dto: AdjustVisitRequest): Promise<Visit> {
+  return request<Visit>(`/visits/${id}`, { method: "PATCH", body: dto });
+}
+
+/** Pins a visit so regeneration cannot move it. Admin only. */
+export function lockVisit(id: string, dto: LockVisitRequest = {}): Promise<Visit> {
+  return request<Visit>(`/visits/${id}/lock`, { method: "POST", body: dto });
+}
+
+/** Hands a pinned visit back to generation. Admin only. */
+export function unlockVisit(id: string): Promise<Visit> {
+  return request<Visit>(`/visits/${id}/unlock`, { method: "POST", body: {} });
+}
+
+/**
+ * What generating this horizon *would* change. Writes nothing — `isPreview`
+ * comes back true and `scheduleRunId` is null. Any signed-in user may call it.
+ */
+export function previewVisitGeneration(
+  dto: GenerateVisitsRequest
+): Promise<GenerationImpact> {
+  return request<GenerationImpact>("/visit-generation/preview", {
+    method: "POST",
+    body: dto,
+  });
+}
+
+/** Applies exactly what preview described, and records a schedule run. Admin only. */
+export function confirmVisitGeneration(
+  dto: GenerateVisitsRequest
+): Promise<GenerationImpact> {
+  return request<GenerationImpact>("/visit-generation/confirm", {
+    method: "POST",
+    body: dto,
+  });
 }

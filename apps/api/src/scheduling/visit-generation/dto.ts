@@ -168,10 +168,12 @@ export class GenerationImpactDto {
   })
   isPreview!: boolean;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     type: String,
     format: 'uuid',
-    description: 'The schedule run recorded, when this was confirmed.',
+    nullable: true,
+    description:
+      'The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.',
   })
-  scheduleRunId?: string | null;
+  scheduleRunId!: string | null;
 }

@@ -74,6 +74,11 @@ export class VisitQueryDto {
   @IsUUID()
   customerId?: string;
 
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  jobTypeId?: string;
+
   @ApiPropertyOptional({
     description: 'Only visits a manager owns — locked, hand-edited, scheduled or done.',
   })
@@ -183,6 +188,7 @@ export class VisitDto {
   @ApiProperty({ type: String, format: 'uuid' }) serviceAgreementId!: string;
   @ApiProperty({ type: String }) customerName!: string;
   @ApiProperty({ type: String }) siteName!: string;
+  @ApiProperty({ type: String }) jobTypeName!: string;
 
   @ApiProperty({
     type: Boolean,
@@ -197,6 +203,8 @@ export class VisitDto {
   protectionReason!: string | null;
 
   @ApiProperty({ type: Boolean }) isManuallyAdjusted!: boolean;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  manuallyAdjustedAt!: string | null;
   @ApiProperty({ type: Boolean }) isLocked!: boolean;
   @ApiProperty({ type: String, nullable: true }) lockReason!: string | null;
   @ApiProperty({ type: Number }) assignmentCount!: number;
