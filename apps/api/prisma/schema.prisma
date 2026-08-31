@@ -502,9 +502,16 @@ model ServiceAgreement {
   branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
   branchCode BranchCode
 
-  /// N visits per frequencyUnit.
+  /// N visits per (frequencyInterval x frequencyUnit).
   frequencyCount Int
   frequencyUnit  FrequencyUnit
+
+  /// How many units make up one cycle. 1 is the ordinary case — "twice a week"
+  /// is count 2, unit WEEK, interval 1. The interval is what lets the model
+  /// hold the cycles UltraKIL actually sells: fortnightly is 1 per 2 WEEKs and
+  /// quarterly is 1 per 3 MONTHs, neither of which is expressible as a whole
+  /// number of visits per single week or month.
+  frequencyInterval Int @default(1)
 
   /// Crew size is variable per agreement.
   crewSize        Int

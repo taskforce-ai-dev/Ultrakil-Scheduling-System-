@@ -2933,6 +2933,16 @@
               "MONTH"
             ]
           },
+          "frequencyInterval": {
+            "type": "number",
+            "example": 1,
+            "description": "Units per cycle. 2 with WEEK is fortnightly; 3 with MONTH is quarterly."
+          },
+          "frequencyLabel": {
+            "type": "string",
+            "example": "Fortnightly",
+            "description": "The frequency written the way a manager would say it."
+          },
           "crewSize": {
             "type": "number"
           },
@@ -3044,6 +3054,8 @@
           "branchCode",
           "frequencyCount",
           "frequencyUnit",
+          "frequencyInterval",
+          "frequencyLabel",
           "crewSize",
           "durationMinutes",
           "serviceWindowStartMinute",

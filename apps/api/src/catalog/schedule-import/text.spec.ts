@@ -29,7 +29,11 @@ describe('parseFrequency', () => {
   ])('reads %s as %i per %s', (source, count, unit) => {
     const result = parseFrequency(source);
 
-    expect(result).toEqual({ kind: 'parsed', frequency: { count, unit }, source });
+    expect(result).toEqual({
+      kind: 'parsed',
+      frequency: { count, unit, interval: 1 },
+      source,
+    });
   });
 
   it('counts the weekdays when the frequency column lists days instead', () => {
@@ -37,7 +41,7 @@ describe('parseFrequency', () => {
 
     expect(result).toEqual({
       kind: 'parsed',
-      frequency: { count: 3, unit: FrequencyUnit.WEEK },
+      frequency: { count: 3, unit: FrequencyUnit.WEEK, interval: 1 },
       source: 'Monday Wednesday Friday',
     });
   });
@@ -45,11 +49,24 @@ describe('parseFrequency', () => {
   // These are real commitments UltraKIL has made. They must be reported as
   // unsupported rather than unreadable — the workbook is not at fault, the
   // model simply cannot express them yet.
+  // The cycles UltraKIL sells by name. Each is one visit per N units, which
+  // is why the model needed an interval rather than another unit.
   it.each([
-    ['Fortnightly', /fortnightly/i],
-    ['Once in Two Months', /two-monthly/i],
-    ['Once in 2 Months', /two-monthly/i],
-    ['Quarterly', /quarterly/i],
+    ['Fortnightly', 1, FrequencyUnit.WEEK, 2],
+    ['Once in Two Months', 1, FrequencyUnit.MONTH, 2],
+    ['Once in 2 Months', 1, FrequencyUnit.MONTH, 2],
+    ['Quarterly', 1, FrequencyUnit.MONTH, 3],
+  ])('reads %s as %i per %s every %i', (source, count, unit, interval) => {
+    const result = parseFrequency(source);
+
+    expect(result).toEqual({
+      kind: 'parsed',
+      frequency: { count, unit, interval },
+      source,
+    });
+  });
+
+  it.each([
     ['On Request', /on-request/i],
     ['OR', /on-request/i],
     ['Weekly/On Request', /ambiguous/i],

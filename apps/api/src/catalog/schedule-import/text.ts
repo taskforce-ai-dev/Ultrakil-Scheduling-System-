@@ -4,6 +4,7 @@ import {
   DayRuleOutcome,
   FrequencyOutcome,
   ParsedEffort,
+  ParsedFrequency,
 } from './types';
 
 /**
@@ -56,10 +57,6 @@ const UNSUPPORTED_DAY_PATTERNS: [RegExp, string][] = [
 ];
 
 const UNSUPPORTED_FREQUENCY_PATTERNS: [RegExp, string][] = [
-  [/fortnight/, 'fortnightly is neither weekly nor monthly, and the model has only those two units'],
-  [/once in (two|2) month/, 'a two-monthly cycle is not expressible with WEEK or MONTH units'],
-  [/quarter/, 'quarterly is not expressible with WEEK or MONTH units'],
-  [/bi-?month/, 'a two-monthly cycle is not expressible with WEEK or MONTH units'],
   [
     /^(on request|or|as required|adhoc|ad hoc)$/,
     'on-request work has no recurring schedule, so it cannot become a recurring agreement',
@@ -122,16 +119,30 @@ export function parseFrequency(raw: string | null | undefined): FrequencyOutcome
     if (pattern.test(text)) return { kind: 'unsupported', source, reason };
   }
 
+  // Cycles longer than one unit. UltraKIL sells these by name, so they are
+  // matched by name rather than reconstructed from a count.
+  const CYCLES: [RegExp, ParsedFrequency][] = [
+    [/fortnight|bi-?weekly|every (two|2) weeks?/, { count: 1, unit: FrequencyUnit.WEEK, interval: 2 }],
+    [/quarter/, { count: 1, unit: FrequencyUnit.MONTH, interval: 3 }],
+    [
+      /once in (two|2) month|every (two|2) months?|bi-?month/,
+      { count: 1, unit: FrequencyUnit.MONTH, interval: 2 },
+    ],
+  ];
+  for (const [pattern, frequency] of CYCLES) {
+    if (pattern.test(text)) return { kind: 'parsed', frequency, source };
+  }
+
   if (/^weekly$/.test(text) || /^once a week$/.test(text)) {
-    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.WEEK }, source };
+    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.WEEK, interval: 1 }, source };
   }
   if (/^monthly$/.test(text) || /^once a month$/.test(text)) {
-    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.MONTH }, source };
+    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.MONTH, interval: 1 }, source };
   }
 
   // "Weekly Thursday" — a frequency with the day appended.
   if (/^weekly\b/.test(text) && WEEKDAY_WORDS.some(([p]) => p.test(text))) {
-    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.WEEK }, source };
+    return { kind: 'parsed', frequency: { count: 1, unit: FrequencyUnit.WEEK, interval: 1 }, source };
   }
 
   // "Twice a Week", "3 times per month", "02 times in month", "2 Twice Month".
@@ -146,6 +157,7 @@ export function parseFrequency(raw: string | null | undefined): FrequencyOutcome
         frequency: {
           count,
           unit: perPeriod[2] === 'week' ? FrequencyUnit.WEEK : FrequencyUnit.MONTH,
+          interval: 1,
         },
         source,
       };
@@ -158,7 +170,7 @@ export function parseFrequency(raw: string | null | undefined): FrequencyOutcome
   if (namedDays.length > 0 && !/\d/.test(text)) {
     return {
       kind: 'parsed',
-      frequency: { count: namedDays.length, unit: FrequencyUnit.WEEK },
+      frequency: { count: namedDays.length, unit: FrequencyUnit.WEEK, interval: 1 },
       source,
     };
   }

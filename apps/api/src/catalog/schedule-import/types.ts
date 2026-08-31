@@ -15,6 +15,8 @@ import { FrequencyUnit, Weekday } from '@prisma/client';
 export interface ParsedFrequency {
   count: number;
   unit: FrequencyUnit;
+  /** Units per cycle. 2 with WEEK is fortnightly; 3 with MONTH is quarterly. */
+  interval: number;
 }
 
 export type FrequencyOutcome =

@@ -6,7 +6,7 @@ import {
   Weekday,
 } from '@prisma/client';
 
-import { DEFAULT_IMPORT_BRANCH } from './sheet-mapping';
+import { decideBranch } from './branch-match';
 import { ParsedAgreement, ParsedSchedule } from './types';
 
 export interface ScheduleImportSummary {
@@ -19,7 +19,10 @@ export interface ScheduleImportSummary {
   agreementsUpdated: number;
   /** Rows the parser could not turn into an agreement without guessing. */
   agreementsSkipped: number;
-  branchCode: BranchCode;
+  sitesInColombo: number;
+  sitesInKandy: number;
+  /** Sites whose town was not recognised; placed in Colombo for review. */
+  sitesUncertain: number;
 }
 
 /**
@@ -47,17 +50,37 @@ export async function importSchedule(
     agreementsCreated: 0,
     agreementsUpdated: 0,
     agreementsSkipped: 0,
-    branchCode: DEFAULT_IMPORT_BRANCH,
+    sitesInColombo: 0,
+    sitesInKandy: 0,
+    sitesUncertain: 0,
   };
 
-  const branch = await prisma.branch.findUniqueOrThrow({
-    where: { code: DEFAULT_IMPORT_BRANCH },
-  });
+  const branches = new Map<BranchCode, string>();
+  for (const record of await prisma.branch.findMany()) {
+    branches.set(record.code, record.id);
+  }
 
   const jobTypeIds = await ensureJobTypes(prisma, parsed, summary);
   const startDate = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
 
   for (const customer of parsed.customers) {
+    // Each site gets the branch nearer to it. The customer takes whichever
+    // branch most of its sites are in: the model puts a branch on the customer
+    // too, and a customer disagreeing with its own sites reads as a bug.
+    const siteDecisions = new Map(
+      customer.sites.map((site) => [
+        site.name.toLowerCase(),
+        decideBranch([site.name, site.addressLine, site.regionLabel]),
+      ]),
+    );
+    const kandyCount = [...siteDecisions.values()].filter(
+      (decision) => decision.branchCode === BranchCode.KANDY,
+    ).length;
+    const customerBranch =
+      kandyCount * 2 > siteDecisions.size ? BranchCode.KANDY : BranchCode.COLOMBO;
+    const customerBranchId = branches.get(customerBranch);
+    if (!customerBranchId) continue;
+
     // One transaction per customer rather than one for the whole workbook: a
     // single bad row should not roll back nine hundred good sites, and the
     // import is re-runnable, so a partial import is recoverable.
@@ -70,13 +93,17 @@ export async function importSchedule(
       const record = existing
         ? await tx.customer.update({
             where: { id: existing.id },
-            data: { branchId: branch.id, branchCode: branch.code, isActive: true },
+            data: {
+              branchId: customerBranchId,
+              branchCode: customerBranch,
+              isActive: true,
+            },
           })
         : await tx.customer.create({
             data: {
               name: customer.name,
-              branchId: branch.id,
-              branchCode: branch.code,
+              branchId: customerBranchId,
+              branchCode: customerBranch,
             },
           });
 
@@ -84,7 +111,20 @@ export async function importSchedule(
       else summary.customersCreated += 1;
 
       const siteIds = new Map<string, string>();
+      const siteBranchIds = new Map<string, string>();
+      const siteBranchCodes = new Map<string, BranchCode>();
       for (const site of customer.sites) {
+        const decision = siteDecisions.get(site.name.toLowerCase());
+        // Each site keeps its own branch, even when that differs from its
+        // customer's. A bank with branches island-wide is served by whichever
+        // crew is nearer to each one.
+        const siteBranch = decision?.branchCode ?? customerBranch;
+        const siteBranchId = branches.get(siteBranch) ?? customerBranchId;
+
+        if (siteBranch === BranchCode.KANDY) summary.sitesInKandy += 1;
+        else summary.sitesInColombo += 1;
+        if (decision?.confidence === 'uncertain') summary.sitesUncertain += 1;
+
         const existingSite = await tx.serviceSite.findFirst({
           where: { customerId: record.id, name: site.name },
           select: { id: true },
@@ -95,8 +135,8 @@ export async function importSchedule(
               where: { id: existingSite.id },
               data: {
                 addressLine: site.addressLine,
-                branchId: branch.id,
-                branchCode: branch.code,
+                branchId: siteBranchId,
+                branchCode: siteBranch,
                 isActive: true,
               },
             })
@@ -105,12 +145,14 @@ export async function importSchedule(
                 customerId: record.id,
                 name: site.name,
                 addressLine: site.addressLine,
-                branchId: branch.id,
-                branchCode: branch.code,
+                branchId: siteBranchId,
+                branchCode: siteBranch,
               },
             });
 
         siteIds.set(site.name.toLowerCase(), siteRecord.id);
+        siteBranchIds.set(siteRecord.id, siteBranchId);
+        siteBranchCodes.set(siteRecord.id, siteBranch);
         if (existingSite) summary.sitesUpdated += 1;
         else summary.sitesCreated += 1;
       }
@@ -146,10 +188,11 @@ export async function importSchedule(
           customerId: record.id,
           serviceSiteId: siteId,
           jobTypeId,
-          branchId: branch.id,
-          branchCode: branch.code,
+          branchId: siteBranchIds.get(siteId) ?? customerBranchId,
+          branchCode: siteBranchCodes.get(siteId) ?? customerBranch,
           frequencyCount: agreement.frequency.frequency.count,
           frequencyUnit: agreement.frequency.frequency.unit,
+          frequencyInterval: agreement.frequency.frequency.interval,
           crewSize: agreement.effort.crewSize ?? jobType.defaultCrewSize,
           durationMinutes: agreement.effort.durationMinutes ?? jobType.defaultDurationMinutes,
           startDate,

@@ -124,6 +124,7 @@ export class AgreementsService {
       preferredDays,
       frequencyCount: dto.frequencyCount,
       frequencyUnit: dto.frequencyUnit,
+      frequencyInterval: dto.frequencyInterval ?? 1,
       startDate: dto.startDate,
       endDate: dto.endDate ?? null,
       durationMinutes,
@@ -142,6 +143,7 @@ export class AgreementsService {
           branchCode: site.branchCode,
           frequencyCount: dto.frequencyCount,
           frequencyUnit: dto.frequencyUnit,
+          frequencyInterval: dto.frequencyInterval ?? 1,
           crewSize,
           durationMinutes,
           serviceWindowStartMinute: dto.serviceWindowStartMinute ?? null,
@@ -244,6 +246,7 @@ export class AgreementsService {
       preferredDays,
       frequencyCount: dto.frequencyCount ?? before.frequencyCount,
       frequencyUnit: dto.frequencyUnit ?? before.frequencyUnit,
+      frequencyInterval: dto.frequencyInterval ?? before.frequencyInterval,
       startDate,
       endDate,
       durationMinutes,
@@ -280,6 +283,9 @@ export class AgreementsService {
             ? { frequencyCount: dto.frequencyCount }
             : {}),
           ...(dto.frequencyUnit ? { frequencyUnit: dto.frequencyUnit } : {}),
+          ...(dto.frequencyInterval !== undefined
+            ? { frequencyInterval: dto.frequencyInterval }
+            : {}),
           crewSize,
           durationMinutes,
           serviceWindowStartMinute: startMinute,
@@ -413,6 +419,7 @@ export class AgreementsService {
     return computeSchedulePreview({
       frequencyCount: agreement.frequencyCount,
       frequencyUnit: agreement.frequencyUnit,
+      frequencyInterval: agreement.frequencyInterval,
       allowedDays: agreement.dayRules
         .filter((rule) => rule.kind === DayRuleKind.ALLOWED)
         .map((rule) => rule.weekday),
@@ -441,6 +448,7 @@ export class AgreementsService {
     preferredDays: Weekday[];
     frequencyCount: number;
     frequencyUnit: Prisma.ServiceAgreementCreateInput['frequencyUnit'];
+    frequencyInterval: number;
     startDate: string;
     endDate: string | null;
     durationMinutes: number;
@@ -451,6 +459,7 @@ export class AgreementsService {
     const preview = computeSchedulePreview({
       frequencyCount: input.frequencyCount,
       frequencyUnit: input.frequencyUnit,
+      frequencyInterval: input.frequencyInterval,
       allowedDays: input.allowedDays,
       preferredDays: input.preferredDays,
       startDate: input.startDate,
@@ -591,6 +600,7 @@ function toSnapshot(agreement: AgreementWithRelations): Prisma.InputJsonValue {
     branchCode: agreement.branchCode,
     frequencyCount: agreement.frequencyCount,
     frequencyUnit: agreement.frequencyUnit,
+    frequencyInterval: agreement.frequencyInterval,
     crewSize: agreement.crewSize,
     durationMinutes: agreement.durationMinutes,
     serviceWindowStartMinute: agreement.serviceWindowStartMinute,

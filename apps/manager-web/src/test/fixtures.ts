@@ -122,6 +122,9 @@ export function buildServiceAgreement(
     branchCode: "COLOMBO",
     frequencyCount: 2,
     frequencyUnit: "WEEK",
+    // Units per cycle: 1 is the ordinary case, 2 with WEEK is fortnightly.
+    frequencyInterval: 1,
+    frequencyLabel: "2 times a week",
     crewSize: 2,
     durationMinutes: 90,
     serviceWindowStartMinute: null,

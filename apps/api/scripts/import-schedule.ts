@@ -141,8 +141,12 @@ async function main(): Promise<void> {
   log(`  agreements  ${summary.agreementsCreated} created, ${summary.agreementsUpdated} updated`);
   log(`  skipped     ${summary.agreementsSkipped} agreement row(s) needing a decision`);
   log();
-  log(`Every site was created in ${summary.branchCode}, because the workbook does not`);
-  log('say which UltraKIL branch serves it. Move the Kandy ones before scheduling.');
+  log('Branches, worked out from each site\'s town:');
+  log(`  Colombo   ${summary.sitesInColombo}`);
+  log(`  Kandy     ${summary.sitesInKandy}`);
+  log(
+    `  of which ${summary.sitesUncertain} site(s) had no recognisable town and were put in Colombo — check these.`,
+  );
   log();
   log('Run this again any time — it updates rather than duplicating.');
 }

@@ -39,7 +39,7 @@ function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule 
             treatmentCodes: ['GPC', 'RC'],
             frequency: {
               kind: 'parsed',
-              frequency: { count: 2, unit: FrequencyUnit.MONTH },
+              frequency: { count: 2, unit: FrequencyUnit.MONTH, interval: 1 },
               source: 'Twice a month',
             },
             dayRule: {

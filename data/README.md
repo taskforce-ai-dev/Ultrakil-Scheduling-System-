@@ -122,27 +122,31 @@ customer quietly given the wrong visit frequency looks right on screen and
 delivers the wrong service all year.
 
 From the 2026 workbook that means **212 customers and 872 sites import
-cleanly**, and 56 of 220 agreement rows become agreements. The rest are listed
+cleanly**, and 72 of 220 agreement rows become agreements. The rest are listed
 in the report for UltraKIL to answer. Safe to re-run: every write upserts on a
 natural key, so a second run updates rather than duplicating.
 
-### Three things the import cannot decide on its own
+### Two things the import cannot decide on its own
 
-**Which branch serves a site.** The workbook never says. Its own "Region"
-columns are the customer's regions, not Colombo and Kandy. Every site is
-therefore created in **Colombo** and listed in the report — moving the Kandy
-ones is a deliberate decision, because branch isolation is a hard scheduling
-rule and a wrong branch assigned quietly is exactly the kind of error that
-survives to the pilot.
+**Which branch serves a site.** The workbook never says — its "Region" columns
+are the customer's regions, not Colombo and Kandy. Each site is matched against
+a list of Central Province towns (Kandy, Peradeniya, Gampola, Matale, Nuwara
+Eliya and the rest) and Western Province ones, using its name, address and
+region together. A site matching neither is put in Colombo and **reported as
+uncertain**, never quietly assumed, because branch isolation is a hard
+scheduling rule.
 
-**Frequencies the model cannot express.** Fortnightly, quarterly, once in two
-months and on-request are real commitments UltraKIL has made, but
-`ServiceAgreement` only has weekly and monthly units. Those rows are reported,
-not approximated. Supporting them is a data-model change.
+One trap worth knowing: Sri Lankan addresses are full of roads named after the
+town they lead to. "315F, Kandy Road, Kadawatha" is in the Western Province,
+nowhere near Kandy. Road names are stripped before matching.
+
+A customer may have sites in **both** branches — Union Bank has thirty-five
+branches island-wide — and each site keeps its own. Which crew serves the work
+is decided by where the site is, not by a label on the customer.
 
 **Day rules that name an occurrence.** "Every 2nd and Last Friday", "9th and
 29th", "2nd Week Saturday" — the model stores which weekdays are allowed, not
-which occurrence of them.
+which occurrence of them. Reported, not approximated.
 
 ### Allowed days read from past bookings
 
