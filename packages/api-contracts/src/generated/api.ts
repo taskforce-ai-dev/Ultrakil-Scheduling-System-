@@ -762,6 +762,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visit-generation/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * What generating this horizon would change
+         * @description Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.
+         */
+        post: operations["VisitGenerationController_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visit-generation/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate the visits
+         * @description Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.
+         */
+        post: operations["VisitGenerationController_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The generated calendar
+         * @description Visits in date order. Filter by branch, date range, status, customer or site. Each row says whether regeneration would leave it alone, and why.
+         */
+        get: operations["VisitsController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visits/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One visit, and why it exists
+         * @description Adds the agreement, the version it was generated from and the allowed days as they stood at that moment — so a visit can be explained even after the agreement has since changed.
+         */
+        get: operations["VisitsController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Move or resize a visit by hand
+         * @description Marks the visit manually adjusted, which is what makes the next generation run leave it alone. A completed or cancelled visit is a record of what happened and is refused.
+         */
+        patch: operations["VisitsController_adjust"];
+        trace?: never;
+    };
+    "/api/visits/{id}/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin a visit
+         * @description A locked visit survives every regeneration, whatever the agreement later says. Use it once a date is promised to a customer.
+         */
+        post: operations["VisitsController_lock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visits/{id}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release a pinned visit
+         * @description Hands the visit back to generation. If it was also hand-edited it stays protected on that ground.
+         */
+        post: operations["VisitsController_unlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1245,6 +1369,202 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        PlannedVisitDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            branchCode: string;
+            /** @description Fell on a preferred weekday rather than a merely allowed one. */
+            isPreferredDay: boolean;
+        };
+        VisitChangeDto: {
+            field: string;
+            from: string;
+            to: string;
+        };
+        PlannedUpdateDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            branchCode: string;
+            /** @description Fell on a preferred weekday rather than a merely allowed one. */
+            isPreferredDay: boolean;
+            /** Format: uuid */
+            visitId: string;
+            changes: components["schemas"]["VisitChangeDto"][];
+        };
+        PlannedRemovalDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            /** @enum {string} */
+            reason: "NO_LONGER_REQUIRED";
+        };
+        ProtectedVisitDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            visitDate: string;
+            /**
+             * @description Why generation left this visit alone.
+             * @enum {string}
+             */
+            protection: "LOCKED" | "MANUALLY_ADJUSTED" | "HAS_ASSIGNMENT" | "ALREADY_SCHEDULED" | "ALREADY_COMPLETED" | "CANCELLED";
+            /**
+             * @description What generation would have done, had it been allowed to.
+             * @enum {string}
+             */
+            wouldHave: "UPDATE" | "REMOVE";
+            changes?: components["schemas"]["VisitChangeDto"][];
+        };
+        GenerationShortfallDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            requested: number;
+            scheduled: number;
+            reason: string;
+            message: string;
+        };
+        GenerationImpactDto: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            agreementsConsidered: number;
+            /** @description Visits that would be created. */
+            additions: components["schemas"]["PlannedVisitDto"][];
+            /** @description Untouched visits that would be brought in line with the agreement. */
+            updates: components["schemas"]["PlannedUpdateDto"][];
+            /** @description Untouched visits the agreements no longer ask for. */
+            removals: components["schemas"]["PlannedRemovalDto"][];
+            /** @description Visits a manager owns. Left exactly as they are, and listed so the change is never a surprise. */
+            protectedVisits: components["schemas"]["ProtectedVisitDto"][];
+            /** @description Already correct; nothing to do. */
+            unchangedCount: number;
+            /** @description Periods that cannot hold the promised number of visits. Reported, never quietly dropped. */
+            shortfalls: components["schemas"]["GenerationShortfallDto"][];
+            /** @description True when this was a preview. Nothing was written. */
+            isPreview: boolean;
+            /**
+             * Format: uuid
+             * @description The schedule run recorded, when this was confirmed.
+             */
+            scheduleRunId?: string;
+        };
+        VisitDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            /** @enum {string} */
+            status: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** @description True when regeneration will leave this visit alone. */
+            isProtected: boolean;
+            /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
+            protectionReason: string | null;
+            isManuallyAdjusted: boolean;
+            isLocked: boolean;
+            lockReason: string | null;
+            assignmentCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        PaginatedVisitsDto: {
+            items: components["schemas"]["VisitDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        VisitOriginDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            jobTypeName: string;
+            /** @description The agreement version this visit was generated from. */
+            agreementVersionNumber: number | null;
+            /** @description The commitment in plain words, e.g. "Fortnightly". */
+            frequencyLabel: string;
+            /** @description The allowed weekdays as they stood when this visit was generated. */
+            allowedDaysAtGeneration: string[];
+            /** Format: date-time */
+            generatedAt: string | null;
+            /** Format: uuid */
+            generatedByRunId: string | null;
+        };
+        VisitDetailDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            requiredCrewSize: number;
+            /** @enum {string} */
+            status: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** @description True when regeneration will leave this visit alone. */
+            isProtected: boolean;
+            /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
+            protectionReason: string | null;
+            isManuallyAdjusted: boolean;
+            isLocked: boolean;
+            lockReason: string | null;
+            assignmentCount: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Why this visit exists — the agreement and version behind it. */
+            origin: components["schemas"]["VisitOriginDto"];
         };
     };
     responses: never;
@@ -2800,6 +3120,216 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobTypeDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationImpactDto"];
+                };
+            };
+            /** @description AGREEMENT_DATES_INVALID, or a horizon longer than a year. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_confirm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationImpactDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitsController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedVisitsDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitDetailDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitsController_adjust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitDto"];
+                };
+            };
+            /** @description SERVICE_WINDOW_INVALID */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT — the visit is finished. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitsController_lock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitsController_unlock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisitDto"];
                 };
             };
             /** @description Missing or invalid token. */

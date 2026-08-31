@@ -1948,6 +1948,233 @@
           "service-agreements"
         ]
       }
+    },
+    "/api/visit-generation/preview": {
+      "post": {
+        "description": "Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.",
+        "operationId": "VisitGenerationController_preview",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationImpactDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AGREEMENT_DATES_INVALID, or a horizon longer than a year."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "What generating this horizon would change",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/confirm": {
+      "post": {
+        "description": "Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.",
+        "operationId": "VisitGenerationController_confirm",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationImpactDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Generate the visits",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visits": {
+      "get": {
+        "description": "Visits in date order. Filter by branch, date range, status, customer or site. Each row says whether regeneration would leave it alone, and why.",
+        "operationId": "VisitsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedVisitsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The generated calendar",
+        "tags": [
+          "visits"
+        ]
+      }
+    },
+    "/api/visits/{id}": {
+      "get": {
+        "description": "Adds the agreement, the version it was generated from and the allowed days as they stood at that moment — so a visit can be explained even after the agreement has since changed.",
+        "operationId": "VisitsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitDetailDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One visit, and why it exists",
+        "tags": [
+          "visits"
+        ]
+      },
+      "patch": {
+        "description": "Marks the visit manually adjusted, which is what makes the next generation run leave it alone. A completed or cancelled visit is a record of what happened and is refused.",
+        "operationId": "VisitsController_adjust",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "SERVICE_WINDOW_INVALID"
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — the visit is finished."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Move or resize a visit by hand",
+        "tags": [
+          "visits"
+        ]
+      }
+    },
+    "/api/visits/{id}/lock": {
+      "post": {
+        "description": "A locked visit survives every regeneration, whatever the agreement later says. Use it once a date is promised to a customer.",
+        "operationId": "VisitsController_lock",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pin a visit",
+        "tags": [
+          "visits"
+        ]
+      }
+    },
+    "/api/visits/{id}/unlock": {
+      "post": {
+        "description": "Hands the visit back to generation. If it was also hand-edited it stays protected on that ground.",
+        "operationId": "VisitsController_unlock",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Release a pinned visit",
+        "tags": [
+          "visits"
+        ]
+      }
     }
   },
   "info": {
@@ -3298,6 +3525,650 @@
           "isActive",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "PlannedVisitDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "isPreferredDay": {
+            "type": "boolean",
+            "description": "Fell on a preferred weekday rather than a merely allowed one."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "branchCode",
+          "isPreferredDay"
+        ]
+      },
+      "VisitChangeDto": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "from",
+          "to"
+        ]
+      },
+      "PlannedUpdateDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "isPreferredDay": {
+            "type": "boolean",
+            "description": "Fell on a preferred weekday rather than a merely allowed one."
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitChangeDto"
+            }
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "branchCode",
+          "isPreferredDay",
+          "visitId",
+          "changes"
+        ]
+      },
+      "PlannedRemovalDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "NO_LONGER_REQUIRED"
+            ]
+          }
+        },
+        "required": [
+          "visitId",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "reason"
+        ]
+      },
+      "ProtectedVisitDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "protection": {
+            "type": "string",
+            "enum": [
+              "LOCKED",
+              "MANUALLY_ADJUSTED",
+              "HAS_ASSIGNMENT",
+              "ALREADY_SCHEDULED",
+              "ALREADY_COMPLETED",
+              "CANCELLED"
+            ],
+            "description": "Why generation left this visit alone."
+          },
+          "wouldHave": {
+            "type": "string",
+            "enum": [
+              "UPDATE",
+              "REMOVE"
+            ],
+            "description": "What generation would have done, had it been allowed to."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitChangeDto"
+            }
+          }
+        },
+        "required": [
+          "visitId",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "visitDate",
+          "protection",
+          "wouldHave"
+        ]
+      },
+      "GenerationShortfallDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "requested": {
+            "type": "number"
+          },
+          "scheduled": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "periodStart",
+          "periodEnd",
+          "requested",
+          "scheduled",
+          "reason",
+          "message"
+        ]
+      },
+      "GenerationImpactDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date"
+          },
+          "agreementsConsidered": {
+            "type": "number"
+          },
+          "additions": {
+            "description": "Visits that would be created.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedVisitDto"
+            }
+          },
+          "updates": {
+            "description": "Untouched visits that would be brought in line with the agreement.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedUpdateDto"
+            }
+          },
+          "removals": {
+            "description": "Untouched visits the agreements no longer ask for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlannedRemovalDto"
+            }
+          },
+          "protectedVisits": {
+            "description": "Visits a manager owns. Left exactly as they are, and listed so the change is never a surprise.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProtectedVisitDto"
+            }
+          },
+          "unchangedCount": {
+            "type": "number",
+            "description": "Already correct; nothing to do."
+          },
+          "shortfalls": {
+            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationShortfallDto"
+            }
+          },
+          "isPreview": {
+            "type": "boolean",
+            "description": "True when this was a preview. Nothing was written."
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The schedule run recorded, when this was confirmed."
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "agreementsConsidered",
+          "additions",
+          "updates",
+          "removals",
+          "protectedVisits",
+          "unchangedCount",
+          "shortfalls",
+          "isPreview"
+        ]
+      },
+      "VisitDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SCHEDULED",
+              "UNASSIGNED",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "isProtected": {
+            "type": "boolean",
+            "description": "True when regeneration will leave this visit alone."
+          },
+          "protectionReason": {
+            "type": "string",
+            "nullable": true,
+            "description": "Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED…"
+          },
+          "isManuallyAdjusted": {
+            "type": "boolean"
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "lockReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "assignmentCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "status",
+          "branchCode",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "isProtected",
+          "protectionReason",
+          "isManuallyAdjusted",
+          "isLocked",
+          "lockReason",
+          "assignmentCount",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "PaginatedVisitsDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "VisitOriginDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "agreementVersionNumber": {
+            "type": "number",
+            "nullable": true,
+            "description": "The agreement version this visit was generated from."
+          },
+          "frequencyLabel": {
+            "type": "string",
+            "description": "The commitment in plain words, e.g. \"Fortnightly\"."
+          },
+          "allowedDaysAtGeneration": {
+            "description": "The allowed weekdays as they stood when this visit was generated.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "generatedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "generatedByRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "agreementVersionNumber",
+          "frequencyLabel",
+          "allowedDaysAtGeneration",
+          "generatedAt",
+          "generatedByRunId"
+        ]
+      },
+      "VisitDetailDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SCHEDULED",
+              "UNASSIGNED",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "isProtected": {
+            "type": "boolean",
+            "description": "True when regeneration will leave this visit alone."
+          },
+          "protectionReason": {
+            "type": "string",
+            "nullable": true,
+            "description": "Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED…"
+          },
+          "isManuallyAdjusted": {
+            "type": "boolean"
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "lockReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "assignmentCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "origin": {
+            "description": "Why this visit exists — the agreement and version behind it.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VisitOriginDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "requiredCrewSize",
+          "status",
+          "branchCode",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "isProtected",
+          "protectionReason",
+          "isManuallyAdjusted",
+          "isLocked",
+          "lockReason",
+          "assignmentCount",
+          "createdAt",
+          "updatedAt",
+          "origin"
         ]
       }
     }
