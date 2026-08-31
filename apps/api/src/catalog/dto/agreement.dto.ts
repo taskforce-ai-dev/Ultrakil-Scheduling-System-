@@ -89,6 +89,19 @@ export class CreateServiceAgreementDto {
   @ApiPropertyOptional({
     example: 2,
     minimum: 1,
+    default: 1,
+    description:
+      'How many units make one cycle. Fortnightly is 1 per WEEK with an interval of 2; quarterly is 1 per MONTH with an interval of 3.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  frequencyInterval?: number;
+
+  @ApiPropertyOptional({
+    example: 2,
+    minimum: 1,
     description: "Crew size for this agreement. Defaults to the job type's default.",
   })
   @IsOptional()

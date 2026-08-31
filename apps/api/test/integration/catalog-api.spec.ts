@@ -212,30 +212,60 @@ describe('customers and sites', () => {
     expect(site.branchCode).toBe(BranchCode.KANDY);
   });
 
-  it('refuses a site in the other branch from its customer', async () => {
+  // A customer can span both branches. Union Bank has thirty-five branches
+  // island-wide, and which crew serves one is decided by where that branch is,
+  // not by a label on the customer. Branch isolation is a rule about the crew
+  // serving the work, and the work happens at a site.
+  it('allows a customer to have sites in both branches', async () => {
     const customer = await createCustomer({ branchCode: BranchCode.COLOMBO });
 
-    const res = await request(http)
+    const kandySite = await request(http)
       .post(`/api/customers/${customer.id}/sites`)
       .set(auth(adminToken))
-      .send({ name: 'Wrong branch', branchCode: BranchCode.KANDY });
+      .send({ name: 'Up-country branch', branchCode: BranchCode.KANDY });
 
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('SITE_BRANCH_MISMATCH');
-    expect(res.body.message).toContain('kept apart');
+    expect(kandySite.status).toBe(201);
+    expect(kandySite.body.branchCode).toBe(BranchCode.KANDY);
+
+    const colomboSite = await request(http)
+      .post(`/api/customers/${customer.id}/sites`)
+      .set(auth(adminToken))
+      .send({ name: 'Head office' });
+
+    expect(colomboSite.body.branchCode).toBe(BranchCode.COLOMBO);
   });
 
-  it('refuses to move a customer with sites to the other branch', async () => {
+  it('gives an agreement the branch of its site, not of its customer', async () => {
     const customer = await createCustomer({ branchCode: BranchCode.COLOMBO });
-    await createSite(customer.id);
+    const site = await createSite(customer.id, { branchCode: BranchCode.KANDY });
 
-    const res = await request(http)
+    const agreement = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload({ serviceSiteId: site.id }));
+
+    expect(agreement.status).toBe(201);
+    // The crew comes from the site's branch, so that is what must be recorded.
+    expect(agreement.body.branchCode).toBe(BranchCode.KANDY);
+  });
+
+  it('lets a customer move branch without stranding its sites', async () => {
+    const customer = await createCustomer({ branchCode: BranchCode.COLOMBO });
+    const site = await createSite(customer.id);
+
+    const moved = await request(http)
       .patch(`/api/customers/${customer.id}`)
       .set(auth(adminToken))
       .send({ branchCode: BranchCode.KANDY });
 
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('SITE_BRANCH_MISMATCH');
+    expect(moved.status).toBe(200);
+    expect(moved.body.branchCode).toBe(BranchCode.KANDY);
+
+    // The site keeps the branch it was given; it is not dragged along.
+    const stillThere = await request(http)
+      .get(`/api/service-sites/${site.id}`)
+      .set(auth(adminToken));
+    expect(stillThere.body.branchCode).toBe(BranchCode.COLOMBO);
   });
 
   it('rejects a duplicate customer code', async () => {

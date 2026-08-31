@@ -46,6 +46,8 @@ data/*.csv
 # committed.
 data/matrix-mapping.json
 data/job-types.json
+# The schedule import report quotes real customer and site names back at you.
+data/master-schedule-import-report.json
 !data/README.md
 !data/*.example.json
 

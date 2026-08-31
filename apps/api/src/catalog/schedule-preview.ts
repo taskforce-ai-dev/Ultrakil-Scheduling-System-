@@ -29,6 +29,12 @@ export interface SiteWindow extends DayWindow {
 export interface SchedulePreviewInput {
   frequencyCount: number;
   frequencyUnit: FrequencyUnit;
+  /**
+   * How many units make one cycle. 1 is the ordinary case; 2 with WEEK is
+   * fortnightly, 3 with MONTH is quarterly. Defaults to 1 so every existing
+   * caller keeps its meaning.
+   */
+  frequencyInterval?: number;
   allowedDays: Weekday[];
   preferredDays: Weekday[];
   /** Inclusive, YYYY-MM-DD. */
@@ -128,12 +134,31 @@ export function effectiveWindows(
   return windows.sort((a, b) => a.startMinute - b.startMinute);
 }
 
-/** Identifies the week or month a date belongs to, relative to the horizon. */
-function periodIndex(date: Date, horizonStart: Date, unit: FrequencyUnit): number {
+/**
+ * Identifies the cycle a date belongs to, relative to the horizon.
+ *
+ * With an interval of 1 this is simply the week or month. With a larger one
+ * the periods are grouped: an interval of 2 on WEEK puts a fortnight in one
+ * bucket, so "one visit per fortnight" places one visit across both weeks
+ * rather than one in each.
+ */
+function periodIndex(
+  date: Date,
+  horizonStart: Date,
+  unit: FrequencyUnit,
+  interval: number,
+): number {
   if (unit === FrequencyUnit.MONTH) {
-    return date.getUTCFullYear() * 12 + date.getUTCMonth();
+    const monthsFromStart =
+      (date.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 +
+      (date.getUTCMonth() - horizonStart.getUTCMonth());
+    return Math.floor(monthsFromStart / interval);
   }
-  return Math.floor((date.getTime() - horizonStart.getTime()) / DAY_MS / 7);
+
+  const weeksFromStart = Math.floor(
+    (date.getTime() - horizonStart.getTime()) / DAY_MS / 7,
+  );
+  return Math.floor(weeksFromStart / interval);
 }
 
 interface Candidate extends PreviewVisit {
@@ -143,6 +168,7 @@ interface Candidate extends PreviewVisit {
 export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePreview {
   const allowed = new Set(input.allowedDays);
   const preferred = new Set(input.preferredDays);
+  const interval = Math.max(1, input.frequencyInterval ?? 1);
 
   const agreementStart = parseDateOnly(input.startDate);
   const horizonStart = input.from ? parseDateOnly(input.from) : agreementStart;
@@ -173,7 +199,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     cursor <= lastDate;
     cursor = new Date(cursor.getTime() + DAY_MS)
   ) {
-    const period = periodIndex(cursor, effectiveStart, input.frequencyUnit);
+    const period = periodIndex(cursor, effectiveStart, input.frequencyUnit, interval);
     const date = toDateOnly(cursor);
 
     const bounds = periodBounds.get(period);
@@ -237,7 +263,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
       // A clipped first or last period was never a whole week or month, so it
       // was never promised the full count. Reporting it would cry wolf.
       if (isLastPeriod || isFirstPeriod) {
-        const spansWholePeriod = coversWholePeriod(bounds, input.frequencyUnit);
+        const spansWholePeriod = coversWholePeriod(bounds, input.frequencyUnit, interval);
         if (!spansWholePeriod) continue;
       }
 
@@ -278,21 +304,25 @@ function stripPeriod(candidate: Candidate): PreviewVisit {
   return visit;
 }
 
-/** True when the bounds cover a full week or calendar month. */
+/** True when the bounds cover a whole cycle, not a clipped piece of one. */
 function coversWholePeriod(
   bounds: { start: string; end: string },
   unit: FrequencyUnit,
+  interval: number,
 ): boolean {
   const start = parseDateOnly(bounds.start);
   const end = parseDateOnly(bounds.end);
   const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
 
-  if (unit === FrequencyUnit.WEEK) return days >= 7;
+  if (unit === FrequencyUnit.WEEK) return days >= 7 * interval;
 
-  const daysInMonth = new Date(
-    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  return days >= daysInMonth;
+  let daysInCycle = 0;
+  for (let offset = 0; offset < interval; offset += 1) {
+    daysInCycle += new Date(
+      Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + offset + 1, 0),
+    ).getUTCDate();
+  }
+  return days >= daysInCycle;
 }
 
 function explainShortfall(context: {

@@ -299,3 +299,84 @@ describe('schedule preview', () => {
     });
   });
 });
+
+describe('frequency intervals — the cycles UltraKIL actually sells', () => {
+  it('places one visit per fortnight, not one per week', () => {
+    const preview = computeSchedulePreview(
+      buildInput({
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.WEEK,
+        frequencyInterval: 2,
+        allowedDays: [Weekday.WEDNESDAY],
+        preferredDays: [],
+        horizonWeeks: 4,
+      }),
+    );
+
+    // Four weeks is two fortnights, so two visits — not four.
+    expect(preview.visits).toHaveLength(2);
+    expect(preview.shortfalls).toEqual([]);
+
+    // And they really are a fortnight apart.
+    const [first, second] = preview.visits.map((v) => new Date(`${v.date}T00:00:00Z`));
+    const daysApart = (second.getTime() - first.getTime()) / (24 * 60 * 60 * 1000);
+    expect(daysApart).toBe(14);
+  });
+
+  it('places one visit per quarter', () => {
+    const preview = computeSchedulePreview(
+      buildInput({
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.MONTH,
+        frequencyInterval: 3,
+        allowedDays: [Weekday.WEDNESDAY],
+        preferredDays: [],
+        startDate: '2026-09-01',
+        horizonWeeks: 26, // roughly six months — two quarters
+      }),
+    );
+
+    expect(preview.visits).toHaveLength(2);
+  });
+
+  it('places one visit every two months', () => {
+    const preview = computeSchedulePreview(
+      buildInput({
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.MONTH,
+        frequencyInterval: 2,
+        allowedDays: [Weekday.WEDNESDAY],
+        preferredDays: [],
+        startDate: '2026-09-01',
+        horizonWeeks: 26,
+      }),
+    );
+
+    expect(preview.visits).toHaveLength(3);
+  });
+
+  it('treats an interval of 1 exactly as before', () => {
+    const withoutInterval = computeSchedulePreview(buildInput());
+    const withExplicitOne = computeSchedulePreview(buildInput({ frequencyInterval: 1 }));
+
+    expect(withExplicitOne).toEqual(withoutInterval);
+  });
+
+  it('does not report a shortfall for a fortnight that is genuinely served', () => {
+    // The trap: grouping two weeks into one cycle must not make the second
+    // week look like a period that received no visit.
+    const preview = computeSchedulePreview(
+      buildInput({
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.WEEK,
+        frequencyInterval: 2,
+        allowedDays: [Weekday.MONDAY],
+        preferredDays: [],
+        horizonWeeks: 8,
+      }),
+    );
+
+    expect(preview.shortfalls).toEqual([]);
+    expect(preview.visits).toHaveLength(4);
+  });
+});

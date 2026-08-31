@@ -1137,6 +1137,16 @@ export interface components {
             frequencyCount: number;
             /** @enum {string} */
             frequencyUnit: "WEEK" | "MONTH";
+            /**
+             * @description Units per cycle. 2 with WEEK is fortnightly; 3 with MONTH is quarterly.
+             * @example 1
+             */
+            frequencyInterval: number;
+            /**
+             * @description The frequency written the way a manager would say it.
+             * @example Fortnightly
+             */
+            frequencyLabel: string;
             crewSize: number;
             durationMinutes: number;
             /** @description Narrows the site's hours. Null falls back to them entirely. */

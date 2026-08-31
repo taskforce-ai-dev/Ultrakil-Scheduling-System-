@@ -129,20 +129,9 @@ export class CustomersService {
       await this.assertCustomerCodeFree(dto.customerCode, id);
     }
 
-    // Moving a customer between branches would strand its sites and every
-    // agreement built on them in the wrong branch, and branch isolation is a
-    // hard rule. Move the sites deliberately, or make a new customer.
-    if (dto.branchCode && dto.branchCode !== before.branchCode) {
-      const siteCount = before.serviceSites.length;
-      if (siteCount > 0) {
-        throw new AppException(
-          'SITE_BRANCH_MISMATCH',
-          `${before.name} has ${siteCount} site(s) in ${before.branchCode} and cannot be moved to ${dto.branchCode}. Colombo and Kandy work are kept apart, so move or archive the sites first.`,
-          HttpStatus.CONFLICT,
-          { customerId: id, from: before.branchCode, to: dto.branchCode, siteCount },
-        );
-      }
-    }
+    // A customer's branch is the one it is mainly served from; its sites each
+    // carry their own. Moving the customer therefore strands nothing — the
+    // sites, which is what the scheduler actually looks at, are untouched.
 
     const branch = dto.branchCode ? await this.branchFor(dto.branchCode) : null;
 
@@ -249,8 +238,10 @@ export class CustomersService {
       );
     }
 
+    // Defaults to the customer's branch, but may differ: a nationwide customer
+    // genuinely has sites in both branches. Branch isolation is a rule about
+    // which crew serves the work, and the work happens at the site.
     const branchCode = dto.branchCode ?? customer.branchCode;
-    this.assertSiteBranchMatchesCustomer(customer.name, customer.branchCode, branchCode);
 
     const hours = normaliseOperatingHours(dto.operatingHours ?? []);
     const branch = await this.branchFor(branchCode);
@@ -292,11 +283,8 @@ export class CustomersService {
     actor: AuthenticatedUser,
   ) {
     const before = await this.loadSite(siteId);
-    const customer = await this.loadCustomer(before.customerId);
 
     const branchCode = dto.branchCode ?? before.branchCode;
-    this.assertSiteBranchMatchesCustomer(customer.name, customer.branchCode, branchCode);
-
     const branch = dto.branchCode ? await this.branchFor(dto.branchCode) : null;
     const hours =
       dto.operatingHours === undefined
@@ -422,21 +410,6 @@ export class CustomersService {
     }
 
     return branch;
-  }
-
-  private assertSiteBranchMatchesCustomer(
-    customerName: string,
-    customerBranch: BranchCode,
-    siteBranch: BranchCode,
-  ): void {
-    if (siteBranch === customerBranch) return;
-
-    throw new AppException(
-      'SITE_BRANCH_MISMATCH',
-      `${customerName} is a ${customerBranch} customer, so its sites cannot be in ${siteBranch}. Colombo and Kandy work are kept apart.`,
-      HttpStatus.CONFLICT,
-      { customerBranch, siteBranch },
-    );
   }
 
   private async assertCustomerCodeFree(

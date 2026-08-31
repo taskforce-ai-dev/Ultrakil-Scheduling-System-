@@ -178,6 +178,21 @@ export class ServiceAgreementDto {
   @ApiProperty({ type: String, enum: Object.values(FrequencyUnit) })
   frequencyUnit!: FrequencyUnit;
 
+  @ApiProperty({
+    type: Number,
+    example: 1,
+    description:
+      'Units per cycle. 2 with WEEK is fortnightly; 3 with MONTH is quarterly.',
+  })
+  frequencyInterval!: number;
+
+  @ApiProperty({
+    type: String,
+    example: 'Fortnightly',
+    description: 'The frequency written the way a manager would say it.',
+  })
+  frequencyLabel!: string;
+
   @ApiProperty({ type: Number })
   crewSize!: number;
 
