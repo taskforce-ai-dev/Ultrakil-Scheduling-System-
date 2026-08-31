@@ -313,6 +313,7 @@ Run `pnpm --filter @ultrakil/api prisma:generate`.
 | `pnpm db:reset` | Drop, recreate, migrate and re-seed — wipes local data |
 | `pnpm db:seed` | Re-run the seed and matrix import (safe to repeat) |
 | `pnpm db:seed:demo` | Load a fabricated workforce when you have no matrix |
+| `pnpm schedule:import` | Import the real customers and sites from the master schedule workbook (`-- --dry-run` to report only) |
 | `pnpm test` | Unit tests |
 | `pnpm contracts:generate` | Regenerate the OpenAPI contract and TS client |
 | `pnpm lint` / `pnpm typecheck` | The same checks CI runs |
