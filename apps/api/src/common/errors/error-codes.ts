@@ -61,7 +61,13 @@ export const ErrorCode = {
   JOB_TYPE_INACTIVE: 'JOB_TYPE_INACTIVE',
   CUSTOMER_INACTIVE: 'CUSTOMER_INACTIVE',
 
-  // --- Scheduling hard rules (populated by ULK-C05) --------------------------
+  // --- Scheduling hard rules (ULK-C05) ---------------------------------------
+  //
+  // These are the eligibility engine's conflict codes as well as error codes:
+  // `scheduling/eligibility/conflict-codes.ts` derives its catalogue from this
+  // list rather than keeping a second one. Two vocabularies for the same rule
+  // is how a dispatch board ends up filtering on a code the API stopped using.
+  ASSIGNMENT_NOT_ELIGIBLE: 'ASSIGNMENT_NOT_ELIGIBLE',
   BRANCH_MISMATCH: 'BRANCH_MISMATCH',
   EMPLOYEE_PERMANENTLY_STATIONED: 'EMPLOYEE_PERMANENTLY_STATIONED',
   NO_PMS_SUPERVISOR_AVAILABLE: 'NO_PMS_SUPERVISOR_AVAILABLE',
@@ -73,6 +79,17 @@ export const ErrorCode = {
   DAY_NOT_ALLOWED: 'DAY_NOT_ALLOWED',
   SKILL_NOT_HELD: 'SKILL_NOT_HELD',
   ASSIGNMENT_LOCKED: 'ASSIGNMENT_LOCKED',
+  // EMPLOYEE_INACTIVE and VEHICLE_INACTIVE are already declared above, under
+  // the workforce codes, and mean the same thing here.
+  EMPLOYEE_UNAVAILABLE: 'EMPLOYEE_UNAVAILABLE',
+  /// Distinct from NO_PMS_SUPERVISOR_AVAILABLE: the branch employs none at all,
+  /// so "add a supervisor" is not advice anyone can act on. Kandy, today.
+  BRANCH_HAS_NO_PMS_SUPERVISOR: 'BRANCH_HAS_NO_PMS_SUPERVISOR',
+  CREW_TOO_SMALL: 'CREW_TOO_SMALL',
+  DUPLICATE_CREW_MEMBER: 'DUPLICATE_CREW_MEMBER',
+  VEHICLE_BRANCH_MISMATCH: 'VEHICLE_BRANCH_MISMATCH',
+  WINDOW_TOO_SHORT: 'WINDOW_TOO_SHORT',
+  VISIT_NOT_SCHEDULABLE: 'VISIT_NOT_SCHEDULABLE',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
