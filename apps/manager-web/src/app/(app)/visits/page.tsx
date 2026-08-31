@@ -31,6 +31,7 @@ import {
   addMonths,
   daysInView,
   formatMinuteOfDay,
+  formatLongDate,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
@@ -147,6 +148,14 @@ export default function VisitsPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
 
+  // When the visible range is empty, where the work actually is. Opening on
+  // today's month and showing a blank grid reads as "broken" rather than
+  // "look in September", which is the single most confusing thing this screen
+  // can do on first use.
+  const [nearest, setNearest] = React.useState<{ date: string; total: number } | null>(
+    null
+  );
+
   const [openVisitId, setOpenVisitId] = React.useState<string | null>(null);
   const [generateOpen, setGenerateOpen] = React.useState(false);
 
@@ -186,6 +195,25 @@ export default function VisitsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  const findNearest = React.useCallback(() => {
+    if (isLoading || visits.length > 0) return;
+    // Results come back in date order, so the first row is the earliest visit
+    // anywhere. Deliberately unfiltered — this is a "where is the work?" hint.
+    fetchVisits({ pageSize: 1 })
+      .then((page) => {
+        setNearest(
+          page.total === 0 || !page.items[0]
+            ? { date: "", total: 0 }
+            : { date: page.items[0].visitDate, total: page.total }
+        );
+      })
+      .catch(() => setNearest(null));
+  }, [isLoading, visits.length]);
+
+  React.useEffect(() => {
+    findNearest();
+  }, [findNearest]);
 
   const visible = React.useMemo(() => {
     return visits.filter((visit) => {
@@ -411,10 +439,33 @@ export default function VisitsPage() {
           </div>
 
           {visible.length === 0 ? (
-            <EmptyState
-              title="No visits in this range"
-              description="Either nothing has been generated for these dates yet, or the filters exclude everything. Use Generate visits to see what the agreements ask for."
-            />
+            visits.length > 0 ? (
+              <EmptyState
+                title="Nothing matches these filters"
+                description={`${visits.length} visits fall in this range, but the filters exclude all of them.`}
+                actionLabel="Clear the filters"
+                onAction={() => {
+                  setCustomerId("ALL");
+                  setJobTypeId("ALL");
+                  setState("ALL");
+                  setBranch("ALL");
+                }}
+              />
+            ) : nearest && nearest.total > 0 ? (
+              <EmptyState
+                title={`No visits in ${view === "month" ? formatMonthYear(anchor) : formatWeekRange(anchor)}`}
+                description={`${nearest.total} visits have been generated. The earliest is ${formatLongDate(nearest.date)}.`}
+                actionLabel="Go to the first visit"
+                onAction={() => setAnchor(nearest.date)}
+              />
+            ) : (
+              <EmptyState
+                title="No visits have been generated yet"
+                description="Service agreements say what work is due; generation turns that into dated visits. Nothing is written until you confirm."
+                actionLabel="See what the agreements ask for"
+                onAction={() => setGenerateOpen(true)}
+              />
+            )
           ) : (
             <div
               className="overflow-x-auto rounded-lg border border-border"
