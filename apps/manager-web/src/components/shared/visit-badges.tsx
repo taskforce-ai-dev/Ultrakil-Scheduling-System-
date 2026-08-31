@@ -1,4 +1,4 @@
-import { Lock, PencilLine, Sparkles, UserCheck, UserX } from "lucide-react";
+import { Clock, Lock, PencilLine, Sparkles, UserCheck, UserX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import type { Visit, VisitStatus } from "@/lib/api-client";
@@ -101,6 +101,23 @@ export function VisitOwnershipBadges({ visit }: { visit: Visit }) {
   }
 
   return <>{owned}</>;
+}
+
+/**
+ * The site's opening hours were never recorded, so this visit sits on an
+ * assumed 08:00-17:00 working day.
+ *
+ * Shown wherever the visit is, because an assumption that looks like a fact is
+ * how a crew ends up at a locked gate. It disappears by itself the moment real
+ * hours are entered for the site.
+ */
+export function HoursUnconfirmedBadge() {
+  return (
+    <Badge variant="destructive" title="No opening hours recorded for this site. The visit was placed on an assumed 08:00-17:00 day.">
+      <Clock aria-hidden="true" />
+      Hours unconfirmed
+    </Badge>
+  );
 }
 
 /** Plain-language reason regeneration will skip a visit. */

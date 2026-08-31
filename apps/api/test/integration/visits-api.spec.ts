@@ -185,6 +185,7 @@ describe('listing the calendar', () => {
     expect(res.body.items[0]).toMatchObject({
       branchCode: BranchCode.COLOMBO,
       jobTypeName: 'C04 Visits Job',
+      hoursUnconfirmed: false,
       isProtected: false,
       protectionReason: null,
       manuallyAdjustedAt: null,

@@ -1499,6 +1499,8 @@ export interface components {
             customerName: string;
             siteName: string;
             jobTypeName: string;
+            /** @description The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered. */
+            hoursUnconfirmed: boolean;
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
@@ -1555,6 +1557,8 @@ export interface components {
             customerName: string;
             siteName: string;
             jobTypeName: string;
+            /** @description The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered. */
+            hoursUnconfirmed: boolean;
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */

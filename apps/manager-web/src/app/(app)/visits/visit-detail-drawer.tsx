@@ -8,6 +8,7 @@ import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import {
   CrewBadge,
+  HoursUnconfirmedBadge,
   VisitOwnershipBadges,
   VisitStatusBadge,
   protectionLabel,
@@ -151,7 +152,16 @@ export function VisitDetailDrawer({
             <VisitStatusBadge status={visit.status} />
             <VisitOwnershipBadges visit={visit} />
             <CrewBadge visit={visit} />
+            {visit.hoursUnconfirmed && <HoursUnconfirmedBadge />}
           </div>
+
+          {visit.hoursUnconfirmed && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+              No opening hours are recorded for {visit.siteName}, so this visit was
+              placed on an assumed <strong>08:00–17:00</strong> working day. Add the
+              site&apos;s real hours to replace the assumption.
+            </p>
+          )}
 
           {visit.isProtected && protection && (
             <p className="rounded-md border border-border bg-muted/40 p-3 text-sm">

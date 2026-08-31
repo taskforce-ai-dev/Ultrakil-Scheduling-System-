@@ -187,6 +187,7 @@ export function buildVisit(overrides: Partial<Visit> = {}): Visit {
     customerName: "Cinnamon Grand Colombo",
     siteName: "Main Kitchen",
     jobTypeName: "Termite Control",
+    hoursUnconfirmed: false,
     isProtected: false,
     protectionReason: null,
     isManuallyAdjusted: false,

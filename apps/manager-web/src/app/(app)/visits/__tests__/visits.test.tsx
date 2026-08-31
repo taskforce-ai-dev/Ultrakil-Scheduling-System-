@@ -365,6 +365,43 @@ describe("state badges", () => {
     expect(within(drawer).queryByText("Crew assigned")).not.toBeInTheDocument();
   });
 
+  it("marks a visit whose site has no recorded opening hours", async () => {
+    // An assumption that looks like a fact is how a crew ends up at a locked
+    // gate, so this has to be visible without opening the visit.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({ id: "visit-unknown-hours", hoursUnconfirmed: true })
+    );
+    mockVisits([
+      generated,
+      buildVisit({
+        id: "visit-unknown-hours",
+        visitDate: "2026-09-10",
+        hoursUnconfirmed: true,
+      }),
+    ]);
+    const user = await renderCalendar();
+
+    expect(screen.getByText("1 with opening hours unconfirmed")).toBeInTheDocument();
+    // Legible from the grid itself.
+    const flagged = within(grid()).getByRole("button", {
+      name: "Cinnamon Grand Colombo at 09:00 on 2026-09-10, opening hours unconfirmed",
+    });
+
+    await user.click(flagged);
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Hours unconfirmed")).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/placed on an assumed/)
+    ).toBeInTheDocument();
+  });
+
+  it("stays silent when the site's hours are known", async () => {
+    await renderCalendar();
+
+    expect(screen.queryByText(/opening hours unconfirmed/)).not.toBeInTheDocument();
+  });
+
   it("counts locked and manually modified work separately", async () => {
     mockVisits([
       generated,

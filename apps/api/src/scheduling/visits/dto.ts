@@ -192,6 +192,13 @@ export class VisitDto {
 
   @ApiProperty({
     type: Boolean,
+    description:
+      'The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered.',
+  })
+  hoursUnconfirmed!: boolean;
+
+  @ApiProperty({
+    type: Boolean,
     description: 'True when regeneration will leave this visit alone.',
   })
   isProtected!: boolean;

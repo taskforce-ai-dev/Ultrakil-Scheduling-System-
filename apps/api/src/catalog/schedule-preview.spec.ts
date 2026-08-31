@@ -2,6 +2,7 @@ import { FrequencyUnit, Weekday } from '@prisma/client';
 
 import {
   SchedulePreviewInput,
+  ASSUMED_DAY_WINDOW,
   computeSchedulePreview,
   effectiveWindows,
 } from './schedule-preview';
@@ -378,5 +379,53 @@ describe('frequency intervals — the cycles UltraKIL actually sells', () => {
 
     expect(preview.shortfalls).toEqual([]);
     expect(preview.visits).toHaveLength(4);
+  });
+
+  describe('a site whose opening hours nobody has recorded', () => {
+    // The master schedule workbook has no opening-hours column, so 907 of 999
+    // imported sites arrive with none. Reading that as "never open" refused to
+    // schedule work UltraKIL demonstrably performs.
+    it('treats no hours at all as unknown, not as closed', () => {
+      const preview = computeSchedulePreview(buildInput({ siteWindows: [] }));
+
+      expect(preview.visits).toHaveLength(4);
+      expect(preview.shortfalls).toEqual([]);
+      expect(preview.visits[0]).toMatchObject({
+        windowStartMinute: ASSUMED_DAY_WINDOW.startMinute,
+        windowEndMinute: ASSUMED_DAY_WINDOW.endMinute,
+      });
+    });
+
+    it('still lets the agreement narrow the assumed day', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: [],
+          agreementWindowStartMinute: 10 * 60,
+          agreementWindowEndMinute: 12 * 60,
+        }),
+      );
+
+      expect(preview.visits[0]).toMatchObject({
+        windowStartMinute: 10 * 60,
+        windowEndMinute: 12 * 60,
+      });
+    });
+
+    it('keeps treating a missing weekday as closed when the site does have hours', () => {
+      // Absence of Saturday from a site that reports Mon-Fri is real
+      // information, unlike a site that reports nothing at all.
+      const preview = computeSchedulePreview(
+        buildInput({
+          allowedDays: [Weekday.SATURDAY],
+          preferredDays: [],
+          frequencyCount: 1,
+        }),
+      );
+
+      expect(preview.visits).toEqual([]);
+      expect(preview.shortfalls[0]).toMatchObject({
+        reason: 'SITE_CLOSED_ON_ALLOWED_DAYS',
+      });
+    });
   });
 });

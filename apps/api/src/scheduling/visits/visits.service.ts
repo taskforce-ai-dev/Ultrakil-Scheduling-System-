@@ -20,7 +20,9 @@ const VISIT_INCLUDE = {
   serviceAgreement: {
     include: {
       customer: { select: { id: true, name: true } },
-      serviceSite: { select: { id: true, name: true } },
+      serviceSite: {
+        select: { id: true, name: true, _count: { select: { operatingHours: true } } },
+      },
       jobType: { select: { name: true } },
     },
   },
@@ -310,6 +312,7 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     customerName: visit.serviceAgreement.customer.name,
     siteName: visit.serviceAgreement.serviceSite.name,
     jobTypeName: visit.serviceAgreement.jobType.name,
+    hoursUnconfirmed: visit.serviceAgreement.serviceSite._count.operatingHours === 0,
     isProtected: protection !== null,
     protectionReason: protection,
     isManuallyAdjusted: visit.isManuallyAdjusted,
