@@ -77,7 +77,10 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // Order matters: dependants first.
+  // Order matters: dependants first. Assignments lead the list because a crew
+  // row restricts deletion of its employee — before ULK-C05 nothing created
+  // assignments, so this wiped cleanly and the dependency was invisible.
+  await prisma.assignment.deleteMany();
   await prisma.vehicleAuthorization.deleteMany();
   await prisma.employeeSkill.deleteMany();
   await prisma.employee.deleteMany();
