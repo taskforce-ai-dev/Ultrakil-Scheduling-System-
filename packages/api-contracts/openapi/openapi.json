@@ -2301,6 +2301,204 @@
           "visits"
         ]
       }
+    },
+    "/api/visits/{id}/assignment/check": {
+      "post": {
+        "description": "Writes nothing. Returns every conflict, not just the first — a manager who fixes the branch only to be told the crew is too short, then that a skill is missing, stops trusting the screen.",
+        "operationId": "AssignmentsController_check",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EligibilityResultDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Would this crew be allowed to take the visit?",
+        "tags": [
+          "assignments"
+        ]
+      }
+    },
+    "/api/visits/{id}/assignment": {
+      "get": {
+        "operationId": "AssignmentsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The crew and vehicles on this visit, if any",
+        "tags": [
+          "assignments"
+        ]
+      },
+      "put": {
+        "description": "Runs the eligibility engine first and refuses if any hard rule fails — there is no override, because a rule that can be skipped is not a hard rule. A refusal lists the visit in the Unassigned queue with every reason.",
+        "operationId": "AssignmentsController_assign",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Put a crew on the visit",
+        "tags": [
+          "assignments"
+        ]
+      },
+      "delete": {
+        "description": "Returns the visit to the Unassigned queue. Refused while a lock is on it.",
+        "operationId": "AssignmentsController_unassign",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Take the crew off the visit",
+        "tags": [
+          "assignments"
+        ]
+      }
+    },
+    "/api/unassigned-visits": {
+      "get": {
+        "description": "Every visit the engine refused, with the full conflict list against each. This is the queue the hard rules protect: work is never quietly dropped, it lands here with its reasons.",
+        "operationId": "AssignmentsController_queue",
+        "parameters": [
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-04",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-09-07",
+              "type": "string"
+            }
+          },
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedUnassignedVisitsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Work that could not be staffed, and why",
+        "tags": [
+          "assignments"
+        ]
+      }
     }
   },
   "info": {
@@ -4327,6 +4525,307 @@
           "createdAt",
           "updatedAt",
           "origin"
+        ]
+      },
+      "ConflictResourcesDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "employeeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vehicleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "serviceSiteId": {
+            "type": "string",
+            "nullable": true
+          },
+          "skillCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assignmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "visitId",
+          "employeeIds",
+          "vehicleIds",
+          "serviceSiteId",
+          "skillCodes",
+          "assignmentIds"
+        ]
+      },
+      "ConflictDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "BRANCH_MISMATCH",
+              "EMPLOYEE_INACTIVE",
+              "EMPLOYEE_UNAVAILABLE",
+              "EMPLOYEE_DOUBLE_BOOKED",
+              "EMPLOYEE_PERMANENTLY_STATIONED",
+              "NO_PMS_SUPERVISOR_AVAILABLE",
+              "BRANCH_HAS_NO_PMS_SUPERVISOR",
+              "CREW_TOO_SMALL",
+              "SKILL_NOT_HELD",
+              "DUPLICATE_CREW_MEMBER",
+              "VEHICLE_INACTIVE",
+              "VEHICLE_BRANCH_MISMATCH",
+              "VEHICLE_DOUBLE_BOOKED",
+              "NO_AUTHORIZED_DRIVER",
+              "VEHICLE_CAPACITY_EXCEEDED",
+              "OUTSIDE_SERVICE_HOURS",
+              "WINDOW_TOO_SHORT",
+              "VISIT_NOT_SCHEDULABLE",
+              "ASSIGNMENT_LOCKED"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Written for a manager."
+          },
+          "remediation": {
+            "type": "string",
+            "description": "What to actually do about it."
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ConflictResourcesDto"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "remediation",
+          "resources"
+        ]
+      },
+      "EligibilityResultDto": {
+        "type": "object",
+        "properties": {
+          "isEligible": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "description": "Every applicable conflict, not just the first, in a stable order.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          }
+        },
+        "required": [
+          "isEligible",
+          "conflicts"
+        ]
+      },
+      "AssignedCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "SUPERVISOR",
+              "TECHNICIAN",
+              "DRIVER",
+              "HELPER"
+            ]
+          },
+          "isPmsSupervisor": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName",
+          "role",
+          "isPmsSupervisor"
+        ]
+      },
+      "AssignedVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "driverName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label",
+          "driverEmployeeId",
+          "driverName"
+        ]
+      },
+      "AssignmentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "generatedVisitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "plannedStartMinute": {
+            "type": "number"
+          },
+          "plannedEndMinute": {
+            "type": "number"
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedVehicleDto"
+            }
+          },
+          "isLocked": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "generatedVisitId",
+          "status",
+          "branchCode",
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "crew",
+          "vehicles",
+          "isLocked",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "UnassignedVisitDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "conflicts": {
+            "description": "Why it could not be staffed.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "visitId",
+          "visitDate",
+          "branchCode",
+          "customerName",
+          "siteName",
+          "requiredCrewSize",
+          "conflicts",
+          "recordedAt"
+        ]
+      },
+      "PaginatedUnassignedVisitsDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnassignedVisitDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
         ]
       }
     }

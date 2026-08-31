@@ -886,6 +886,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visits/{id}/assignment/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Would this crew be allowed to take the visit?
+         * @description Writes nothing. Returns every conflict, not just the first — a manager who fixes the branch only to be told the crew is too short, then that a skill is missing, stops trusting the screen.
+         */
+        post: operations["AssignmentsController_check"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visits/{id}/assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The crew and vehicles on this visit, if any */
+        get: operations["AssignmentsController_get"];
+        /**
+         * Put a crew on the visit
+         * @description Runs the eligibility engine first and refuses if any hard rule fails — there is no override, because a rule that can be skipped is not a hard rule. A refusal lists the visit in the Unassigned queue with every reason.
+         */
+        put: operations["AssignmentsController_assign"];
+        post?: never;
+        /**
+         * Take the crew off the visit
+         * @description Returns the visit to the Unassigned queue. Refused while a lock is on it.
+         */
+        delete: operations["AssignmentsController_unassign"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/unassigned-visits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Work that could not be staffed, and why
+         * @description Every visit the engine refused, with the full conflict list against each. This is the queue the hard rules protect: work is never quietly dropped, it lands here with its reasons.
+         */
+        get: operations["AssignmentsController_queue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1575,6 +1640,82 @@ export interface components {
             updatedAt: string;
             /** @description Why this visit exists — the agreement and version behind it. */
             origin: components["schemas"]["VisitOriginDto"];
+        };
+        ConflictResourcesDto: {
+            /** Format: uuid */
+            visitId: string | null;
+            employeeIds: string[];
+            vehicleIds: string[];
+            serviceSiteId: string | null;
+            skillCodes: string[];
+            assignmentIds: string[];
+        };
+        ConflictDto: {
+            /** @enum {string} */
+            code: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED";
+            /** @description Written for a manager. */
+            message: string;
+            /** @description What to actually do about it. */
+            remediation: string;
+            resources: components["schemas"]["ConflictResourcesDto"];
+        };
+        EligibilityResultDto: {
+            isEligible: boolean;
+            /** @description Every applicable conflict, not just the first, in a stable order. */
+            conflicts: components["schemas"]["ConflictDto"][];
+        };
+        AssignedCrewMemberDto: {
+            /** Format: uuid */
+            employeeId: string;
+            fullName: string;
+            /** @enum {string} */
+            role: "SUPERVISOR" | "TECHNICIAN" | "DRIVER" | "HELPER";
+            isPmsSupervisor: boolean;
+        };
+        AssignedVehicleDto: {
+            /** Format: uuid */
+            vehicleId: string;
+            label: string;
+            /** Format: uuid */
+            driverEmployeeId: string | null;
+            driverName: string | null;
+        };
+        AssignmentDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            generatedVisitId: string;
+            status: string;
+            branchCode: string;
+            plannedStartMinute: number;
+            plannedEndMinute: number;
+            crew: components["schemas"]["AssignedCrewMemberDto"][];
+            vehicles: components["schemas"]["AssignedVehicleDto"][];
+            isLocked: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        UnassignedVisitDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: date */
+            visitDate: string;
+            branchCode: string;
+            customerName: string;
+            siteName: string;
+            requiredCrewSize: number;
+            /** @description Why it could not be staffed. */
+            conflicts: components["schemas"]["ConflictDto"][];
+            /** Format: date-time */
+            recordedAt: string;
+        };
+        PaginatedUnassignedVisitsDto: {
+            items: components["schemas"]["UnassignedVisitDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
         };
     };
     responses: never;
@@ -3363,6 +3504,155 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VisitDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_check: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EligibilityResultDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignmentDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_assign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignmentDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_unassign: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_queue: {
+        parameters: {
+            query?: {
+                to?: string;
+                from?: string;
+                branchCode?: "COLOMBO" | "KANDY";
+                pageSize?: number;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedUnassignedVisitsDto"];
                 };
             };
             /** @description Missing or invalid token. */
