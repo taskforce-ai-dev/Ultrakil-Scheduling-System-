@@ -231,19 +231,40 @@ export class AssignmentsService {
     return assignment ? toAssignmentDto(assignment) : null;
   }
 
-  /** The Unassigned queue: work the engine refused, and why. */
+  /**
+   * The Unassigned queue: every visit that still needs a crew.
+   *
+   * Deliberately *not* "visits the engine refused". Before anyone has proposed
+   * a crew there are no refusals to list, so that definition left a manager
+   * staring at an empty page while several hundred visits sat unstaffed — the
+   * exact work the queue exists to surface. A visit belongs here when it has
+   * no live assignment, whether or not anybody has tried yet.
+   *
+   * `hasBeenChecked` keeps the two honest: false means nobody has proposed a
+   * crew, so the empty conflict list is silence rather than a clean bill of
+   * health. Pass `withConflictsOnly` to narrow to work already found to be
+   * impossible.
+   */
   async unassignedQueue(query: {
     page?: number;
     pageSize?: number;
     branchCode?: string;
     from?: string;
     to?: string;
+    withConflictsOnly?: boolean;
+    serviceAgreementId?: string;
   }) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
     const where: Prisma.GeneratedVisitWhereInput = {
-      unassignedReasons: { some: {} },
+      assignments: { none: { status: { in: LIVE_STATUSES } } },
+      // Finished and cancelled work is history; it needs nobody.
+      status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
+      ...(query.withConflictsOnly ? { unassignedReasons: { some: {} } } : {}),
+      ...(query.serviceAgreementId
+        ? { serviceAgreementId: query.serviceAgreementId }
+        : {}),
       ...(query.branchCode
         ? { branchCode: query.branchCode as Prisma.EnumBranchCodeFilter['equals'] }
         : {}),
@@ -283,6 +304,7 @@ export class AssignmentsService {
       customerName: visit.serviceAgreement.customer.name,
       siteName: visit.serviceAgreement.serviceSite.name,
       requiredCrewSize: visit.requiredCrewSize,
+      hasBeenChecked: visit.unassignedReasons.length > 0,
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,
         message: reason.message,
