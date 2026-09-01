@@ -9,6 +9,9 @@
 #   macOS / Linux:  python3.11 -m venv .venv
 #
 fastapi==0.115.12
+# CP-SAT. The solve is CPU-bound and can take seconds on a full week, which is
+# exactly why it lives in this service rather than in the API process.
+ortools==9.11.4210
 uvicorn[standard]==0.34.0
 pydantic==2.11.1
 pydantic-settings==2.8.1

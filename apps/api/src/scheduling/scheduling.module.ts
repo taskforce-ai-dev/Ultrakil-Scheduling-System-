@@ -1,5 +1,10 @@
 import { Module } from '@nestjs/common';
 
+import { PublishingService } from './optimizer/publishing.service';
+import { ScheduleRunProcessor, ScheduleRunQueue } from './optimizer/schedule-run.processor';
+import { ScheduleRunService } from './optimizer/schedule-run.service';
+import { ScheduleRunsController } from './optimizer/schedule-runs.controller';
+import { SchedulerClient } from './optimizer/scheduler.client';
 import { AssignmentsController } from './eligibility/assignments.controller';
 import { AssignmentsService } from './eligibility/assignments.service';
 import { EligibilityService } from './eligibility/eligibility.service';
@@ -13,11 +18,27 @@ import { VisitsService } from './visits/visits.service';
  *
  * ULK-C04 covers generation — which visits the agreements require, and when.
  * ULK-C05 adds the eligibility engine: who may serve each one, and why not.
- * Choosing between the eligible options is the optimizer, ULK-C06.
+ * ULK-C06 adds the optimizer that chooses between the legal options, the locks
+ * that protect a manager's decisions from it, and publishing.
  */
 @Module({
-  controllers: [VisitGenerationController, VisitsController, AssignmentsController],
-  providers: [VisitGenerationService, VisitsService, EligibilityService, AssignmentsService],
-  exports: [VisitGenerationService, VisitsService, EligibilityService],
+  controllers: [
+    VisitGenerationController,
+    VisitsController,
+    AssignmentsController,
+    ScheduleRunsController,
+  ],
+  providers: [
+    VisitGenerationService,
+    VisitsService,
+    EligibilityService,
+    AssignmentsService,
+    SchedulerClient,
+    ScheduleRunService,
+    ScheduleRunQueue,
+    ScheduleRunProcessor,
+    PublishingService,
+  ],
+  exports: [VisitGenerationService, VisitsService, EligibilityService, ScheduleRunService],
 })
 export class SchedulingModule {}

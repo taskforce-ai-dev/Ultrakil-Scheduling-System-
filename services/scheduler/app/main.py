@@ -1,9 +1,10 @@
 """
 UltraKIL scheduling service.
 
-Phase 1 scope for this service is deliberately small: it exists, it is healthy,
-and the API can reach it. The constraint model that assigns crews and vehicles to
-visits lands with ULK-C06.
+It holds the constraint model that assigns crews and vehicles to visits
+(ULK-C06). It owns no database: the API hands it every fact a solve needs and
+writes the result itself, which keeps the solve reproducible and keeps writes
+in one place.
 
 It is a separate process from the NestJS API because constraint solving is
 CPU-bound and can take seconds. Running it here means a slow solve never blocks a
@@ -18,6 +19,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from app.settings import settings
+from app.solver.model import solve as run_solver
+from app.solver.schemas import SolveRequest, SolveResponse
 
 STARTED_AT = time.monotonic()
 
@@ -73,3 +76,18 @@ def ready() -> ReadinessResponse:
         version=settings.version,
         uptime_seconds=_uptime_seconds(),
     )
+
+
+@app.post("/solve", response_model=SolveResponse, tags=["scheduling"])
+def solve(request: SolveRequest) -> SolveResponse:
+    """Assign crews and vehicles to visits.
+
+    Never relaxes a hard rule to return a fuller schedule. A visit that cannot
+    satisfy every rule comes back in `unassigned` with the reasons that made it
+    impossible, using the same conflict codes the API's own eligibility engine
+    emits — so the Unassigned queue reads identically whether a person or the
+    solver failed to staff the work.
+
+    Deterministic: the same request always produces the same schedule.
+    """
+    return run_solver(request)

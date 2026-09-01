@@ -87,6 +87,18 @@ export class AssignmentsService {
       include: ASSIGNMENT_INCLUDE,
     });
 
+    // A published assignment is what the crews were told. Changing one by hand
+    // would rewrite a record people are working from; publish a new run
+    // instead, which supersedes this one and keeps both.
+    if (existing && existing.status === AssignmentStatus.PUBLISHED) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This visit is on a published schedule and cannot be re-crewed by hand. Run the scheduler again and publish the new schedule — the published one is kept as a record.',
+        HttpStatus.CONFLICT,
+        { visitId, assignmentId: existing.id },
+      );
+    }
+
     const result = await this.eligibility.evaluate(visitId, proposal, {
       excludeAssignmentId: existing?.id,
     });
@@ -191,6 +203,15 @@ export class AssignmentsService {
         'This visit has no crew assigned, so there is nothing to remove.',
         HttpStatus.NOT_FOUND,
         { visitId },
+      );
+    }
+
+    if (existing.status === AssignmentStatus.PUBLISHED) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This crew is on a published schedule and cannot be removed. Publish a new schedule to replace it; the published one stays as a record.',
+        HttpStatus.CONFLICT,
+        { visitId, assignmentId: existing.id },
       );
     }
 

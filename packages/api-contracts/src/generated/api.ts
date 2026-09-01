@@ -951,6 +951,124 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/schedule-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Past and current schedule runs */
+        get: operations["ScheduleRunsController_list"];
+        put?: never;
+        /**
+         * Solve a date range
+         * @description Queues a solve and returns immediately with a run to poll — a solve takes seconds and would time out behind a proxy if it were held open. Published work is never touched, and locked parts of a draft are kept exactly as they are.
+         */
+        post: operations["ScheduleRunsController_start"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schedule-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One run, with its progress
+         * @description Poll this while a solve is working. `progressPercent` moves as it goes.
+         */
+        get: operations["ScheduleRunsController_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schedule-runs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop a run
+         * @description Sets a cancel flag the worker checks at each safe point, so a run stops without writing a half-finished schedule. A run that has already written is left as it is.
+         */
+        post: operations["ScheduleRunsController_cancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schedule-runs/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish the schedule
+         * @description Freezes this run: its assignments become the schedule the crews were told, and neither they nor the run may change afterwards. Anything published earlier for the same visits is superseded, never deleted.
+         */
+        post: operations["ScheduleRunsController_publish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assignments/{id}/lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin part of an assignment
+         * @description CREW, SUPERVISOR, VEHICLE, TIME or FULL. The next run keeps whatever is pinned. A lock can never make an illegal crew legal — the hard rules still apply, so a pinned but impossible crew leaves the visit unassigned.
+         */
+        post: operations["ScheduleRunsController_lock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assignments/{id}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release a pinned part of an assignment */
+        post: operations["ScheduleRunsController_unlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1715,6 +1833,46 @@ export interface components {
         };
         PaginatedUnassignedVisitsDto: {
             items: components["schemas"]["UnassignedVisitDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        ScheduleRunDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "SUPERSEDED";
+            /** Format: date */
+            rangeStart: string;
+            /** Format: date */
+            rangeEnd: string;
+            branchCode: string | null;
+            /** @description 0-100. */
+            progressPercent: number;
+            visitsConsidered: number;
+            visitsScheduled: number;
+            visitsUnassigned: number;
+            /** @description True once published and frozen. */
+            isPublished: boolean;
+            /** Format: date-time */
+            publishedAt: string | null;
+            /**
+             * Format: uuid
+             * @description The later run that replaced this one.
+             */
+            supersededByRunId: string | null;
+            cancelRequested: boolean;
+            errorCode: string | null;
+            errorMessage: string | null;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        PaginatedScheduleRunsDto: {
+            items: components["schemas"]["ScheduleRunDto"][];
             total: number;
             page: number;
             pageSize: number;
@@ -3660,6 +3818,207 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PaginatedUnassignedVisitsDto"];
                 };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedScheduleRunsDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunDto"];
+                };
+            };
+            /** @description AGREEMENT_DATES_INVALID */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_cancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_publish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT — already published, unfinished, or nothing to publish. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_lock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Locked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ScheduleRunsController_unlock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Released. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid token. */
             401: {
