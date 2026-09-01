@@ -280,6 +280,7 @@ export function buildUnassignedVisit(
     customerName: "Grandview Hotel",
     siteName: "Main Kitchen",
     requiredCrewSize: 2,
+    hasBeenChecked: true,
     conflicts: [buildConflict()],
     recordedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,

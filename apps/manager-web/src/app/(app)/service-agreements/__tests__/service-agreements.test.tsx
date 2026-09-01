@@ -137,7 +137,12 @@ describe("ServiceAgreementsPage", () => {
     const created = buildServiceAgreement({ id: "agreement-2" });
     vi.mocked(createServiceAgreement).mockResolvedValue(created);
     // A deliberate delay, so the loading state is actually observable here
-    // instead of resolving in the same tick as the assertion below.
+    // instead of resolving in the same tick as the assertion below. 250ms
+    // rather than the original 30ms: on a contended CI runner the two prior
+    // `await`s (opening the form, saving) can themselves eat past 30ms of
+    // wall-clock time, which resolves this mock before the assertion below
+    // ever gets to see the loading state — 250ms leaves real headroom
+    // without meaningfully slowing the suite.
     vi.mocked(fetchSchedulePreview).mockImplementation(
       () =>
         new Promise((resolve) =>
@@ -157,7 +162,7 @@ describe("ServiceAgreementsPage", () => {
                   ],
                 })
               ),
-            30
+            250
           )
         )
     );

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CircleDashed, ShieldAlert } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,9 +47,12 @@ const GROUP_LABELS: Record<GroupFilter, string> = {
 };
 
 /**
- * Every visit the eligibility engine could not staff, with every conflict it
- * returned (never truncated) and a direct path from each one to the
- * employee/vehicle/visit record it's about — per ULK-O05.
+ * Every visit that still needs a crew — not just ones the engine has already
+ * refused. `hasBeenChecked` distinguishes the two: false means nobody has
+ * proposed a crew yet, so an empty conflict list is silence, not a pass.
+ * Every conflict a checked visit does have is shown in full (never
+ * truncated), with a direct path from each one to the employee/vehicle/visit
+ * record it's about — per ULK-O05.
  */
 export default function UnassignedVisitsPage() {
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
@@ -107,8 +110,9 @@ export default function UnassignedVisitsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Unassigned Visits</h1>
         <p className="text-muted-foreground">
-          Visits the eligibility engine could not staff, and exactly why. Nothing here is ready
-          to dispatch until every conflict below is resolved.
+          Every visit that still needs a crew — including work nobody has tried to staff yet.
+          Nothing here is ready to dispatch: a blank conflict list means it hasn&apos;t been
+          checked, not that it&apos;s fine.
         </p>
       </div>
 
@@ -214,11 +218,20 @@ export default function UnassignedVisitsPage() {
                   <div className="flex items-center gap-1.5">
                     <Badge variant="outline">{visit.branchCode}</Badge>
                     <Badge variant="outline">Needs {visit.requiredCrewSize} crew</Badge>
+                    {!visit.hasBeenChecked && <Badge variant="outline">Not yet checked</Badge>}
                   </div>
                 </div>
 
                 <div className="mt-3">
-                  <ConflictList conflicts={visit.conflicts} />
+                  {visit.hasBeenChecked && visit.conflicts.length > 0 ? (
+                    <ConflictList conflicts={visit.conflicts} />
+                  ) : (
+                    <p className="flex items-center gap-1.5 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+                      <CircleDashed className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      Nobody has proposed a crew for this visit yet — this is not a clean bill of
+                      health, it just hasn&apos;t been checked.
+                    </p>
+                  )}
                 </div>
 
                 <div className="mt-3">
