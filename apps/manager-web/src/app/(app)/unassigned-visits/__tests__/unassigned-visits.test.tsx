@@ -167,4 +167,23 @@ describe("unassigned visits queue", () => {
     expect(within(row).getByText("Missing PMS supervisor")).toBeInTheDocument();
     expect(within(row).getByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).toBeInTheDocument();
   });
+
+  it("never shows a not-yet-checked visit as if it had no problems", async () => {
+    // hasBeenChecked: false means nobody has proposed a crew — the queue
+    // used to only list refusals, so this state is new. An empty conflict
+    // list here must never read as "this visit is fine".
+    const untried = buildUnassignedVisit({
+      visitId: "visit-untried",
+      customerName: "Arpico DC",
+      hasBeenChecked: false,
+      conflicts: [],
+    });
+    mockUnassigned([untried]);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Arpico DC");
+
+    const row = screen.getByText("Arpico DC").closest("li")!;
+    expect(within(row).getByText("Not yet checked")).toBeInTheDocument();
+    expect(within(row).getByText(/hasn.t been checked/)).toBeInTheDocument();
+  });
 });
