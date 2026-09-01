@@ -47,7 +47,7 @@ const GROUP_LABELS: Record<GroupFilter, string> = {
 };
 
 /**
- * Every visit the eligibility engine could not staff, with every conflict it
+ * Every visit that still needs a crew, with every conflict the engine
  * returned (never truncated) and a direct path from each one to the
  * employee/vehicle/visit record it's about — per ULK-O05.
  */
@@ -107,7 +107,8 @@ export default function UnassignedVisitsPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Unassigned Visits</h1>
         <p className="text-muted-foreground">
-          Visits the eligibility engine could not staff, and exactly why. Nothing here is ready
+          Visits that still need a crew. Where one was proposed and refused, every reason is
+          listed. Nothing here is ready
           to dispatch until every conflict below is resolved.
         </p>
       </div>
@@ -181,7 +182,7 @@ export default function UnassignedVisitsPage() {
           title={items.length === 0 ? "Nothing unassigned" : "No visits match this filter"}
           description={
             items.length === 0
-              ? "Every visit currently has a valid crew and vehicle assignment."
+              ? "Every visit in range has a crew. Generate visits, or widen the filters, if you expected work here."
               : "Try a different branch or conflict type."
           }
         />
@@ -218,7 +219,17 @@ export default function UnassignedVisitsPage() {
                 </div>
 
                 <div className="mt-3">
-                  <ConflictList conflicts={visit.conflicts} />
+                  {visit.hasBeenChecked ? (
+                    <ConflictList conflicts={visit.conflicts} />
+                  ) : (
+                    // An empty conflict list on an unchecked visit is silence,
+                    // not a clean bill of health — saying nothing here would
+                    // read as "no problems found".
+                    <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                      No crew has been proposed yet, so nothing has been checked against the
+                      scheduling rules.
+                    </p>
+                  )}
                 </div>
 
                 <div className="mt-3">

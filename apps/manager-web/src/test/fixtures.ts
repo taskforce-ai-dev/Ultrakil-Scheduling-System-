@@ -280,6 +280,10 @@ export function buildUnassignedVisit(
     customerName: "Grandview Hotel",
     siteName: "Main Kitchen",
     requiredCrewSize: 2,
+    // The default fixture is a visit somebody tried to staff and could not, so
+    // it has been checked. A visit nobody has proposed a crew for has
+    // hasBeenChecked false and no conflicts — override for that case.
+    hasBeenChecked: true,
     conflicts: [buildConflict()],
     recordedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,

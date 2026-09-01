@@ -167,4 +167,29 @@ describe("unassigned visits queue", () => {
     expect(within(row).getByText("Missing PMS supervisor")).toBeInTheDocument();
     expect(within(row).getByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).toBeInTheDocument();
   });
+
+  it("says nothing has been checked when no crew has been proposed", async () => {
+    // Most rows look like this until the optimizer runs. An empty conflict
+    // list must not read as "no problems found".
+    vi.mocked(fetchUnassignedVisits).mockResolvedValue({
+      items: [
+        buildUnassignedVisit({
+          visitId: "visit-untried",
+          customerName: "Arpico DC - Mattegoda",
+          hasBeenChecked: false,
+          conflicts: [],
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    });
+
+    render(<UnassignedVisitsPage />);
+
+    expect(await screen.findByText("Arpico DC - Mattegoda")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No crew has been proposed yet/),
+    ).toBeInTheDocument();
+  });
 });
