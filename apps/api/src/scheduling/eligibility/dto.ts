@@ -150,7 +150,16 @@ export class UnassignedVisitDto {
   @ApiProperty({ type: String }) customerName!: string;
   @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ type: Number }) requiredCrewSize!: number;
-  @ApiProperty({ type: [ConflictDto], description: 'Why it could not be staffed.' })
+  @ApiProperty({
+    type: Boolean,
+    description:
+      'True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine.',
+  })
+  hasBeenChecked!: boolean;
+  @ApiProperty({
+    type: [ConflictDto],
+    description: 'Why it could not be staffed. Empty when nobody has proposed a crew.',
+  })
   conflicts!: ConflictDto[];
   @ApiProperty({ type: String, format: 'date-time' }) recordedAt!: string;
 }

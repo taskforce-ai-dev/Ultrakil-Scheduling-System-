@@ -939,8 +939,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Work that could not be staffed, and why
-         * @description Every visit the engine refused, with the full conflict list against each. This is the queue the hard rules protect: work is never quietly dropped, it lands here with its reasons.
+         * Work that still needs a crew, and why it has none
+         * @description Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.
          */
         get: operations["AssignmentsController_queue"];
         put?: never;
@@ -1706,7 +1706,9 @@ export interface components {
             customerName: string;
             siteName: string;
             requiredCrewSize: number;
-            /** @description Why it could not be staffed. */
+            /** @description True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. */
+            hasBeenChecked: boolean;
+            /** @description Why it could not be staffed. Empty when nobody has proposed a crew. */
             conflicts: components["schemas"]["ConflictDto"][];
             /** Format: date-time */
             recordedAt: string;
@@ -3635,6 +3637,10 @@ export interface operations {
     AssignmentsController_queue: {
         parameters: {
             query?: {
+                /** @description Only visits already found to be unstaffable, rather than all unstaffed work. */
+                withConflictsOnly?: boolean;
+                /** @description Only unstaffed visits generated from this agreement. */
+                serviceAgreementId?: string;
                 to?: string;
                 from?: string;
                 branchCode?: "COLOMBO" | "KANDY";

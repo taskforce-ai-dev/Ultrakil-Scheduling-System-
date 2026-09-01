@@ -92,15 +92,28 @@ export class AssignmentsController {
 
   @Get('unassigned-visits')
   @ApiOperation({
-    summary: 'Work that could not be staffed, and why',
+    summary: 'Work that still needs a crew, and why it has none',
     description:
-      'Every visit the engine refused, with the full conflict list against each. This is the queue the hard rules protect: work is never quietly dropped, it lands here with its reasons.',
+      'Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
   @ApiQuery({ name: 'branchCode', required: false, enum: Object.values(BranchCode) })
   @ApiQuery({ name: 'from', required: false, type: String, example: '2026-09-07' })
   @ApiQuery({ name: 'to', required: false, type: String, example: '2026-10-04' })
+  @ApiQuery({
+    name: 'serviceAgreementId',
+    required: false,
+    type: String,
+    format: 'uuid',
+    description: 'Only unstaffed visits generated from this agreement.',
+  })
+  @ApiQuery({
+    name: 'withConflictsOnly',
+    required: false,
+    type: Boolean,
+    description: 'Only visits already found to be unstaffable, rather than all unstaffed work.',
+  })
   @ApiResponse({ status: 200, type: PaginatedUnassignedVisitsDto })
   queue(
     @Query('page') page?: string,
@@ -108,6 +121,8 @@ export class AssignmentsController {
     @Query('branchCode') branchCode?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('withConflictsOnly') withConflictsOnly?: string,
+    @Query('serviceAgreementId') serviceAgreementId?: string,
   ): Promise<PaginatedUnassignedVisitsDto> {
     return this.assignments.unassignedQueue({
       page: page ? Number(page) : undefined,
@@ -115,6 +130,8 @@ export class AssignmentsController {
       branchCode,
       from,
       to,
+      withConflictsOnly: withConflictsOnly === 'true' || withConflictsOnly === '1',
+      serviceAgreementId,
     });
   }
 }

@@ -40,6 +40,8 @@ async function login(email: string, password: string): Promise<string> {
   return res.body.accessToken as string;
 }
 
+let lastAgreementId = '';
+
 /** An agreement with one Wednesday visit generated, and that visit's id. */
 async function visitForAssignment(): Promise<string> {
   const agreement = await request(http)
@@ -63,10 +65,12 @@ async function visitForAssignment(): Promise<string> {
     .send({ ...HORIZON, serviceAgreementIds: [agreement.body.id] });
   expect(generated.status).toBe(200);
 
+  lastAgreementId = agreement.body.id as string;
+
   const listed = await request(http)
     .get('/api/visits')
     .set(auth(adminToken))
-    .query({ serviceAgreementId: agreement.body.id });
+    .query({ serviceAgreementId: lastAgreementId });
   return listed.body.items[0].id as string;
 }
 
@@ -333,6 +337,7 @@ describe('the engine cannot be bypassed', () => {
 
   it('puts the refused visit in the Unassigned queue with its reasons', async () => {
     const visitId = await visitForAssignment();
+    const agreementUnderTest = lastAgreementId;
     await request(http)
       .put(`/api/visits/${visitId}/assignment`)
       .set(auth(adminToken))
@@ -345,7 +350,7 @@ describe('the engine cannot be bypassed', () => {
     const queue = await request(http)
       .get('/api/unassigned-visits')
       .set(auth(managerToken))
-      .query({ from: HORIZON.from, to: HORIZON.to });
+      .query({ serviceAgreementId: agreementUnderTest });
 
     expect(queue.status).toBe(200);
     const entry = queue.body.items.find(
@@ -353,6 +358,7 @@ describe('the engine cannot be bypassed', () => {
     );
     expect(entry).toBeDefined();
     expect(entry.conflicts.length).toBeGreaterThan(1);
+    expect(entry.hasBeenChecked).toBe(true);
     // The way out is carried through to the queue, not just the error.
     expect(entry.conflicts[0].remediation).not.toBe('');
   });
@@ -379,6 +385,90 @@ describe('the engine cannot be bypassed', () => {
     expect(
       await prisma.visitUnassignedReason.count({ where: { generatedVisitId: visitId } }),
     ).toBe(0);
+  });
+});
+
+describe('the Unassigned queue lists work nobody has tried to staff', () => {
+  it('includes a freshly generated visit with no crew, before anyone proposes one', async () => {
+    // The queue used to list only refusals, so before the optimizer runs a
+    // manager saw an empty page while hundreds of visits sat unstaffed.
+    const visitId = await visitForAssignment();
+    const agreementUnderTest = lastAgreementId;
+
+    const queue = await request(http)
+      .get('/api/unassigned-visits')
+      .set(auth(managerToken))
+      .query({ serviceAgreementId: agreementUnderTest });
+
+    const entry = queue.body.items.find((i: { visitId: string }) => i.visitId === visitId);
+    expect(entry).toBeDefined();
+    expect(entry.hasBeenChecked).toBe(false);
+    expect(entry.conflicts).toEqual([]);
+  });
+
+  it('marks a visit checked once a crew has been proposed and refused', async () => {
+    const visitId = await visitForAssignment();
+    const agreementUnderTest = lastAgreementId;
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        plannedStartMinute: 9 * 60,
+        plannedEndMinute: 11 * 60,
+        crew: [{ employeeId: technicianId, role: 'TECHNICIAN' }],
+      });
+
+    const queue = await request(http)
+      .get('/api/unassigned-visits')
+      .set(auth(managerToken))
+      .query({ serviceAgreementId: agreementUnderTest });
+
+    const entry = queue.body.items.find((i: { visitId: string }) => i.visitId === visitId);
+    expect(entry.hasBeenChecked).toBe(true);
+    expect(entry.conflicts.length).toBeGreaterThan(1);
+  });
+
+  it('drops a visit from the queue once it has a crew', async () => {
+    const visitId = await visitForAssignment();
+    const agreementUnderTest = lastAgreementId;
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send(goodCrew());
+
+    const queue = await request(http)
+      .get('/api/unassigned-visits')
+      .set(auth(managerToken))
+      .query({ serviceAgreementId: agreementUnderTest });
+
+    expect(
+      queue.body.items.find((i: { visitId: string }) => i.visitId === visitId),
+    ).toBeUndefined();
+  });
+
+  it('narrows to already-refused work when asked', async () => {
+    const untried = await visitForAssignment();
+    const untriedAgreement = lastAgreementId;
+    const refused = await visitForAssignment();
+    const agreementUnderTest = lastAgreementId;
+    void untriedAgreement;
+    await request(http)
+      .put(`/api/visits/${refused}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        plannedStartMinute: 9 * 60,
+        plannedEndMinute: 11 * 60,
+        crew: [{ employeeId: technicianId, role: 'TECHNICIAN' }],
+      });
+
+    const queue = await request(http)
+      .get('/api/unassigned-visits')
+      .set(auth(managerToken))
+      .query({ withConflictsOnly: 'true', serviceAgreementId: agreementUnderTest });
+
+    const ids = queue.body.items.map((i: { visitId: string }) => i.visitId);
+    expect(ids).toContain(refused);
+    expect(ids).not.toContain(untried);
   });
 });
 
