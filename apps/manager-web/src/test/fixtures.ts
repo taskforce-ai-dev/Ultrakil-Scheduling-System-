@@ -1,6 +1,9 @@
 import type {
+  Assignment,
+  Conflict,
   Customer,
   GenerationImpact,
+  UnassignedVisit,
   Visit,
   VisitDetail,
   JobType,
@@ -215,6 +218,70 @@ export function buildVisitDetail(overrides: Partial<VisitDetail> = {}): VisitDet
       generatedAt: "2026-08-31T00:00:00.000Z",
       generatedByRunId: "run-1",
     },
+    ...overrides,
+  };
+}
+
+export function buildConflict(overrides: Partial<Conflict> = {}): Conflict {
+  return {
+    code: "BRANCH_HAS_NO_PMS_SUPERVISOR",
+    message: "No PMS-grade supervisor is available in Kandy for this visit.",
+    remediation: "Assign a Kandy PMS supervisor, or wait until one becomes available.",
+    resources: {
+      visitId: "visit-1",
+      employeeIds: [],
+      vehicleIds: [],
+      serviceSiteId: "site-1",
+      skillCodes: [],
+      assignmentIds: [],
+    },
+    ...overrides,
+  };
+}
+
+export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment {
+  return {
+    id: "assignment-1",
+    generatedVisitId: "visit-1",
+    status: "CONFIRMED",
+    branchCode: "COLOMBO",
+    plannedStartMinute: 540,
+    plannedEndMinute: 630,
+    crew: [
+      {
+        employeeId: "employee-1",
+        fullName: "A Perera",
+        role: "SUPERVISOR",
+        isPmsSupervisor: true,
+      },
+    ],
+    vehicles: [
+      {
+        vehicleId: "vehicle-1",
+        label: "Van( 04 People) 253-4289",
+        driverEmployeeId: "employee-1",
+        driverName: "A Perera",
+      },
+    ],
+    isLocked: false,
+    createdAt: "2026-08-31T00:00:00.000Z",
+    updatedAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildUnassignedVisit(
+  overrides: Partial<UnassignedVisit> = {}
+): UnassignedVisit {
+  return {
+    visitId: "visit-2",
+    visitDate: "2026-09-09",
+    branchCode: "KANDY",
+    customerName: "Grandview Hotel",
+    siteName: "Main Kitchen",
+    requiredCrewSize: 2,
+    conflicts: [buildConflict()],
+    recordedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,
   };
 }

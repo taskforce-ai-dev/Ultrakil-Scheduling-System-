@@ -59,18 +59,7 @@ export interface Vehicle {
   isActive: boolean;
 }
 
-export interface DispatchVisit {
-  id: string;
-  customerName: string;
-  branchCode: BranchCode;
-  scheduledDate: string;
-  crewEmployeeNames: string[];
-  hasPmsSupervisor: boolean;
-}
-
-export interface UnassignedVisit {
-  id: string;
-  customerName: string;
-  branchCode: BranchCode;
-  reason: string;
-}
+// DispatchVisit / UnassignedVisit used to live here as placeholder types for
+// the ULK-O01 scaffold. ULK-C05 is live now (the eligibility/conflict
+// engine) — the Dispatch Board and Unassigned Visits pages use the real
+// Visit/AssignmentDto/ConflictDto types from api-client.ts instead.

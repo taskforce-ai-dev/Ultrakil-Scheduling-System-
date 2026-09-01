@@ -87,6 +87,26 @@ export type VisitQuery = NonNullable<
   paths["/api/visits"]["get"]["parameters"]["query"]
 >;
 
+export type Conflict = components["schemas"]["ConflictDto"];
+export type ConflictCode = Conflict["code"];
+export type Assignment = components["schemas"]["AssignmentDto"];
+export type UnassignedVisit = components["schemas"]["UnassignedVisitDto"];
+export type PaginatedUnassignedVisits = components["schemas"]["PaginatedUnassignedVisitsDto"];
+/**
+ * Hand-typed: the published contract has no `path`/`query` types for
+ * `/api/unassigned-visits` (same gap as elsewhere — see the note above
+ * `CreateCustomerRequest`), but the controller
+ * (`apps/api/src/scheduling/eligibility/assignments.controller.ts`) does
+ * accept these.
+ */
+export interface UnassignedVisitsQuery {
+  page?: number;
+  pageSize?: number;
+  branchCode?: "COLOMBO" | "KANDY";
+  from?: string;
+  to?: string;
+}
+
 export type CustomerQuery = NonNullable<
   paths["/api/customers"]["get"]["parameters"]["query"]
 >;
@@ -465,4 +485,33 @@ export function confirmVisitGeneration(
     method: "POST",
     body: dto,
   });
+}
+
+/* -------------------------------------------------------------------------
+ * Assignments and the Unassigned queue (ULK-C05)
+ * ---------------------------------------------------------------------- */
+
+/**
+ * The crew and vehicles on a visit, or `null` if nobody is assigned yet.
+ * Hand-typed as nullable: the published contract claims this always returns
+ * an `AssignmentDto`, but the handler
+ * (`apps/api/src/scheduling/eligibility/assignments.service.ts#get`) returns
+ * `null` with a 200 when there's no live assignment — a real visit's normal
+ * state right after generation. Flagged as a contract gap in the PR.
+ */
+export function fetchVisitAssignment(visitId: string): Promise<Assignment | null> {
+  return request<Assignment | null>(`/visits/${visitId}/assignment`);
+}
+
+/**
+ * Work the eligibility engine refused, and every reason why — never only the
+ * first. This is the queue the hard rules protect: nothing is silently
+ * dropped, it lands here with an explanation a manager can act on.
+ */
+export function fetchUnassignedVisits(
+  query?: UnassignedVisitsQuery
+): Promise<PaginatedUnassignedVisits> {
+  return request<PaginatedUnassignedVisits>(
+    `/unassigned-visits${buildQuery(query as Record<string, unknown> | undefined)}`
+  );
 }
