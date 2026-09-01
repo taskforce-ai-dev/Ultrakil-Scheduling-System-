@@ -59,6 +59,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The optimizer integration tests exercise the real solve path, so the
+      # Python scheduling service has to be running for them. Only the runtime
+      # requirements are installed here; its own lint and tests live in the
+      # scheduler job.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: services/scheduler/requirements.txt
+
+      - name: Install scheduler service dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/scheduler/requirements.txt
+
       - name: Prisma generate
         run: pnpm --filter @ultrakil/api prisma:generate
 
@@ -74,8 +89,35 @@ jobs:
       - name: Unit tests
         run: pnpm --filter @ultrakil/api test
 
+      - name: Start scheduler service
+        working-directory: services/scheduler
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+            > "$RUNNER_TEMP/scheduler.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/scheduler.pid"
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; then
+              echo "Scheduler service is up after ${attempt} attempt(s)."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Scheduler service did not become healthy within 40s."
+          cat "$RUNNER_TEMP/scheduler.log"
+          exit 1
+
       - name: Integration tests (database, seed, health)
         run: pnpm --filter @ultrakil/api test:integration
+
+      # Printed on failure only: a solver problem shows up as a failing API
+      # test, and its explanation is in this log rather than in Jest's output.
+      - name: Scheduler service log
+        if: failure()
+        run: cat "$RUNNER_TEMP/scheduler.log" || true
+
+      - name: Stop scheduler service
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/scheduler.pid")" 2>/dev/null || true
 
       - name: Build
         run: pnpm --filter @ultrakil/api build

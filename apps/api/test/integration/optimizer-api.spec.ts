@@ -8,7 +8,10 @@
  *
  * The solve itself is driven through `ScheduleRunService.execute` directly
  * rather than the queue, so a test never depends on a Redis worker picking a
- * job up — the queue is covered separately by its own idempotency test.
+ * job up. For that to actually hold, the background processor is replaced with
+ * an inert provider below: left in place it consumes the runs these tests
+ * create and solves them concurrently, which is how "cancels a queued run"
+ * ends up seeing RUNNING.
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -18,6 +21,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
+import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
 const prisma = new PrismaClient();
@@ -96,7 +100,12 @@ async function solve(): Promise<string> {
 }
 
 beforeAll(async () => {
-  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    // A plain value carries no @Processor metadata, so BullMQ registers no
+    // worker for this app and the queue stays untouched by these tests.
+    .overrideProvider(ScheduleRunProcessor)
+    .useValue({})
+    .compile();
 
   app = moduleRef.createNestApplication();
   app.setGlobalPrefix('api');
