@@ -2518,6 +2518,214 @@
           "assignments"
         ]
       }
+    },
+    "/api/schedule-runs": {
+      "post": {
+        "description": "Queues a solve and returns immediately with a run to poll — a solve takes seconds and would time out behind a proxy if it were held open. Published work is never touched, and locked parts of a draft are kept exactly as they are.",
+        "operationId": "ScheduleRunsController_start",
+        "parameters": [],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "AGREEMENT_DATES_INVALID"
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Solve a date range",
+        "tags": [
+          "schedule-runs"
+        ]
+      },
+      "get": {
+        "operationId": "ScheduleRunsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedScheduleRunsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Past and current schedule runs",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
+    },
+    "/api/schedule-runs/{id}": {
+      "get": {
+        "description": "Poll this while a solve is working. `progressPercent` moves as it goes.",
+        "operationId": "ScheduleRunsController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "One run, with its progress",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
+    },
+    "/api/schedule-runs/{id}/cancel": {
+      "post": {
+        "description": "Sets a cancel flag the worker checks at each safe point, so a run stops without writing a half-finished schedule. A run that has already written is left as it is.",
+        "operationId": "ScheduleRunsController_cancel",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Stop a run",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
+    },
+    "/api/schedule-runs/{id}/publish": {
+      "post": {
+        "description": "Freezes this run: its assignments become the schedule the crews were told, and neither they nor the run may change afterwards. Anything published earlier for the same visits is superseded, never deleted.",
+        "operationId": "ScheduleRunsController_publish",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — already published, unfinished, or nothing to publish."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Publish the schedule",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
+    },
+    "/api/assignments/{id}/lock": {
+      "post": {
+        "description": "CREW, SUPERVISOR, VEHICLE, TIME or FULL. The next run keeps whatever is pinned. A lock can never make an illegal crew legal — the hard rules still apply, so a pinned but impossible crew leaves the visit unassigned.",
+        "operationId": "ScheduleRunsController_lock",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Locked."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pin part of an assignment",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
+    },
+    "/api/assignments/{id}/unlock": {
+      "post": {
+        "operationId": "ScheduleRunsController_unlock",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Released."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Release a pinned part of an assignment",
+        "tags": [
+          "schedule-runs"
+        ]
+      }
     }
   },
   "info": {
@@ -4833,6 +5041,137 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/UnassignedVisitDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "ScheduleRunDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "RUNNING",
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "rangeStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "rangeEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "progressPercent": {
+            "type": "number",
+            "description": "0-100."
+          },
+          "visitsConsidered": {
+            "type": "number"
+          },
+          "visitsScheduled": {
+            "type": "number"
+          },
+          "visitsUnassigned": {
+            "type": "number"
+          },
+          "isPublished": {
+            "type": "boolean",
+            "description": "True once published and frozen."
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "supersededByRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The later run that replaced this one."
+          },
+          "cancelRequested": {
+            "type": "boolean"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "errorMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "rangeStart",
+          "rangeEnd",
+          "branchCode",
+          "progressPercent",
+          "visitsConsidered",
+          "visitsScheduled",
+          "visitsUnassigned",
+          "isPublished",
+          "publishedAt",
+          "supersededByRunId",
+          "cancelRequested",
+          "errorCode",
+          "errorMessage",
+          "startedAt",
+          "finishedAt",
+          "createdAt"
+        ]
+      },
+      "PaginatedScheduleRunsDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRunDto"
             }
           },
           "total": {

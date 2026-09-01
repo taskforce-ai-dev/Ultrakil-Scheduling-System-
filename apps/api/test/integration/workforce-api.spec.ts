@@ -24,6 +24,15 @@ let app: INestApplication;
 let http: string;
 let adminToken: string;
 let managerToken: string;
+/**
+ * An employee's natural key is derived from name plus branch, so a fixed name
+ * collides with itself the second time this suite runs against the same
+ * database — the create returns 409 and every later assertion reads undefined.
+ * It only ever passed because another suite happened to wipe the employee
+ * table first, which is not something a test should depend on.
+ */
+const runSuffix = Math.random().toString(36).slice(2, 8);
+
 let colomboEmployeeId: string;
 let stationedEmployeeId: string;
 let vehicleId: string;
@@ -90,6 +99,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Crew rows restrict deleting an employee, so anything the optimizer booked
+  // them onto has to go first.
+  const mine = await prisma.employee.findMany({
+    where: { sourceKey: { contains: runSuffix.toUpperCase() } },
+    select: { id: true },
+  });
+  if (mine.length > 0) {
+    const ids = mine.map((employee) => employee.id);
+    await prisma.assignment.deleteMany({
+      where: { crewMembers: { some: { employeeId: { in: ids } } } },
+    });
+    await prisma.employee.deleteMany({ where: { id: { in: ids } } });
+  }
   await prisma.user.deleteMany({
     where: { email: { in: [ADMIN.email, MANAGER.email] } },
   });
@@ -246,13 +268,22 @@ describe('branch isolation', () => {
     const colombo = await request(http)
       .post('/api/employees')
       .set(auth(adminToken))
-      .send({ fullName: 'Branch Colombo Person', gradeLabel: 'SPMS', branchCode: 'COLOMBO' });
+      .send({
+        fullName: `Branch Colombo Person ${runSuffix}`,
+        gradeLabel: 'SPMS',
+        branchCode: 'COLOMBO',
+      });
+    expect(colombo.status).toBe(201);
     colomboEmployeeId = colombo.body.id;
 
     await request(http)
       .post('/api/employees')
       .set(auth(adminToken))
-      .send({ fullName: 'Branch Kandy Person', gradeLabel: 'Junior PMT', branchCode: 'KANDY' });
+      .send({
+        fullName: `Branch Kandy Person ${runSuffix}`,
+        gradeLabel: 'Junior PMT',
+        branchCode: 'KANDY',
+      });
   });
 
   it('returns only the requested branch', async () => {
@@ -304,12 +335,13 @@ describe('permanently stationed employees', () => {
       .post('/api/employees')
       .set(auth(adminToken))
       .send({
-        fullName: 'Stationed Person',
+        fullName: `Stationed Person ${runSuffix}`,
         gradeLabel: 'APMS',
         branchCode: 'COLOMBO',
         deploymentType: DeploymentType.PERMANENTLY_STATIONED,
         permanentSiteLabel: 'Lion Brewery',
       });
+    expect(res.status).toBe(201);
     stationedEmployeeId = res.body.id;
   });
 

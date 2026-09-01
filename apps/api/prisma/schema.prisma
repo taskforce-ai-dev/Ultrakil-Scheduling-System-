@@ -90,6 +90,10 @@ enum AssignmentStatus {
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  /// Replaced by a later published schedule. Kept, never deleted: a published
+  /// schedule is a record of what the crews were told, and rewriting history
+  /// is how a dispute becomes unanswerable.
+  SUPERSEDED
 }
 
 enum CrewRole {
@@ -103,6 +107,10 @@ enum CrewRole {
 enum LockScope {
   FULL
   CREW
+  /// The supervisor specifically, leaving the rest of the crew free to change.
+  /// Distinct from CREW because a manager often cares who is in charge without
+  /// caring who else goes.
+  SUPERVISOR
   VEHICLE
   TIME
 }
@@ -113,6 +121,8 @@ enum ScheduleRunStatus {
   SUCCEEDED
   FAILED
   CANCELLED
+  /// A published run replaced by a later one covering the same work.
+  SUPERSEDED
 }
 
 /// Who a portal account is. Phase 1 needs only these two: a manager runs the
@@ -841,6 +851,27 @@ model ScheduleRun {
 
   errorCode    String?
   errorMessage String?
+
+  /// 0-100, updated as the run works. A solve can take seconds; a manager
+  /// watching a spinner with no number assumes it has hung.
+  progressPercent Int @default(0)
+
+  /// BullMQ job id, so a queued run can be found and cancelled.
+  jobId String?
+
+  /// Set when a manager asks to stop. The worker checks it at each safe point
+  /// and abandons the run without writing, rather than being killed mid-write.
+  cancelRequestedAt DateTime?
+
+  /// Publishing freezes the run: its assignments become the schedule the crews
+  /// were told, and neither they nor this row may change afterwards.
+  publishedAt       DateTime?
+  publishedByUserId String?
+
+  /// The later run that replaced this one.
+  supersededByRunId String?       @db.Uuid
+  supersededBy      ScheduleRun?  @relation("ScheduleRunSupersession", fields: [supersededByRunId], references: [id], onDelete: SetNull)
+  superseded        ScheduleRun[] @relation("ScheduleRunSupersession")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

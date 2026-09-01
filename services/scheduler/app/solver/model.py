@@ -17,7 +17,6 @@ never drop a visit to make the remaining ones tidier.
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 
 from ortools.sat.python import cp_model
 
@@ -40,11 +39,6 @@ WEIGHT_WORKLOAD_SPREAD = 5
 # to assign one at all, since a vehicle is optional — and a pest control crew
 # arriving without their equipment is not a schedule anybody wanted.
 WEIGHT_VEHICLE_ASSIGNED = 40
-
-
-def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
-    """Touching is not overlapping: finishing at 12:00 frees the crew at 12:00."""
-    return a_start < b_end and b_start < a_end
 
 
 def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
@@ -164,31 +158,56 @@ def solve(request: SolveRequest) -> SolveResponse:
         if visit.window_end_minute - visit.window_start_minute < visit.duration_minutes:
             model.Add(staffed[visit.id] == 0)
 
-    # Nobody in two places at once. Only same-date, overlapping pairs can clash.
-    by_date: dict[str, list] = defaultdict(list)
-    for visit in visits:
-        by_date[visit.visit_date].append(visit)
+    # Nobody, and no vehicle, in two places at once.
+    #
+    # Expressed as optional intervals on one timeline rather than a constraint
+    # per overlapping pair. On real data a single day holds 500+ visits, and
+    # pairwise would be O(visits squared x employees) — over a million
+    # constraints, which CP-SAT never even finishes building. Intervals are
+    # linear in the number of visits and are what NoOverlap is for.
+    day_index = {date: index for index, date in enumerate(sorted({v.visit_date for v in visits}))}
 
-    for same_day in by_date.values():
-        for i, first in enumerate(same_day):
-            for second in same_day[i + 1 :]:
-                if not _overlaps(
-                    first.window_start_minute,
-                    first.window_start_minute + first.duration_minutes,
-                    second.window_start_minute,
-                    second.window_start_minute + second.duration_minutes,
-                ):
-                    continue
-                for employee in employees:
-                    left = assign.get((first.id, employee.id))
-                    right = assign.get((second.id, employee.id))
-                    if left is not None and right is not None:
-                        model.Add(left + right <= 1)
-                for vehicle in vehicles:
-                    left_v = uses_vehicle.get((first.id, vehicle.id))
-                    right_v = uses_vehicle.get((second.id, vehicle.id))
-                    if left_v is not None and right_v is not None:
-                        model.Add(left_v + right_v <= 1)
+    def absolute_start(v) -> int:
+        """Minutes from the start of the horizon, so dates separate naturally."""
+        return day_index[v.visit_date] * 1440 + v.window_start_minute
+
+    for employee in employees:
+        intervals = []
+        for v in visits:
+            var = assign.get((v.id, employee.id))
+            if var is None:
+                continue
+            start = absolute_start(v)
+            intervals.append(
+                model.NewOptionalIntervalVar(
+                    start,
+                    v.duration_minutes,
+                    start + v.duration_minutes,
+                    var,
+                    f"i_{v.id}_{employee.id}",
+                )
+            )
+        if len(intervals) > 1:
+            model.AddNoOverlap(intervals)
+
+    for vehicle in vehicles:
+        intervals = []
+        for v in visits:
+            var = uses_vehicle.get((v.id, vehicle.id))
+            if var is None:
+                continue
+            start = absolute_start(v)
+            intervals.append(
+                model.NewOptionalIntervalVar(
+                    start,
+                    v.duration_minutes,
+                    start + v.duration_minutes,
+                    var,
+                    f"iv_{v.id}_{vehicle.id}",
+                )
+            )
+        if len(intervals) > 1:
+            model.AddNoOverlap(intervals)
 
     # Vehicles: seats, and a driver who is actually going and authorized.
     for visit in visits:
