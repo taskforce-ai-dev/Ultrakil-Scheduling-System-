@@ -1,4 +1,4 @@
-import type { Employee, Vehicle, DispatchVisit, UnassignedVisit } from "./types";
+import type { Employee, Vehicle } from "./types";
 
 // Customer / JobType / ServiceAgreement mocks used to live here — removed
 // now that ULK-C03 is live; the Customers and Service Agreements pages fetch
@@ -98,22 +98,3 @@ export const mockEmployees: Employee[] = [
   },
 ];
 
-export const mockDispatchVisits: DispatchVisit[] = [
-  {
-    id: "visit-1",
-    customerName: "Cinnamon Grand Colombo",
-    branchCode: "COLOMBO",
-    scheduledDate: "2026-08-24",
-    crewEmployeeNames: ["S. Perera"],
-    hasPmsSupervisor: true,
-  },
-];
-
-export const mockUnassignedVisits: UnassignedVisit[] = [
-  {
-    id: "unassigned-1",
-    customerName: "Kandy City Centre",
-    branchCode: "KANDY",
-    reason: "No PMS-grade supervisor available in Kandy for the preferred day.",
-  },
-];
