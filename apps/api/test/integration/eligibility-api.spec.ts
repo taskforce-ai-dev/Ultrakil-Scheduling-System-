@@ -183,7 +183,24 @@ beforeAll(async () => {
   siteId = site.body.id;
 });
 
+/**
+ * Every test in this file books the same two people on the same Wednesday, so
+ * without this the second test would be told — correctly — that the crew is
+ * already out on the first test's visit. Clearing between tests keeps each
+ * one's intent readable; the double-booking rule gets its own tests below.
+ */
+beforeEach(async () => {
+  await prisma.assignment.deleteMany({
+    where: { crewMembers: { some: { employeeId: { in: [supervisorId, technicianId] } } } },
+  });
+});
+
 afterAll(async () => {
+  // Crew rows restrict deletion of an employee, so the assignments have to go
+  // first — otherwise cleanup throws and Jest hangs instead of exiting.
+  await prisma.assignment.deleteMany({
+    where: { crewMembers: { some: { employeeId: { in: [supervisorId, technicianId] } } } },
+  });
   await prisma.employee.deleteMany({ where: { sourceKey: { contains: suffix } } });
   await prisma.vehicle.deleteMany({ where: { code: { contains: suffix } } });
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
