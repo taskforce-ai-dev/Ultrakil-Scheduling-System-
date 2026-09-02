@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -117,5 +117,30 @@ describe("CustomersPage", () => {
     expect(await screen.findByText("That customer code is already in use.")).toBeInTheDocument();
     // The form is still open and usable — the name we typed is still there.
     expect(screen.getByLabelText("Customer name")).toHaveValue("Test Customer");
+  });
+
+  it("collapses a rapid double-click on Save into a single request", async () => {
+    let resolveCreate: (() => void) | undefined;
+    vi.mocked(createCustomer).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = () => resolve(buildCustomer({ id: "customer-2", name: "Test Customer", sites: [] }));
+        })
+    );
+
+    const user = await openForm();
+    await user.type(screen.getByLabelText("Customer name"), "Test Customer");
+    await user.type(screen.getByLabelText("Site name"), "Main Kitchen");
+
+    const button = screen.getByRole("button", { name: "Save customer" });
+    // Two clicks fired without awaiting between them — a genuine double-click,
+    // not two sequential, fully-settled ones.
+    await userEvent.click(button, { skipHover: true });
+    await userEvent.click(button, { skipHover: true });
+
+    expect(createCustomer).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveCreate?.();
+    });
   });
 });

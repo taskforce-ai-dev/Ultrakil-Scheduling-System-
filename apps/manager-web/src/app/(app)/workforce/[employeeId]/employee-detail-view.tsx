@@ -42,6 +42,10 @@ export function EmployeeDetailView({
   const [draftVehicleIds, setDraftVehicleIds] = React.useState<string[]>(authorizedVehicleIds);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  // A ref alongside the state: two clicks fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isSaving`, so the
+  // state check alone can't stop the second one.
+  const isSavingRef = React.useRef(false);
   const [saveError, setSaveError] = React.useState<ApiError | null>(null);
 
   function openDrawer() {
@@ -57,6 +61,8 @@ export function EmployeeDetailView({
   }
 
   async function confirmSave() {
+    if (isSavingRef.current) return; // Collapses a double-click into one request.
+    isSavingRef.current = true;
     setConfirmOpen(false);
     setIsSaving(true);
     setSaveError(null);
@@ -78,6 +84,7 @@ export function EmployeeDetailView({
           : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
       );
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   }

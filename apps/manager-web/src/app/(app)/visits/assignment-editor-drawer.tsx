@@ -136,10 +136,17 @@ export function AssignmentEditorDrawer({
   const [checkResult, setCheckResult] = React.useState<EligibilityResult | null>(null);
   const [isChecking, setIsChecking] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  // A ref alongside each busy state below: two clicks fired in the same tick
+  // (a fast double-click) both close over the same pre-update state, so the
+  // state check alone can't stop the second one. The ref updates
+  // synchronously, before React has scheduled a re-render.
+  const isSavingRef = React.useRef(false);
   const [isRemoving, setIsRemoving] = React.useState(false);
+  const isRemovingRef = React.useRef(false);
   const [saveConflicts, setSaveConflicts] = React.useState<Conflict[] | null>(null);
 
   const [lockBusyScope, setLockBusyScope] = React.useState<LockScope | null>(null);
+  const lockBusyScopeRef = React.useRef<LockScope | null>(null);
   // What this browser session has itself locked/unlocked, by scope. The API
   // has no way to read back *which* scopes are locked on an existing
   // assignment (see the note on `lockAssignment` in api-client.ts) — this is
@@ -323,6 +330,8 @@ export function AssignmentEditorDrawer({
       notify.error("A reason is required for a manual override.");
       return;
     }
+    if (isSavingRef.current) return; // Collapses a double-click into one request.
+    isSavingRef.current = true;
     setIsSaving(true);
     setSaveConflicts(null);
     try {
@@ -339,12 +348,15 @@ export function AssignmentEditorDrawer({
         notify.error("Could not save this assignment.");
       }
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   }
 
   async function removeCrew() {
     if (!visitId) return;
+    if (isRemovingRef.current) return; // Collapses a double-click into one request.
+    isRemovingRef.current = true;
     setIsRemoving(true);
     try {
       await unassignVisit(visitId);
@@ -354,12 +366,15 @@ export function AssignmentEditorDrawer({
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not remove the crew.");
     } finally {
+      isRemovingRef.current = false;
       setIsRemoving(false);
     }
   }
 
   async function toggleLock(scope: LockScope) {
     if (!assignment) return;
+    if (lockBusyScopeRef.current) return; // Collapses a double-click into one request.
+    lockBusyScopeRef.current = scope;
     const currentlyLocked = sessionLocks[scope] !== undefined ? sessionLocks[scope] !== null : null;
     setLockBusyScope(scope);
     try {
@@ -384,6 +399,7 @@ export function AssignmentEditorDrawer({
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not change this lock.");
     } finally {
+      lockBusyScopeRef.current = null;
       setLockBusyScope(null);
     }
   }

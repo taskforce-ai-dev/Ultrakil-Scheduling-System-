@@ -107,6 +107,36 @@ describe("ScheduleHistoryPage", () => {
     expect(publishScheduleRun).toHaveBeenCalledWith("run-2", {});
   });
 
+  it("collapses a rapid double-click on Publish into a single request", async () => {
+    const run = buildScheduleRun({
+      id: "run-4",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 0,
+    });
+    mockRuns([run]);
+    let resolvePublish: (() => void) | undefined;
+    vi.mocked(publishScheduleRun).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePublish = () => resolve({ ...run, isPublished: true });
+        })
+    );
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+    const confirmButton = await screen.findByRole("button", { name: "Publish" });
+    // Two clicks fired without awaiting between them — a genuine double-click,
+    // not two sequential, fully-settled ones.
+    await userEvent.click(confirmButton, { skipHover: true });
+    await userEvent.click(confirmButton, { skipHover: true });
+
+    expect(publishScheduleRun).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolvePublish?.();
+    });
+  });
+
   it("stays quiet about the warning when nothing is left unassigned", async () => {
     const run = buildScheduleRun({
       id: "run-3",

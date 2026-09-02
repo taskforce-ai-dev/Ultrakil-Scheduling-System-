@@ -92,6 +92,10 @@ export function GenerationImpactDrawer({
   const [error, setError] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isConfirming, setIsConfirming] = React.useState(false);
+  // A ref alongside the state: two clicks fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isConfirming`, so the
+  // state check alone can't stop the second one.
+  const isConfirmingRef = React.useRef(false);
 
   const loadPreview = React.useCallback(() => {
     if (!open) return;
@@ -118,6 +122,8 @@ export function GenerationImpactDrawer({
   }, [loadPreview]);
 
   async function confirm() {
+    if (isConfirmingRef.current) return; // Collapses a double-click into one request.
+    isConfirmingRef.current = true;
     setIsConfirming(true);
     try {
       const result = await confirmVisitGeneration({ from, to, branchCode });
@@ -133,6 +139,7 @@ export function GenerationImpactDrawer({
         caught instanceof ApiError ? caught.message : "Could not generate the visits."
       );
     } finally {
+      isConfirmingRef.current = false;
       setIsConfirming(false);
     }
   }

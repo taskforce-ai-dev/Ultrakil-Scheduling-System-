@@ -219,6 +219,10 @@ export default function VisitsPage() {
   const [moveRequest, setMoveRequest] = React.useState<MoveRequest | null>(null);
   const [moveReason, setMoveReason] = React.useState("");
   const [isMoving, setIsMoving] = React.useState(false);
+  // A ref alongside the state: two clicks fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isMoving`, so the
+  // state check alone can't stop the second one.
+  const isMovingRef = React.useRef(false);
 
   const { from, to } = rangeForView(anchor, view);
 
@@ -346,6 +350,8 @@ export default function VisitsPage() {
       notify.error("A reason is required to move a visit by hand.");
       return;
     }
+    if (isMovingRef.current) return; // Collapses a double-click into one request.
+    isMovingRef.current = true;
     setIsMoving(true);
     try {
       await adjustVisit(moveRequest.visit.id, {
@@ -358,6 +364,7 @@ export default function VisitsPage() {
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not move this visit.");
     } finally {
+      isMovingRef.current = false;
       setIsMoving(false);
     }
   }
