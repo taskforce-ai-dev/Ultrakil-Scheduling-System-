@@ -1,6 +1,8 @@
 import { test as setup, expect } from "@playwright/test";
 
-const authFile = "e2e/.auth/user.json";
+// Outside apps/manager-web on purpose — see the note in playwright.config.ts
+// about the dev server's file watcher.
+const authFile = "../../.playwright-artifacts/.auth/user.json";
 
 /**
  * Logs in once via the real UI against the real API, then saves the

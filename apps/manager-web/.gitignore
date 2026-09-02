@@ -39,8 +39,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# playwright — the saved auth state holds a real access token
-/e2e/.auth
-/playwright-report
-/test-results

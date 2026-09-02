@@ -15,15 +15,28 @@ import { defineConfig, devices } from "@playwright/test";
  * Nest, the scheduler and Postgres together is what `pnpm dev:*` already
  * does, and duplicating that here would just be a second, less reliable copy
  * of it.
+ *
+ * Every output path below is pushed outside this directory on purpose:
+ * `next dev`'s file watcher covers the whole `apps/manager-web` tree, and a
+ * run writes a screenshot/video/trace file on every failure — inside that
+ * tree, each write is a "file changed" event, which triggers a Fast Refresh
+ * rebuild, which can itself touch `.next/`, which triggers another one. A
+ * long or repeatedly-failing run turns that into a continuous rebuild loop
+ * fighting the very dev server the suite is testing against — this is
+ * confirmed against the real dev server, not theoretical.
  */
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "../../.playwright-artifacts/test-results",
   fullyParallel: false,
   // Real writes against one real database — a second worker would be
   // fighting the first over the same customers, agreements and runs.
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
+  reporter: [
+    ["list"],
+    ["html", { open: "never", outputFolder: "../../.playwright-artifacts/playwright-report" }],
+  ],
   timeout: 30_000,
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
@@ -35,7 +48,7 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], storageState: "e2e/.auth/user.json" },
+      use: { ...devices["Desktop Chrome"], storageState: "../../.playwright-artifacts/.auth/user.json" },
       dependencies: ["setup"],
     },
   ],
