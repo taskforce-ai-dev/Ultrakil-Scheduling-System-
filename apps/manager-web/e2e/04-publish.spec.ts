@@ -29,8 +29,9 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
     timeout: 120_000,
   });
 
+  // The runs list is a card list (<ul><li>), not a table.
   const row = page
-    .locator("tr", { has: page.getByText("Draft — ready to publish") })
+    .locator("li", { has: page.getByText("Draft — ready to publish") })
     .first();
   await row.getByRole("button", { name: "Publish" }).click();
 

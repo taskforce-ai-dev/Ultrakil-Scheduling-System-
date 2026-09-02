@@ -67,8 +67,15 @@ test("creates a customer with a site, then a service agreement for it, and sees 
     timeout: 10_000,
   });
   await expect(page.getByText("Schedule preview")).toBeVisible();
-  // Either a concrete preview or an explained shortfall — never a blank panel.
+  // A populated preview lists each visit as a plain date/time row (no
+  // summary sentence), so this checks for that structure directly rather
+  // than guessing wording. Either that, the "nothing in range" message, or
+  // a real load error — never a blank panel.
   await expect(
-    page.getByText(/No visits fall in the preview window\.|visit(s)? falls? in|Could not load the schedule preview\./).first()
+    page
+      .locator("li", { hasText: /^\d{4}-\d{2}-\d{2}/ })
+      .first()
+      .or(page.getByText("No visits fall in the preview window."))
+      .or(page.getByText("Could not load the schedule preview."))
   ).toBeVisible({ timeout: 10_000 });
 });

@@ -22,7 +22,9 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
   }
   await editCrewButton.click();
 
-  await expect(page.getByText(/^Edit crew — /)).toBeVisible();
+  // The drawer's own data (visit + employees + vehicles) is a real fetch,
+  // not instant, so the default 5s assertion timeout is too tight here.
+  await expect(page.getByText(/^Edit crew — /)).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: "Add crew member" }).click();
   await page.getByLabel("Employee").click();
   await page.getByRole("option").first().click();
@@ -61,6 +63,11 @@ test("visit calendar: locks and releases a visit", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: wasLocked ? "Lock this visit" : "Release this visit" })
   ).toBeVisible({ timeout: 10_000 });
+
+  // The success toast from that click sits over this same footer button
+  // (bottom-positioned, same as the drawer's own footer) until it clears,
+  // which otherwise blocks the very next click for as long as it's visible.
+  await page.locator('[data-sonner-toast]').first().waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
   // Leave the visit as it was found — this spec observes state, it doesn't
   // decide for the manager whether a real visit should end up locked.
