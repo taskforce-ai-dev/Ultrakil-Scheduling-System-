@@ -1,9 +1,18 @@
 "use client";
 
 import * as React from "react";
-import { CalendarPlus, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Move } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -12,11 +21,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Badge } from "@/components/ui/badge";
 import {
+  adjustVisit,
   ApiError,
   fetchCustomers,
   fetchJobTypes,
@@ -41,8 +52,15 @@ import {
   type CalendarView,
 } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
+import { notify } from "@/lib/notify";
 import { VisitDetailDrawer } from "./visit-detail-drawer";
 import { GenerationImpactDrawer } from "./generation-impact-drawer";
+
+/** A visit chip requested a move, either by drag-and-drop or the accessible button. */
+interface MoveRequest {
+  visit: Visit;
+  targetDate: string;
+}
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StateFilter = "ALL" | VisitStatus | "LOCKED" | "MANUALLY_ADJUSTED" | "GENERATED";
@@ -78,8 +96,23 @@ const STATE_LABELS = Object.fromEntries(
  */
 const MAX_CHIPS_PER_MONTH_CELL = 3;
 
-/** One visit as it appears inside a day cell. */
-function VisitChip({ visit, onOpen }: { visit: Visit; onOpen: () => void }) {
+/**
+ * One visit as it appears inside a day cell.
+ *
+ * Draggable to another day for a quick reschedule, but dragging is never the
+ * only way: the small "Move" button opens the same confirmation dialog for
+ * anyone who can't (or would rather not) drag — keyboard users, screen
+ * readers, touch devices without a drag gesture.
+ */
+function VisitChip({
+  visit,
+  onOpen,
+  onMoveRequested,
+}: {
+  visit: Visit;
+  onOpen: () => void;
+  onMoveRequested: () => void;
+}) {
   // Colour carries stage, never staffing: an unstaffed visit must not read as
   // ready. The dot is the ownership marker, so a locked or hand-edited visit
   // is identifiable at a glance without opening it.
@@ -93,36 +126,53 @@ function VisitChip({ visit, onOpen }: { visit: Visit; onOpen: () => void }) {
           : "border-border bg-background";
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
-        visit.hoursUnconfirmed ? ", opening hours unconfirmed" : ""
-      }`}
+    <div
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData("text/plain", visit.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
       className={cn(
-        "w-full truncate rounded border px-1.5 py-1 text-left text-xs transition-colors",
-        "hover:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex w-full items-stretch gap-0.5 rounded border text-xs transition-colors",
+        "hover:border-ring",
         tone
       )}
     >
-      <span className="flex items-center gap-1">
-        {visit.isLocked && (
-          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-        )}
-        {!visit.isLocked && visit.isManuallyAdjusted && (
-          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
-        )}
-        <span className="shrink-0 tabular-nums text-muted-foreground">
-          {formatMinuteOfDay(visit.windowStartMinute)}
-        </span>
-        <span className="truncate">{visit.customerName}</span>
-        {visit.hoursUnconfirmed && (
-          <span aria-hidden="true" className="shrink-0 text-destructive" title="Opening hours unconfirmed">
-            ⟡
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
+          visit.hoursUnconfirmed ? ", opening hours unconfirmed" : ""
+        }`}
+        className="min-w-0 flex-1 truncate px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="flex items-center gap-1">
+          {visit.isLocked && (
+            <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+          )}
+          {!visit.isLocked && visit.isManuallyAdjusted && (
+            <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
+          )}
+          <span className="shrink-0 tabular-nums text-muted-foreground">
+            {formatMinuteOfDay(visit.windowStartMinute)}
           </span>
-        )}
-      </span>
-    </button>
+          <span className="truncate">{visit.customerName}</span>
+          {visit.hoursUnconfirmed && (
+            <span aria-hidden="true" className="shrink-0 text-destructive" title="Opening hours unconfirmed">
+              ⟡
+            </span>
+          )}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onMoveRequested}
+        aria-label={`Move ${visit.customerName}'s visit to a different date`}
+        className="shrink-0 px-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Move className="h-3 w-3" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -165,6 +215,10 @@ export default function VisitsPage() {
 
   const [openVisitId, setOpenVisitId] = React.useState<string | null>(null);
   const [generateOpen, setGenerateOpen] = React.useState(false);
+
+  const [moveRequest, setMoveRequest] = React.useState<MoveRequest | null>(null);
+  const [moveReason, setMoveReason] = React.useState("");
+  const [isMoving, setIsMoving] = React.useState(false);
 
   const { from, to } = rangeForView(anchor, view);
 
@@ -275,6 +329,37 @@ export default function VisitsPage() {
 
   function step(direction: -1 | 1) {
     setAnchor(view === "month" ? addMonths(anchor, direction) : addDays(anchor, direction * 7));
+  }
+
+  function handleDrop(day: string, event: React.DragEvent) {
+    event.preventDefault();
+    const visitId = event.dataTransfer.getData("text/plain");
+    const visit = visible.find((candidate) => candidate.id === visitId);
+    if (!visit || visit.visitDate === day) return;
+    setMoveRequest({ visit, targetDate: day });
+    setMoveReason("");
+  }
+
+  async function confirmMove() {
+    if (!moveRequest) return;
+    if (!moveReason.trim()) {
+      notify.error("A reason is required to move a visit by hand.");
+      return;
+    }
+    setIsMoving(true);
+    try {
+      await adjustVisit(moveRequest.visit.id, {
+        visitDate: moveRequest.targetDate,
+        reason: moveReason.trim(),
+      });
+      notify.success("Visit moved.");
+      setMoveRequest(null);
+      load();
+    } catch (caught) {
+      notify.error(caught instanceof ApiError ? caught.message : "Could not move this visit.");
+    } finally {
+      setIsMoving(false);
+    }
   }
 
   const lockedCount = visible.filter((visit) => visit.isLocked).length;
@@ -507,6 +592,8 @@ export default function VisitsPage() {
                     <div
                       key={day}
                       role="gridcell"
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => handleDrop(day, event)}
                       className={cn(
                         "min-h-28 space-y-1 border-b border-r border-border p-1.5",
                         outsideMonth && "bg-muted/30",
@@ -534,6 +621,10 @@ export default function VisitsPage() {
                           key={visit.id}
                           visit={visit}
                           onOpen={() => setOpenVisitId(visit.id)}
+                          onMoveRequested={() => {
+                            setMoveRequest({ visit, targetDate: visit.visitDate });
+                            setMoveReason("");
+                          }}
                         />
                       ))}
                       {hiddenCount > 0 && (
@@ -573,6 +664,52 @@ export default function VisitsPage() {
         branchCode={branch === "ALL" ? undefined : branch}
         onConfirmed={load}
       />
+
+      <Dialog open={moveRequest !== null} onOpenChange={(open) => !open && setMoveRequest(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Move this visit?</DialogTitle>
+            <DialogDescription>
+              {moveRequest &&
+                `${moveRequest.visit.customerName} — currently ${formatLongDate(moveRequest.visit.visitDate)}.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="move-date">New date</Label>
+            <Input
+              id="move-date"
+              type="date"
+              value={moveRequest?.targetDate ?? ""}
+              onChange={(event) =>
+                event.target.value &&
+                setMoveRequest((current) =>
+                  current ? { ...current, targetDate: event.target.value } : current
+                )
+              }
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="move-reason">Reason</Label>
+            <Textarea
+              id="move-reason"
+              value={moveReason}
+              onChange={(event) => setMoveReason(event.target.value)}
+              placeholder="Why is this visit moving?"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveRequest(null)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmMove} disabled={isMoving}>
+              {isMoving ? "Moving…" : "Move visit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

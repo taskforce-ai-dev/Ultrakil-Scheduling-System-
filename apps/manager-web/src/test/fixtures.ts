@@ -1,8 +1,11 @@
 import type {
   Assignment,
+  AssignmentLock,
   Conflict,
   Customer,
+  EligibilityResult,
   GenerationImpact,
+  ScheduleRun,
   UnassignedVisit,
   Visit,
   VisitDetail,
@@ -283,6 +286,54 @@ export function buildUnassignedVisit(
     hasBeenChecked: true,
     conflicts: [buildConflict()],
     recordedAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildEligibilityResult(
+  overrides: Partial<EligibilityResult> = {}
+): EligibilityResult {
+  return {
+    isEligible: true,
+    conflicts: [],
+    ...overrides,
+  };
+}
+
+export function buildScheduleRun(overrides: Partial<ScheduleRun> = {}): ScheduleRun {
+  return {
+    id: "run-1",
+    status: "SUCCEEDED",
+    rangeStart: "2026-09-07",
+    rangeEnd: "2026-09-13",
+    branchCode: "COLOMBO",
+    progressPercent: 100,
+    visitsConsidered: 40,
+    visitsScheduled: 38,
+    visitsUnassigned: 2,
+    isPublished: false,
+    publishedAt: null,
+    supersededByRunId: null,
+    cancelRequested: false,
+    errorCode: null,
+    errorMessage: null,
+    startedAt: "2026-08-31T00:00:05.000Z",
+    finishedAt: "2026-08-31T00:00:15.000Z",
+    createdAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildAssignmentLock(overrides: Partial<AssignmentLock> = {}): AssignmentLock {
+  return {
+    id: "lock-1",
+    assignmentId: "assignment-1",
+    scope: "CREW",
+    lockedByUserId: "user-1",
+    reason: null,
+    releasedAt: null,
+    createdAt: "2026-08-31T00:00:00.000Z",
+    updatedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,
   };
 }
