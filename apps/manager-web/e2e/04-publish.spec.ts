@@ -4,12 +4,17 @@ import { test, expect } from "@playwright/test";
  * Starts a real optimizer run against the real scheduler service, waits for
  * it to leave QUEUED/RUNNING, then publishes it. This is the slowest spec in
  * the suite by a wide margin — CP-SAT over a real week of agreements is
- * real computation, not a mock resolving instantly — so its timeout is
- * generous on purpose. Watching a run reach 100% here is also what proves
- * the schedule-history page's poll-on-refresh behaviour actually reflects
- * server truth, not stale client state.
+ * real computation, not a mock resolving instantly. Watching a run reach
+ * 100% here is also what proves the schedule-history page's
+ * poll-on-refresh behaviour actually reflects server truth, not stale
+ * client state.
  */
 test("starts a schedule run, watches it finish, and publishes it", async ({ page }) => {
+  // The suite's default (playwright.config.ts) is 30s, sized for the other
+  // specs — this is the one test that genuinely needs minutes, for a real
+  // optimizer search plus write-back, not a mock resolving instantly.
+  test.setTimeout(180_000);
+
   await page.goto("/schedule-history");
   await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
 

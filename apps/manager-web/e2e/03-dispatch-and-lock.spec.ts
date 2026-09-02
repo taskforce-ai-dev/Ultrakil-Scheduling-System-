@@ -45,7 +45,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
 
 test("visit calendar: locks and releases a visit", async ({ page }) => {
   await page.goto("/visits");
-  await expect(page.getByRole("heading", { name: "Visits" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
 
   const visitButton = page.locator('button[aria-label*=" at "][aria-label*=" on "]').first();
   if ((await visitButton.count()) === 0) {

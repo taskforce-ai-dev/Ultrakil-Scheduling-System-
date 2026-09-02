@@ -11,7 +11,7 @@ import { test, expect } from "@playwright/test";
  */
 test("previews visit generation for the current month, then confirms it", async ({ page }) => {
   await page.goto("/visits");
-  await expect(page.getByRole("heading", { name: "Visits" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
 
   await page.getByRole("button", { name: "Generate visits" }).click();
 

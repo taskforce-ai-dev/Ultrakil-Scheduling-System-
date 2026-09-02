@@ -30,13 +30,17 @@ test("creates a customer with a site, then a service agreement for it, and sees 
 
   await page.getByRole("button", { name: "Add agreement" }).click();
 
-  await page.getByLabel("Customer").click();
+  // IDs rather than getByLabel: several unrelated controls on this form
+  // (the "override window" checkbox among them) have accessible names that
+  // loosely overlap "Customer"/"Site"/"Job type" once Playwright's
+  // substring label matching is in play.
+  await page.locator("#customerId").click();
   await page.getByRole("option", { name: customerName }).click();
 
-  await page.getByLabel("Site").click();
+  await page.locator("#serviceSiteId").click();
   await page.getByRole("option", { name: siteName }).click();
 
-  await page.getByLabel("Job type").click();
+  await page.locator("#jobTypeId").click();
   // Whatever job types exist for this UltraKIL instance — the first one is
   // enough to prove the agreement pipeline end to end.
   await page.getByRole("option").first().click();
