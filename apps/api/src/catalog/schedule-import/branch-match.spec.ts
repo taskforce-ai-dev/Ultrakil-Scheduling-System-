@@ -61,6 +61,14 @@ describe('decideBranch', () => {
     expect(decideBranch([name, address]).branchCode).toBe(expected);
   });
 
+  it('matches a hyphenated town name, as the workbook sometimes writes it', () => {
+    // Real row from the workbook: "Nuwara- Eliya", not "Nuwara Eliya".
+    const decision = decideBranch(['Nuwara- Eliya']);
+
+    expect(decision.branchCode).toBe(BranchCode.KANDY);
+    expect(decision.confidence).toBe('matched');
+  });
+
   it('falls back to Colombo but says it is uncertain', () => {
     // A name with no recognisable town must never look like a confident match.
     const decision = decideBranch(['J & J Agencies']);
