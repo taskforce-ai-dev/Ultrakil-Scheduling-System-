@@ -18,7 +18,9 @@ setup("authenticate", async ({ page }) => {
 
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  // exact: true — "Password" would otherwise loosely match the "Show
+  // password" visibility-toggle button too (substring match by default).
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page).toHaveURL(/\/dashboard/);
