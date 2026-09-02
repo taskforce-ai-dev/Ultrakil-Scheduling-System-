@@ -92,7 +92,12 @@ export function decideBranch(parts: (string | null | undefined)[]): BranchDecisi
     parts
       .filter((part): part is string => Boolean(part))
       .join(' ')
-      .toLowerCase(),
+      .toLowerCase()
+      // Hand-typed sheets punctuate town names inconsistently — "Nuwara-
+      // Eliya" for "Nuwara Eliya" — so a hyphen is treated as a space before
+      // matching, the same as one already-normal word break.
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' '),
   );
 
   // Kandy is checked first: its list is far smaller and more specific, and a
