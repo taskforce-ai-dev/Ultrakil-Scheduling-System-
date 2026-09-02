@@ -15,6 +15,7 @@
     "db:seed": "node scripts/with-env.mjs tsx prisma/seed.ts",
     "db:seed:demo": "node scripts/with-env.mjs tsx prisma/seed-demo.ts",
     "schedule:import": "node scripts/with-env.mjs tsx scripts/import-schedule.ts",
+    "why-no-crew": "node scripts/with-env.mjs tsx scripts/why-no-crew.ts",
     "openapi:generate": "node scripts/with-env.mjs tsx scripts/generate-openapi.ts",
     "lint": "eslint \"{src,test,scripts,prisma}/**/*.ts\" --max-warnings 0",
     "typecheck": "tsc --noEmit -p tsconfig.json",

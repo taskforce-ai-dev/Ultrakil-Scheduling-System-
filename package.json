@@ -2,7 +2,7 @@
   "name": "ultrakil-scheduling-system",
   "version": "0.1.0",
   "private": true,
-  "description": "UltraKIL scheduling and dispatching system — Phase 1 pilot",
+  "description": "UltraKIL scheduling and dispatching system \u2014 Phase 1 pilot",
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
@@ -23,6 +23,7 @@
     "db:seed": "pnpm --filter @ultrakil/api db:seed",
     "db:seed:demo": "pnpm --filter @ultrakil/api db:seed:demo",
     "schedule:import": "pnpm --filter @ultrakil/api schedule:import",
+    "why-no-crew": "pnpm --filter @ultrakil/api why-no-crew",
     "contracts:generate": "pnpm --filter @ultrakil/api openapi:generate && pnpm --filter @ultrakil/api-contracts generate"
   },
   "devDependencies": {
