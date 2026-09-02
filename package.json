@@ -16,6 +16,7 @@
     "dev:scheduler": "node scripts/dev-scheduler.mjs",
     "build": "pnpm --filter @ultrakil/api build && pnpm --filter @ultrakil/api-contracts build",
     "test": "pnpm --filter @ultrakil/api test",
+    "test:e2e": "pnpm --filter @ultrakil/manager-web test:e2e",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "db:migrate": "pnpm --filter @ultrakil/api db:migrate",
