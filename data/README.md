@@ -28,6 +28,7 @@ in git history.
 | `job-types.json` | No (optional) | Job type reference data taken from the signed proposal. |
 | `master-schedule-2026.xlsx` | No | UltraKIL's real master schedule: customers, sites, addresses and the visits planned for the year. Ask the Project Lead. |
 | `master-schedule-import-report.json` | No | Written by the import. Quotes real customer and site names back at you, so it is ignored too. |
+| `uncertain-branch-sites.csv` | No | Written by `pnpm schedule:uncertain-branches`. Every site the branch match could not place in Colombo or Kandy, for review. |
 
 ## Two things the workbook does not say — both now answered
 
@@ -134,7 +135,14 @@ a list of Central Province towns (Kandy, Peradeniya, Gampola, Matale, Nuwara
 Eliya and the rest) and Western Province ones, using its name, address and
 region together. A site matching neither is put in Colombo and **reported as
 uncertain**, never quietly assumed, because branch isolation is a hard
-scheduling rule.
+scheduling rule. Only a count of these is printed by the import itself; run
+
+```bash
+pnpm schedule:uncertain-branches
+```
+
+to write every uncertain site's name, address and region to
+`data/uncertain-branch-sites.csv` for review.
 
 One trap worth knowing: Sri Lankan addresses are full of roads named after the
 town they lead to. "315F, Kandy Road, Kadawatha" is in the Western Province,
