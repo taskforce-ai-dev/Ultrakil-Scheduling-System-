@@ -52,6 +52,30 @@ const RANGE = { from: '2027-03-01', to: '2027-03-07' };
 /** Only this suite's own visits, so a shared database cannot skew a count. */
 let agreementIds: string[] = [];
 
+/**
+ * Removes the fixture graph this suite creates: its agreements, sites,
+ * customers and job types, matched by the `C06` naming every one of them uses.
+ *
+ * Cleaning up employees and users was not enough. Each run also left an
+ * agreement behind, and an agreement keeps generating visits into the test week
+ * long after the run that made it — a dev database that had seen a few dozen
+ * runs held 133 of them, all on the same Wednesday at 09:00. The week then has
+ * more work than the branch has staff, and the suite fails on the no-overlap
+ * rule working exactly as intended. CI never sees this: its database is new
+ * every time, which is precisely why the leak survived.
+ *
+ * Run before as well as after, so a database already carrying the residue of
+ * older runs heals itself rather than staying broken until someone drops it.
+ */
+async function clearFixtures(): Promise<void> {
+  const ownCustomer = { customer: { name: { startsWith: 'C06 Customer' } } };
+
+  await prisma.serviceAgreement.deleteMany({ where: { serviceSite: ownCustomer } });
+  await prisma.serviceSite.deleteMany({ where: ownCustomer });
+  await prisma.customer.deleteMany({ where: { name: { startsWith: 'C06 Customer' } } });
+  await prisma.jobType.deleteMany({ where: { code: { startsWith: 'C06_' } } });
+}
+
 async function login(email: string, password: string): Promise<string> {
   const res = await request(http).post('/api/auth/login').send({ email, password });
   expect(res.status).toBe(200);
@@ -124,6 +148,7 @@ beforeAll(async () => {
   runs = app.get(ScheduleRunService);
 
   await prisma.$connect();
+  await clearFixtures();
   for (const code of [BranchCode.COLOMBO, BranchCode.KANDY]) {
     await prisma.branch.upsert({
       where: { code },
@@ -218,6 +243,7 @@ afterAll(async () => {
       ],
     },
   });
+  await clearFixtures();
   await prisma.employee.deleteMany({ where: { id: { in: ids } } });
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
   await prisma.$disconnect();
