@@ -24,6 +24,7 @@
     "db:seed:demo": "pnpm --filter @ultrakil/api db:seed:demo",
     "schedule:import": "pnpm --filter @ultrakil/api schedule:import",
     "schedule:uncertain-branches": "pnpm --filter @ultrakil/api schedule:uncertain-branches",
+    "schedule:skipped-agreements": "pnpm --filter @ultrakil/api schedule:skipped-agreements",
     "contracts:generate": "pnpm --filter @ultrakil/api openapi:generate && pnpm --filter @ultrakil/api-contracts generate"
   },
   "devDependencies": {

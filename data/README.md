@@ -29,6 +29,7 @@ in git history.
 | `master-schedule-2026.xlsx` | No | UltraKIL's real master schedule: customers, sites, addresses and the visits planned for the year. Ask the Project Lead. |
 | `master-schedule-import-report.json` | No | Written by the import. Quotes real customer and site names back at you, so it is ignored too. |
 | `uncertain-branch-sites.csv` | No | Written by `pnpm schedule:uncertain-branches`. Every site the branch match could not place in Colombo or Kandy, for review. |
+| `skipped-agreement-rows.csv` | No | Written by `pnpm schedule:skipped-agreements`. Every agreement row the import skipped, one line per row with every reason together — the console report groups by reason instead, so a row missing two things shows up twice there. |
 
 ## Two things the workbook does not say — both now answered
 
