@@ -65,15 +65,21 @@ test("visit calendar: locks and releases a visit", async ({ page }) => {
   ).toBeVisible({ timeout: 10_000 });
 
   // The success toast from that click sits over this same footer button
-  // (bottom-positioned, same as the drawer's own footer) until it clears,
-  // which otherwise blocks the very next click for as long as it's visible.
+  // (bottom-positioned, same as the drawer's own footer). Sonner pauses a
+  // toast's auto-dismiss timer while the pointer is over it, and Playwright's
+  // virtual cursor is left sitting exactly there after the click above — so
+  // waiting alone never resolves it. Moving the pointer away first lets the
+  // timer actually run; forcing the click after is a guaranteed fallback,
+  // since the button underneath is genuinely there and enabled the whole
+  // time — only the toast's own hover-pause is in the way, not the app.
+  await page.mouse.move(0, 0);
   await page.locator('[data-sonner-toast]').first().waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
 
   // Leave the visit as it was found — this spec observes state, it doesn't
   // decide for the manager whether a real visit should end up locked.
   await page
     .getByRole("button", { name: wasLocked ? "Lock this visit" : "Release this visit" })
-    .click();
+    .click({ force: true });
   await expect(
     page.getByRole("button", { name: wasLocked ? "Release this visit" : "Lock this visit" })
   ).toBeVisible({ timeout: 10_000 });
