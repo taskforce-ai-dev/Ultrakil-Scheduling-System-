@@ -90,8 +90,81 @@ export type VisitQuery = NonNullable<
 export type Conflict = components["schemas"]["ConflictDto"];
 export type ConflictCode = Conflict["code"];
 export type Assignment = components["schemas"]["AssignmentDto"];
+export type AssignmentStatus = Assignment["status"];
 export type UnassignedVisit = components["schemas"]["UnassignedVisitDto"];
 export type PaginatedUnassignedVisits = components["schemas"]["PaginatedUnassignedVisitsDto"];
+export type EligibilityResult = components["schemas"]["EligibilityResultDto"];
+export type CrewRole = Assignment["crew"][number]["role"];
+
+/**
+ * Hand-typed request body — `AssignCrewDto` at
+ * `apps/api/src/scheduling/eligibility/dto.ts`. Used for both the dry-run
+ * check and the real assign; `reason` is optional server-side but the UI
+ * requires it whenever this represents a manual override (ULK-O06).
+ */
+export interface AssignCrewRequest {
+  plannedStartMinute: number;
+  plannedEndMinute: number;
+  crew: Array<{ employeeId: string; role?: CrewRole }>;
+  vehicles?: Array<{ vehicleId: string; driverEmployeeId?: string }>;
+  reason?: string;
+}
+
+/* -------------------------------------------------------------------------
+ * Schedule runs, locks and publishing (ULK-C06)
+ * ---------------------------------------------------------------------- */
+
+export type ScheduleRun = components["schemas"]["ScheduleRunDto"];
+export type ScheduleRunStatus = ScheduleRun["status"];
+export type PaginatedScheduleRuns = components["schemas"]["PaginatedScheduleRunsDto"];
+
+export type LockScope = "FULL" | "CREW" | "SUPERVISOR" | "VEHICLE" | "TIME";
+
+/**
+ * Hand-typed: same recurring gap (`apps/api/nest-cli.json` has no NestJS
+ * Swagger CLI `plugins` entry, so handlers without an explicit `@ApiBody`
+ * publish no request-body schema) plus one more here — `lock`/`unlock` in
+ * `apps/api/src/scheduling/optimizer/schedule-runs.controller.ts` return the
+ * `AssignmentLock` row directly but carry no `@ApiResponse({ type: ... })`,
+ * so the response body types as `never` too. Matches
+ * `apps/api/prisma/schema.prisma`'s `AssignmentLock` model.
+ */
+export interface AssignmentLock {
+  id: string;
+  assignmentId: string;
+  scope: LockScope;
+  lockedByUserId: string | null;
+  reason: string | null;
+  releasedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LockAssignmentRequest {
+  scope: LockScope;
+  reason?: string;
+}
+
+/** `StartScheduleRunDto` — same request-body gap as above. */
+export interface StartScheduleRunRequest {
+  from: string;
+  to: string;
+  branchCode?: "COLOMBO" | "KANDY";
+  timeLimitSeconds?: number;
+}
+
+/** `ScheduleRunQueryDto` — the query gap, same pattern as `UnassignedVisitsQuery`. */
+export interface ScheduleRunQuery {
+  page?: number;
+  pageSize?: number;
+  status?: ScheduleRunStatus;
+  ids?: string[];
+}
+
+/** `PublishScheduleDto` — same request-body gap. */
+export interface PublishScheduleRequest {
+  reason?: string;
+}
 /**
  * Hand-typed: the published contract has no `path`/`query` types for
  * `/api/unassigned-visits` (same gap as elsewhere — see the note above
@@ -514,4 +587,100 @@ export function fetchUnassignedVisits(
   return request<PaginatedUnassignedVisits>(
     `/unassigned-visits${buildQuery(query as Record<string, unknown> | undefined)}`
   );
+}
+
+/**
+ * Would this crew be allowed on the visit? Writes nothing. Returns every
+ * conflict, not just the first, so a manual replacement can be validated
+ * before it's saved.
+ */
+export function checkAssignment(
+  visitId: string,
+  dto: AssignCrewRequest
+): Promise<EligibilityResult> {
+  return request<EligibilityResult>(`/visits/${visitId}/assignment/check`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+/**
+ * Sets the crew and vehicles on a visit — replaces any existing live
+ * assignment, which is how a supervisor/crew/vehicle "replacement" is done.
+ * Refused (409 ASSIGNMENT_NOT_ELIGIBLE) if any hard rule fails; refused
+ * (409 RESOURCE_CONFLICT) if the current assignment is already published.
+ */
+export function assignCrew(visitId: string, dto: AssignCrewRequest): Promise<Assignment> {
+  return request<Assignment>(`/visits/${visitId}/assignment`, { method: "PUT", body: dto });
+}
+
+/** Takes the crew off a visit. Refused while published or locked. */
+export function unassignVisit(visitId: string): Promise<void> {
+  return request<void>(`/visits/${visitId}/assignment`, { method: "DELETE" });
+}
+
+/**
+ * Pins part of an assignment (`FULL`, `CREW`, `SUPERVISOR`, `VEHICLE` or
+ * `TIME`) so the next schedule run keeps it exactly as it is.
+ *
+ * Known gap: nothing in the published contract or the response of this call
+ * lets a client later ask "which scopes are locked on assignment X" — the
+ * only read signal is `Assignment.isLocked`, a single boolean covering any
+ * scope. Flagged in the PR; the fix is for `AssignmentDto` to include the
+ * live `locks: AssignmentLock[]` for an assignment.
+ */
+export function lockAssignment(
+  assignmentId: string,
+  dto: LockAssignmentRequest
+): Promise<AssignmentLock> {
+  return request<AssignmentLock>(`/assignments/${assignmentId}/lock`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+export function unlockAssignment(
+  assignmentId: string,
+  scope: LockScope
+): Promise<AssignmentLock> {
+  return request<AssignmentLock>(`/assignments/${assignmentId}/unlock`, {
+    method: "POST",
+    body: { scope },
+  });
+}
+
+/**
+ * Queues a solve over a date range. Returns immediately with a run to poll —
+ * `GET /schedule-runs/:id` — rather than holding the request open.
+ */
+export function startScheduleRun(dto: StartScheduleRunRequest): Promise<ScheduleRun> {
+  return request<ScheduleRun>("/schedule-runs", { method: "POST", body: dto });
+}
+
+export function fetchScheduleRuns(query?: ScheduleRunQuery): Promise<PaginatedScheduleRuns> {
+  return request<PaginatedScheduleRuns>(
+    `/schedule-runs${buildQuery(query as Record<string, unknown> | undefined)}`
+  );
+}
+
+/** Poll this while a run is queued or running — `progressPercent` moves as it goes. */
+export function fetchScheduleRun(id: string): Promise<ScheduleRun> {
+  return request<ScheduleRun>(`/schedule-runs/${id}`);
+}
+
+/** Asks a queued or running solve to stop. A run that already finished is left as it is. */
+export function cancelScheduleRun(id: string): Promise<ScheduleRun> {
+  return request<ScheduleRun>(`/schedule-runs/${id}/cancel`, { method: "POST", body: {} });
+}
+
+/**
+ * Freezes a finished run: its draft assignments become the published
+ * schedule. Anything published earlier for the same visits is superseded,
+ * never deleted or edited.
+ */
+export function publishScheduleRun(
+  id: string,
+  dto: PublishScheduleRequest = {}
+): Promise<ScheduleRun> {
+  return request<ScheduleRun>(`/schedule-runs/${id}/publish`, { method: "POST", body: dto });
 }

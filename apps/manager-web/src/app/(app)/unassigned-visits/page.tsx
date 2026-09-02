@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CircleDashed, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CircleDashed, ShieldAlert, UserCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import {
   conflictGroup,
   type ConflictGroup,
 } from "@/lib/conflict-groups";
+import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
@@ -62,6 +63,7 @@ export default function UnassignedVisitsPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [selectedVisitId, setSelectedVisitId] = React.useState<string | null>(null);
+  const [assignVisitId, setAssignVisitId] = React.useState<string | null>(null);
 
   const load = React.useCallback(() => {
     setIsLoading(true);
@@ -234,7 +236,7 @@ export default function UnassignedVisitsPage() {
                   )}
                 </div>
 
-                <div className="mt-3">
+                <div className="mt-3 flex gap-2">
                   <Button
                     type="button"
                     variant="outline"
@@ -242,6 +244,14 @@ export default function UnassignedVisitsPage() {
                     onClick={() => setSelectedVisitId(visit.visitId)}
                   >
                     View visit details
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setAssignVisitId(visit.visitId)}
+                  >
+                    <UserCog className="h-3.5 w-3.5" aria-hidden="true" />
+                    Assign crew
                   </Button>
                 </div>
               </li>
@@ -253,6 +263,12 @@ export default function UnassignedVisitsPage() {
       <VisitDetailDrawer
         visitId={selectedVisitId}
         onOpenChange={(open) => !open && setSelectedVisitId(null)}
+        onChanged={load}
+      />
+
+      <AssignmentEditorDrawer
+        visitId={assignVisitId}
+        onOpenChange={(open) => !open && setAssignVisitId(null)}
         onChanged={load}
       />
     </div>

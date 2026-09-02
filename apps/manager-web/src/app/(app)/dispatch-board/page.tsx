@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { AlertTriangle, ChevronLeft, ChevronRight, ShieldAlert, UserX } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, ShieldAlert, UserCog, UserX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,7 @@ import {
   type Visit,
 } from "@/lib/api-client";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
+import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
@@ -45,10 +46,9 @@ const BRANCH_LABELS: Record<BranchFilter, string> = {
 };
 
 /**
- * Read-only: this shows who is on each visit today, it does not propose or
- * change a crew. Building a crew there so a manager can check it against the
- * eligibility engine (`POST /visits/:id/assignment/check`) is separate work —
- * out of scope here, see the PR description.
+ * Who is on each visit today, with a direct path to change it: "Edit crew"
+ * opens the same override workflow the Unassigned queue uses (ULK-O06),
+ * validated against the eligibility engine before anything is saved.
  *
  * Nothing on this board may suggest a visit is staffed before an assignment
  * exists: every row states its supervisor/crew/vehicle explicitly, including
@@ -62,6 +62,7 @@ export default function DispatchBoardPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [selectedVisitId, setSelectedVisitId] = React.useState<string | null>(null);
+  const [editVisitId, setEditVisitId] = React.useState<string | null>(null);
 
   const load = React.useCallback(() => {
     setIsLoading(true);
@@ -194,6 +195,7 @@ export default function DispatchBoardPage() {
               <TableHead>Crew</TableHead>
               <TableHead>Vehicle</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="sr-only">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -275,6 +277,17 @@ export default function DispatchBoardPage() {
                       )}
                     </div>
                   </TableCell>
+                  <TableCell>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setEditVisitId(visit.id)}
+                    >
+                      <UserCog className="h-3 w-3" aria-hidden="true" />
+                      Edit crew
+                    </Button>
+                  </TableCell>
                 </TableRow>
               );
             })}
@@ -285,6 +298,12 @@ export default function DispatchBoardPage() {
       <VisitDetailDrawer
         visitId={selectedVisitId}
         onOpenChange={(open) => !open && setSelectedVisitId(null)}
+        onChanged={load}
+      />
+
+      <AssignmentEditorDrawer
+        visitId={editVisitId}
+        onOpenChange={(open) => !open && setEditVisitId(null)}
         onChanged={load}
       />
     </div>
