@@ -1,7 +1,10 @@
 import { MapPin, ShieldCheck, Lock, CheckCircle2, XCircle, Car } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { BranchCode, DeploymentType } from "@/lib/mock-data/types";
+import type { Employee, Vehicle } from "@/lib/api-client";
+
+type BranchCode = NonNullable<Vehicle["branchCode"]>;
+type DeploymentType = Employee["deploymentType"];
 
 /**
  * Every badge here pairs an icon with a text label — status is never shown

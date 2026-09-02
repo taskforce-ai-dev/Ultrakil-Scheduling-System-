@@ -1,6 +1,7 @@
 import type {
   Assignment,
   AssignmentLock,
+  AuthorizedDrivers,
   Conflict,
   Customer,
   EligibilityResult,
@@ -60,6 +61,17 @@ export function buildEmployee(overrides: Partial<Employee> = {}): Employee {
     availability: [],
     createdAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildAuthorizedDrivers(
+  overrides: Partial<AuthorizedDrivers> = {}
+): AuthorizedDrivers {
+  return {
+    vehicle: { id: "vehicle-1", code: "253-4289", label: "Van( 04 People) 253-4289", seatCapacity: 4 },
+    drivers: [],
+    total: 0,
     ...overrides,
   };
 }

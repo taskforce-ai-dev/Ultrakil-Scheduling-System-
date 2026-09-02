@@ -404,6 +404,10 @@ export function fetchVehicles(query?: VehicleQuery): Promise<PaginatedVehicles> 
   return request<PaginatedVehicles>(`/vehicles${buildQuery(query)}`);
 }
 
+export function fetchVehicle(id: string): Promise<Vehicle> {
+  return request<Vehicle>(`/vehicles/${id}`);
+}
+
 /**
  * Everyone authorised to drive this vehicle, straight from the workforce
  * matrix checkmarks. Says nothing about ownership or a usual driver.
