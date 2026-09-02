@@ -123,7 +123,9 @@ export function parseFrequency(raw: string | null | undefined): FrequencyOutcome
   // matched by name rather than reconstructed from a count.
   const CYCLES: [RegExp, ParsedFrequency][] = [
     [/fortnight|bi-?weekly|every (two|2) weeks?/, { count: 1, unit: FrequencyUnit.WEEK, interval: 2 }],
-    [/quarter/, { count: 1, unit: FrequencyUnit.MONTH, interval: 3 }],
+    // "Quaterly" is a common misspelling in the workbook — the missing "r" is
+    // consistent enough (not a one-off typo) that it is worth recognising.
+    [/quarter|quaterly/, { count: 1, unit: FrequencyUnit.MONTH, interval: 3 }],
     [
       /once in (two|2) month|every (two|2) months?|bi-?month/,
       { count: 1, unit: FrequencyUnit.MONTH, interval: 2 },

@@ -56,6 +56,8 @@ describe('parseFrequency', () => {
     ['Once in Two Months', 1, FrequencyUnit.MONTH, 2],
     ['Once in 2 Months', 1, FrequencyUnit.MONTH, 2],
     ['Quarterly', 1, FrequencyUnit.MONTH, 3],
+    // Real row from the workbook: "Quaterly", not "Quarterly".
+    ['Quaterly', 1, FrequencyUnit.MONTH, 3],
   ])('reads %s as %i per %s every %i', (source, count, unit, interval) => {
     const result = parseFrequency(source);
 
