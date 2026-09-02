@@ -361,7 +361,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     });
   }
 
-  return response.json() as Promise<T>;
+  // A 200 with a genuinely empty body (as opposed to 204, already handled
+  // above) still needs to resolve to "nothing" rather than throw — Response
+  // .json() rejects on empty input, and that raw parse error isn't an
+  // ApiError, so it would otherwise surface to the user as an unexplained
+  // "Something went wrong" instead of the empty result the endpoint meant.
+  const text = await response.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 /* -------------------------------------------------------------------------
