@@ -15,7 +15,11 @@ test("previews visit generation for the current month, then confirms it", async 
 
   await page.getByRole("button", { name: "Generate visits" }).click();
 
-  await expect(page.getByText("Generate visits")).toBeVisible();
+  // The trigger button also reads "Generate visits" and stays in the
+  // accessibility tree while the drawer is open (unlike the modal Dialog
+  // elsewhere in the app, this Sheet does not hide background content), so
+  // this must be scoped to the drawer's own heading specifically.
+  await expect(page.getByRole("heading", { name: "Generate visits" })).toBeVisible();
   // Never a blank drawer: either the impact loaded, or a real error explains
   // why it did not — both are acceptable outcomes for this API call, an
   // indefinite spinner or a silent blank panel are not.

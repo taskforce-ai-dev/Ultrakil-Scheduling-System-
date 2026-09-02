@@ -49,7 +49,13 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   // job type got picked, and it is a hard constraint the model can express
   // directly — no ambiguity for the API to reject.
   for (const day of ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"]) {
-    await page.locator(`#allowed-${day}`).check();
+    // The checkbox's real (accessible, label-associated) element is a
+    // visually-hidden native input — base-ui puts the id there, not on the
+    // visible styled control — so Playwright's viewport check can never
+    // find it in frame. Clicking the label is what a real user does, and
+    // native <label for> click-forwarding reaches the hidden input
+    // regardless of how it's visually hidden.
+    await page.locator(`label[for="allowed-${day}"]`).click();
   }
 
   const today = new Date().toISOString().slice(0, 10);
