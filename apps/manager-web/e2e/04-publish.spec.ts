@@ -23,6 +23,18 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
     timeout: 15_000,
   });
 
+  // A hard reload — new page load, no client state survives it — is the
+  // literal ULK-O07 requirement ("preserve scheduler-run progress across
+  // refresh"), not just the polling this page already does in place. The
+  // API has no push channel (see page.tsx's top comment), so the only way
+  // this can work is the page re-fetching current truth on mount; a stale
+  // client would show nothing, an error, or a run stuck at its pre-reload
+  // percentage.
+  await page.reload();
+  await expect(page.getByText(/Running — \d+%|Draft — ready to publish/).first()).toBeVisible({
+    timeout: 15_000,
+  });
+
   // Poll for the run to settle. A real CP-SAT search can run for the
   // configured time limit (20s default here) plus write-back time.
   await expect(page.getByText("Draft — ready to publish").first()).toBeVisible({
