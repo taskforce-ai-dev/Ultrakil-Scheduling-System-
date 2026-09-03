@@ -25,9 +25,40 @@ class VisitInput(BaseModel):
     required_crew_size: int
     required_skill_codes: list[str] = Field(default_factory=list)
     service_site_id: str
+    """Which commitment this visit satisfies. Two visits of the same agreement
+    are the same job at the same site, so they never share a day."""
+    service_agreement_id: str = ""
     """Set by ULK-C04 when the date fell on a preferred weekday, not merely an
     allowed one. A soft preference: worth a nudge, never a refusal."""
     is_preferred_day: bool = False
+    """Every legal date and time this visit could take, when the caller is
+    willing to let the solver move it.
+
+    Left empty the visit is pinned exactly where it is — which is what a
+    published or time-locked visit sends, and what keeps a caller that knows
+    nothing about slots behaving as it always did. Given candidates, the visit
+    lands on whichever one produces the best schedule overall, and the date it
+    was generated on carries no weight of its own."""
+    candidate_slots: list[CandidateSlot] = Field(default_factory=list)
+
+
+class CandidateSlot(BaseModel):
+    """One legal place a visit could go: a date, and the earliest and latest it
+    could start on that date.
+
+    The API works these out, because only it knows the agreement's allowed
+    weekdays and the site's opening hours for each of them. The solver's job is
+    to choose between them — which is the whole point of ULK-C09's successor
+    change: date, time, crew and vehicle decided together instead of the date
+    being fixed first and the crew squeezed in around it.
+    """
+
+    date: str
+    earliest_start_minute: int
+    latest_start_minute: int
+    """True when this date falls on a weekday the customer prefers rather than
+    merely allows. A soft preference, scored, never enforced."""
+    is_preferred: bool = False
 
 
 class EmployeeInput(BaseModel):
@@ -92,6 +123,9 @@ class AssignmentOutput(BaseModel):
     employee_ids: list[str]
     vehicles: list[VehicleAssignmentOutput] = Field(default_factory=list)
     start_minute: int
+    """The date the solver settled on. Equal to the visit's own date when it was
+    pinned; possibly a different allowed weekday when it was free to move."""
+    scheduled_date: str
 
 
 class UnassignedOutput(BaseModel):
