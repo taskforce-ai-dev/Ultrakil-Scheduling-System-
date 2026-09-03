@@ -90,6 +90,27 @@ describe("ServiceAgreementsPage", () => {
     expect(screen.getByLabelText("Customer")).toHaveFocus();
   });
 
+  it("excludes an inactive site from the picker, even for an active customer (ULK-O09)", async () => {
+    const inactiveSite = buildServiceSite({
+      id: "site-inactive",
+      customerId: "customer-1",
+      name: "Closed Warehouse",
+      isActive: false,
+    });
+    vi.mocked(fetchCustomers).mockResolvedValue({
+      items: [{ ...customer, sites: [site, inactiveSite] }],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Site"));
+
+    expect(await screen.findByRole("option", { name: site.name })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Closed Warehouse" })).not.toBeInTheDocument();
+  });
+
   it("requires a start date before saving", async () => {
     const user = await openForm();
 

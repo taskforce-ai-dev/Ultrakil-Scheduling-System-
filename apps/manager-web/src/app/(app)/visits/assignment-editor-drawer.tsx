@@ -251,6 +251,56 @@ export function AssignmentEditorDrawer({
     [vehicles]
   );
 
+  // Every employee currently on the crew, regardless of the role they're
+  // listed under — a supervisor or technician can just as well be the
+  // vehicle's driver. This is the "checked crew member" half of the ULK-O09
+  // rule: a driver must be authorized for the vehicle (driversByVehicle,
+  // below) *and* actually on this visit's crew.
+  const crewEmployeeIds = React.useMemo(
+    () => new Set(crewRows.map((row) => row.employeeId).filter(Boolean)),
+    [crewRows]
+  );
+
+  // Fetch (and cache) authorized drivers for every vehicle currently on the
+  // form — not just one freshly chosen via onVehicleChosen below, so a
+  // vehicle row hydrated from an existing assignment gets its driver options
+  // too, without waiting for the manager to reselect it.
+  React.useEffect(() => {
+    for (const row of vehicleRows) {
+      if (row.vehicleId && !driversByVehicle[row.vehicleId]) {
+        fetchAuthorizedDrivers(row.vehicleId)
+          .then((drivers) =>
+            setDriversByVehicle((current) => ({ ...current, [row.vehicleId]: drivers }))
+          )
+          .catch(() => {
+            /* The driver dropdown just stays empty; the eligibility check
+             * still catches an unauthorized driver either way. */
+          });
+      }
+    }
+  }, [vehicleRows, driversByVehicle]);
+
+  // If the crew changes — someone is removed, or a row's employee is swapped
+  // — any vehicle row whose driver is no longer on the crew has to be
+  // cleared. Otherwise a manager could save a driver who a moment ago was
+  // valid (on the crew) but silently no longer is, which the driver <Select>
+  // below would still show as selected even though it's no longer offered.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  React.useEffect(() => {
+    setVehicleRows((rows) => {
+      const needsClearing = rows.some(
+        (row) => row.driverEmployeeId && !crewEmployeeIds.has(row.driverEmployeeId)
+      );
+      if (!needsClearing) return rows;
+      return rows.map((row) =>
+        row.driverEmployeeId && !crewEmployeeIds.has(row.driverEmployeeId)
+          ? { ...row, driverEmployeeId: "" }
+          : row
+      );
+    });
+  }, [crewEmployeeIds]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   const proposal = React.useMemo(
     () => ({
       plannedStartMinute: startMinute,
@@ -309,19 +359,12 @@ export function AssignmentEditorDrawer({
   }
 
   function onVehicleChosen(key: string, vehicleId: string) {
+    // Driver eligibility is vehicle-specific, so switching vehicles always
+    // clears the driver — the authorized-drivers fetch itself is handled by
+    // the effect above, which watches vehicleRows.
     setVehicleRows((rows) =>
       rows.map((row) => (row.key === key ? { ...row, vehicleId, driverEmployeeId: "" } : row))
     );
-    if (vehicleId && !driversByVehicle[vehicleId]) {
-      fetchAuthorizedDrivers(vehicleId)
-        .then((drivers) =>
-          setDriversByVehicle((current) => ({ ...current, [vehicleId]: drivers }))
-        )
-        .catch(() => {
-          /* The driver dropdown just stays empty; the eligibility check still
-           * catches an unauthorized driver either way. */
-        });
-    }
   }
 
   async function save() {
@@ -575,8 +618,16 @@ export function AssignmentEditorDrawer({
             <div className="space-y-2">
               {vehicleRows.map((row) => {
                 const drivers = row.vehicleId ? driversByVehicle[row.vehicleId] : undefined;
+                // ULK-O09: offer a driver only if they're both authorized
+                // for this vehicle (a checkmark, per the workforce matrix)
+                // and actually on this visit's crew. Never just "authorized
+                // for the vehicle" — that would let a manager assign someone
+                // who isn't part of this visit at all.
+                const eligibleDrivers = (drivers?.drivers ?? []).filter((driver) =>
+                  crewEmployeeIds.has(driver.id)
+                );
                 const driverLabels = Object.fromEntries(
-                  (drivers?.drivers ?? []).map((driver) => [driver.id, driver.fullName])
+                  eligibleDrivers.map((driver) => [driver.id, driver.fullName])
                 );
                 return (
                   <div key={row.key} className="flex items-center gap-2">
@@ -608,10 +659,16 @@ export function AssignmentEditorDrawer({
                       }
                     >
                       <SelectTrigger aria-label="Driver" className="w-40">
-                        <SelectValue placeholder="Driver" />
+                        <SelectValue
+                          placeholder={
+                            row.vehicleId && drivers && eligibleDrivers.length === 0
+                              ? "No crew member is authorized"
+                              : "Driver"
+                          }
+                        />
                       </SelectTrigger>
                       <SelectContent>
-                        {(drivers?.drivers ?? []).map((driver) => (
+                        {eligibleDrivers.map((driver) => (
                           <SelectItem key={driver.id} value={driver.id}>
                             {driver.fullName}
                           </SelectItem>

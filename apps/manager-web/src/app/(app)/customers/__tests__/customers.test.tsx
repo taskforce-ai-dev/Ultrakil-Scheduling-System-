@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -117,6 +117,60 @@ describe("CustomersPage", () => {
     expect(await screen.findByText("That customer code is already in use.")).toBeInTheDocument();
     // The form is still open and usable — the name we typed is still there.
     expect(screen.getByLabelText("Customer name")).toHaveValue("Test Customer");
+  });
+
+  it("shows a customer's active vs inactive site counts in text, not colour alone (ULK-O09)", async () => {
+    vi.mocked(fetchCustomers).mockResolvedValue({
+      items: [
+        buildCustomer({
+          id: "customer-3",
+          name: "Starbucks New Jersey",
+          sites: [
+            buildServiceSite({ id: "site-active", name: "Main Kitchen", isActive: true }),
+            buildServiceSite({ id: "site-inactive", name: "Closed Branch", isActive: false }),
+          ],
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<CustomersPage />);
+
+    expect(await screen.findByText("1 active, 1 inactive")).toBeInTheDocument();
+  });
+
+  it("defaults to active customers only, and switching to Inactive re-fetches and labels them in text (ULK-O09)", async () => {
+    const inactiveCustomer = buildCustomer({
+      id: "customer-inactive",
+      name: "Closed Client Ltd",
+      isActive: false,
+      sites: [],
+    });
+    vi.mocked(fetchCustomers).mockImplementation((query) =>
+      Promise.resolve(
+        query?.active === false
+          ? { items: [inactiveCustomer], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingCustomer], total: 1, page: 1, pageSize: 200 }
+      )
+    );
+
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+    // The default view never fetched inactive customers at all.
+    expect(fetchCustomers).toHaveBeenCalledWith(expect.objectContaining({ active: true }));
+
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Inactive" }));
+
+    expect(await screen.findByText("Closed Client Ltd")).toBeInTheDocument();
+    expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
+    expect(fetchCustomers).toHaveBeenCalledWith(expect.objectContaining({ active: false }));
+    // Text label, not colour alone — scoped to the table, since the Status
+    // filter's own (still-mounted) option list can also contain the word.
+    expect(within(screen.getByRole("table")).getByText("Inactive")).toBeInTheDocument();
   });
 
   it("collapses a rapid double-click on Save into a single request", async () => {

@@ -56,11 +56,19 @@ export function PermanentBadge({ deploymentType }: { deploymentType: DeploymentT
   );
 }
 
-export function ActiveStatusBadge({ isActive }: { isActive: boolean }) {
+export function ActiveStatusBadge({
+  isActive,
+  activeLabel = "Available",
+}: {
+  isActive: boolean;
+  /** "Available" reads right for an employee/vehicle; customers and sites
+   * want "Active" instead. Inactive is always just "Inactive". */
+  activeLabel?: string;
+}) {
   return (
     <Badge variant={isActive ? "success" : "outline"}>
       {isActive ? <CheckCircle2 aria-hidden="true" /> : <XCircle aria-hidden="true" />}
-      {isActive ? "Available" : "Inactive"}
+      {isActive ? activeLabel : "Inactive"}
     </Badge>
   );
 }

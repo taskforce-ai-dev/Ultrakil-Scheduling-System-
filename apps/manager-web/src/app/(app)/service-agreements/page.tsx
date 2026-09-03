@@ -167,7 +167,11 @@ export default function ServiceAgreementsPage() {
   const overrideWindow = useWatch({ control, name: "overrideWindow" });
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
-  const sitesForCustomer = selectedCustomer?.sites ?? [];
+  // ULK-O09: an inactive site must never be offered when creating an
+  // agreement, even for an otherwise-active customer — customers.sites is
+  // unfiltered by the API (it's the customer-level `active` param that's
+  // filtered, not the nested sites), so this has to filter client-side.
+  const sitesForCustomer = (selectedCustomer?.sites ?? []).filter((site) => site.isActive);
   const selectedSite: ServiceSite | undefined = sitesForCustomer.find(
     (site) => site.id === serviceSiteId
   );
@@ -239,10 +243,11 @@ export default function ServiceAgreementsPage() {
     setPreviewError(null);
     setSubmitError(null);
     const firstCustomer = customers[0];
+    const firstActiveSite = firstCustomer?.sites.find((site) => site.isActive);
     reset({
       ...defaultValues,
       customerId: firstCustomer?.id ?? "",
-      serviceSiteId: firstCustomer?.sites[0]?.id ?? "",
+      serviceSiteId: firstActiveSite?.id ?? "",
     });
     setDrawerOpen(true);
   }

@@ -11,6 +11,12 @@ export function VehicleDetailView({
   vehicle: Vehicle;
   authorized: AuthorizedDrivers;
 }) {
+  // Alphabetical, not API order: whatever order the backend happens to
+  // return in is otherwise the only thing distinguishing these rows, and a
+  // manager could easily misread "first in the list" as "primary driver" —
+  // exactly what ULK-O09 says this page must never imply.
+  const drivers = [...authorized.drivers].sort((a, b) => a.fullName.localeCompare(b.fullName));
+
   return (
     <div className="space-y-6">
       <div>
@@ -34,14 +40,14 @@ export function VehicleDetailView({
           Every employee listed here is authorized to drive this vehicle — this is not an ownership or
           primary-driver assignment.
         </p>
-        {authorized.drivers.length === 0 ? (
+        {drivers.length === 0 ? (
           <EmptyState
             title="No authorized drivers"
             description="No employee is currently authorized to drive this vehicle."
           />
         ) : (
           <ul className="space-y-2">
-            {authorized.drivers.map((employee) => (
+            {drivers.map((employee) => (
               <li key={employee.id} className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <Link

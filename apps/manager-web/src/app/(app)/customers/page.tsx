@@ -6,6 +6,7 @@ import { Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -28,6 +29,7 @@ import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { SiteHoursEditor, type SiteOperatingHours } from "@/components/shared/site-hours-editor";
 import { Badge } from "@/components/ui/badge";
+import { ActiveStatusBadge } from "@/components/shared/workforce-badges";
 import {
   ApiError,
   createCustomer,
@@ -36,6 +38,8 @@ import {
   type Customer,
 } from "@/lib/api-client";
 import { notify } from "@/lib/notify";
+
+type StatusFilter = "ACTIVE" | "INACTIVE";
 
 type BranchCode = "COLOMBO" | "KANDY";
 
@@ -79,6 +83,13 @@ export default function CustomersPage() {
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+  // The API has no combined mode — omitting `active` (or passing `true`)
+  // returns active customers only, `false` returns inactive-only (see
+  // apps/api/src/catalog/customers.service.ts). This filter is what
+  // "preserve a manager-accessible way to inspect inactive records" means
+  // here: normal browsing (the default) never shows an inactive customer,
+  // and switching to Inactive is a deliberate, separate look.
+  const [status, setStatus] = React.useState<StatusFilter>("ACTIVE");
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   // A ref alongside the state: two submits fired in the same tick (a fast
@@ -99,7 +110,7 @@ export default function CustomersPage() {
   const load = React.useCallback(() => {
     setIsLoading(true);
     setError(null);
-    fetchCustomers({ pageSize: 200 })
+    fetchCustomers({ pageSize: 200, active: status === "ACTIVE" })
       .then((response) => setCustomers(response.items))
       .catch((caught: unknown) => {
         setError(
@@ -109,7 +120,7 @@ export default function CustomersPage() {
         );
       })
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [status]);
 
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
@@ -182,6 +193,21 @@ export default function CustomersPage() {
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
+        <div className="space-y-1.5">
+          <Label htmlFor="customers-status">Status</Label>
+          <Select value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
+            <SelectTrigger id="customers-status" className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ACTIVE">Active</SelectItem>
+              <SelectItem value="INACTIVE">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       {isLoading ? (
         <LoadingState rows={3} />
       ) : error ? (
@@ -193,10 +219,14 @@ export default function CustomersPage() {
         />
       ) : customers.length === 0 ? (
         <EmptyState
-          title="No customers yet"
-          description="Add your first customer to start building service agreements."
-          actionLabel="Add customer"
-          onAction={() => setDrawerOpen(true)}
+          title={status === "ACTIVE" ? "No customers yet" : "No inactive customers"}
+          description={
+            status === "ACTIVE"
+              ? "Add your first customer to start building service agreements."
+              : "Every customer on record is currently active."
+          }
+          actionLabel={status === "ACTIVE" ? "Add customer" : undefined}
+          onAction={status === "ACTIVE" ? () => setDrawerOpen(true) : undefined}
         />
       ) : (
         <Table>
@@ -206,23 +236,37 @@ export default function CustomersPage() {
               <TableHead>Branch</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Sites</TableHead>
+              <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {customers.map((customer) => (
-              <TableRow key={customer.id}>
-                <TableCell className="font-medium">{customer.name}</TableCell>
-                <TableCell>
-                  <Badge variant={customer.branchCode === "COLOMBO" ? "default" : "secondary"}>
-                    {customer.branchCode === "COLOMBO" ? "Colombo" : "Kandy"}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {customer.contactName ?? "—"}
-                </TableCell>
-                <TableCell>{customer.sites.length}</TableCell>
-              </TableRow>
-            ))}
+            {customers.map((customer) => {
+              const activeSites = customer.sites.filter((site) => site.isActive).length;
+              const inactiveSites = customer.sites.length - activeSites;
+              return (
+                <TableRow key={customer.id}>
+                  <TableCell className="font-medium">{customer.name}</TableCell>
+                  <TableCell>
+                    <Badge variant={customer.branchCode === "COLOMBO" ? "default" : "secondary"}>
+                      {customer.branchCode === "COLOMBO" ? "Colombo" : "Kandy"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {customer.contactName ?? "—"}
+                  </TableCell>
+                  <TableCell>
+                    {/* Text, not just a count: an inactive site under an
+                        active customer must be distinguishable without
+                        opening anything or relying on colour. */}
+                    {activeSites} active
+                    {inactiveSites > 0 && `, ${inactiveSites} inactive`}
+                  </TableCell>
+                  <TableCell>
+                    <ActiveStatusBadge isActive={customer.isActive} activeLabel="Active" />
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       )}

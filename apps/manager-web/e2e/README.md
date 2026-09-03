@@ -61,6 +61,7 @@ pnpm exec playwright show-report
 | `04-publish.spec.ts` | Start a schedule run, wait for it to finish, publish it | Nothing beyond agreements existing somewhere in the horizon used |
 | `05-accessibility.spec.ts` | Automated axe-core scan (serious/critical only) of every top-level page, plus the customer/agreement/generation forms and the override/publish dialogs | Runs after 01-04 so those dialogs have real data to open; the override and publish dialog checks skip themselves (not fail) if nothing's there to open |
 | `06-responsive.spec.ts` | No document-level horizontal scroll, and a working nav (fixed sidebar vs. hamburger/Sheet drawer), on every top-level page at a laptop width (1366×768) and a tablet width (768×1024) | Nothing — layout-only, doesn't touch data |
+| `07-vehicle-drivers-and-inactive-clients.spec.ts` | ULK-O09's required scenarios: DAG-3284/ABE-7244/PJ-6796/DAI-0191/DAC-2485 each show all their checked drivers equally (DAC-2485 by name); an inactive customer is labelled in text and excluded from the agreement site picker | The real MASTER SCHEDULE 2026 import (Chanya's ULK-C09) — every test looks its record up first and skips itself, rather than failing, if this environment hasn't imported it yet |
 
 The numeric prefixes are load-bearing, not cosmetic: Playwright walks
 `testDir` in filename order and this suite runs with `workers: 1` (see
