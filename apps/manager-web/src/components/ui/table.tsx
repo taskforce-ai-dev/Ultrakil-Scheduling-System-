@@ -9,6 +9,12 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
     <div
       data-slot="table-container"
       className="relative w-full overflow-x-auto"
+      // A scrollable region needs to be reachable by keyboard on its own —
+      // axe's scrollable-region-focusable rule (only trips once a table is
+      // actually wide enough to scroll, which real imported data now is).
+      // Without this, a keyboard user with no mouse has no way to reach the
+      // table's overflowing columns at all.
+      tabIndex={0}
     >
       <table
         data-slot="table"

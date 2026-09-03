@@ -60,7 +60,7 @@ test("DAC-2485 shows T M Supun Tharaka Wijeweera, S Tharilingam and P Selvaraj e
   await expect(driverRows).toHaveCount(3);
 });
 
-test("an inactive customer is labelled in text and excluded from the agreement site picker (ULK-O09)", async ({
+test("an inactive customer is labelled in text and excluded from the agreement picker (ULK-O09)", async ({
   page,
 }) => {
   await page.goto("/customers");
@@ -71,7 +71,7 @@ test("an inactive customer is labelled in text and excluded from the agreement s
 
   const inactiveRows = page.locator("tbody tr");
   if ((await inactiveRows.count()) === 0) {
-    test.skip(true, "No inactive customers in this environment's imported data yet.");
+    test.skip(true, "No fully-inactive customer in this environment's imported data yet.");
   }
 
   // Text, not colour alone.
@@ -85,4 +85,37 @@ test("an inactive customer is labelled in text and excluded from the agreement s
   await page.getByRole("button", { name: "Add agreement" }).click();
   await page.locator("#customerId").click();
   await expect(page.getByRole("option", { name: customerName! })).toHaveCount(0);
+});
+
+test("an active customer's inactive site is labelled in text and excluded from the agreement site picker (ULK-O09)", async ({
+  page,
+}) => {
+  // The real master schedule mostly marks individual sites "no longer
+  // serviced" under an otherwise-active customer (a closed branch of a
+  // bank, say), rather than deactivating the whole customer — this is the
+  // more common real-world case the test above doesn't cover.
+  await page.goto("/customers");
+  await expect(page.getByRole("heading", { name: "Customers" })).toBeVisible();
+
+  const siteCountCells = page.locator("tbody tr td", { hasText: /inactive/ });
+  if ((await siteCountCells.count()) === 0) {
+    test.skip(true, "No active customer with an inactive site in this environment's data yet.");
+  }
+
+  const row = siteCountCells.first().locator("xpath=ancestor::tr");
+  const customerName = (await row.locator("td").first().textContent())?.trim();
+  const siteCountText = (await siteCountCells.first().textContent()) ?? "";
+  const activeCount = Number(siteCountText.match(/(\d+) active/)?.[1]);
+  expect(customerName).toBeTruthy();
+  expect(activeCount).toBeGreaterThan(0);
+
+  await page.goto("/service-agreements");
+  await page.getByRole("button", { name: "Add agreement" }).click();
+  await page.locator("#customerId").click();
+  await page.getByRole("option", { name: customerName! }).click();
+
+  await page.locator("#serviceSiteId").click();
+  // Only the active sites for this customer are offered — the inactive
+  // one(s) counted in the customer row above are never among them.
+  await expect(page.getByRole("listbox").getByRole("option")).toHaveCount(activeCount);
 });

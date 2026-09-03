@@ -421,6 +421,11 @@ export default function ServiceAgreementsPage() {
             ? "Here's what the system will schedule for it."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
+        // The created-agreement view is a read-only schedule preview (no
+        // form fields) — same scrollable-region-focusable case as the
+        // visit-generation drawer. The form view keeps the default so the
+        // Sheet's autofocus still lands on the first real field.
+        contentTabIndex={Boolean(createdAgreement)}
         footer={
           createdAgreement ? (
             <Button className="w-full" onClick={handleDone}>
