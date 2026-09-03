@@ -69,6 +69,10 @@ export function VisitDetailDrawer({
   const [error, setError] = React.useState<ApiError | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  // A ref alongside the state: two clicks fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isSaving`, so the
+  // state check alone can't stop the second one.
+  const isSavingRef = React.useRef(false);
 
   const load = React.useCallback(() => {
     if (!visitId) return;
@@ -96,6 +100,8 @@ export function VisitDetailDrawer({
 
   async function toggleLock() {
     if (!visit) return;
+    if (isSavingRef.current) return; // Collapses a double-click into one request.
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
       if (visit.isLocked) {
@@ -112,6 +118,7 @@ export function VisitDetailDrawer({
         caught instanceof ApiError ? caught.message : "Could not change the lock."
       );
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   }

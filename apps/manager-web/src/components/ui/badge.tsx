@@ -12,7 +12,10 @@ const badgeVariants = cva(
         secondary: "border-transparent bg-secondary text-secondary-foreground",
         outline: "border-border bg-background text-foreground",
         destructive: "border-transparent bg-destructive/10 text-destructive",
-        success: "border-transparent bg-primary/10 text-primary dark:bg-primary/20",
+        // text-success rather than text-primary: the brand green directly on
+        // its own light tint fails WCAG AA contrast (3.84:1, needs 4.5:1) —
+        // see the --success token in globals.css.
+        success: "border-transparent bg-primary/10 text-success dark:bg-primary/20",
       },
     },
     defaultVariants: {

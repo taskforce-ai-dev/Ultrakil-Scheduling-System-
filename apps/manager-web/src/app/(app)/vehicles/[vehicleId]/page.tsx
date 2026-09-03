@@ -1,18 +1,80 @@
-import Link from "next/link";
+"use client";
+
+import * as React from "react";
 
 import { EmptyState } from "@/components/shared/empty-state";
-import { BranchBadge, ActiveStatusBadge, PmsBadge } from "@/components/shared/workforce-badges";
-import { mockEmployees, mockVehicles } from "@/lib/mock-data";
+import { ErrorState } from "@/components/shared/error-state";
+import { LoadingState } from "@/components/shared/loading-state";
+import {
+  ApiError,
+  fetchAuthorizedDrivers,
+  fetchVehicle,
+  type AuthorizedDrivers,
+  type Vehicle,
+} from "@/lib/api-client";
+import { VehicleDetailView } from "./vehicle-detail-view";
 
-export default async function VehicleDetailPage({
+/**
+ * A client component, not a server one: the access token lives in the
+ * browser's storage, so the server has no way to make an authenticated call on
+ * the visitor's behalf.
+ */
+export default function VehicleDetailPage({
   params,
 }: {
   params: Promise<{ vehicleId: string }>;
 }) {
-  const { vehicleId } = await params;
-  const vehicle = mockVehicles.find((candidate) => candidate.id === vehicleId);
+  const { vehicleId } = React.use(params);
 
-  if (!vehicle) {
+  const [vehicle, setVehicle] = React.useState<Vehicle | null>(null);
+  const [authorized, setAuthorized] = React.useState<AuthorizedDrivers | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<ApiError | null>(null);
+
+  const load = React.useCallback(() => {
+    setIsLoading(true);
+    setError(null);
+    Promise.all([fetchVehicle(vehicleId), fetchAuthorizedDrivers(vehicleId)])
+      .then(([loadedVehicle, loadedAuthorized]) => {
+        setVehicle(loadedVehicle);
+        setAuthorized(loadedAuthorized);
+      })
+      .catch((caught: unknown) => {
+        setError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+        );
+      })
+      .finally(() => setIsLoading(false));
+  }, [vehicleId]);
+
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load();
+  }, [load]);
+
+  if (isLoading) return <LoadingState rows={6} />;
+
+  if (error) {
+    // A missing vehicle is a normal outcome worth its own wording; anything
+    // else is a failure the manager may be able to retry.
+    return error.code === "RESOURCE_NOT_FOUND" ? (
+      <EmptyState
+        title="Vehicle not found"
+        description={`No vehicle matches ID "${vehicleId}". It may have been removed.`}
+      />
+    ) : (
+      <ErrorState
+        title="Couldn't load this vehicle"
+        description={error.message}
+        code={error.code}
+        onRetry={load}
+      />
+    );
+  }
+
+  if (!vehicle || !authorized) {
     return (
       <EmptyState
         title="Vehicle not found"
@@ -21,60 +83,5 @@ export default async function VehicleDetailPage({
     );
   }
 
-  const authorizedDrivers = mockEmployees.filter((employee) =>
-    employee.authorizedVehicleIds.includes(vehicle.id)
-  );
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{vehicle.label}</h1>
-        <p className="text-sm text-muted-foreground">Vehicle code: {vehicle.code}</p>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <BranchBadge branchCode={vehicle.branchCode} />
-        <ActiveStatusBadge isActive={vehicle.isActive} />
-      </div>
-
-      <section className="space-y-2 rounded-xl border bg-card p-4 shadow-sm">
-        <h2 className="text-sm font-medium text-muted-foreground">Seat capacity</h2>
-        <p className="text-lg">{vehicle.seatCapacity ?? "Not recorded"}</p>
-      </section>
-
-      <section className="space-y-3 rounded-xl border bg-card p-4 shadow-sm">
-        <h2 className="text-sm font-medium text-muted-foreground">Authorized drivers</h2>
-        <p className="text-sm text-muted-foreground">
-          Every employee listed here is authorized to drive this vehicle — this is not an ownership or
-          primary-driver assignment.
-        </p>
-        {authorizedDrivers.length === 0 ? (
-          <EmptyState
-            title="No authorized drivers"
-            description="No employee is currently authorized to drive this vehicle."
-          />
-        ) : (
-          <ul className="space-y-2">
-            {authorizedDrivers.map((employee) => (
-              <li key={employee.id} className="flex items-center justify-between rounded-md border p-3">
-                <div>
-                  <Link
-                    href={`/workforce/${employee.id}`}
-                    className="font-medium underline-offset-4 hover:underline"
-                  >
-                    {employee.fullName}
-                  </Link>
-                  <p className="text-sm text-muted-foreground">Authorized to drive</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <PmsBadge isPmsGrade={employee.isPmsGrade} />
-                  <BranchBadge branchCode={employee.branchCode} />
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
-  );
+  return <VehicleDetailView vehicle={vehicle} authorized={authorized} />;
 }

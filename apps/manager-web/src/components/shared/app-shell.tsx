@@ -122,7 +122,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <UserFooter name={user?.fullName} onSignOut={logout} />
       </aside>
 
-      <div className="flex flex-1 flex-col">
+      {/* min-w-0: without it, this flex item's default min-width:auto lets it
+          refuse to shrink below its descendants' min-content width — a wide
+          table's whitespace-nowrap cells (already scrollable in their own
+          overflow-x-auto container) would otherwise escape that container
+          and force the whole page to scroll horizontally. */}
+      <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center gap-3 bg-sidebar px-4 lg:hidden">
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
             <SheetTrigger

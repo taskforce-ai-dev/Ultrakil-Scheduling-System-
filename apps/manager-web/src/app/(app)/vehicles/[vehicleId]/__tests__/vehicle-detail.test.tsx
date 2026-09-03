@@ -1,13 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import VehicleDetailPage from "../page";
+import { VehicleDetailView } from "../vehicle-detail-view";
+import type { AuthorizedDrivers } from "@/lib/api-client";
+import { buildAuthorizedDrivers, buildVehicle } from "@/test/fixtures";
 
-describe("VehicleDetailPage", () => {
-  it("lists every authorized driver for the selected vehicle (acceptance scenario)", async () => {
-    // veh-1 (COL-4521) is authorized for emp-1 (S. Perera) and emp-4 (R. Bandara)
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "veh-1" }) });
-    render(ui);
+const driverS: AuthorizedDrivers["drivers"][number] = {
+  id: "emp-1",
+  fullName: "S. Perera",
+  gradeLabel: "PMS",
+  isPmsGrade: true,
+  branchCode: "COLOMBO",
+  deploymentType: "MOBILE",
+  isActive: true,
+};
+const driverR: AuthorizedDrivers["drivers"][number] = {
+  id: "emp-4",
+  fullName: "R. Bandara",
+  gradeLabel: "Junior PMT",
+  isPmsGrade: false,
+  branchCode: "COLOMBO",
+  deploymentType: "MOBILE",
+  isActive: true,
+};
+
+describe("VehicleDetailView", () => {
+  it("lists every authorized driver for the selected vehicle (acceptance scenario)", () => {
+    render(
+      <VehicleDetailView
+        vehicle={buildVehicle({ id: "veh-1", code: "COL-4521" })}
+        authorized={buildAuthorizedDrivers({ drivers: [driverS, driverR], total: 2 })}
+      />
+    );
 
     expect(screen.getByText("S. Perera")).toBeInTheDocument();
     expect(screen.getByText("R. Bandara")).toBeInTheDocument();
@@ -18,18 +42,27 @@ describe("VehicleDetailPage", () => {
     expect(screen.queryByText(/^owner$/i)).not.toBeInTheDocument();
   });
 
-  it("shows an empty state when a vehicle has no authorized drivers", async () => {
-    // veh-4 (KAN-2004) has no employee authorized for it in the fixtures.
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "veh-4" }) });
-    render(ui);
+  it("shows an empty state when a vehicle has no authorized drivers", () => {
+    render(
+      <VehicleDetailView
+        vehicle={buildVehicle({ id: "veh-4", code: "KAN-2004" })}
+        authorized={buildAuthorizedDrivers({ drivers: [], total: 0 })}
+      />
+    );
 
     expect(screen.getByText("No authorized drivers")).toBeInTheDocument();
   });
 
-  it("shows a not-found message for an unknown vehicle ID", async () => {
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "does-not-exist" }) });
-    render(ui);
+  it("shows the vehicle's seat capacity and branch", () => {
+    render(
+      <VehicleDetailView
+        vehicle={buildVehicle({ label: "Van( 04 People) 253-4289", seatCapacity: 4, branchCode: "KANDY" })}
+        authorized={buildAuthorizedDrivers()}
+      />
+    );
 
-    expect(screen.getByText("Vehicle not found")).toBeInTheDocument();
+    expect(screen.getByText("Van( 04 People) 253-4289")).toBeInTheDocument();
+    expect(screen.getByText("4")).toBeInTheDocument();
+    expect(screen.getByText("Kandy")).toBeInTheDocument();
   });
 });

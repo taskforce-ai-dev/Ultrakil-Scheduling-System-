@@ -137,7 +137,13 @@ export default function ServiceAgreementsPage() {
 
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  // A ref alongside the state: two submits fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isSubmitting`, so the
+  // state check alone can't stop the second one.
+  const isSubmittingRef = React.useRef(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  const [busyAgreementId, setBusyAgreementId] = React.useState<string | null>(null);
+  const busyAgreementIdRef = React.useRef<string | null>(null);
 
   const [createdAgreement, setCreatedAgreement] = React.useState<ServiceAgreement | null>(null);
   const [preview, setPreview] = React.useState<SchedulePreview | null>(null);
@@ -242,6 +248,8 @@ export default function ServiceAgreementsPage() {
   }
 
   async function onSubmit(values: ServiceAgreementFormValues) {
+    if (isSubmittingRef.current) return; // Collapses a double-click into one request.
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
     try {
@@ -283,6 +291,7 @@ export default function ServiceAgreementsPage() {
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   }
@@ -293,6 +302,9 @@ export default function ServiceAgreementsPage() {
   }
 
   async function handleToggleStatus(agreement: ServiceAgreement) {
+    if (busyAgreementIdRef.current) return; // Collapses a double-click into one request.
+    busyAgreementIdRef.current = agreement.id;
+    setBusyAgreementId(agreement.id);
     const nextStatus = agreement.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
     try {
       await changeAgreementStatus(agreement.id, { status: nextStatus });
@@ -300,6 +312,9 @@ export default function ServiceAgreementsPage() {
       load();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not change the status.");
+    } finally {
+      busyAgreementIdRef.current = null;
+      setBusyAgreementId(null);
     }
   }
 
@@ -372,8 +387,17 @@ export default function ServiceAgreementsPage() {
                 </TableCell>
                 <TableCell>
                   {agreement.status !== "ARCHIVED" && (
-                    <Button variant="outline" size="sm" onClick={() => handleToggleStatus(agreement)}>
-                      {agreement.status === "ACTIVE" ? "Pause" : "Resume"}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleToggleStatus(agreement)}
+                      disabled={busyAgreementId === agreement.id}
+                    >
+                      {busyAgreementId === agreement.id
+                        ? "Working…"
+                        : agreement.status === "ACTIVE"
+                          ? "Pause"
+                          : "Resume"}
                     </Button>
                   )}
                 </TableCell>
@@ -477,7 +501,11 @@ export default function ServiceAgreementsPage() {
             </div>
           </div>
         ) : (
-          <form id="agreement-form" onSubmit={handleSubmit(onSubmit)} className="space-y-6 py-4">
+          <form
+            id="agreement-form"
+            onSubmit={(event) => handleSubmit(onSubmit)(event)}
+            className="space-y-6 py-4"
+          >
             {submitError && (
               <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 {submitError}

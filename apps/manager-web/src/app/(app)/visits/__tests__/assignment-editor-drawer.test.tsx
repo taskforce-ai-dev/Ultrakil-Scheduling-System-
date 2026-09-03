@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -235,5 +235,37 @@ describe("AssignmentEditorDrawer", () => {
       await screen.findByText("Only 1 of 2 required crew were proposed.")
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save assignment" })).toBeInTheDocument();
+  });
+
+  it("collapses a rapid double-click on Save into a single request", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    let resolveAssign: (() => void) | undefined;
+    vi.mocked(assignCrew).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAssign = () =>
+            resolve(
+              buildAssignment({
+                crew: [{ employeeId: supervisor.id, fullName: supervisor.fullName, role: "SUPERVISOR", isPmsSupervisor: true }],
+              })
+            );
+        })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Customer requested this crew");
+
+    const button = screen.getByRole("button", { name: "Save assignment" });
+    // Two clicks fired without awaiting between them — a genuine double-click,
+    // not two sequential, fully-settled ones.
+    await userEvent.click(button, { skipHover: true });
+    await userEvent.click(button, { skipHover: true });
+
+    expect(assignCrew).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveAssign?.();
+    });
   });
 });

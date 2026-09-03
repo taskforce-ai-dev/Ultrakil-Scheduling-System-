@@ -43,4 +43,19 @@ describe("api-client", () => {
     await expect(fetchMeta()).rejects.toBeInstanceOf(ApiError);
     await expect(fetchMeta()).rejects.toBeInstanceOf(Error);
   });
+
+  it("resolves to undefined on a 200 with a genuinely empty body, rather than throwing", async () => {
+    // Real example: GET /visits/:id/assignment for an unassigned visit comes
+    // back 200 with a zero-length body instead of 204 or a JSON `null` —
+    // Response.json() rejects on empty input, and an uncaught parse error
+    // isn't an ApiError, so this used to surface as an unexplained
+    // "Something went wrong" instead of "no assignment".
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(""),
+    }) as unknown as typeof fetch;
+
+    await expect(fetchMeta()).resolves.toBeUndefined();
+  });
 });

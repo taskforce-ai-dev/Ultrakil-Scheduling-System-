@@ -35,6 +35,7 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-success: var(--success);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -63,6 +64,12 @@
   --popover-foreground: var(--brand-deep-teal);
   --primary: var(--brand-green);
   --primary-foreground: #ffffff;
+  /* Text-on-tinted-background contexts (the "success" badge) need a darker
+     shade than --brand-green itself: the brand green directly on its own
+     10% tint is only 3.84:1, short of WCAG AA's 4.5:1 for text. Same hue,
+     darker lightness — confirmed at 5.2–5.9:1 against the tints actually in
+     use. */
+  --success: #236c4e;
   --secondary: #e7f1ea;
   --secondary-foreground: var(--brand-dark-teal);
   --muted: #eef4f0;
@@ -98,6 +105,12 @@
   --popover-foreground: #eaf3ec;
   --primary: var(--brand-green);
   --primary-foreground: #ffffff;
+  /* Opposite direction from light mode: on the dark "success" badge tint
+     (--brand-green at 20% over the dark card), --brand-green text itself is
+     only 2.47:1 — worse than light mode, since darker-on-dark loses more
+     contrast than darker-on-light. --brand-sage, already used elsewhere in
+     dark mode for the same reason, measures 5.27:1 here. */
+  --success: var(--brand-sage);
   --secondary: #143b3a;
   --secondary-foreground: #eaf3ec;
   --muted: #123231;

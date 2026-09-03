@@ -147,9 +147,12 @@ export default function ScheduleHistoryPage() {
   const isStartingRef = React.useRef(false);
 
   const [busyRunId, setBusyRunId] = React.useState<string | null>(null);
+  // Same double-click hazard as isStartingRef above, for the cancel button.
+  const busyRunIdRef = React.useRef<string | null>(null);
   const [publishTarget, setPublishTarget] = React.useState<ScheduleRun | null>(null);
   const [publishReason, setPublishReason] = React.useState("");
   const [isPublishing, setIsPublishing] = React.useState(false);
+  const isPublishingRef = React.useRef(false);
 
   const load = React.useCallback(() => {
     setError(null);
@@ -212,6 +215,8 @@ export default function ScheduleHistoryPage() {
   }
 
   async function handleCancel(run: ScheduleRun) {
+    if (busyRunIdRef.current) return; // Collapses a double-click into one request.
+    busyRunIdRef.current = run.id;
     setBusyRunId(run.id);
     try {
       await cancelScheduleRun(run.id);
@@ -220,6 +225,7 @@ export default function ScheduleHistoryPage() {
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not cancel this run.");
     } finally {
+      busyRunIdRef.current = null;
       setBusyRunId(null);
     }
   }
@@ -231,6 +237,8 @@ export default function ScheduleHistoryPage() {
 
   async function confirmPublish() {
     if (!publishTarget) return;
+    if (isPublishingRef.current) return; // Collapses a double-click into one request.
+    isPublishingRef.current = true;
     setIsPublishing(true);
     try {
       await publishScheduleRun(publishTarget.id, {
@@ -242,6 +250,7 @@ export default function ScheduleHistoryPage() {
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not publish this run.");
     } finally {
+      isPublishingRef.current = false;
       setIsPublishing(false);
     }
   }

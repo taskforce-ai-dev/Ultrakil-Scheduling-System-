@@ -23,10 +23,16 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  // A ref alongside the state: two submits fired in the same tick (a fast
+  // double-click, or Enter held down) both close over the same pre-update
+  // `isSubmitting`, so the state check alone can't stop the second one.
+  const isSubmittingRef = React.useRef(false);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!email.trim() || !password) return;
+    if (isSubmittingRef.current) return; // Collapses a double-click into one request.
+    isSubmittingRef.current = true;
 
     setIsSubmitting(true);
     setError(null);
@@ -36,6 +42,7 @@ export default function LoginPage() {
     } catch (caught) {
       setError(describeLoginError(caught));
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   }

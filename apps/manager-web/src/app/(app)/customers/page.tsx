@@ -81,6 +81,10 @@ export default function CustomersPage() {
   const [error, setError] = React.useState<ApiError | null>(null);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  // A ref alongside the state: two submits fired in the same tick (a fast
+  // double-click, or Enter held down) both close over the same pre-update
+  // `isSubmitting`, so the state check alone can't stop the second one.
+  const isSubmittingRef = React.useRef(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
 
   const {
@@ -115,6 +119,8 @@ export default function CustomersPage() {
   }, [load]);
 
   async function onSubmit(values: CustomerFormValues) {
+    if (isSubmittingRef.current) return; // Collapses a double-click into one request.
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
     try {
@@ -158,6 +164,7 @@ export default function CustomersPage() {
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
   }
@@ -231,7 +238,11 @@ export default function CustomersPage() {
           </Button>
         }
       >
-        <form id="customer-form" onSubmit={handleSubmit(onSubmit)} className="space-y-6 py-4">
+        <form
+          id="customer-form"
+          onSubmit={(event) => handleSubmit(onSubmit)(event)}
+          className="space-y-6 py-4"
+        >
           <div className="space-y-4">
             <FormField id="name" label="Customer name" error={errors.name?.message}>
               <Input id="name" {...register("name", { required: "Name is required" })} />

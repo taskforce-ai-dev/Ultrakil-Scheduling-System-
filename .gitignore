@@ -61,3 +61,11 @@ apps/manager-web/CLAUDE.md
 *.log
 npm-debug.log*
 pnpm-debug.log*
+
+# Playwright output (screenshots, videos, traces, the HTML report, the saved
+# login for e2e runs — that one holds a real access token). Kept outside
+# apps/manager-web deliberately: `next dev`'s file watcher covers that whole
+# tree, and a run writing files inside it triggers a Fast Refresh rebuild per
+# file, which fights the very dev server the suite is testing against. See
+# the note in apps/manager-web/playwright.config.ts.
+/.playwright-artifacts/
