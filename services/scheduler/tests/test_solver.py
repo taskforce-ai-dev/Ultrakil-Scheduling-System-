@@ -13,6 +13,7 @@ import pytest
 
 from app.solver.model import solve
 from app.solver.schemas import (
+    CandidateSlot,
     EmployeeInput,
     ExistingAssignmentInput,
     LockInput,
@@ -557,3 +558,207 @@ class TestVehicleAuthorization:
             if any(vehicle.vehicle_id == "van-1" for vehicle in assignment.vehicles)
         ]
         assert len(using_the_van) <= 1
+
+
+def slot(date: str, *, preferred: bool = False, opens: int = 9 * 60, closes: int = 17 * 60):
+    """One legal day, from opening to the last start that still fits the job."""
+    return CandidateSlot(
+        date=date,
+        earliest_start_minute=opens,
+        latest_start_minute=closes - 90,
+        is_preferred=preferred,
+    )
+
+
+class TestChoosingTheDayAndTime:
+    """Date, time, crew and vehicle decided in one solve.
+
+    Before this, generation fixed the date and the solver could only pick people
+    to fit around it, so a Tuesday visit with no free supervisor stayed
+    unstaffed even when Thursday was empty. Every case here would fail against
+    that model — which is the point of them.
+    """
+
+    def test_moves_a_visit_to_a_day_its_crew_can_actually_work(self):
+        # Tuesday is the generated date and the whole crew is away. Thursday is
+        # equally allowed and everyone is free. The old model left this
+        # unstaffed; the new one moves it.
+        away = ["2026-09-08"]
+        result = solve(
+            request(
+                visits=[
+                    visit(
+                        visit_date="2026-09-08",
+                        candidate_slots=[slot("2026-09-08"), slot("2026-09-10")],
+                    )
+                ],
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True, unavailable_dates=away),
+                    employee(id="tech-1", unavailable_dates=away),
+                ],
+            )
+        )
+
+        assert len(result.assignments) == 1
+        assert result.assignments[0].scheduled_date == "2026-09-10"
+
+    def test_spreads_two_visits_across_days_rather_than_dropping_one(self):
+        # One crew, two visits, both generated on the same Tuesday, each long
+        # enough that only one fits in a day. Fixed dates meant one had to go
+        # unstaffed. Two allowed days means both happen.
+        slots = [slot("2026-09-08"), slot("2026-09-10")]
+        result = solve(
+            request(
+                visits=[
+                    visit(
+                        id="visit-a",
+                        visit_date="2026-09-08",
+                        duration_minutes=7 * 60,
+                        candidate_slots=slots,
+                    ),
+                    visit(
+                        id="visit-b",
+                        visit_date="2026-09-08",
+                        service_site_id="site-2",
+                        duration_minutes=7 * 60,
+                        candidate_slots=slots,
+                    ),
+                ],
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True),
+                    employee(id="tech-1"),
+                ],
+            )
+        )
+
+        assert len(result.assignments) == 2
+        assert {a.scheduled_date for a in result.assignments} == {"2026-09-08", "2026-09-10"}
+
+    def test_uses_the_same_day_twice_when_the_hours_allow_it(self):
+        # Not a rule that one visit per day is the answer: a long enough window
+        # takes both, one after the other, and that is the better schedule
+        # because it leaves Thursday free.
+        result = solve(
+            request(
+                visits=[
+                    visit(id="visit-a", duration_minutes=60, candidate_slots=[slot("2026-09-08")]),
+                    visit(
+                        id="visit-b",
+                        duration_minutes=60,
+                        service_site_id="site-2",
+                        candidate_slots=[slot("2026-09-08")],
+                    ),
+                ],
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True),
+                    employee(id="tech-1"),
+                ],
+            )
+        )
+
+        assert len(result.assignments) == 2
+        starts = sorted(a.start_minute for a in result.assignments)
+        # Same crew, so the second cannot begin before the first has finished.
+        assert starts[1] - starts[0] >= 60
+
+    def test_start_times_land_on_the_half_hour(self):
+        result = solve(
+            request(
+                visits=[visit(candidate_slots=[slot("2026-09-08", opens=9 * 60)])],
+            )
+        )
+
+        assert result.assignments
+        assert result.assignments[0].start_minute % 30 == 0
+
+    def test_prefers_the_customers_weekday_when_it_costs_nothing(self):
+        result = solve(
+            request(
+                visits=[
+                    visit(
+                        visit_date="2026-09-08",
+                        candidate_slots=[
+                            slot("2026-09-08"),
+                            slot("2026-09-10", preferred=True),
+                        ],
+                    )
+                ],
+            )
+        )
+
+        assert result.assignments[0].scheduled_date == "2026-09-10"
+
+    def test_covers_more_work_rather_than_honouring_a_preferred_day(self):
+        # The trade-off that matters. One crew; visit A can only happen Tuesday,
+        # visit B prefers Tuesday but is allowed Thursday. Staffing both is
+        # worth 10,000 and the preference 30, so B moves.
+        result = solve(
+            request(
+                visits=[
+                    visit(id="only-tuesday", candidate_slots=[slot("2026-09-08")]),
+                    visit(
+                        id="prefers-tuesday",
+                        service_site_id="site-2",
+                        duration_minutes=8 * 60,
+                        candidate_slots=[
+                            slot("2026-09-08", preferred=True, closes=17 * 60),
+                            slot("2026-09-10", closes=17 * 60),
+                        ],
+                    ),
+                ],
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True),
+                    employee(id="tech-1"),
+                ],
+            )
+        )
+
+        assert len(result.assignments) == 2
+
+    def test_a_visit_with_no_candidates_stays_exactly_where_it_is(self):
+        # What a published or time-locked visit sends. Freedom is opt-in.
+        result = solve(request(visits=[visit(visit_date="2026-09-09")]))
+
+        assert result.assignments[0].scheduled_date == "2026-09-09"
+        assert result.assignments[0].start_minute == 9 * 60
+
+    def test_never_places_a_visit_outside_the_hours_it_was_given(self):
+        result = solve(
+            request(
+                visits=[
+                    visit(
+                        duration_minutes=90,
+                        candidate_slots=[slot("2026-09-08", opens=13 * 60, closes=16 * 60)],
+                    )
+                ],
+            )
+        )
+
+        start = result.assignments[0].start_minute
+        assert 13 * 60 <= start <= 16 * 60 - 90
+
+    def test_is_still_deterministic_when_it_may_choose_the_day(self):
+        def run():
+            return solve(
+                request(
+                    visits=[
+                        visit(
+                            id=f"visit-{n}",
+                            service_site_id=f"site-{n}",
+                            candidate_slots=[slot("2026-09-08"), slot("2026-09-10")],
+                        )
+                        for n in range(4)
+                    ],
+                    employees=[
+                        employee(id="sup-1", is_pms_grade=True),
+                        employee(id="sup-2", is_pms_grade=True),
+                        employee(id="tech-1"),
+                        employee(id="tech-2"),
+                    ],
+                )
+            )
+
+        first, second = run(), run()
+        assert [(a.visit_id, a.scheduled_date, a.start_minute) for a in first.assignments] == [
+            (a.visit_id, a.scheduled_date, a.start_minute) for a in second.assignments
+        ]

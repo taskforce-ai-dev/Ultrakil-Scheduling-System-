@@ -14,6 +14,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
@@ -33,7 +34,19 @@ const REPLACEABLE_STATUSES: AssignmentStatus[] = [
 const MAX_RANGE_DAYS = 62;
 
 const VISIT_FOR_SOLVE = {
-  serviceAgreement: { include: { requiredSkills: { select: { skillCode: true } } } },
+  serviceAgreement: {
+    include: {
+      requiredSkills: { select: { skillCode: true } },
+      // The allowed and preferred weekdays, and the site's opening hours: the
+      // two things needed to work out where else a visit could legally go.
+      dayRules: { select: { weekday: true, kind: true } },
+      serviceSite: {
+        select: {
+          operatingHours: { select: { weekday: true, opensAtMinute: true, closesAtMinute: true } },
+        },
+      },
+    },
+  },
   assignments: {
     where: { status: { in: LIVE_STATUSES } },
     include: {
@@ -210,6 +223,8 @@ export class ScheduleRunService {
 
     const request = this.buildSolveRequest(run.id, visits, employees, vehicles, {
       timeLimitSeconds: options.timeLimitSeconds ?? 20,
+      from: run.rangeStart,
+      to: run.rangeEnd,
     });
 
     await this.prisma.scheduleRun.update({
@@ -221,9 +236,18 @@ export class ScheduleRunService {
       return this.finish(runId, 0, 0);
     }
 
+    // The solver works a day at a time and spends up to the time limit on each,
+    // so a week can legitimately take seven times as long as one day. Timing out
+    // at a single day's budget aborted solves that were running perfectly well
+    // and reported SCHEDULER_UNAVAILABLE — a service that was in fact answering.
+    const solveDays = new Set(request.visits.flatMap((visit) =>
+      visit.candidate_slots.length > 0
+        ? visit.candidate_slots.map((slot) => slot.date)
+        : [visit.visit_date],
+    )).size;
     const solution = await this.scheduler.solve(
       request,
-      Math.round((options.timeLimitSeconds ?? 20) * 1000) + 15_000,
+      Math.round((options.timeLimitSeconds ?? 20) * 1000) * Math.max(1, solveDays) + 15_000,
     );
 
     await progress(70);
@@ -238,6 +262,36 @@ export class ScheduleRunService {
     for (const proposal of solution.assignments) {
       const visit = byId.get(proposal.visit_id);
       if (!visit) continue;
+
+      // The solver may have chosen a different allowed day. The move has to
+      // land before the engine re-checks, because the checks that matter most
+      // here — double-booking, the site being open — are answered against the
+      // date the visit is on. Validating the old date and writing the new one
+      // would be checking a schedule nobody is going to run.
+      const originalDate = visit.visitDate;
+      const originalWindowStart = visit.windowStartMinute;
+      const originalWindowEnd = visit.windowEndMinute;
+      const moved =
+        proposal.scheduled_date !== undefined &&
+        proposal.scheduled_date !== dateOnly(visit.visitDate);
+
+      if (moved) {
+        // The window moves with the date. A visit left advertising its old
+        // hours would show one time on the calendar and another on the
+        // assignment, and the pair of them is the confusion this change set
+        // exists to remove.
+        await this.prisma.generatedVisit.update({
+          where: { id: visit.id },
+          data: {
+            visitDate: new Date(`${proposal.scheduled_date}T00:00:00.000Z`),
+            windowStartMinute: proposal.start_minute,
+            windowEndMinute: Math.max(
+              visit.windowEndMinute,
+              proposal.start_minute + visit.durationMinutes,
+            ),
+          },
+        });
+      }
 
       const dto = {
         plannedStartMinute: proposal.start_minute,
@@ -262,6 +316,21 @@ export class ScheduleRunService {
       });
 
       if (!verdict.isEligible) {
+        // Put the day back. A refused proposal should leave nothing behind: a
+        // visit silently sitting on a date nobody chose, with no assignment
+        // against it, is exactly the half-applied state this whole change set
+        // out to remove.
+        if (moved) {
+          await this.prisma.generatedVisit.update({
+            where: { id: visit.id },
+            data: {
+              visitDate: originalDate,
+              windowStartMinute: originalWindowStart,
+              windowEndMinute: originalWindowEnd,
+            },
+          });
+        }
+
         this.logger.warn(
           `Solver proposed an assignment the engine refused for visit ${visit.id}: ${verdict.conflicts
             .map((conflict) => conflict.code)
@@ -300,10 +369,12 @@ export class ScheduleRunService {
     visits: VisitForSolve[],
     employees: EmployeeForSolve[],
     vehicles: VehicleForSolve[],
-    options: { timeLimitSeconds: number },
+    options: { timeLimitSeconds: number; from: Date; to: Date },
   ): SolveRequest {
     const locks: SolveRequest['locks'] = [];
     const existing: SolveRequest['existing'] = [];
+    /** Visits a manager has fixed in time. These are never offered new slots. */
+    const pinned = new Set<string>();
 
     const solvable = visits.filter((visit) => {
       const live = visit.assignments.find((a) => LIVE_STATUSES.includes(a.status));
@@ -314,6 +385,11 @@ export class ScheduleRunService {
 
       const lock = live.locks[0];
       if (lock) {
+        // A lock on the time is a decision about when, so the visit stops being
+        // free to move. Any other scope still lets the day change.
+        if (lock.scope === LockScope.FULL || lock.scope === LockScope.TIME) {
+          pinned.add(visit.id);
+        }
         locks.push({
           visit_id: visit.id,
           scope: lock.scope === LockScope.SUPERVISOR ? 'CREW' : lock.scope,
@@ -336,20 +412,54 @@ export class ScheduleRunService {
 
     return {
       run_id: runId,
-      visits: solvable.map((visit) => ({
-        id: visit.id,
-        branch_code: visit.branchCode,
-        visit_date: dateOnly(visit.visitDate),
-        window_start_minute: visit.windowStartMinute,
-        window_end_minute: visit.windowEndMinute,
-        duration_minutes: visit.durationMinutes,
-        required_crew_size: visit.requiredCrewSize,
-        required_skill_codes: visit.serviceAgreement.requiredSkills
-          .map((skill) => skill.skillCode)
-          .sort(),
-        service_site_id: visit.serviceAgreement.serviceSiteId,
-        is_preferred_day: false,
-      })),
+      visits: solvable.map((visit) => {
+        // The day a visit was generated on is one legal option among several,
+        // not a decision. Handing the solver all of them is what lets it settle
+        // date, time, crew and vehicle in one pass instead of taking the date
+        // as given and hunting for people who happen to be free.
+        //
+        // A visit a manager pinned in time keeps its date: an empty list means
+        // "stay exactly where you are", so their decision survives the rerun.
+        const { allowedDays, preferredDays } = splitDayRules(visit.serviceAgreement.dayRules);
+        const candidates = pinned.has(visit.id)
+          ? []
+          : buildCandidateSlots({
+              allowedDays,
+              preferredDays,
+              siteWindows: visit.serviceAgreement.serviceSite.operatingHours.map((hours) => ({
+                weekday: hours.weekday,
+                startMinute: hours.opensAtMinute,
+                endMinute: hours.closesAtMinute,
+              })),
+              agreementStartMinute: visit.serviceAgreement.serviceWindowStartMinute,
+              agreementEndMinute: visit.serviceAgreement.serviceWindowEndMinute,
+              durationMinutes: visit.durationMinutes,
+              from: options.from,
+              to: options.to,
+            });
+
+        return {
+          id: visit.id,
+          branch_code: visit.branchCode,
+          visit_date: dateOnly(visit.visitDate),
+          window_start_minute: visit.windowStartMinute,
+          window_end_minute: visit.windowEndMinute,
+          duration_minutes: visit.durationMinutes,
+          required_crew_size: visit.requiredCrewSize,
+          required_skill_codes: visit.serviceAgreement.requiredSkills
+            .map((skill) => skill.skillCode)
+            .sort(),
+          service_site_id: visit.serviceAgreement.serviceSiteId,
+          service_agreement_id: visit.serviceAgreementId,
+          is_preferred_day: false,
+          candidate_slots: candidates.map((slot) => ({
+            date: slot.date,
+            earliest_start_minute: slot.earliestStartMinute,
+            latest_start_minute: slot.latestStartMinute,
+            is_preferred: slot.isPreferred,
+          })),
+        };
+      }),
       employees: employees.map((employee) => ({
         id: employee.id,
         branch_code: employee.branchCode,

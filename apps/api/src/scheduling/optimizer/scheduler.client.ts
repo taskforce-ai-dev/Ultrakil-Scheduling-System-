@@ -16,7 +16,15 @@ export interface SolveRequest {
     required_crew_size: number;
     required_skill_codes: string[];
     service_site_id: string;
+    service_agreement_id: string;
     is_preferred_day: boolean;
+    /** Every legal date and time this visit may take. Empty pins it in place. */
+    candidate_slots: {
+      date: string;
+      earliest_start_minute: number;
+      latest_start_minute: number;
+      is_preferred: boolean;
+    }[];
   }[];
   employees: {
     id: string;
@@ -56,6 +64,8 @@ export interface SolveResponse {
     employee_ids: string[];
     vehicles: { vehicle_id: string; driver_employee_id: string }[];
     start_minute: number;
+    /** The date the solver settled on, which may differ from the generated one. */
+    scheduled_date: string;
   }[];
   unassigned: {
     visit_id: string;
