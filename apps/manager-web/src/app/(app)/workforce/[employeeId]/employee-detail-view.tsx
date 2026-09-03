@@ -89,9 +89,11 @@ export function EmployeeDetailView({
     }
   }
 
-  const authorizedVehicles = vehicles.filter((vehicle) =>
-    authorizedVehicleIds.includes(vehicle.id)
-  );
+  // Alphabetical, not API order — same reasoning as the vehicle detail page:
+  // list order must never read as a ranking of any kind.
+  const authorizedVehicles = vehicles
+    .filter((vehicle) => authorizedVehicleIds.includes(vehicle.id))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   return (
     <div className="space-y-6">

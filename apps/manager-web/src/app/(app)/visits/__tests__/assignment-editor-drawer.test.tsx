@@ -24,6 +24,7 @@ import {
   ApiError,
   assignCrew,
   checkAssignment,
+  fetchAuthorizedDrivers,
   fetchEmployees,
   fetchVehicles,
   fetchVisit,
@@ -34,6 +35,7 @@ import {
 import {
   buildAssignment,
   buildAssignmentLock,
+  buildAuthorizedDrivers,
   buildConflict,
   buildEligibilityResult,
   buildEmployee,
@@ -78,6 +80,12 @@ beforeEach(() => {
     page: 1,
     pageSize: 200,
   });
+  // Default: no authorized drivers for anyone, for any vehicle. The drawer
+  // now fetches this eagerly for every vehicle row it renders (not just one
+  // the manager just picked), so every test needs a resolvable default —
+  // individual tests override it when the driver list itself is what's
+  // being exercised.
+  vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(buildAuthorizedDrivers({ drivers: [] }));
   vi.mocked(checkAssignment).mockReset();
   vi.mocked(assignCrew).mockReset();
   vi.mocked(lockAssignment).mockReset();
@@ -185,6 +193,108 @@ describe("AssignmentEditorDrawer", () => {
       screen.getByText("This employee is permanently stationed elsewhere.")
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+  });
+
+  it("offers only crew members who are also authorized for the vehicle as driver choices (ULK-O09)", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        id: "assignment-driver-1",
+        crew: [
+          { employeeId: supervisor.id, fullName: supervisor.fullName, role: "SUPERVISOR", isPmsSupervisor: true },
+          { employeeId: technician.id, fullName: technician.fullName, role: "TECHNICIAN", isPmsSupervisor: false },
+        ],
+        vehicles: [
+          { vehicleId: "vehicle-1", label: "Van 253-4289", driverEmployeeId: null, driverName: null },
+        ],
+      })
+    );
+    vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(
+      buildAuthorizedDrivers({
+        // The supervisor is authorized and on the crew (eligible). The
+        // technician is on the crew but not authorized (must not appear).
+        // "Z Outsider" is authorized but not on this visit's crew at all
+        // (must not appear either) — offering them would let a manager
+        // assign someone who isn't even part of the visit.
+        drivers: [
+          {
+            id: supervisor.id,
+            fullName: supervisor.fullName,
+            gradeLabel: "PMS",
+            isPmsGrade: true,
+            branchCode: "COLOMBO",
+            deploymentType: "MOBILE",
+            isActive: true,
+          },
+          {
+            id: "employee-outsider",
+            fullName: "Z Outsider",
+            gradeLabel: "Technician",
+            isPmsGrade: false,
+            branchCode: "COLOMBO",
+            deploymentType: "MOBILE",
+            isActive: true,
+          },
+        ],
+      })
+    );
+
+    const { user } = await openDrawer();
+    await screen.findByLabelText("Driver");
+
+    await user.click(screen.getByLabelText("Driver"));
+
+    expect(await screen.findByRole("option", { name: "A Perera" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Fernando/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Outsider/ })).not.toBeInTheDocument();
+  });
+
+  it("clears an assigned driver the moment they're removed from the crew (ULK-O09)", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        id: "assignment-driver-2",
+        crew: [
+          { employeeId: supervisor.id, fullName: supervisor.fullName, role: "SUPERVISOR", isPmsSupervisor: true },
+          { employeeId: technician.id, fullName: technician.fullName, role: "TECHNICIAN", isPmsSupervisor: false },
+        ],
+        vehicles: [
+          {
+            vehicleId: "vehicle-1",
+            label: "Van 253-4289",
+            driverEmployeeId: supervisor.id,
+            driverName: supervisor.fullName,
+          },
+        ],
+      })
+    );
+    vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(
+      buildAuthorizedDrivers({
+        drivers: [
+          {
+            id: supervisor.id,
+            fullName: supervisor.fullName,
+            gradeLabel: "PMS",
+            isPmsGrade: true,
+            branchCode: "COLOMBO",
+            deploymentType: "MOBILE",
+            isActive: true,
+          },
+        ],
+      })
+    );
+
+    await openDrawer();
+    const driverTrigger = await screen.findByLabelText("Driver");
+    expect(driverTrigger).toHaveTextContent("A Perera");
+
+    // Remove the supervisor — the first "Remove crew member" button, since
+    // crew rows render in the same order as the crew array above.
+    await userEvent.click(screen.getAllByRole("button", { name: "Remove crew member" })[0]);
+
+    // The saved driver was the person just removed, and they're no longer
+    // on the crew at all — the row has to fall back to "unset", not keep
+    // showing a driver who isn't part of this visit anymore.
+    expect(driverTrigger).not.toHaveTextContent("A Perera");
+    expect(driverTrigger).toHaveTextContent("No crew member is authorized");
   });
 
   it("pins a scope for this session and shows it as pinned", async () => {
