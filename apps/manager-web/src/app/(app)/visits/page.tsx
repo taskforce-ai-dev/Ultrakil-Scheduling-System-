@@ -577,79 +577,93 @@ export default function VisitsPage() {
               role="grid"
               aria-label={view === "month" ? "Month calendar" : "Week calendar"}
             >
-              <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40">
+              <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
                 {WEEKDAY_INITIALS.map((day) => (
                   <div
                     key={day}
+                    role="columnheader"
                     className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
                   >
                     {day}
                   </div>
                 ))}
               </div>
-              <div className="grid min-w-3xl grid-cols-7">
-                {days.map((day) => {
-                  const dayVisits = byDay.get(day) ?? [];
-                  const outsideMonth = view === "month" && !isSameMonth(day, anchor);
-                  const shownVisits =
-                    view === "month" ? dayVisits.slice(0, MAX_CHIPS_PER_MONTH_CELL) : dayVisits;
-                  const hiddenCount = dayVisits.length - shownVisits.length;
+              {/* One role="row" per week: role="gridcell" requires a role="row"
+                  parent, which a single flat grid-cols-7 div (relying on CSS
+                  wrapping for the visual row break) never provided — axe
+                  flagged this as a critical aria-required-parent violation. */}
+              {Array.from({ length: Math.ceil(days.length / 7) }, (_, week) =>
+                days.slice(week * 7, week * 7 + 7)
+              ).map((week) => (
+                <div key={week[0]} className="grid min-w-3xl grid-cols-7" role="row">
+                  {week.map((day) => {
+                    const dayVisits = byDay.get(day) ?? [];
+                    const outsideMonth = view === "month" && !isSameMonth(day, anchor);
+                    const shownVisits =
+                      view === "month" ? dayVisits.slice(0, MAX_CHIPS_PER_MONTH_CELL) : dayVisits;
+                    const hiddenCount = dayVisits.length - shownVisits.length;
 
-                  return (
-                    <div
-                      key={day}
-                      role="gridcell"
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={(event) => handleDrop(day, event)}
-                      className={cn(
-                        "min-h-28 space-y-1 border-b border-r border-border p-1.5",
-                        outsideMonth && "bg-muted/30",
-                        day === today && "bg-primary/5"
-                      )}
-                    >
-                      <div className="flex items-baseline justify-between">
-                        <span
-                          className={cn(
-                            "text-xs tabular-nums",
-                            outsideMonth ? "text-muted-foreground/60" : "text-muted-foreground",
-                            day === today && "font-semibold text-primary"
-                          )}
-                        >
-                          {Number(day.slice(8, 10))}
-                        </span>
-                        {dayVisits.length > 1 && (
-                          <span className="text-[10px] text-muted-foreground">
-                            {dayVisits.length}
+                    return (
+                      <div
+                        key={day}
+                        role="gridcell"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => handleDrop(day, event)}
+                        className={cn(
+                          "min-h-28 space-y-1 border-b border-r border-border p-1.5",
+                          outsideMonth && "bg-muted/30",
+                          day === today && "bg-primary/5"
+                        )}
+                      >
+                        <div className="flex items-baseline justify-between">
+                          <span
+                            className={cn(
+                              // Full-opacity text-muted-foreground for both cases: the
+                              // /60-opacity fade for outside-month days dropped contrast
+                              // to 2.32:1 against WCAG AA's 4.5:1 minimum. text-success
+                              // rather than text-primary for the same reason the badges
+                              // needed it — the brand green directly on this light
+                              // background fails contrast (see globals.css).
+                              "text-xs tabular-nums text-muted-foreground",
+                              day === today && "font-semibold text-success"
+                            )}
+                          >
+                            {Number(day.slice(8, 10))}
                           </span>
+                          {dayVisits.length > 1 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {dayVisits.length}
+                            </span>
+                          )}
+                        </div>
+                        {shownVisits.map((visit) => (
+                          <VisitChip
+                            key={visit.id}
+                            visit={visit}
+                            onOpen={() => setOpenVisitId(visit.id)}
+                            onMoveRequested={() => {
+                              setMoveRequest({ visit, targetDate: visit.visitDate });
+                              setMoveReason("");
+                            }}
+                          />
+                        ))}
+                        {hiddenCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAnchor(day);
+                              setView("week");
+                            }}
+                            className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            + {hiddenCount} more
+                          </button>
                         )}
                       </div>
-                      {shownVisits.map((visit) => (
-                        <VisitChip
-                          key={visit.id}
-                          visit={visit}
-                          onOpen={() => setOpenVisitId(visit.id)}
-                          onMoveRequested={() => {
-                            setMoveRequest({ visit, targetDate: visit.visitDate });
-                            setMoveReason("");
-                          }}
-                        />
-                      ))}
-                      {hiddenCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAnchor(day);
-                            setView("week");
-                          }}
-                          className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          + {hiddenCount} more
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
           )}
         </>

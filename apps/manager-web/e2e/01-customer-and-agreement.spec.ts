@@ -23,7 +23,9 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   await page.getByLabel("Site name").fill(siteName);
   await page.getByRole("button", { name: "Save customer" }).click();
 
-  await expect(page.getByText(customerName)).toBeVisible({ timeout: 10_000 });
+  // Scoped to the table cell — the success toast also contains the customer
+  // name, so a bare getByText now matches both.
+  await expect(page.getByRole("cell", { name: customerName })).toBeVisible({ timeout: 10_000 });
 
   await page.goto("/service-agreements");
   await expect(page.getByRole("heading", { name: "Service Agreements" })).toBeVisible();
