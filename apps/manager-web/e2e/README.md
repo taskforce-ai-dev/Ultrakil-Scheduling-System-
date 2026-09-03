@@ -59,6 +59,8 @@ pnpm exec playwright show-report
 | `02-generation.spec.ts` | Preview and confirm visit generation for the visible month | At least one active service agreement (created by the spec above, or from a real import) |
 | `03-dispatch-and-lock.spec.ts` | Dispatch board → Edit crew (a manual override, with a reason) on today's date; lock/unlock a visit | At least one visit scheduled for today, which `02-generation.spec.ts` just created |
 | `04-publish.spec.ts` | Start a schedule run, wait for it to finish, publish it | Nothing beyond agreements existing somewhere in the horizon used |
+| `05-accessibility.spec.ts` | Automated axe-core scan (serious/critical only) of every top-level page, plus the customer/agreement/generation forms and the override/publish dialogs | Runs after 01-04 so those dialogs have real data to open; the override and publish dialog checks skip themselves (not fail) if nothing's there to open |
+| `06-responsive.spec.ts` | No document-level horizontal scroll, and a working nav (fixed sidebar vs. hamburger/Sheet drawer), on every top-level page at a laptop width (1366×768) and a tablet width (768×1024) | Nothing — layout-only, doesn't touch data |
 
 The numeric prefixes are load-bearing, not cosmetic: Playwright walks
 `testDir` in filename order and this suite runs with `workers: 1` (see
