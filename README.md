@@ -135,6 +135,7 @@ to the **Unassigned queue with a clear reason**.
 | [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md) | Who owns which folders, and how to request a change |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the three services fit together |
 | [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Every table and why it exists |
+| [`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md) | Which endpoints the manager portal consumes, and why |
 | [`data/README.md`](data/README.md) | The technician matrix and how it is imported |
 
 ---

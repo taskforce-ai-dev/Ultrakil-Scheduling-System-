@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsDateString,
   IsEnum,
   IsInt,
   IsOptional,
@@ -166,6 +167,65 @@ export class UnassignedVisitDto {
 
 export class PaginatedUnassignedVisitsDto {
   @ApiProperty({ type: [UnassignedVisitDto] }) items!: UnassignedVisitDto[];
+  @ApiProperty({ type: Number }) total!: number;
+  @ApiProperty({ type: Number }) page!: number;
+  @ApiProperty({ type: Number }) pageSize!: number;
+}
+
+export class EmployeeAssignmentQueryDto {
+  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number = 50;
+
+  @ApiPropertyOptional({ format: 'date', description: 'Assignments on or after this date.' })
+  @IsOptional()
+  @IsDateString()
+  from?: string;
+
+  @ApiPropertyOptional({ format: 'date', description: 'Assignments on or before this date.' })
+  @IsOptional()
+  @IsDateString()
+  to?: string;
+}
+
+/**
+ * A Phase 2-compatible read model: what a PMS tablet or worker app would show
+ * one employee about a published visit. `acknowledgedAt`/`startedAt`/
+ * `completedAt` are the Phase 2 hooks already carried on `Assignment` —
+ * always null in Phase 1, since nothing writes them yet.
+ */
+export class EmployeeAssignmentDto {
+  @ApiProperty({ type: String, format: 'uuid' }) assignmentId!: string;
+  @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
+  @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
+  @ApiProperty({ type: Number }) plannedStartMinute!: number;
+  @ApiProperty({ type: Number }) plannedEndMinute!: number;
+  @ApiProperty({ type: String }) branchCode!: string;
+  @ApiProperty({ type: String }) customerName!: string;
+  @ApiProperty({ type: String }) siteName!: string;
+  @ApiProperty({ type: String }) jobTypeName!: string;
+  @ApiProperty({ type: String, enum: Object.values(CrewRole) }) role!: CrewRole;
+  @ApiProperty({ type: Boolean }) isPmsSupervisor!: boolean;
+  @ApiProperty({ type: String, format: 'date-time' }) publishedAt!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  acknowledgedAt!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' }) startedAt!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' }) completedAt!: string | null;
+}
+
+export class PaginatedEmployeeAssignmentsDto {
+  @ApiProperty({ type: [EmployeeAssignmentDto] }) items!: EmployeeAssignmentDto[];
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) page!: number;
   @ApiProperty({ type: Number }) pageSize!: number;

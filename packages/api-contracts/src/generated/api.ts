@@ -951,6 +951,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/employees/{employeeId}/assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * An employee's published daily assignments
+         * @description The Phase 2-compatible read model a PMS tablet or worker mobile app would call: published visits only, with the acknowledgement/start/completion hooks already on Assignment, always null until Phase 2 writes them.
+         */
+        get: operations["AssignmentsController_employeeAssignments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/schedule-runs": {
         parameters: {
             query?: never;
@@ -1063,6 +1083,26 @@ export interface paths {
         put?: never;
         /** Release a pinned part of an assignment */
         post: operations["ScheduleRunsController_unlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/schedule/calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The unified schedule, one row per visit
+         * @description Date, time, crew, vehicle and status joined server-side so the manager portal can render one calendar instead of assembling it from several screens. Bounded to 120 days — page through the visits endpoint for a longer range.
+         */
+        get: operations["CalendarController_list"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1837,6 +1877,37 @@ export interface components {
             page: number;
             pageSize: number;
         };
+        EmployeeAssignmentDto: {
+            /** Format: uuid */
+            assignmentId: string;
+            /** Format: uuid */
+            visitId: string;
+            /** Format: date */
+            visitDate: string;
+            plannedStartMinute: number;
+            plannedEndMinute: number;
+            branchCode: string;
+            customerName: string;
+            siteName: string;
+            jobTypeName: string;
+            /** @enum {string} */
+            role: "SUPERVISOR" | "TECHNICIAN" | "DRIVER" | "HELPER";
+            isPmsSupervisor: boolean;
+            /** Format: date-time */
+            publishedAt: string;
+            /** Format: date-time */
+            acknowledgedAt: string | null;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+        };
+        PaginatedEmployeeAssignmentsDto: {
+            items: components["schemas"]["EmployeeAssignmentDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
         ScheduleRunDto: {
             /** Format: uuid */
             id: string;
@@ -1876,6 +1947,75 @@ export interface components {
             total: number;
             page: number;
             pageSize: number;
+        };
+        CalendarCrewMemberDto: {
+            /** Format: uuid */
+            employeeId: string;
+            fullName: string;
+            role: string;
+            isPmsSupervisor: boolean;
+        };
+        CalendarVehicleDto: {
+            /** Format: uuid */
+            vehicleId: string;
+            label: string;
+            driverName: string | null;
+        };
+        CalendarAssignmentDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /**
+             * Format: uuid
+             * @description The employee carrying the required PMS-grade supervisor on this crew.
+             */
+            supervisorEmployeeId: string | null;
+            supervisorName: string | null;
+            crew: components["schemas"]["CalendarCrewMemberDto"][];
+            vehicles: components["schemas"]["CalendarVehicleDto"][];
+            /**
+             * Format: uuid
+             * @description The schedule run this assignment came from. Combined with publishedAt this identifies the published schedule version a crew was told about.
+             */
+            scheduleRunId: string | null;
+            /** Format: date-time */
+            publishedAt: string | null;
+            /**
+             * Format: date-time
+             * @description Phase 2 hook. Always null in Phase 1 — no worker app writes this yet.
+             */
+            acknowledgedAt: string | null;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            completedAt: string | null;
+        };
+        CalendarEntryDto: {
+            /** Format: uuid */
+            visitId: string;
+            /** Format: date */
+            visitDate: string;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            durationMinutes: number;
+            /** @enum {string} */
+            visitStatus: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            jobTypeName: string;
+            /** @description What the crew is told to do, from the agreement's notes. */
+            instructions: string | null;
+            /** @description Null when the visit has no crew yet — it belongs in the Unassigned queue. */
+            assignment: components["schemas"]["CalendarAssignmentDto"] | null;
+        };
+        CalendarResponseDto: {
+            items: components["schemas"]["CalendarEntryDto"][];
+            total: number;
         };
     };
     responses: never;
@@ -3828,6 +3968,44 @@ export interface operations {
             };
         };
     };
+    AssignmentsController_employeeAssignments: {
+        parameters: {
+            query?: {
+                to?: string;
+                from?: string;
+                pageSize?: number;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedEmployeeAssignmentsDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     ScheduleRunsController_list: {
         parameters: {
             query?: never;
@@ -4015,6 +4193,43 @@ export interface operations {
         responses: {
             /** @description Released. */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CalendarController_list: {
+        parameters: {
+            query: {
+                branchCode?: "COLOMBO" | "KANDY";
+                to: string;
+                from: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarResponseDto"];
+                };
+            };
+            /** @description VALIDATION_FAILED — bad or too wide a date range. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

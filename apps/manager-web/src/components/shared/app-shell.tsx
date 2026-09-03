@@ -11,6 +11,7 @@ import {
   Car,
   ClipboardList,
   CalendarDays,
+  CalendarRange,
   AlertTriangle,
   History,
   Menu,
@@ -29,6 +30,7 @@ import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/calendar", label: "Calendar", icon: CalendarRange },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/service-agreements", label: "Service Agreements", icon: FileText },
   { href: "/visits", label: "Visit Calendar", icon: CalendarDays },

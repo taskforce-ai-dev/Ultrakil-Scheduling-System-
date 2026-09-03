@@ -251,12 +251,13 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  skills                   EmployeeSkill[]
-  availability             EmployeeAvailability[]
-  permanentAssignments     PermanentAssignment[]
-  vehicleAuthorizations    VehicleAuthorization[]
-  crewMemberships          AssignmentCrewMember[]
-  drivenAssignmentVehicles AssignmentVehicle[]    @relation("AssignmentVehicleDriver")
+  skills                    EmployeeSkill[]
+  availability              EmployeeAvailability[]
+  permanentAssignments      PermanentAssignment[]
+  vehicleAuthorizations     VehicleAuthorization[]
+  crewMemberships           AssignmentCrewMember[]
+  drivenAssignmentVehicles  AssignmentVehicle[]            @relation("AssignmentVehicleDriver")
+  notificationOutboxEntries AssignmentNotificationOutbox[]
 
   @@index([branchId, isActive])
   @@index([isPmsGrade, branchCode])
@@ -747,9 +748,10 @@ model Assignment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  crewMembers AssignmentCrewMember[]
-  vehicles    AssignmentVehicle[]
-  locks       AssignmentLock[]
+  crewMembers               AssignmentCrewMember[]
+  vehicles                  AssignmentVehicle[]
+  locks                     AssignmentLock[]
+  notificationOutboxEntries AssignmentNotificationOutbox[]
 
   @@index([branchId, status])
   @@index([generatedVisitId])
@@ -883,6 +885,39 @@ model ScheduleRun {
 
   @@index([status, createdAt])
   @@map("schedule_runs")
+}
+
+/// A record of a future assignment notification — written when a schedule is
+/// published, read by nothing yet. This is the outbox ULK-C07 asks for: Phase 1
+/// does not send notifications, but Phase 2's worker app and push delivery can
+/// be built by adding a consumer that marks rows `processedAt`, without any
+/// change to how publishing writes them.
+model AssignmentNotificationOutbox {
+  id String @id @default(uuid()) @db.Uuid
+
+  assignmentId String     @db.Uuid
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  employeeId String   @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// e.g. "assignment.published". Kept as free text like AuditEvent.action so a
+  /// new event type needs no migration.
+  eventType String
+
+  /// Everything a future notification would need to say, snapshotted at publish
+  /// time so it reads correctly even if the employee or visit later changes.
+  payload Json
+
+  createdAt DateTime @default(now())
+
+  /// Null until a future consumer sends the notification. No consumer exists in
+  /// Phase 1 — this column exists so adding one needs no migration either.
+  processedAt DateTime?
+
+  @@index([processedAt])
+  @@index([employeeId])
+  @@map("assignment_notification_outbox")
 }
 
 /// Append-only operations history. Every manager override, lock and publish is

@@ -108,5 +108,13 @@ are not built now, but Phase 1 does not paint them into a corner:
 - `AssignmentStatus` already includes `ACKNOWLEDGED` and `IN_PROGRESS`.
 - `AuditEvent` is generic (`entityType`, `entityId`, `action`, `before`, `after`),
   so new event types need no migration.
+- Publishing a schedule writes an `AssignmentNotificationOutbox` row per crew
+  member (ULK-C07). Nothing reads these rows in Phase 1 — no push
+  notification is sent — but a future consumer can send them and mark
+  `processedAt` without any change to how they are written.
+- `GET /api/schedule/calendar` and `GET /api/employees/{id}/assignments`
+  (ULK-C07) already return the crew roster, supervisor, instructions,
+  assignment status and published-schedule identity a PMS tablet or worker
+  app would need — see [`docs/API_INTEGRATION.md`](API_INTEGRATION.md).
 - Every entity uses a stable UUID, so a mobile client can hold a reference across
   sessions.

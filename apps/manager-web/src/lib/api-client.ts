@@ -28,6 +28,8 @@ export type PaginatedEmployees = Json<
   paths["/api/employees"]["get"]["responses"]["200"]
 >;
 export type Employee = PaginatedEmployees["items"][number];
+export type BranchCode = Employee["branchCode"];
+export type DeploymentType = Employee["deploymentType"];
 export type PaginatedVehicles = Json<
   paths["/api/vehicles"]["get"]["responses"]["200"]
 >;
@@ -85,6 +87,13 @@ export type GenerationShortfall = GenerationImpact["shortfalls"][number];
 
 export type VisitQuery = NonNullable<
   paths["/api/visits"]["get"]["parameters"]["query"]
+>;
+
+export type CalendarResponse = components["schemas"]["CalendarResponseDto"];
+export type CalendarEntry = components["schemas"]["CalendarEntryDto"];
+export type CalendarAssignment = NonNullable<CalendarEntry["assignment"]>;
+export type CalendarQuery = NonNullable<
+  paths["/api/schedule/calendar"]["get"]["parameters"]["query"]
 >;
 
 export type Conflict = components["schemas"]["ConflictDto"];
@@ -404,6 +413,10 @@ export function fetchVehicles(query?: VehicleQuery): Promise<PaginatedVehicles> 
   return request<PaginatedVehicles>(`/vehicles${buildQuery(query)}`);
 }
 
+export function fetchVehicle(id: string): Promise<Vehicle> {
+  return request<Vehicle>(`/vehicles/${id}`);
+}
+
 /**
  * Everyone authorised to drive this vehicle, straight from the workforce
  * matrix checkmarks. Says nothing about ownership or a usual driver.
@@ -683,4 +696,16 @@ export function publishScheduleRun(
   dto: PublishScheduleRequest = {}
 ): Promise<ScheduleRun> {
   return request<ScheduleRun>(`/schedule-runs/${id}/publish`, { method: "POST", body: dto });
+}
+
+/* -------------------------------------------------------------------------
+ * The unified calendar (ULK-C07) — date, time, crew and vehicle joined
+ * server-side into one row per visit, for the manager portal's single
+ * calendar screen.
+ * ---------------------------------------------------------------------- */
+
+export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
+  return request<CalendarResponse>(
+    `/schedule/calendar${buildQuery(query as Record<string, unknown>)}`
+  );
 }

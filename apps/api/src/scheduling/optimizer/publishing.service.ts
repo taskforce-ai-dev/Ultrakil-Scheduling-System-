@@ -155,6 +155,30 @@ export class PublishingService {
         data: { publishedAt: new Date(), publishedByUserId: actor.id },
       });
 
+      // One outbox row per crew member per published assignment — everything a
+      // future notification would need to say, snapshotted now so it stays
+      // correct even if the employee or visit changes later. Nothing reads
+      // these yet; Phase 2 adds the sender, not this write.
+      await tx.assignmentNotificationOutbox.createMany({
+        data: publishable.flatMap((assignment) =>
+          assignment.crewMembers.map((member) => ({
+            assignmentId: assignment.id,
+            employeeId: member.employeeId,
+            eventType: 'assignment.published',
+            payload: {
+              visitId: assignment.generatedVisitId,
+              customerName: assignment.generatedVisit.serviceAgreement.customer.name,
+              siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
+              visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+              plannedStart: assignment.plannedStart.toISOString(),
+              plannedEnd: assignment.plannedEnd.toISOString(),
+              role: member.role,
+              isPmsSupervisor: member.isPmsSupervisor,
+            } as unknown as Prisma.InputJsonValue,
+          })),
+        ),
+      });
+
       await this.audit.record(
         {
           entityType: 'ScheduleRun',

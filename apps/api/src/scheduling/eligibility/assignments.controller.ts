@@ -22,6 +22,8 @@ import {
   AssignCrewDto,
   AssignmentDto,
   EligibilityResultDto,
+  EmployeeAssignmentQueryDto,
+  PaginatedEmployeeAssignmentsDto,
   PaginatedUnassignedVisitsDto,
 } from './dto';
 
@@ -133,5 +135,24 @@ export class AssignmentsController {
       withConflictsOnly: withConflictsOnly === 'true' || withConflictsOnly === '1',
       serviceAgreementId,
     });
+  }
+
+  @Get('employees/:employeeId/assignments')
+  @ApiOperation({
+    summary: "An employee's published daily assignments",
+    description:
+      'The Phase 2-compatible read model a PMS tablet or worker mobile app would call: published visits only, with the acknowledgement/start/completion hooks already on Assignment, always null until Phase 2 writes them.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
+  @ApiQuery({ name: 'from', required: false, type: String, example: '2026-09-07' })
+  @ApiQuery({ name: 'to', required: false, type: String, example: '2026-10-04' })
+  @ApiResponse({ status: 200, type: PaginatedEmployeeAssignmentsDto })
+  @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  employeeAssignments(
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Query() query: EmployeeAssignmentQueryDto,
+  ): Promise<PaginatedEmployeeAssignmentsDto> {
+    return this.assignments.employeeAssignments(employeeId, query);
   }
 }

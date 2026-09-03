@@ -1,6 +1,9 @@
 import type {
   Assignment,
   AssignmentLock,
+  AuthorizedDrivers,
+  CalendarAssignment,
+  CalendarEntry,
   Conflict,
   Customer,
   EligibilityResult,
@@ -334,6 +337,68 @@ export function buildAssignmentLock(overrides: Partial<AssignmentLock> = {}): As
     releasedAt: null,
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildAuthorizedDrivers(
+  overrides: Partial<AuthorizedDrivers> = {}
+): AuthorizedDrivers {
+  const drivers = overrides.drivers ?? [
+    {
+      id: "employee-1",
+      fullName: "A Perera",
+      gradeLabel: "PMS",
+      isPmsGrade: true,
+      branchCode: "COLOMBO",
+      deploymentType: "MOBILE",
+      isActive: true,
+    },
+  ];
+  return {
+    vehicle: { id: "vehicle-1", code: "253-4289", label: "Van( 04 People) 253-4289", seatCapacity: 4 },
+    drivers,
+    total: drivers.length,
+    ...overrides,
+  };
+}
+
+export function buildCalendarAssignment(
+  overrides: Partial<CalendarAssignment> = {}
+): CalendarAssignment {
+  return {
+    id: "assignment-1",
+    status: "DRAFT",
+    supervisorEmployeeId: "employee-1",
+    supervisorName: "A Perera",
+    crew: [
+      { employeeId: "employee-1", fullName: "A Perera", role: "SUPERVISOR", isPmsSupervisor: true },
+    ],
+    vehicles: [],
+    scheduleRunId: null,
+    publishedAt: null,
+    acknowledgedAt: null,
+    startedAt: null,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+export function buildCalendarEntry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
+  return {
+    visitId: "visit-1",
+    visitDate: "2026-09-09",
+    windowStartMinute: 540,
+    windowEndMinute: 630,
+    durationMinutes: 90,
+    visitStatus: "SCHEDULED",
+    branchCode: "COLOMBO",
+    serviceAgreementId: "agreement-1",
+    customerName: "Cinnamon Grand Colombo",
+    siteName: "Main Kitchen",
+    jobTypeName: "Termite Control",
+    instructions: null,
+    assignment: null,
     ...overrides,
   };
 }

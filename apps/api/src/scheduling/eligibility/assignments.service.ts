@@ -11,6 +11,8 @@ import {
   AssignmentDto,
   ConflictDto,
   EligibilityResultDto,
+  EmployeeAssignmentDto,
+  EmployeeAssignmentQueryDto,
   UnassignedVisitDto,
 } from './dto';
 import { EligibilityService } from './eligibility.service';
@@ -338,6 +340,100 @@ export class AssignmentsService {
       recordedAt:
         visit.unassignedReasons[0]?.createdAt.toISOString() ?? visit.updatedAt.toISOString(),
     }));
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * One employee's published daily assignments — the Phase 2-compatible read
+   * model a PMS tablet or worker app would call. Deliberately PUBLISHED only:
+   * a draft proposal is not yet something to tell an employee about.
+   */
+  async employeeAssignments(employeeId: string, query: EmployeeAssignmentQueryDto) {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 50;
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { id: true },
+    });
+    if (!employee) {
+      throw new AppException(
+        'RESOURCE_NOT_FOUND',
+        `Employee "${employeeId}" was not found.`,
+        HttpStatus.NOT_FOUND,
+        { employeeId },
+      );
+    }
+
+    const where: Prisma.AssignmentWhereInput = {
+      status: AssignmentStatus.PUBLISHED,
+      crewMembers: { some: { employeeId } },
+      ...(query.from || query.to
+        ? {
+            generatedVisit: {
+              visitDate: {
+                ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
+                ...(query.to ? { lte: new Date(`${query.to}T00:00:00.000Z`) } : {}),
+              },
+            },
+          }
+        : {}),
+    };
+
+    const [total, assignments] = await Promise.all([
+      this.prisma.assignment.count({ where }),
+      this.prisma.assignment.findMany({
+        where,
+        include: {
+          crewMembers: { where: { employeeId } },
+          generatedVisit: {
+            include: {
+              serviceAgreement: {
+                include: {
+                  customer: { select: { name: true } },
+                  serviceSite: { select: { name: true } },
+                  jobType: { select: { name: true } },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { plannedStart: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    const items: EmployeeAssignmentDto[] = assignments.map((assignment) => {
+      const midnight = new Date(
+        Date.UTC(
+          assignment.plannedStart.getUTCFullYear(),
+          assignment.plannedStart.getUTCMonth(),
+          assignment.plannedStart.getUTCDate(),
+        ),
+      ).getTime();
+      const minutes = (moment: Date) => Math.round((moment.getTime() - midnight) / 60_000);
+      const membership = assignment.crewMembers[0];
+
+      return {
+        assignmentId: assignment.id,
+        visitId: assignment.generatedVisitId,
+        visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+        plannedStartMinute: minutes(assignment.plannedStart),
+        plannedEndMinute: minutes(assignment.plannedEnd),
+        branchCode: assignment.branchCode,
+        customerName: assignment.generatedVisit.serviceAgreement.customer.name,
+        siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
+        jobTypeName: assignment.generatedVisit.serviceAgreement.jobType.name,
+        role: membership.role,
+        isPmsSupervisor: membership.isPmsSupervisor,
+        publishedAt: (assignment.publishedAt ?? assignment.updatedAt).toISOString(),
+        acknowledgedAt: assignment.acknowledgedAt?.toISOString() ?? null,
+        startedAt: assignment.startedAt?.toISOString() ?? null,
+        completedAt: assignment.completedAt?.toISOString() ?? null,
+      };
+    });
 
     return { items, total, page, pageSize };
   }

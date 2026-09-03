@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 
+import { CalendarController } from './calendar/calendar.controller';
+import { CalendarService } from './calendar/calendar.service';
 import { PublishingService } from './optimizer/publishing.service';
 import { ScheduleRunProcessor, ScheduleRunQueue } from './optimizer/schedule-run.processor';
 import { ScheduleRunService } from './optimizer/schedule-run.service';
@@ -27,6 +29,7 @@ import { VisitsService } from './visits/visits.service';
     VisitsController,
     AssignmentsController,
     ScheduleRunsController,
+    CalendarController,
   ],
   providers: [
     VisitGenerationService,
@@ -38,6 +41,7 @@ import { VisitsService } from './visits/visits.service';
     ScheduleRunQueue,
     ScheduleRunProcessor,
     PublishingService,
+    CalendarService,
   ],
   exports: [VisitGenerationService, VisitsService, EligibilityService, ScheduleRunService],
 })

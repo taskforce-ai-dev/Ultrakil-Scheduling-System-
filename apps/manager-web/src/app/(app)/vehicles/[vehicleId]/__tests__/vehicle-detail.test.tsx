@@ -1,13 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import VehicleDetailPage from "../page";
+import { VehicleDetailView } from "../vehicle-detail-view";
+import { buildAuthorizedDrivers, buildVehicle } from "@/test/fixtures";
 
-describe("VehicleDetailPage", () => {
-  it("lists every authorized driver for the selected vehicle (acceptance scenario)", async () => {
-    // veh-1 (COL-4521) is authorized for emp-1 (S. Perera) and emp-4 (R. Bandara)
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "veh-1" }) });
-    render(ui);
+describe("VehicleDetailView", () => {
+  it("lists every authorized driver for the selected vehicle (acceptance scenario)", () => {
+    const vehicle = buildVehicle({ id: "veh-1", code: "COL-4521" });
+    const { drivers } = buildAuthorizedDrivers({
+      drivers: [
+        {
+          id: "emp-1",
+          fullName: "S. Perera",
+          gradeLabel: "PMS",
+          isPmsGrade: true,
+          branchCode: "COLOMBO",
+          deploymentType: "MOBILE",
+          isActive: true,
+        },
+        {
+          id: "emp-4",
+          fullName: "R. Bandara",
+          gradeLabel: "Assistant PMS",
+          isPmsGrade: true,
+          branchCode: "COLOMBO",
+          deploymentType: "MOBILE",
+          isActive: true,
+        },
+      ],
+    });
+
+    render(<VehicleDetailView vehicle={vehicle} drivers={drivers} />);
 
     expect(screen.getByText("S. Perera")).toBeInTheDocument();
     expect(screen.getByText("R. Bandara")).toBeInTheDocument();
@@ -18,18 +41,19 @@ describe("VehicleDetailPage", () => {
     expect(screen.queryByText(/^owner$/i)).not.toBeInTheDocument();
   });
 
-  it("shows an empty state when a vehicle has no authorized drivers", async () => {
-    // veh-4 (KAN-2004) has no employee authorized for it in the fixtures.
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "veh-4" }) });
-    render(ui);
+  it("shows an empty state when a vehicle has no authorized drivers", () => {
+    const vehicle = buildVehicle({ id: "veh-4", code: "KAN-2004" });
+
+    render(<VehicleDetailView vehicle={vehicle} drivers={[]} />);
 
     expect(screen.getByText("No authorized drivers")).toBeInTheDocument();
   });
 
-  it("shows a not-found message for an unknown vehicle ID", async () => {
-    const ui = await VehicleDetailPage({ params: Promise.resolve({ vehicleId: "does-not-exist" }) });
-    render(ui);
+  it("shows the seat capacity, or says it was not recorded", () => {
+    const vehicle = buildVehicle({ seatCapacity: null });
 
-    expect(screen.getByText("Vehicle not found")).toBeInTheDocument();
+    render(<VehicleDetailView vehicle={vehicle} drivers={[]} />);
+
+    expect(screen.getByText("Not recorded")).toBeInTheDocument();
   });
 });
