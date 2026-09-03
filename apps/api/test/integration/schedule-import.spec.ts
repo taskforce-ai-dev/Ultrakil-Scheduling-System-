@@ -25,17 +25,20 @@ function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule 
       {
         name: CUSTOMER,
         sourceSheet: 'Main',
+        isServiced: true,
         sites: [
           {
             name: `${CUSTOMER} — Head Office`,
             addressLine: '1 Test Road, Colombo 03',
             regionLabel: 'Metro',
             locationCode: 'HO-1',
+            isServiced: true,
           },
         ],
         agreements: [
           {
             siteName: `${CUSTOMER} — Head Office`,
+            isServiced: true,
             treatmentCodes: ['GPC', 'RC'],
             frequency: {
               kind: 'parsed',
@@ -127,7 +130,9 @@ describe('master schedule import', () => {
       {
         ...schedule.customers[0],
         name,
-        sites: [{ name: `${name} — Site`, addressLine: null, regionLabel: null, locationCode: null }],
+        sites: [
+          { name: `${name} — Site`, addressLine: null, regionLabel: null, locationCode: null, isServiced: true },
+        ],
         agreements: [
           {
             ...schedule.customers[0].agreements[0],
@@ -163,7 +168,9 @@ describe('master schedule import', () => {
       {
         ...schedule.customers[0],
         name,
-        sites: [{ name: `${name} — Site`, addressLine: null, regionLabel: null, locationCode: null }],
+        sites: [
+          { name: `${name} — Site`, addressLine: null, regionLabel: null, locationCode: null, isServiced: true },
+        ],
         agreements: [
           {
             ...schedule.customers[0].agreements[0],
@@ -198,5 +205,130 @@ describe('master schedule import', () => {
     const after = await prisma.jobType.count({ where: { code: { startsWith: 'IMPORTED_' } } });
 
     expect(after).toBe(before);
+  });
+});
+
+describe('records the workbook marks red', () => {
+  /** The same customer, with its site and agreement marked as gone. */
+  function unservicedSchedule(): ParsedSchedule {
+    const schedule = buildSchedule();
+    const customer = schedule.customers[0];
+    return {
+      ...schedule,
+      customers: [
+        {
+          ...customer,
+          isServiced: false,
+          sites: customer.sites.map((site) => ({ ...site, isServiced: false })),
+          agreements: customer.agreements.map((agreement) => ({
+            ...agreement,
+            isServiced: false,
+          })),
+        },
+      ],
+    };
+  }
+
+  it('imports them inactive, and their agreements archived', async () => {
+    await importSchedule(prisma, unservicedSchedule());
+
+    const customer = await prisma.customer.findFirstOrThrow({
+      where: { name: CUSTOMER },
+      include: { serviceSites: { include: { serviceAgreements: true } } },
+    });
+
+    expect(customer.isActive).toBe(false);
+    expect(customer.importedInactiveAt).not.toBeNull();
+    expect(customer.serviceSites.every((site) => !site.isActive)).toBe(true);
+    // Archived, not deleted: the promise that was once made is still on record.
+    expect(
+      customer.serviceSites.flatMap((site) => site.serviceAgreements),
+    ).not.toHaveLength(0);
+    expect(
+      customer.serviceSites
+        .flatMap((site) => site.serviceAgreements)
+        .every((agreement) => agreement.status === AgreementStatus.ARCHIVED),
+    ).toBe(true);
+  });
+
+  it('does not silently switch them back on when the red is gone', async () => {
+    await importSchedule(prisma, unservicedSchedule());
+    // The workbook is edited and the fill removed. That is somebody changing a
+    // cell, not the client returning, so the importer must not act on it.
+    await importSchedule(prisma, buildSchedule());
+
+    const customer = await prisma.customer.findFirstOrThrow({
+      where: { name: CUSTOMER },
+      include: { serviceSites: true },
+    });
+
+    expect(customer.isActive).toBe(false);
+    expect(customer.serviceSites.every((site) => !site.isActive)).toBe(true);
+  });
+
+  it('reactivates once a person has cleared the import marking', async () => {
+    await importSchedule(prisma, unservicedSchedule());
+
+    // What a manager turning the client back on does: the decision is theirs,
+    // and clearing the marking is what records that they made it.
+    await prisma.customer.updateMany({
+      where: { name: CUSTOMER },
+      data: { isActive: true, importedInactiveAt: null },
+    });
+    await prisma.serviceSite.updateMany({
+      where: { customer: { name: CUSTOMER } },
+      data: { isActive: true, importedInactiveAt: null },
+    });
+
+    await importSchedule(prisma, buildSchedule());
+
+    const customer = await prisma.customer.findFirstOrThrow({
+      where: { name: CUSTOMER },
+      include: { serviceSites: { include: { serviceAgreements: true } } },
+    });
+    expect(customer.isActive).toBe(true);
+    expect(
+      customer.serviceSites
+        .flatMap((site) => site.serviceAgreements)
+        .every((agreement) => agreement.status === AgreementStatus.ACTIVE),
+    ).toBe(true);
+  });
+
+  it('keeps a customer serviced while any one of its sites still is', async () => {
+    // A chain that closed one branch is still a paying client everywhere else.
+    const schedule = buildSchedule();
+    const customer = schedule.customers[0];
+    const [live] = customer.sites;
+
+    await importSchedule(prisma, {
+      ...schedule,
+      customers: [
+        {
+          ...customer,
+          isServiced: true,
+          sites: [
+            live,
+            {
+              name: `${CUSTOMER} — Closed Branch`,
+              addressLine: null,
+              regionLabel: null,
+              locationCode: null,
+              isServiced: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    const record = await prisma.customer.findFirstOrThrow({
+      where: { name: CUSTOMER },
+      include: { serviceSites: true },
+    });
+
+    expect(record.isActive).toBe(true);
+    expect(record.serviceSites.find((site) => site.name === live.name)?.isActive).toBe(true);
+    expect(
+      record.serviceSites.find((site) => site.name.endsWith('Closed Branch'))?.isActive,
+    ).toBe(false);
   });
 });

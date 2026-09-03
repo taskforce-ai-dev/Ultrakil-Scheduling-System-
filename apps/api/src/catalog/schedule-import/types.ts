@@ -63,6 +63,13 @@ export interface ParsedSite {
   regionLabel: string | null;
   /** Location or branch code from the sheet, when present. */
   locationCode: string | null;
+  /**
+   * False when the workbook marks this site red — UltraKIL's way of recording
+   * that it is no longer serviced. There is no column for it; the colour is
+   * the only statement, so it is read here and carried through rather than
+   * being rediscovered later.
+   */
+  isServiced: boolean;
 }
 
 export interface ParsedAgreement {
@@ -75,6 +82,9 @@ export interface ParsedAgreement {
   /** "Agreement date Up to", when the sheet records one. */
   endDate: string | null;
   notes: string | null;
+  /** False when its site is marked red. Such an agreement is imported, but
+   *  never ACTIVE, so it produces no future visits. */
+  isServiced: boolean;
 }
 
 export interface ParsedCustomer {
@@ -83,6 +93,12 @@ export interface ParsedCustomer {
   sourceSheet: string;
   sites: ParsedSite[];
   agreements: ParsedAgreement[];
+  /**
+   * False only when every row naming this customer is red. One live site is
+   * enough to keep the customer serviced — deactivating a customer because a
+   * single branch closed would stop work that is still being paid for.
+   */
+  isServiced: boolean;
 }
 
 export interface ImportIssue {
@@ -100,7 +116,11 @@ export interface ImportIssue {
     | 'TREATMENT_UNKNOWN'
     | 'SITE_NAME_MISSING'
     | 'BRANCH_UNKNOWN'
-    | 'SHEET_NOT_MAPPED';
+    | 'SHEET_NOT_MAPPED'
+    /** Read as no longer serviced because its identity cells are red. */
+    | 'RECORD_INACTIVE'
+    /** Some identity cells red and some not. Left active for a human to rule on. */
+    | 'RECORD_MARKING_AMBIGUOUS';
   /** What the workbook actually said, so a human can find it. */
   source: string | null;
   message: string;

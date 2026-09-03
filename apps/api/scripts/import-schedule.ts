@@ -55,6 +55,9 @@ const ISSUE_HEADINGS: Record<ImportIssue['code'], string> = {
   SITE_NAME_MISSING: 'Rows with no location',
   BRANCH_UNKNOWN: 'Sites whose UltraKIL branch needs confirming',
   SHEET_NOT_MAPPED: 'Sheets not in the import mapping',
+  RECORD_INACTIVE: 'Marked red — imported as no longer serviced, history kept',
+  RECORD_MARKING_AMBIGUOUS:
+    'Red on some identity cells but not others — left serviced, needs a decision',
 };
 
 function report(parsed: ParsedSchedule): void {
