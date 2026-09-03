@@ -26,6 +26,28 @@ export interface ScheduleImportSummary {
 }
 
 /**
+ * What an import may change about a record's active state.
+ *
+ * Deactivating is immediate: the workbook says this client is gone, and every
+ * day it keeps generating work is a crew sent somewhere nobody is paying for.
+ * Reactivating is deliberately not symmetric — `isActive` is absent from the
+ * serviced branch, so a record already marked red stays off. A row that has
+ * merely lost its red fill is not evidence the client came back; it is
+ * evidence somebody edited a cell. Switching their work back on is a decision
+ * a person makes, not a side effect of re-running the importer.
+ *
+ * A record reactivated by hand keeps that decision: clearing its
+ * `importedInactiveAt` is what tells later imports to treat it normally again.
+ */
+function activation(isServiced: boolean): {
+  isActive?: boolean;
+  importedInactiveAt?: Date | null;
+} {
+  if (!isServiced) return { isActive: false, importedInactiveAt: new Date() };
+  return {};
+}
+
+/**
  * Writes a parsed master schedule into the database.
  *
  * Customers and sites are always imported — a name and an address are facts
@@ -96,7 +118,7 @@ export async function importSchedule(
             data: {
               branchId: customerBranchId,
               branchCode: customerBranch,
-              isActive: true,
+              ...activation(customer.isServiced),
             },
           })
         : await tx.customer.create({
@@ -104,6 +126,8 @@ export async function importSchedule(
               name: customer.name,
               branchId: customerBranchId,
               branchCode: customerBranch,
+              isActive: customer.isServiced,
+              importedInactiveAt: customer.isServiced ? null : new Date(),
             },
           });
 
@@ -137,7 +161,7 @@ export async function importSchedule(
                 addressLine: site.addressLine,
                 branchId: siteBranchId,
                 branchCode: siteBranch,
-                isActive: true,
+                ...activation(site.isServiced),
               },
             })
           : await tx.serviceSite.create({
@@ -147,6 +171,8 @@ export async function importSchedule(
                 addressLine: site.addressLine,
                 branchId: siteBranchId,
                 branchCode: siteBranch,
+                isActive: site.isServiced,
+                importedInactiveAt: site.isServiced ? null : new Date(),
               },
             });
 
@@ -199,7 +225,11 @@ export async function importSchedule(
           endDate: agreement.endDate
             ? new Date(`${agreement.endDate}T00:00:00.000Z`)
             : null,
-          status: AgreementStatus.ACTIVE,
+          // An agreement on a site nobody services any more is kept, not deleted
+          // — it is the record of what was once promised, and its past visits
+          // still hang off it. ARCHIVED is what keeps it out of generation and
+          // out of the optimizer without losing any of that.
+          status: agreement.isServiced ? AgreementStatus.ACTIVE : AgreementStatus.ARCHIVED,
           notes:
             agreement.dayRule.kind === 'derived'
               ? `Imported from the master schedule workbook (${customer.sourceSheet}). The allowed days were not stated — they were read from the ${agreement.dayRule.sampleSize} visit dates already booked (${agreement.dayRule.evidence}). Confirm with the customer.`

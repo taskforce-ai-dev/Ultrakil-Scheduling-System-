@@ -180,6 +180,12 @@ export class ScheduleRunService {
       where: {
         visitDate: { gte: run.rangeStart, lte: run.rangeEnd },
         status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
+        // Work for a client that is no longer serviced is never scheduled.
+        // Visits already generated before the site went inactive would
+        // otherwise keep competing for crews and, worse, keep being staffed.
+        // The rows stay in the database: this excludes them from the solve,
+        // it does not erase the history.
+        serviceAgreement: { serviceSite: { isActive: true, customer: { isActive: true } } },
         ...branchFilter,
       },
       include: VISIT_FOR_SOLVE,

@@ -69,7 +69,25 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
     if visit.window_end_minute - visit.window_start_minute < visit.duration_minutes:
         reasons.append("WINDOW_TOO_SHORT")
 
+    # A checkmark against a vehicle means that employee may drive it, and every
+    # checked employee is equal — there is no owner and no preferred driver. So
+    # a vehicle is usable by this visit exactly when someone who could serve the
+    # visit is also checked against it. When no vehicle in the fleet clears that
+    # bar, the model quietly assigns no vehicle; saying so is the difference
+    # between a manager seeing "nobody who can serve this is checked for any
+    # van" and seeing an unexplained blank.
+    usable = [v for v in request.vehicles if _vehicle_serves_branch(v, visit)]
+    if usable and not any(
+        v.id in e.authorized_vehicle_ids for v in usable for e in eligible
+    ):
+        reasons.append("NO_AUTHORIZED_DRIVER")
+
     return reasons
+
+
+def _vehicle_serves_branch(vehicle, visit) -> bool:
+    """An unbranded vehicle goes anywhere; a branded one stays in its branch."""
+    return vehicle.branch_code is None or vehicle.branch_code == visit.branch_code
 
 
 def _employee_can_serve(employee, visit) -> bool:
@@ -417,6 +435,9 @@ _MESSAGES = {
     "CREW_TOO_SMALL": "Not enough eligible people are free to make up the crew.",
     "SKILL_NOT_HELD": "Nobody eligible and free holds a skill this job requires.",
     "WINDOW_TOO_SHORT": "The customer's window is shorter than the job takes.",
+    "NO_AUTHORIZED_DRIVER": (
+        "Nobody who could serve this visit is authorized to drive any available vehicle."
+    ),
     "NO_FEASIBLE_CREW": (
         "No combination of available people satisfies every rule for this visit."
     ),

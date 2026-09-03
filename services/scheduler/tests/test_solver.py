@@ -383,3 +383,177 @@ def test_meets_the_crew_size_the_agreement_asks_for(crew_size):
     result = solve(request(visits=[visit(required_crew_size=crew_size)], employees=pool))
 
     assert len(result.assignments[0].employee_ids) == crew_size
+
+
+class TestVehicleAuthorization:
+    """The clarified rule (ULK-C09), case by case.
+
+    A checkmark means "may drive". Every checked employee is equal: there is no
+    owner, no primary driver, no ranking. These cases are shaped after the real
+    fleet — DAC-2485 and DAG-3284 carry three checked drivers each, DAI-0191
+    two, PJ-6796 two, and some vans carry exactly one — because the bug this
+    guards against is a model that quietly picks a "main" driver and then
+    reports the vehicle unusable whenever that one person is busy.
+    """
+
+    def _crew_of_three(self) -> list[EmployeeInput]:
+        return [
+            employee(id="driver-a", is_pms_grade=True, authorized_vehicle_ids=["van-1"]),
+            employee(id="driver-b", authorized_vehicle_ids=["van-1"]),
+            employee(id="driver-c", authorized_vehicle_ids=["van-1"]),
+        ]
+
+    def test_any_checked_employee_may_be_the_driver(self):
+        # Each of the three, alone with a supervisor, must be able to drive it.
+        for candidate in ("driver-a", "driver-b", "driver-c"):
+            crew = [
+                employee(id="sup-x", is_pms_grade=True),
+                employee(id=candidate, authorized_vehicle_ids=["van-1"]),
+            ]
+            result = solve(
+                request(
+                    employees=crew,
+                    vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+                )
+            )
+
+            assert len(result.assignments) == 1, candidate
+            vehicles = result.assignments[0].vehicles
+            assert len(vehicles) == 1, candidate
+            assert vehicles[0].driver_employee_id == candidate
+
+    def test_the_driver_is_always_someone_on_the_crew(self):
+        result = solve(
+            request(
+                employees=self._crew_of_three(),
+                vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+            )
+        )
+
+        assignment = result.assignments[0]
+        driver = assignment.vehicles[0].driver_employee_id
+        assert driver in assignment.employee_ids
+
+    def test_an_unchecked_employee_is_never_the_driver(self):
+        result = solve(
+            request(
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["van-1"]),
+                    # Checked for nothing. Must never be recorded as driving.
+                    employee(id="unchecked-1"),
+                ],
+                vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+            )
+        )
+
+        for assignment in result.assignments:
+            for vehicle in assignment.vehicles:
+                assert vehicle.driver_employee_id != "unchecked-1"
+
+    def test_a_multi_driver_vehicle_survives_one_driver_being_unavailable(self):
+        # The point of the rule: three checked drivers, one away, van still goes.
+        crew = self._crew_of_three()
+        crew[1] = employee(
+            id="driver-b",
+            authorized_vehicle_ids=["van-1"],
+            unavailable_dates=["2026-09-09"],
+        )
+
+        result = solve(
+            request(employees=crew, vehicles=[VehicleInput(id="van-1", seat_capacity=4)])
+        )
+
+        assert len(result.assignments) == 1
+        vehicles = result.assignments[0].vehicles
+        assert len(vehicles) == 1
+        assert vehicles[0].driver_employee_id != "driver-b"
+
+    def test_a_single_driver_vehicle_is_unusable_when_that_driver_cannot_serve(self):
+        result = solve(
+            request(
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True),
+                    employee(
+                        id="only-driver",
+                        authorized_vehicle_ids=["van-1"],
+                        unavailable_dates=["2026-09-09"],
+                    ),
+                    employee(id="tech-9"),
+                ],
+                vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+            )
+        )
+
+        # Staffed by the two who can serve, but no vehicle: nobody left is checked.
+        for assignment in result.assignments:
+            assert assignment.vehicles == []
+
+    def test_says_so_when_nobody_eligible_is_checked_for_any_vehicle(self):
+        result = solve(
+            request(
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True),
+                    # Crew of 2 required, only one person: the visit is unassigned,
+                    # and the missing driver is one of the reasons it names.
+                    employee(
+                        id="driver-away",
+                        authorized_vehicle_ids=["van-1"],
+                        unavailable_dates=["2026-09-09"],
+                    ),
+                ],
+                vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+            )
+        )
+
+        assert result.unassigned
+        assert "NO_AUTHORIZED_DRIVER" in result.unassigned[0].reason_codes
+
+    def test_a_branch_vehicle_stays_in_its_branch(self):
+        result = solve(
+            request(
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["kandy-van"]),
+                    employee(id="tech-1", authorized_vehicle_ids=["kandy-van"]),
+                ],
+                vehicles=[VehicleInput(id="kandy-van", branch_code="KANDY", seat_capacity=4)],
+            )
+        )
+
+        for assignment in result.assignments:
+            assert assignment.vehicles == []
+
+    def test_a_vehicle_too_small_for_the_crew_is_not_used(self):
+        result = solve(
+            request(
+                employees=self._crew_of_three(),
+                vehicles=[VehicleInput(id="van-1", seat_capacity=1)],
+            )
+        )
+
+        for assignment in result.assignments:
+            assert assignment.vehicles == []
+
+    def test_one_vehicle_cannot_be_in_two_places_at_once(self):
+        # Two visits at the same hour, three checked drivers between them.
+        result = solve(
+            request(
+                visits=[
+                    visit(id="visit-a"),
+                    visit(id="visit-b", service_site_id="site-2"),
+                ],
+                employees=[
+                    employee(id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["van-1"]),
+                    employee(id="sup-2", is_pms_grade=True, authorized_vehicle_ids=["van-1"]),
+                    employee(id="tech-1", authorized_vehicle_ids=["van-1"]),
+                    employee(id="tech-2", authorized_vehicle_ids=["van-1"]),
+                ],
+                vehicles=[VehicleInput(id="van-1", seat_capacity=4)],
+            )
+        )
+
+        using_the_van = [
+            assignment
+            for assignment in result.assignments
+            if any(vehicle.vehicle_id == "van-1" for vehicle in assignment.vehicles)
+        ]
+        assert len(using_the_van) <= 1

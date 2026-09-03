@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 
+import { CellMarking, ExcelColour, classifyRecord, isRedMarking } from './cell-colour';
 import {
   AgreementSheetMapping,
   BranchSheetMapping,
@@ -34,6 +35,27 @@ function cellText(row: ExcelJS.Row, column: number | undefined): string {
     return String(inner).replace(/\s+/g, ' ').trim();
   }
   return String(value).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * How one identity cell is marked, from its fill and its font.
+ *
+ * Both are read because the workbook uses both: some sheets fill the row red,
+ * others leave the fill alone and turn the text red. Either is a statement;
+ * neither is more official than the other.
+ */
+function cellMarking(row: ExcelJS.Row, column: number | undefined): CellMarking {
+  if (!column) return 'plain';
+  const cell = row.getCell(column);
+
+  const fill = cell.fill;
+  if (fill?.type === 'pattern' && fill.pattern !== 'none') {
+    if (isRedMarking(fill.fgColor as ExcelColour | undefined)) return 'red';
+  }
+
+  if (isRedMarking(cell.font?.color as ExcelColour | undefined)) return 'red';
+
+  return 'plain';
 }
 
 /** True when a site cell holds a heading or filler rather than a place. */
@@ -108,8 +130,44 @@ function readAgreementSheet(
       });
     }
 
+    // Only these two cells are ever consulted. The month and date columns are
+    // full of red for reasons that have nothing to do with whether a client is
+    // still on the books, and the heading guard above has already excluded
+    // section headers, so a red banner cannot reach this line.
+    const marking = classifyRecord([
+      cellMarking(row, columns.customer),
+      ...(rawLocation ? [cellMarking(row, columns.location)] : []),
+    ]);
+    const isServiced = marking !== 'inactive';
+
+    if (marking === 'inactive') {
+      issues.push({
+        sheet: mapping.sheet,
+        rowNumber,
+        code: 'RECORD_INACTIVE',
+        source: null,
+        message: `${customerName} — ${siteName}: marked red, so it was imported as no longer serviced. It generates no future visits; its history is kept.`,
+      });
+    } else if (marking === 'ambiguous') {
+      issues.push({
+        sheet: mapping.sheet,
+        rowNumber,
+        code: 'RECORD_MARKING_AMBIGUOUS',
+        source: null,
+        message: `${customerName} — ${siteName}: the client and location cells disagree on the red marking, so it was left serviced. Someone should confirm which was meant.`,
+      });
+    }
+
     const customer = upsertCustomer(customers, customerName, mapping.sheet);
-    addSite(customer, { name: siteName, addressLine: null, regionLabel: null, locationCode: null });
+    addSite(customer, {
+      name: siteName,
+      addressLine: null,
+      regionLabel: null,
+      locationCode: null,
+      isServiced,
+    });
+    // One live row keeps the customer live, however many of its sites have closed.
+    if (isServiced) customer.isServiced = true;
     siteNames.add(siteName);
 
     const treatmentCodes = parseTreatmentCodes(cellText(row, columns.treatment));
@@ -142,6 +200,7 @@ function readAgreementSheet(
 
     customer.agreements.push({
       siteName,
+      isServiced,
       treatmentCodes,
       frequency,
       dayRule,
@@ -158,6 +217,7 @@ function readBranchSheet(
   worksheet: ExcelJS.Worksheet,
   mapping: BranchSheetMapping,
   customers: Map<string, ParsedCustomer>,
+  issues: ImportIssue[],
 ): { rows: number; sites: number } {
   const headerText = cellText(worksheet.getRow(mapping.headerRow), mapping.columns.site);
   const customer = upsertCustomer(customers, mapping.customerName, mapping.sheet);
@@ -171,11 +231,27 @@ function readBranchSheet(
     if (looksLikeHeading(name, headerText)) return;
     rows += 1;
 
+    // A branch sheet is one customer's list of places, so the site cell is the
+    // whole identity of the record and cannot disagree with itself.
+    const isServiced = classifyRecord([cellMarking(row, mapping.columns.site)]) !== 'inactive';
+    if (isServiced) {
+      customer.isServiced = true;
+    } else {
+      issues.push({
+        sheet: mapping.sheet,
+        rowNumber,
+        code: 'RECORD_INACTIVE',
+        source: null,
+        message: `${mapping.customerName} — ${name}: marked red, so it was imported as no longer serviced. It generates no future visits; its history is kept.`,
+      });
+    }
+
     addSite(customer, {
       name,
       addressLine: cellText(row, mapping.columns.address) || null,
       regionLabel: cellText(row, mapping.columns.region) || null,
       locationCode: cellText(row, mapping.columns.code) || null,
+      isServiced,
     });
   });
 
@@ -191,7 +267,15 @@ function upsertCustomer(
   const existing = customers.get(key);
   if (existing) return existing;
 
-  const created: ParsedCustomer = { name, sourceSheet: sheet, sites: [], agreements: [] };
+  const created: ParsedCustomer = {
+    name,
+    sourceSheet: sheet,
+    sites: [],
+    agreements: [],
+    // Raised by the first row that is not red. A customer every one of whose
+    // rows is red is genuinely gone.
+    isServiced: false,
+  };
   customers.set(key, created);
   return created;
 }
@@ -211,6 +295,10 @@ function addSite(customer: ParsedCustomer, site: ParsedSite): void {
   existing.addressLine ??= site.addressLine;
   existing.regionLabel ??= site.regionLabel;
   existing.locationCode ??= site.locationCode;
+  // One live row is enough. The same site listed twice, red on one sheet and
+  // plain on another, is still being serviced somewhere — and stopping work
+  // that is still happening is the worse of the two mistakes.
+  if (site.isServiced) existing.isServiced = true;
 }
 
 function recordFrequencyIssue(
@@ -327,7 +415,7 @@ export async function parseMasterSchedule(path: string): Promise<ParsedSchedule>
     const counts =
       mapping.kind === 'agreements'
         ? readAgreementSheet(worksheet, mapping, customers, issues)
-        : readBranchSheet(worksheet, mapping, customers);
+        : readBranchSheet(worksheet, mapping, customers, issues);
 
     sheetSummary.push({ sheet: worksheet.name, ...counts });
   });

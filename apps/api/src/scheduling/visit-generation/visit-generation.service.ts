@@ -146,6 +146,12 @@ export class VisitGenerationService {
         // Only active agreements generate work. A paused one keeps its past
         // visits but produces no new ones — that is what pausing means.
         status: AgreementStatus.ACTIVE,
+        // And only for a site and customer still being serviced. The import
+        // already archives the agreements of a site it read as red, so this is
+        // the second lock on the same door: a site a manager deactivates by
+        // hand stops generating work immediately, without anyone having to
+        // remember to archive each of its agreements too.
+        serviceSite: { isActive: true, customer: { isActive: true } },
         ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),
         ...(dto.serviceAgreementIds?.length
           ? { id: { in: dto.serviceAgreementIds } }

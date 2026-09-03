@@ -401,6 +401,13 @@ model Customer {
 
   isActive Boolean @default(true)
 
+  /// Set when an import read this record as no longer serviced — a red row in
+  /// the master schedule. It is what stops the next import quietly switching
+  /// the record back on: a row that has since lost its red is not evidence the
+  /// client returned, only that someone changed a fill. Reactivating is a
+  /// deliberate act, not a side effect of re-running the importer.
+  importedInactiveAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -429,6 +436,13 @@ model ServiceSite {
   longitude Decimal? @db.Decimal(9, 6)
 
   isActive Boolean @default(true)
+
+  /// Set when an import read this record as no longer serviced — a red row in
+  /// the master schedule. It is what stops the next import quietly switching
+  /// the record back on: a row that has since lost its red is not evidence the
+  /// client returned, only that someone changed a fill. Reactivating is a
+  /// deliberate act, not a side effect of re-running the importer.
+  importedInactiveAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
