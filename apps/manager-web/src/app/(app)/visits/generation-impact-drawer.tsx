@@ -156,6 +156,9 @@ export function GenerationImpactDrawer({
       onOpenChange={onOpenChange}
       title="Generate visits"
       description={`${formatLongDate(from)} to ${formatLongDate(to)}`}
+      // This body is a read-only impact summary — no form fields, nothing
+      // for the Sheet's open-time autofocus to prefer instead.
+      contentTabIndex
       footer={
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
