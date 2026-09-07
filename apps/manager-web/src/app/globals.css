@@ -9,7 +9,10 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  /* Site-wide now, not just the Dashboard — every h1/h2/h3 (see the base
+     layer below) picks up the distinctive display face. */
+  --font-heading: var(--font-display), var(--font-sans);
+  --color-brand-lime: var(--brand-lime);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -50,11 +53,22 @@
 }
 
 :root {
-  /* UltraKIL brand palette — deep teal, dark teal/green, main green, sage. */
-  --brand-deep-teal: #092328;
-  --brand-dark-teal: #12544f;
-  --brand-green: #2a835f;
+  /* UltraKIL brand palette, matched to the marketing site (deep forest
+     green, pine, a richer primary green, sage, and a lime accent reserved
+     for dark surfaces/icons only — see the note on --brand-lime below).
+     Contrast-checked against every place these feed into (relative
+     luminance / WCAG formula), not eyeballed: new primary green vs. white
+     text is 5.32:1 (up from the old palette's 4.66:1), sidebar text vs. the
+     new dark sidebar is 14.6:1, dark-mode foreground vs. the new dark
+     background is 15.89:1. */
+  --brand-deep-teal: #0a2116;
+  --brand-dark-teal: #123a26;
+  --brand-green: #1f7a4d;
   --brand-sage: #8bbb92;
+  /* Accent only — never usable as text or a fill behind white/light text
+     (1.26:1 against white, fails WCAG outright). Confined to dark
+     surfaces, icon color, and small decorative accents. */
+  --brand-lime: #d6f23c;
 
   --background: #f5f8f6;
   --foreground: var(--brand-deep-teal);
@@ -99,9 +113,9 @@
 .dark {
   --background: var(--brand-deep-teal);
   --foreground: #eaf3ec;
-  --card: #0e2f31;
+  --card: #0d2a1c;
   --card-foreground: #eaf3ec;
-  --popover: #0e2f31;
+  --popover: #0d2a1c;
   --popover-foreground: #eaf3ec;
   --primary: var(--brand-green);
   --primary-foreground: #ffffff;
@@ -126,7 +140,7 @@
   --chart-3: #5fa37d;
   --chart-4: var(--brand-dark-teal);
   --chart-5: #eaf3ec;
-  --sidebar: #061a1d;
+  --sidebar: #061510;
   --sidebar-foreground: #d9ece0;
   --sidebar-primary: var(--brand-green);
   --sidebar-primary-foreground: #ffffff;

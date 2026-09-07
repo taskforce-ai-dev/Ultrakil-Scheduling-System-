@@ -93,7 +93,7 @@ export default function DashboardPage() {
           Dashboard
         </h1>
         <p className="relative mt-3 max-w-xl font-[family-name:var(--font-display)] text-xl leading-snug font-medium text-white/90">
-          Good to see you. Here&apos;s <span className="text-[#d6f23c]">today&apos;s dispatch.</span>
+          Good to see you. Here&apos;s <span className="text-brand-lime">today&apos;s dispatch.</span>
         </p>
         <p className="relative mt-3 max-w-md text-sm text-white/60">
           Overview of today&apos;s schedule and dispatch status, and the live connection this portal
@@ -104,7 +104,7 @@ export default function DashboardPage() {
       {/* Content */}
       <div className="space-y-4 px-6">
         <div className="flex items-center gap-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-[#d6f23c]" aria-hidden="true" />
+          <span className="h-1.5 w-1.5 rounded-full bg-brand-lime" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-muted-foreground">API connection</h2>
         </div>
 
@@ -129,7 +129,7 @@ export default function DashboardPage() {
                 style={{ transitionDelay: `${index * 30}ms` }}
               >
                 <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#d6f23c]/15 text-[#2a6b17] dark:text-[#d6f23c]">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-lime/15 text-[#2a6b17] dark:text-brand-lime">
                     <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                   </span>
                   {label}
