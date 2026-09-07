@@ -88,6 +88,53 @@ beforeEach(async () => {
 });
 
 describe('importing the workforce matrix', () => {
+  it.each(['group', 'capacity', 'description', 'bare'])(
+    'imports and re-imports distinct provincial registrations with %s context',
+    async (context) => {
+      const fixturePath = join(workDir, `provincial-${context}.xlsx`);
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Matrix');
+      const prefix = context === 'capacity' ? 'Van( 04 People) ' : context === 'description' ? 'Van ' : '';
+      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'];
+      if (context === 'group') sheet.addRow([...Array<string>(10).fill(''), 'Transport']);
+      sheet.addRows([
+        ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', ...skills,
+          `${prefix}WP CAB-1234`, `${prefix}CP CAB-1234`, 'Bolero Truck DAC- 2485'],
+        ['Colombo Branch', 1, 'Fixture Aspen', '', 'SPMS', ...skills.map(() => '✓'), '✓', '', '✓'],
+        ['', 2, 'Fixture Birch', '', 'Junior PMT', ...skills.map(() => ''), '', '✓', '✓'],
+        ['', 3, 'Fixture Cedar', '', 'Junior PMT', ...skills.map(() => ''), '', '', ''],
+      ]);
+      await workbook.xlsx.writeFile(fixturePath);
+      const { grid } = await readMatrixFile(fixturePath, null);
+      const parsed = parseMatrix(grid);
+      expect(parsed.issues).toEqual([]);
+      const first = await importMatrix(prisma, parsed);
+      expect(first.vehiclesCreated).toBe(3);
+      expect(first.authorizationsLinked).toBe(4);
+      const vehicles = await prisma.vehicle.findMany({ orderBy: { code: 'asc' } });
+      expect(vehicles.map(({ code }) => code)).toEqual(['CP CAB-1234', 'DAC-2485', 'WP CAB-1234']);
+      const employees = await prisma.employee.findMany({
+        orderBy: { fullName: 'asc' }, include: {
+          vehicleAuthorizations: { orderBy: { vehicle: { code: 'asc' } }, include: { vehicle: true } },
+          skills: { orderBy: { skillCode: 'asc' } },
+        },
+      });
+      expect(employees.map(({ vehicleAuthorizations }) => vehicleAuthorizations.map(({ vehicle }) => vehicle.code)))
+        .toEqual([['DAC-2485', 'WP CAB-1234'], ['CP CAB-1234', 'DAC-2485'], []]);
+      expect(employees[0].skills.map(({ skillCode }) => skillCode)).toEqual([
+        'CPR_2026', 'FIRST_AID_2026', 'ISO_9001', 'VAN_FIRST_AID_2026',
+      ]);
+      const authorizations = await prisma.vehicleAuthorization.findMany({ orderBy: { id: 'asc' } });
+      const second = await importMatrix(prisma, parsed);
+      expect(second.vehiclesCreated).toBe(0);
+      expect(second.employeesCreated).toBe(0);
+      expect(second.authorizationsLinked).toBe(4);
+      expect(await prisma.vehicle.findMany({ orderBy: { code: 'asc' } }))
+        .toEqual(vehicles.map((vehicle) => ({ ...vehicle, updatedAt: expect.any(Date) })));
+      expect(await prisma.vehicleAuthorization.findMany({ orderBy: { id: 'asc' } })).toEqual(authorizations);
+    },
+  );
+
   it('imports a no-capacity DAC header with three equal permissions and preserves them on re-import', async () => {
     const fixturePath = join(workDir, 'no-capacity-dac.xlsx');
     const workbook = new ExcelJS.Workbook();

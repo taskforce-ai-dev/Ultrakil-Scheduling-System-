@@ -391,16 +391,18 @@ function classifyColumns(
     // Registration syntax alone is ambiguous: "First Aid 2026" and "ISO 9001"
     // are skills, yet end in valid-looking plates. Without group/capacity
     // context, require an established vehicle description immediately before
-    // the parsed registration (e.g. "Bolero Truck DAC- 2485").
+    // the parsed registration (e.g. "Bolero Truck DAC- 2485"), or a complete
+    // standalone provincial registration (e.g. "WP CAB-1234").
     const { code, seatCapacity } = parseVehicleHeader(label);
     const description = code
       ? label.trim().replace(/\s+/g, ' ').replace(/\s*-\s*/g, '-').slice(0, -code.length).trim()
       : '';
     const headerDescribesVehicle = /\b(?:van|truck|motor bike)$/i.test(description);
+    const standaloneProvincialRegistration = description === '' && /^[A-Za-z]{2} /.test(code ?? '');
 
     // Capacity-only headings still report their missing registration in
     // buildVehicles instead of silently becoming skills.
-    if (groupSaysVehicle || seatCapacity !== null || (code !== null && headerDescribesVehicle)) {
+    if (groupSaysVehicle || seatCapacity !== null || (code !== null && headerDescribesVehicle) || standaloneProvincialRegistration) {
       vehicleColumns.push({ index, label, group });
     } else {
       skillColumns.push({ index, label, group });

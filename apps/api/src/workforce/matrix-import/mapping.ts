@@ -124,8 +124,8 @@ export function toSkillCode(label: string): string {
  * Pulls the registration out of a vehicle header.
  *
  * Headers look like "Van( 04 People) 253-4289" or
- * "Motor Bike( 01 Person) BJG 4419". The registration is the trailing token;
- * the description and capacity bracket are optional.
+ * "Motor Bike( 01 Person) BJG 4419". The registration is at the end and may
+ * include a province ("WP CAB-1234"); description and capacity are optional.
  */
 export function parseVehicleHeader(label: string): {
   code: string | null;
@@ -145,9 +145,11 @@ export function parseVehicleHeader(label: string): {
   // bracket ("Bolero Truck DAC- 2485"). The leading boundary prevents numeric
   // skill labels such as "Safety Level 2026" from yielding "vel 2026". Numeric
   // prefixes need a separator so an ordinary six/seven-digit skill number is
-  // not mistaken for a registration. Never fall back to arbitrary text.
+  // not mistaken for a registration. Keep an optional two-letter provincial
+  // prefix: WP CAB-1234 and CP CAB-1234 identify different vehicles. Never
+  // fall back to arbitrary text.
   const registration = compact.match(
-    /(?:^|\s)((?:[A-Za-z]{1,3}\s*(?:-\s*)?|\d{2,3}(?:\s*-\s*|\s+))\d{4})$/,
+    /(?:^|\s)((?:[A-Za-z]{2}\s+)?(?:[A-Za-z]{1,3}\s*(?:-\s*)?|\d{2,3}(?:\s*-\s*|\s+))\d{4})$/,
   )?.[1];
   const code = registration?.replace(/\s*-\s*/g, '-') ?? null;
 

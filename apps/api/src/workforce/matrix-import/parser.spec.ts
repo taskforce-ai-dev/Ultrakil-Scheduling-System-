@@ -53,6 +53,15 @@ const mapping = {
 };
 
 describe('parseVehicleHeader', () => {
+  it.each([
+    ['WP CAB-1234', 'WP CAB-1234', null],
+    ['CP CAB-1234', 'CP CAB-1234', null],
+    ['Van WP CAB- 1234', 'WP CAB-1234', null],
+    ['Van( 04 People) CP CAB-1234', 'CP CAB-1234', 4],
+  ])('retains the complete provincial registration in %s', (label, code, seatCapacity) => {
+    expect(parseVehicleHeader(label as string)).toEqual({ code, seatCapacity });
+  });
+
   it('splits capacity from registration', () => {
     expect(parseVehicleHeader('Van( 04 People) 253-4289')).toEqual({
       code: '253-4289',
@@ -179,6 +188,35 @@ describe('a no-capacity vehicle without group or merge context', () => {
     expect(result.vehicles).toEqual([]);
     expect(result.issues.map(({ code }) => code)).toEqual(['MATRIX_VEHICLE_NO_REGISTRATION']);
   });
+});
+
+describe('distinct provincial vehicle registrations', () => {
+  it.each(['group', 'capacity', 'description', 'bare'])(
+    'keeps provincial plates and checkmarks distinct with %s context',
+    (context) => {
+      const prefix = context === 'capacity' ? 'Van( 04 People) ' : context === 'description' ? 'Van ' : '';
+      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'];
+      const grid: Grid = [
+        ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', ...skills,
+          `${prefix}WP CAB-1234`, `${prefix}CP CAB-1234`, 'Bolero Truck DAC- 2485'],
+        ['Colombo Branch', '1', 'Fixture Aspen', '', 'SPMS', ...skills.map(() => '✓'), '✓', '', '✓'],
+        ['', '2', 'Fixture Birch', '', 'Junior PMT', ...skills.map(() => ''), '', '✓', '✓'],
+        ['', '3', 'Fixture Cedar', '', 'Junior PMT', ...skills.map(() => ''), '', '', ''],
+      ];
+      if (context === 'group') grid.unshift([...Array<string>(10).fill(''), 'Transport']);
+      const parsed = parseMatrix(grid);
+
+      expect(parsed.issues).toEqual([]);
+      expect(parsed.vehicles.map(({ code }) => code)).toEqual(['WP CAB-1234', 'CP CAB-1234', 'DAC-2485']);
+      expect(parsed.employees.map(({ vehicles }) => vehicles)).toEqual([
+        [{ vehicleCode: 'WP CAB-1234' }, { vehicleCode: 'DAC-2485' }],
+        [{ vehicleCode: 'CP CAB-1234' }, { vehicleCode: 'DAC-2485' }],
+        [],
+      ]);
+      expect(parsed.skillColumns.map(({ label }) => label)).toEqual(skills);
+      expect(parsed.employees[0].skills.map(({ skillLabel }) => skillLabel)).toEqual(skills);
+    },
+  );
 });
 
 describe('the "Public Vehicles" column', () => {
