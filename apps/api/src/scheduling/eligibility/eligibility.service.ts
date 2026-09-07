@@ -28,6 +28,8 @@ interface EligibilityOptions {
     visitDate: Date;
     windowStartMinute: number;
     windowEndMinute: number;
+    durationMinutes?: number;
+    requiredCrewSize?: number;
   };
 }
 
@@ -114,8 +116,8 @@ export class EligibilityService {
         visitDate: timing.visitDate.toISOString().slice(0, 10),
         windowStartMinute: timing.windowStartMinute,
         windowEndMinute: timing.windowEndMinute,
-        durationMinutes: visit.durationMinutes,
-        requiredCrewSize: visit.requiredCrewSize,
+        durationMinutes: options.proposedVisit?.durationMinutes ?? visit.durationMinutes,
+        requiredCrewSize: options.proposedVisit?.requiredCrewSize ?? visit.requiredCrewSize,
         serviceSiteId: visit.serviceAgreement.serviceSite.id,
         siteName: visit.serviceAgreement.serviceSite.name,
         customerName: visit.serviceAgreement.customer.name,

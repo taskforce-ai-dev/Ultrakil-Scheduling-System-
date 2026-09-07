@@ -15,7 +15,7 @@
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BranchCode, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
@@ -24,6 +24,8 @@ import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { EligibilityService } from '../../src/scheduling/eligibility/eligibility.service';
+import { AssignmentsService } from '../../src/scheduling/eligibility/assignments.service';
+import { VisitsService } from '../../src/scheduling/visits/visits.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
@@ -61,15 +63,16 @@ function deferred<T>() {
 }
 
 /** Exposes the real connection/lock boundary without replacing any SQL. */
-function transactionProbe(holdLock: boolean) {
+function transactionProbe(holdLock: boolean, beforeTransaction?: () => Promise<void>) {
   const pid = deferred<number>();
   const locked = deferred<void>();
   const release = deferred<void>();
   const client = new Proxy(prisma, {
     get(target, property) {
       if (property === '$transaction') {
-        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
-          target.$transaction(async (tx) => {
+        return async (work: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+          await beforeTransaction?.();
+          return target.$transaction(async (tx) => {
             const [backend] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
             pid.resolve(backend.pid);
             return work(new Proxy(tx, {
@@ -88,6 +91,7 @@ function transactionProbe(holdLock: boolean) {
               },
             }));
           }, { timeout: 15_000 });
+        };
       }
       return Reflect.get(target, property);
     },
@@ -499,6 +503,368 @@ describe('locks survive a rerun', () => {
     });
     expect(lock.releasedAt).not.toBeNull();
   });
+});
+
+async function manualPublicationFixture(withDraft = true) {
+  const visitId = await makeVisit();
+  const visit = await prisma.generatedVisit.findUniqueOrThrow({
+    where: { id: visitId },
+  });
+  const run = await prisma.scheduleRun.create({
+    data: {
+      status: 'SUCCEEDED',
+      rangeStart: new Date(RANGE.from),
+      rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    },
+  });
+  const createDraft = async () => {
+    const draft = await prisma.assignment.create({
+      data: {
+        generatedVisitId: visitId,
+        branchId: visit.branchId,
+        branchCode: BranchCode.COLOMBO,
+        scheduleRunId: run.id,
+        status: 'DRAFT',
+        plannedStart: new Date('2027-03-03T09:00:00Z'),
+        plannedEnd: new Date('2027-03-03T10:30:00Z'),
+        crewMembers: {
+          create: [
+            {
+              employeeId: supervisorIds[0],
+              role: 'SUPERVISOR',
+              isPmsSupervisor: true,
+            },
+            { employeeId: technicianIds[0], role: 'TECHNICIAN' },
+          ],
+        },
+      },
+    });
+    await prisma.generatedVisit.update({
+      where: { id: visitId },
+      data: { status: 'SCHEDULED' },
+    });
+    return draft;
+  };
+  const draft = withDraft ? await createDraft() : undefined;
+  const actor = await prisma.user.findUniqueOrThrow({
+    where: { email: ADMIN.email },
+  });
+  const proposal = {
+    plannedStartMinute: 540,
+    plannedEndMinute: 630,
+    crew: [
+      { employeeId: supervisorIds[0], role: CrewRole.SUPERVISOR },
+      { employeeId: technicianIds[0], role: CrewRole.TECHNICIAN },
+    ],
+  };
+  return { visitId, run, draft, createDraft, actor, proposal };
+}
+
+describe('standard writer publication protocol', () => {
+  it('preserves a draft and visit when an adjustment violates crew eligibility', async () => {
+    const f = await manualPublicationFixture();
+    const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+      where: { id: f.visitId },
+    });
+    const draftBefore = await prisma.assignment.findUniqueOrThrow({
+      where: { id: f.draft!.id },
+    });
+    const failure = await app
+      .get(VisitsService)
+      .adjust(
+        f.visitId,
+        { visitDate: '2027-03-04', requiredCrewSize: 3 },
+        f.actor,
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(
+      await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+    ).toEqual(visitBefore);
+    expect(
+      await prisma.assignment.findUnique({ where: { id: f.draft!.id } }),
+    ).toEqual(draftBefore);
+    expect(
+      await prisma.auditEvent.count({
+        where: { entityId: f.visitId, action: 'visit.adjusted' },
+      }),
+    ).toBe(0);
+  });
+
+  it.each(
+    ['assign', 'unassign', 'adjust'].flatMap((operation) =>
+      ['publisher', 'manual'].map((first) => ({ operation, first })),
+    ),
+  )(
+    'serializes manual $operation when $first locks first',
+    async ({ operation, first }) => {
+      const f = await manualPublicationFixture();
+      const manual = transactionProbe(first === 'manual');
+      const publisher = transactionProbe(first === 'publisher');
+      const assignments = new AssignmentsService(
+        manual.client,
+        app.get(EligibilityService),
+        app.get(AuditService),
+      );
+      const visits = new VisitsService(
+        manual.client,
+        app.get(AuditService),
+        app.get(EligibilityService),
+      );
+      const publishing = new PublishingService(
+        publisher.client,
+        app.get(AuditService),
+      );
+      const mutate = () =>
+        operation === 'assign'
+          ? assignments.assign(f.visitId, f.proposal, f.actor)
+          : operation === 'unassign'
+            ? assignments.unassign(f.visitId, f.actor)
+            : visits.adjust(
+                f.visitId,
+                {
+                  visitDate: '2027-03-04',
+                  windowStartMinute: 510,
+                  windowEndMinute: 900,
+                  durationMinutes: 120,
+                  requiredCrewSize: 2,
+                },
+                f.actor,
+              );
+      const originalVisit = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      let mutation: Promise<unknown> | undefined;
+      let publication: Promise<unknown> | undefined;
+      try {
+        if (first === 'manual') {
+          mutation = mutate().then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          await manual.locked.promise;
+        }
+        publication = publishing.publish(f.run.id, null, f.actor).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        if (first === 'publisher') {
+          await publisher.locked.promise;
+          mutation = mutate().then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+        }
+        const [manualPid, publisherPid] = await Promise.all([
+          manual.pid.promise,
+          publisher.pid.promise,
+        ]);
+        await waitForBlocked(
+          first === 'manual' ? publisherPid : manualPid,
+          first === 'manual' ? manualPid : publisherPid,
+        );
+        (first === 'manual' ? manual : publisher).release.resolve();
+        const [mutated, published] = await Promise.all([mutation, publication]);
+        const visit = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: f.visitId },
+        });
+        const notices = await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: f.draft!.id },
+        });
+        const draft = await prisma.assignment.findUnique({
+          where: { id: f.draft!.id },
+        });
+        if (first === 'publisher') {
+          expect(published).toHaveProperty('value');
+          expect(mutated).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(draft?.status).toBe('PUBLISHED');
+          expect(visit).toEqual(originalVisit);
+          expect(notices).toHaveLength(2);
+        } else if (operation === 'adjust') {
+          expect(mutated).toHaveProperty('value');
+          expect(published).toHaveProperty('value');
+          expect(visit.visitDate.toISOString()).toBe(
+            '2027-03-04T00:00:00.000Z',
+          );
+          expect(draft?.plannedStart.toISOString()).toBe(
+            '2027-03-04T09:00:00.000Z',
+          );
+          expect(draft?.plannedEnd.toISOString()).toBe(
+            '2027-03-04T11:00:00.000Z',
+          );
+          expect(notices).toHaveLength(2);
+          for (const notice of notices)
+            expect(notice.payload).toMatchObject({
+              visitDate: '2027-03-04',
+              plannedStart: draft!.plannedStart.toISOString(),
+              plannedEnd: draft!.plannedEnd.toISOString(),
+            });
+          const audit = await prisma.auditEvent.findFirstOrThrow({
+            where: { entityId: f.run.id, action: 'schedule_run.published' },
+          });
+          expect(audit.after).toMatchObject({
+            snapshot: [
+              expect.objectContaining({
+                visitDate: '2027-03-04',
+                plannedStart: draft!.plannedStart.toISOString(),
+                plannedEnd: draft!.plannedEnd.toISOString(),
+              }),
+            ],
+          });
+        } else {
+          expect(mutated).toHaveProperty('value');
+          expect(published).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(draft).toBeNull();
+          expect(notices).toHaveLength(0);
+          expect(visit.status).toBe(
+            operation === 'assign' ? 'SCHEDULED' : 'UNASSIGNED',
+          );
+          expect(
+            (
+              await prisma.scheduleRun.findUniqueOrThrow({
+                where: { id: f.run.id },
+              })
+            ).publishedAt,
+          ).toBeNull();
+        }
+      } finally {
+        manual.release.resolve();
+        publisher.release.resolve();
+        await Promise.all([mutation, publication]);
+      }
+    },
+  );
+
+  it('preserves a new publication after a rejected manual proposal took an empty snapshot', async () => {
+    const f = await manualPublicationFixture(false);
+    const snapshotRead = deferred<void>();
+    const resume = deferred<void>();
+    const probe = transactionProbe(false, async () => {
+      snapshotRead.resolve();
+      await resume.promise;
+    });
+    const manual = new AssignmentsService(
+      probe.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const pending = manual
+      .assign(f.visitId, { ...f.proposal, crew: [] }, f.actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    try {
+      await snapshotRead.promise;
+      const draft = await f.createDraft();
+      await app.get(PublishingService).publish(f.run.id, null, f.actor);
+      const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      const notices = await prisma.assignmentNotificationOutbox.findMany({
+        where: { assignmentId: draft.id },
+        orderBy: { id: 'asc' },
+      });
+      resume.resolve();
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(
+        await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+      ).toEqual(visitBefore);
+      expect(
+        await prisma.visitUnassignedReason.count({
+          where: { generatedVisitId: f.visitId },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: draft.id },
+          orderBy: { id: 'asc' },
+        }),
+      ).toEqual(notices);
+    } finally {
+      resume.resolve();
+      await pending;
+    }
+  });
+
+  it.each([
+    AssignmentStatus.PUBLISHED,
+    AssignmentStatus.ACKNOWLEDGED,
+    AssignmentStatus.IN_PROGRESS,
+    AssignmentStatus.COMPLETED,
+    AssignmentStatus.SUPERSEDED,
+    AssignmentStatus.CANCELLED,
+  ])(
+    'protects %s published history from every manual writer',
+    async (status) => {
+      const f = await manualPublicationFixture();
+      await app.get(PublishingService).publish(f.run.id, null, f.actor);
+      await prisma.assignment.update({
+        where: { id: f.draft!.id },
+        data: { status },
+      });
+      const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      const assignmentBefore = await prisma.assignment.findUniqueOrThrow({
+        where: { id: f.draft!.id },
+        include: { crewMembers: true },
+      });
+      const notices = await prisma.assignmentNotificationOutbox.findMany({
+        where: { assignmentId: f.draft!.id },
+        orderBy: { id: 'asc' },
+      });
+      const mutations = [
+        () =>
+          app.get(AssignmentsService).assign(f.visitId, f.proposal, f.actor),
+        () => app.get(AssignmentsService).unassign(f.visitId, f.actor),
+        () =>
+          app
+            .get(VisitsService)
+            .adjust(
+              f.visitId,
+              {
+                visitDate: '2027-03-04',
+                windowStartMinute: 510,
+                windowEndMinute: 900,
+                durationMinutes: 120,
+                requiredCrewSize: 3,
+              },
+              f.actor,
+            ),
+      ];
+      for (const mutate of mutations)
+        expect(
+          await mutate().then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+        ).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(
+        await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+      ).toEqual(visitBefore);
+      expect(
+        await prisma.assignment.findUnique({
+          where: { id: f.draft!.id },
+          include: { crewMembers: true },
+        }),
+      ).toEqual(assignmentBefore);
+      expect(
+        await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: f.draft!.id },
+          orderBy: { id: 'asc' },
+        }),
+      ).toEqual(notices);
+    },
+  );
 });
 
 describe('publishing', () => {

@@ -89,10 +89,12 @@ function fixture(
   };
   const assignment = {
     findMany: jest.fn(
-      async ({ where }: { where: { status: { in: AssignmentStatus[] } } }) =>
+      async ({ where }: { where: { status?: { in: AssignmentStatus[] } } }) =>
         assignments
-          .filter((entry) => where.status.in.includes(entry.status))
-          .map((entry) => ({ ...entry })),
+          .filter((entry) => !where.status || where.status.in.includes(entry.status))
+          .map((entry) => ({ ...entry, publishedAt: null, _count: {
+            notificationOutboxEntries: outbox.filter((notice) => notice.assignmentId === entry.id).length,
+          } })),
     ),
     delete: jest.fn(async ({ where }: { where: { id: string } }) =>
       remove(where.id),

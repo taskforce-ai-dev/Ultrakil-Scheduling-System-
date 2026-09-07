@@ -5,6 +5,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { assertScheduleSnapshot, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
 import {
   AssignCrewDto,
@@ -76,7 +77,10 @@ export class AssignmentsService {
   ) {}
 
   /** Judges a proposal and writes nothing at all. */
-  async check(visitId: string, dto: AssignCrewDto): Promise<EligibilityResultDto> {
+  async check(
+    visitId: string,
+    dto: AssignCrewDto,
+  ): Promise<EligibilityResultDto> {
     const result = await this.eligibility.evaluate(visitId, toProposal(dto));
     return {
       isEligible: result.isEligible,
@@ -92,62 +96,42 @@ export class AssignmentsService {
    */
   async assign(visitId: string, dto: AssignCrewDto, actor: AuthenticatedUser) {
     const proposal = toProposal(dto);
-
-    const existing = await this.prisma.assignment.findFirst({
+    const snapshot = await this.prisma.assignment.findFirst({
       where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
       include: ASSIGNMENT_INCLUDE,
     });
-
-    // A published assignment is what the crews were told. Changing one by hand
-    // would rewrite a record people are working from; publish a new run
-    // instead, which supersedes this one and keeps both.
-    if (existing && existing.status === AssignmentStatus.PUBLISHED) {
-      throw new AppException(
-        'RESOURCE_CONFLICT',
-        'This visit is on a published schedule and cannot be re-crewed by hand. Run the scheduler again and publish the new schedule — the published one is kept as a record.',
-        HttpStatus.CONFLICT,
-        { visitId, assignmentId: existing.id },
-      );
-    }
-
-    const result = await this.eligibility.evaluate(visitId, proposal, {
-      excludeAssignmentId: existing?.id,
-    });
-
-    if (!result.isEligible) {
-      // A rejected *replacement* leaves the existing crew in place, so the
-      // visit is still staffed and must not be dumped in the queue — doing so
-      // would report work as unassigned while a crew is on its way to it.
-      if (!existing) await this.recordUnassigned(visitId, result.conflicts);
-
-      const tail = existing
-        ? 'The crew already on this visit has been left as it is.'
-        : 'The visit has been listed in the Unassigned queue with every reason.';
-
-      throw new AppException(
-        'ASSIGNMENT_NOT_ELIGIBLE',
-        result.conflicts.length === 1
-          ? result.conflicts[0].message
-          : `This crew cannot take the visit — ${result.conflicts.length} rules are not met. ${tail}`,
-        HttpStatus.CONFLICT,
-        { conflicts: result.conflicts.map(toConflictDto) },
-      );
-    }
-
-    const visit = await this.prisma.generatedVisit.findUniqueOrThrow({
-      where: { id: visitId },
-      select: { visitDate: true, branchId: true, branchCode: true },
-    });
-
-    const employees = await this.prisma.employee.findMany({
-      where: { id: { in: proposal.crew.map((member) => member.employeeId) } },
-      select: { id: true, isPmsGrade: true },
-    });
-    const pmsById = new Map(employees.map((row) => [row.id, row.isPmsGrade]));
-
     const saved = await this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, [visitId]);
+      await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      const existing = await tx.assignment.findFirst({
+        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+        include: ASSIGNMENT_INCLUDE,
+      });
+      const result = await this.eligibility.evaluate(visitId, proposal, {
+        excludeAssignmentId: existing?.id,
+      });
+      if (!result.isEligible) {
+        // Commit refusal reasons before returning the error to the caller.
+        // A refused replacement leaves the existing crew and queue untouched.
+        if (!existing)
+          await this.recordUnassigned(tx, visitId, result.conflicts);
+        return {
+          kind: 'rejected' as const,
+          conflicts: result.conflicts,
+          hadAssignment: existing !== null,
+        };
+      }
+      const visit = await tx.generatedVisit.findUniqueOrThrow({
+        where: { id: visitId },
+        select: { visitDate: true, branchId: true, branchCode: true },
+      });
+      const employees = await tx.employee.findMany({
+        where: { id: { in: proposal.crew.map((member) => member.employeeId) } },
+        select: { id: true, isPmsGrade: true },
+      });
+      const pmsById = new Map(employees.map((row) => [row.id, row.isPmsGrade]));
       if (existing) {
-        await tx.assignment.delete({ where: { id: existing.id } });
+        await this.deleteDraft(tx, visitId, existing.id);
       }
 
       const assignment = await tx.assignment.create({
@@ -197,48 +181,58 @@ export class AssignmentsService {
         tx,
       );
 
-      return assignment;
+      return { kind: 'assigned' as const, assignment };
     });
 
-    return toAssignmentDto(saved);
+    if (saved.kind === 'rejected') {
+      const tail = saved.hadAssignment
+        ? 'The crew already on this visit has been left as it is.'
+        : 'The visit has been listed in the Unassigned queue with every reason.';
+      throw new AppException(
+        'ASSIGNMENT_NOT_ELIGIBLE',
+        saved.conflicts.length === 1
+          ? saved.conflicts[0].message
+          : `This crew cannot take the visit — ${saved.conflicts.length} rules are not met. ${tail}`,
+        HttpStatus.CONFLICT,
+        { conflicts: saved.conflicts.map(toConflictDto) },
+      );
+    }
+    return toAssignmentDto(saved.assignment);
   }
 
   /** Takes the crew off a visit and puts it back in the queue. */
   async unassign(visitId: string, actor: AuthenticatedUser) {
-    const existing = await this.prisma.assignment.findFirst({
+    const snapshot = await this.prisma.assignment.findFirst({
       where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
       include: ASSIGNMENT_INCLUDE,
     });
 
-    if (!existing) {
-      throw new AppException(
-        'RESOURCE_NOT_FOUND',
-        'This visit has no crew assigned, so there is nothing to remove.',
-        HttpStatus.NOT_FOUND,
-        { visitId },
-      );
-    }
-
-    if (existing.status === AssignmentStatus.PUBLISHED) {
-      throw new AppException(
-        'RESOURCE_CONFLICT',
-        'This crew is on a published schedule and cannot be removed. Publish a new schedule to replace it; the published one stays as a record.',
-        HttpStatus.CONFLICT,
-        { visitId, assignmentId: existing.id },
-      );
-    }
-
-    if (existing.locks.length > 0) {
-      throw new AppException(
-        'RESOURCE_CONFLICT',
-        'A manager has pinned this crew. Release the lock before removing it.',
-        HttpStatus.CONFLICT,
-        { visitId, assignmentId: existing.id },
-      );
-    }
-
     await this.prisma.$transaction(async (tx) => {
-      await tx.assignment.delete({ where: { id: existing.id } });
+      await lockScheduleVisits(tx, [visitId]);
+      await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      const existing = await tx.assignment.findFirst({
+        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+        include: ASSIGNMENT_INCLUDE,
+      });
+      if (!existing) {
+        throw new AppException(
+          'RESOURCE_NOT_FOUND',
+          'This visit has no crew assigned, so there is nothing to remove.',
+          HttpStatus.NOT_FOUND,
+          { visitId },
+        );
+      }
+
+      if (existing.locks.length > 0) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'A manager has pinned this crew. Release the lock before removing it.',
+          HttpStatus.CONFLICT,
+          { visitId, assignmentId: existing.id },
+        );
+      }
+
+      await this.deleteDraft(tx, visitId, existing.id);
       await tx.generatedVisit.update({
         where: { id: visitId },
         data: { status: VisitStatus.UNASSIGNED },
@@ -296,17 +290,24 @@ export class AssignmentsService {
       // Finished and cancelled work is history; it needs nobody.
       status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
       ...(query.withConflictsOnly ? { unassignedReasons: { some: {} } } : {}),
-      ...(query.serviceAgreementId ? { serviceAgreementId: query.serviceAgreementId } : {}),
+      ...(query.serviceAgreementId
+        ? { serviceAgreementId: query.serviceAgreementId }
+        : {}),
       ...(query.branchCode
         ? {
-            branchCode: query.branchCode as Prisma.EnumBranchCodeFilter['equals'],
+            branchCode:
+              query.branchCode as Prisma.EnumBranchCodeFilter['equals'],
           }
         : {}),
       ...(query.from || query.to
         ? {
             visitDate: {
-              ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
-              ...(query.to ? { lte: new Date(`${query.to}T00:00:00.000Z`) } : {}),
+              ...(query.from
+                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                : {}),
+              ...(query.to
+                ? { lte: new Date(`${query.to}T00:00:00.000Z`) }
+                : {}),
             },
           }
         : {}),
@@ -342,13 +343,17 @@ export class AssignmentsService {
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,
         message: reason.message,
-        remediation: (reason.details as { remediation?: string } | null)?.remediation ?? '',
+        remediation:
+          (reason.details as { remediation?: string } | null)?.remediation ??
+          '',
         resources: normaliseResources(
-          (reason.details as { resources?: Record<string, unknown> } | null)?.resources,
+          (reason.details as { resources?: Record<string, unknown> } | null)
+            ?.resources,
         ),
       })),
       recordedAt:
-        visit.unassignedReasons[0]?.createdAt.toISOString() ?? visit.updatedAt.toISOString(),
+        visit.unassignedReasons[0]?.createdAt.toISOString() ??
+        visit.updatedAt.toISOString(),
     }));
 
     return { items, total, page, pageSize };
@@ -360,7 +365,10 @@ export class AssignmentsService {
    * shown; a published job stays visible as it is acknowledged, started and
    * completed.
    */
-  async employeeAssignments(employeeId: string, query: EmployeeAssignmentQueryDto) {
+  async employeeAssignments(
+    employeeId: string,
+    query: EmployeeAssignmentQueryDto,
+  ) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
@@ -393,8 +401,12 @@ export class AssignmentsService {
         ? {
             generatedVisit: {
               visitDate: {
-                ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
-                ...(query.to ? { lte: new Date(`${query.to}T00:00:00.000Z`) } : {}),
+                ...(query.from
+                  ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                  : {}),
+                ...(query.to
+                  ? { lte: new Date(`${query.to}T00:00:00.000Z`) }
+                  : {}),
               },
             },
           }
@@ -433,13 +445,16 @@ export class AssignmentsService {
           assignment.plannedStart.getUTCDate(),
         ),
       ).getTime();
-      const minutes = (moment: Date) => Math.round((moment.getTime() - midnight) / 60_000);
+      const minutes = (moment: Date) =>
+        Math.round((moment.getTime() - midnight) / 60_000);
       const membership = assignment.crewMembers[0];
 
       return {
         assignmentId: assignment.id,
         visitId: assignment.generatedVisitId,
-        visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+        visitDate: assignment.generatedVisit.visitDate
+          .toISOString()
+          .slice(0, 10),
         plannedStartMinute: minutes(assignment.plannedStart),
         plannedEndMinute: minutes(assignment.plannedEnd),
         branchCode: assignment.branchCode,
@@ -464,27 +479,52 @@ export class AssignmentsService {
    * Replaced rather than appended: a stale reason a manager has already fixed
    * is worse than no reason at all.
    */
-  private async recordUnassigned(visitId: string, conflicts: Conflict[]) {
-    await this.prisma.$transaction(async (tx) => {
-      await tx.visitUnassignedReason.deleteMany({
-        where: { generatedVisitId: visitId },
-      });
-      await tx.visitUnassignedReason.createMany({
-        data: conflicts.map((conflict) => ({
-          generatedVisitId: visitId,
-          code: conflict.code,
-          message: conflict.message,
-          details: {
-            remediation: conflict.remediation,
-            resources: conflict.resources,
-          } as unknown as Prisma.InputJsonValue,
-        })),
-      });
-      await tx.generatedVisit.update({
-        where: { id: visitId },
-        data: { status: VisitStatus.UNASSIGNED },
-      });
+  private async recordUnassigned(
+    tx: Prisma.TransactionClient,
+    visitId: string,
+    conflicts: Conflict[],
+  ) {
+    // assign() holds the visit lock and has checked the expected empty snapshot.
+    await tx.visitUnassignedReason.deleteMany({
+      where: { generatedVisitId: visitId },
     });
+    await tx.visitUnassignedReason.createMany({
+      data: conflicts.map((conflict) => ({
+        generatedVisitId: visitId,
+        code: conflict.code,
+        message: conflict.message,
+        details: {
+          remediation: conflict.remediation,
+          resources: conflict.resources,
+        } as unknown as Prisma.InputJsonValue,
+      })),
+    });
+    await tx.generatedVisit.update({
+      where: { id: visitId },
+      data: { status: VisitStatus.UNASSIGNED },
+    });
+  }
+
+  private async deleteDraft(
+    tx: Prisma.TransactionClient,
+    visitId: string,
+    assignmentId: string,
+  ) {
+    const deleted = await tx.assignment.deleteMany({
+      where: {
+        id: assignmentId,
+        status: { in: [AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED] },
+        publishedAt: null,
+      },
+    });
+    if (deleted.count !== 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'The assignment changed. Refresh and try again.',
+        HttpStatus.CONFLICT,
+        { visitId, assignmentId },
+      );
+    }
   }
 }
 

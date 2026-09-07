@@ -7,6 +7,21 @@ import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { lockScheduleVisits } from './schedule-visit-lock';
 
+const PUBLISH_ASSIGNMENT_INCLUDE = {
+  crewMembers: { include: { employee: { select: { fullName: true } } } },
+  vehicles: { include: { vehicle: { select: { label: true } } } },
+  generatedVisit: {
+    include: {
+      serviceAgreement: {
+        include: {
+          customer: { select: { name: true } },
+          serviceSite: { select: { name: true } },
+        },
+      },
+    },
+  },
+} satisfies Prisma.AssignmentInclude;
+
 /**
  * Publishing a schedule, and pinning parts of one.
  *
@@ -28,27 +43,16 @@ export class PublishingService {
    * member and vehicle as published, so the record survives even if an employee
    * is later renamed or deactivated.
    */
-  async publish(runId: string, reason: string | null, actor: AuthenticatedUser) {
+  async publish(
+    runId: string,
+    reason: string | null,
+    actor: AuthenticatedUser,
+  ) {
     const run = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
       include: {
         assignments: {
-          include: {
-            crewMembers: {
-              include: { employee: { select: { fullName: true } } },
-            },
-            vehicles: { include: { vehicle: { select: { label: true } } } },
-            generatedVisit: {
-              include: {
-                serviceAgreement: {
-                  include: {
-                    customer: { select: { name: true } },
-                    serviceSite: { select: { name: true } },
-                  },
-                },
-              },
-            },
-          },
+          select: { id: true, generatedVisitId: true, status: true },
         },
       },
     });
@@ -80,11 +84,11 @@ export class PublishingService {
       );
     }
 
-    const publishable = run.assignments.filter(
+    const expected = run.assignments.filter(
       (assignment) => assignment.status === AssignmentStatus.DRAFT,
     );
 
-    if (publishable.length === 0) {
+    if (expected.length === 0) {
       throw new AppException(
         'RESOURCE_CONFLICT',
         'This run produced no assignments to publish.',
@@ -95,31 +99,51 @@ export class PublishingService {
 
     // Everything published earlier for the same visits is superseded, not
     // deleted — the crews were told those, and that stays on the record.
-    const visitIds = publishable.map((assignment) => assignment.generatedVisitId);
-
-    const snapshot = publishable.map((assignment) => ({
-      assignmentId: assignment.id,
-      visitId: assignment.generatedVisitId,
-      customerName: assignment.generatedVisit.serviceAgreement.customer.name,
-      siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
-      visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
-      plannedStart: assignment.plannedStart.toISOString(),
-      plannedEnd: assignment.plannedEnd.toISOString(),
-      crew: assignment.crewMembers.map((member) => ({
-        employeeId: member.employeeId,
-        fullName: member.employee.fullName,
-        role: member.role,
-        isPmsSupervisor: member.isPmsSupervisor,
-      })),
-      vehicles: assignment.vehicles.map((entry) => ({
-        vehicleId: entry.vehicleId,
-        label: entry.vehicle.label,
-        driverEmployeeId: entry.driverEmployeeId,
-      })),
-    }));
+    const visitIds = expected.map((assignment) => assignment.generatedVisitId);
 
     const published = await this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, visitIds);
+      // Only the identities come from the pre-lock read. Adjustments may have
+      // changed visit and draft timing while publication waited for the lock.
+      const publishable = await tx.assignment.findMany({
+        where: {
+          id: { in: expected.map((assignment) => assignment.id) },
+          scheduleRunId: runId,
+          status: AssignmentStatus.DRAFT,
+        },
+        include: PUBLISH_ASSIGNMENT_INCLUDE,
+      });
+      if (publishable.length !== expected.length) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'One or more assignments changed while the schedule was being published. Refresh and try again.',
+          HttpStatus.CONFLICT,
+          { runId },
+        );
+      }
+      const snapshot = publishable.map((assignment) => ({
+        assignmentId: assignment.id,
+        visitId: assignment.generatedVisitId,
+        customerName: assignment.generatedVisit.serviceAgreement.customer.name,
+        siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
+        visitDate: assignment.generatedVisit.visitDate
+          .toISOString()
+          .slice(0, 10),
+        plannedStart: assignment.plannedStart.toISOString(),
+        plannedEnd: assignment.plannedEnd.toISOString(),
+        crew: assignment.crewMembers.map((member) => ({
+          employeeId: member.employeeId,
+          fullName: member.employee.fullName,
+          role: member.role,
+          isPmsSupervisor: member.isPmsSupervisor,
+        })),
+        vehicles: assignment.vehicles.map((entry) => ({
+          vehicleId: entry.vehicleId,
+          label: entry.vehicle.label,
+          driverEmployeeId: entry.driverEmployeeId,
+        })),
+      }));
+
       // Another publication may have finished while this one waited. Read
       // supersession targets under the same visit locks used by the solver.
       const previouslyPublished = await tx.assignment.findMany({
@@ -206,9 +230,13 @@ export class PublishingService {
             eventType: 'assignment.published',
             payload: {
               visitId: assignment.generatedVisitId,
-              customerName: assignment.generatedVisit.serviceAgreement.customer.name,
-              siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
-              visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+              customerName:
+                assignment.generatedVisit.serviceAgreement.customer.name,
+              siteName:
+                assignment.generatedVisit.serviceAgreement.serviceSite.name,
+              visitDate: assignment.generatedVisit.visitDate
+                .toISOString()
+                .slice(0, 10),
               plannedStart: assignment.plannedStart.toISOString(),
               plannedEnd: assignment.plannedEnd.toISOString(),
               role: member.role,
@@ -238,10 +266,13 @@ export class PublishingService {
         tx,
       );
 
-      return tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } });
+      return {
+        run: await tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } }),
+        publishedCount: publishable.length,
+      };
     });
 
-    return { run: published, publishedCount: publishable.length };
+    return published;
   }
 
   /** Pins part of an assignment so the next run cannot change it. */
@@ -283,7 +314,11 @@ export class PublishingService {
     return lock;
   }
 
-  async unlock(assignmentId: string, scope: LockScope, actor: AuthenticatedUser) {
+  async unlock(
+    assignmentId: string,
+    scope: LockScope,
+    actor: AuthenticatedUser,
+  ) {
     const existing = await this.prisma.assignmentLock.findUnique({
       where: { assignmentId_scope: { assignmentId, scope } },
     });

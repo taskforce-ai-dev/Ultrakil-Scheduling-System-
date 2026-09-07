@@ -38,6 +38,8 @@ it('loads availability and bookings for the proposed visit date without writing 
       visitDate: proposedDate,
       windowStartMinute: 600,
       windowEndMinute: 780,
+      durationMinutes: 120,
+      requiredCrewSize: 2,
     },
   };
   const context = await service.buildContext(
@@ -55,6 +57,8 @@ it('loads availability and bookings for the proposed visit date without writing 
     visitDate: '2027-03-04',
     windowStartMinute: 600,
     windowEndMinute: 780,
+    durationMinutes: 120,
+    requiredCrewSize: 2,
   });
   expect(prisma.employee.findMany).toHaveBeenCalledWith(
     expect.objectContaining({
