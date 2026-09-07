@@ -27,7 +27,8 @@ Create the deployment and import directories:
 test "$(id -u)" -ne 0
 sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" \
   /opt/ultrakil/app /opt/ultrakil/import /opt/ultrakil/import-config \
-  /opt/ultrakil/import-reports /opt/ultrakil/backups
+  /opt/ultrakil/import-reports
+sudo install -d -m 0700 -o 10001 -g 10001 /opt/ultrakil/backups
 ```
 
 Clone the repository into `/opt/ultrakil/app`, check out the exact reviewed
@@ -56,9 +57,13 @@ Set `IMPORT_UID` and `IMPORT_GID` to the deployment operator's numeric
 `id -u` and `id -g`, never zero. The nonroot import runner uses these IDs, so
 operator-owned 0600 workbooks remain readable without granting public access.
 Do not grant the API process access to the private inputs or report directory.
-Set `BACKUP_UID`/`BACKUP_GID` to the same operator IDs and `BACKUP_DIR` to the
-operator-owned 0700 backup directory. The backup tool refuses other ownership,
-group/world access and symlinks. Its bind mount never creates a missing host path.
+Set `BACKUP_DIR` to the 0700 backup directory owned by UID/GID `10001:10001`.
+The recovery image defines that fixed nonroot `recovery` account in `/etc/passwd`
+so OpenSSH can resolve its executing user. Both backup and export inherit that
+account; do not override their container user. The tool refuses mismatched
+ownership, group/world access and symlinks. Its bind mount never creates a
+missing host path. The deployment operator uses an authorized protected sudo
+session when inspecting these recovery-owned host files.
 
 Give every validation stack a unique `COMPOSE_PROJECT_NAME`, for example
 `ultrakil-validation-20260907-01`, and a new database ending in `_test`.
@@ -223,7 +228,7 @@ overwrite existing names. The `.dump.sha256` manifest is the completion marker;
 an archive without its valid manifest is never a usable backup. Files are 0600.
 
 Seven-day retention runs only after successful publication and deletes only
-exact UltraKIL archive/manifest pairs owned by the operator with matching
+exact UltraKIL archive/manifest pairs owned by the recovery account with matching
 checksums. Unrelated, corrupt, symlinked and incomplete files are preserved for
 inspection. Graceful interruption removes only that invocation's temporary
 files and any incomplete publication it created. SIGKILL, host loss or filesystem
@@ -292,9 +297,21 @@ server-side immutability before enabling it. The decryption identity must never
 be stored on the staging host or in this repository. Local backups alone do not
 survive loss of the host.
 
-Create operator-owned 0700 `/opt/ultrakil/export-work` and
-`/opt/ultrakil/export-secrets`; put the upload key and pinned `known-hosts` file
-at the configured exact paths with mode 0600. Reserve at least twice the largest
+Create recovery-owned private directories, then place the approved upload key
+and pinned `known-hosts` file at the configured exact paths:
+
+```bash
+sudo install -d -m 0700 -o 10001 -g 10001 \
+  /opt/ultrakil/export-work /opt/ultrakil/export-secrets
+# After placing the two approved files, apply their exact ownership and mode.
+sudo chown 10001:10001 /opt/ultrakil/export-secrets/ssh-key \
+  /opt/ultrakil/export-secrets/known-hosts
+sudo chmod 0600 /opt/ultrakil/export-secrets/ssh-key \
+  /opt/ultrakil/export-secrets/known-hosts
+```
+
+The host backup directory, export work directory and both credential files must
+match the image's fixed UID/GID `10001:10001`. Reserve at least twice the largest
 archive size in the work directory for the temporary plaintext bundle and
 encrypted output. Fill the `EXPORT_*` settings in the private staging env file.
 The remote directory must already exist and be dedicated to UltraKIL. The

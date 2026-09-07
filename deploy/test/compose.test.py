@@ -88,7 +88,7 @@ class StagingComposeTest(unittest.TestCase):
         self.assertEqual(backup["command"], ["schedule"])
         self.assertEqual(backup["depends_on"]["migrate"]["condition"], "service_completed_successfully")
         self.assertEqual(backup["build"]["dockerfile"], "deploy/recovery.Dockerfile")
-        self.assertIn("BACKUP_UID", backup["user"])
+        self.assertNotIn("user", backup, "The image's real recovery account must not be overridden")
         self.assertTrue(backup["read_only"])
         self.assertEqual(backup["healthcheck"]["test"], ["CMD", "python3", "/opt/ultrakil/recovery.py", "health"])
         mount = backup["volumes"][0]
@@ -98,6 +98,7 @@ class StagingComposeTest(unittest.TestCase):
 
     def test_optional_export_has_separate_egress_and_read_only_backup_access(self):
         exporter = self.services["backup-export"]
+        self.assertNotIn("user", exporter, "OpenSSH must resolve the image's fixed account with getpwuid")
         self.assertEqual(exporter["profiles"], ["offhost"])
         self.assertEqual(exporter["networks"], ["export-egress"])
         self.assertNotIn("PGPASSWORD", exporter["environment"])
@@ -106,6 +107,15 @@ class StagingComposeTest(unittest.TestCase):
         self.assertTrue(mounts["/export-secrets/ssh-key"]["read_only"])
         self.assertTrue(mounts["/export-secrets/known-hosts"]["read_only"])
         self.assertFalse(self.config["networks"]["export-egress"].get("internal", False))
+
+    def test_recovery_image_has_a_fixed_nonroot_passwd_account(self):
+        image = (ROOT / "deploy/recovery.Dockerfile").read_text()
+        self.assertRegex(image, r"addgroup[^\n]*-g 10001 recovery")
+        self.assertRegex(image, r"adduser[^\n]*-u 10001[^\n]*-G recovery[^\n]*recovery")
+        self.assertRegex(image, r"(?m)^USER recovery$")
+        env = (ROOT / "deploy/staging.env.example").read_text()
+        self.assertNotIn("BACKUP_UID=", env)
+        self.assertNotIn("BACKUP_GID=", env)
 
     def test_every_build_context_excludes_private_inputs_at_any_depth(self):
         # Scanner rules use /i. Docker does not: every alphabetic literal in

@@ -255,7 +255,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/recovery.Dockerfile
-    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
     mem_limit: 128m
     cpus: 0.5
     pids_limit: 64
@@ -294,7 +293,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/recovery.Dockerfile
-    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
     restart: "no"
     mem_limit: 256m
     cpus: 0.5
