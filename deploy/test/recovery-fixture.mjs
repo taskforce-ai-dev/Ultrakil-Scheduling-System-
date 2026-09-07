@@ -25,6 +25,16 @@ try {
       name: 'Synthetic inactive customer', branchId: branch.id, branchCode: branch.code,
       isActive: false, importedInactiveAt: new Date('2025-01-01T00:00:00Z'),
     } });
+    const reactivated = await tx.customer.create({ data: {
+      name: 'Synthetic manually reactivated customer', branchId: branch.id, branchCode: branch.code,
+      isActive: false, importedInactiveAt: new Date('2025-01-01T00:00:00Z'),
+    } });
+    // Match the authorized CustomersService.setActive behavior: its deliberate
+    // activation changes isActive and records an audit event, retaining provenance.
+    await tx.customer.update({ where: { id: reactivated.id }, data: { isActive: true } });
+    await tx.auditEvent.create({ data: {
+      entityType: 'Customer', entityId: reactivated.id, action: 'customer.reactivated', actorLabel: 'Synthetic authorized operator',
+    } });
     const site = await tx.serviceSite.create({ data: {
       name: 'Synthetic inactive site', customerId: customer.id, branchId: branch.id, branchCode: branch.code,
       isActive: false, importedInactiveAt: new Date('2025-01-01T00:00:00Z'),

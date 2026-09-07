@@ -259,9 +259,12 @@ malformed manifests, corrupt archives and symlinks before creating anything.
 It revokes public connection access, marks the target as disposable, and uses
 `pg_restore --single-transaction --exit-on-error --no-owner --no-acl`. The tool
 checks 26 required tables, at least nine successful migrations, no unfinished
-migration, no reactivated imported-inactive records and no duplicate outbox
-keys. It emits only numeric workforce/authorization/assignment/outbox/inactive/
-history counts. Compare those with the pre-change count evidence in a quiescent
+migration and no duplicate outbox keys. It emits only numeric workforce/
+authorization/assignment/outbox/inactive/history counts. `reactivatedImports`
+counts active records that still have imported-inactive provenance; an authorized
+manual activation retains that provenance and is valid. This metric is evidence,
+not an automatic restore failure. Silent reactivation during re-import remains
+forbidden. Compare counts with the pre-change evidence in a quiescent
 release window. A format check or a checksum alone is not restore proof.
 
 Failed restores preserve the disposable database for authorized inspection;

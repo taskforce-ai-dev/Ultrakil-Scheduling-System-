@@ -61,6 +61,7 @@ def main():
             assert before["employees"] == 2 and before["vehicleAuthorizations"] == 2
             assert before["history"] == 1 and before["outbox"] == 1
             assert before["inactiveCustomers"] == 1 and before["inactiveSites"] == 1
+            assert before["reactivatedImports"] == 1  # Authorized manual activation is valid history.
             # Prove driver/crew/checkmark lineage, not just table existence.
             evidence = recovery.sql(target, '''SELECT count(*) FROM public.assignment_vehicles av
                 JOIN public.vehicle_authorizations va ON va."vehicleId" = av."vehicleId" AND va."employeeId" = av."driverEmployeeId"

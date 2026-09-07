@@ -275,7 +275,9 @@ SELECT json_build_object(
                 "outbox", "inactiveCustomers", "inactiveSites", "history", "reactivatedImports", "duplicateOutbox"}
     if not isinstance(values, dict) or set(values) != expected or any(type(value) is not int or value < 0 for value in values.values()):
         raise RecoveryError("Restore count evidence is incomplete")
-    if values["tables"] != len(TABLES) or values["migrations"] < 9 or any(values[key] for key in ("failedMigrations", "reactivatedImports", "duplicateOutbox")):
+    # Imported-inactive provenance can remain after an authorized manual
+    # activation. Preserve/report that count; it is not corruption by itself.
+    if values["tables"] != len(TABLES) or values["migrations"] < 9 or any(values[key] for key in ("failedMigrations", "duplicateOutbox")):
         raise RecoveryError("Restored UltraKIL schema or count invariants failed; disposable database preserved")
     return values
 

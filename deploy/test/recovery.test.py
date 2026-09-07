@@ -246,6 +246,21 @@ class RecoveryTest(unittest.TestCase):
                 self.assertFalse(any(name == "dropdb" for name, _ in self.call_log()))
                 Path(self.env["DB_STATE"]).unlink()
 
+    def test_restore_accepts_manual_reactivation_while_preserving_it_as_count_evidence(self):
+        archive = self.create_pair()
+        counts = {**GOOD_COUNTS, "reactivatedImports": 2}
+        result = self.run_tool("restore", str(archive), "ultrakil_restore_reactivated_test", GOOD_COUNTS=json.dumps(counts))
+        self.assertEqual(json.loads(result.stdout)["counts"]["reactivatedImports"], 2)
+
+    def test_failed_migrations_and_duplicate_outbox_still_fail_count_checks(self):
+        archive = self.create_pair()
+        for metric in ("failedMigrations", "duplicateOutbox"):
+            with self.subTest(metric=metric):
+                counts = {**GOOD_COUNTS, metric: 1}
+                self.run_tool("restore", str(archive), "ultrakil_restore_invariant_test", success=False, GOOD_COUNTS=json.dumps(counts))
+                self.assertTrue(Path(self.env["DB_STATE"]).exists())
+                Path(self.env["DB_STATE"]).unlink()
+
     def test_cleanup_refuses_foreign_database_even_with_safe_name(self):
         Path(self.env["DB_STATE"]).write_text("unrelated")
         self.run_tool("cleanup", "ultrakil_restore_foreign_test", success=False)
