@@ -5,19 +5,29 @@ PostgreSQL, Redis, the scheduling service, API, manager portal, health checks,
 rotated container logs and a daily PostgreSQL backup. The real workbooks and
 all secrets stay on the staging host and are never committed.
 
+C08 is based on accepted C07 `8c1ba7738108ca8f47a444b4be8113b36a3670d5`.
+The sibling handoff was replayed separately; it is not evidence of a deployment.
+Thivarrakesh handles C07/C08 during the takeover. Oshadi retains O08 evidence
+and the separate UI work. No staging host is implied by this runbook.
+
 ## 1. Host prerequisites
 
-- A Linux host with Docker Engine 26+ and Docker Compose v2.
+- An authorized UltraKIL Linux host with Docker Engine 26+ and Docker Compose
+  v2.24+; confirm host access, DNS, TLS and pilot access with Thivarrakesh.
 - At least 2 CPU cores, 4 GB RAM and 20 GB free disk for the pilot.
-- TCP 3000 and 3001 restricted to the pilot network, or an HTTPS reverse proxy
-  in front of both ports. Do not expose plain HTTP to the public internet.
+- The supplied bindings are loopback-only. Use an HTTPS reverse proxy on the
+  authorized host; expose only 443 to the approved pilot range (and 80 only if
+  needed for certificate issuance). PostgreSQL, Redis and scheduler have no
+  host ports. Do not publish 3000/3001 directly to the internet.
 - A DNS name and valid TLS certificate before external/customer UAT.
 
 Create the deployment and import directories:
 
 ```bash
-sudo install -d -m 0750 /opt/ultrakil/app /opt/ultrakil/import
-sudo chown -R "$USER":"$USER" /opt/ultrakil/app /opt/ultrakil/import
+test "$(id -u)" -ne 0
+sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" \
+  /opt/ultrakil/app /opt/ultrakil/import /opt/ultrakil/import-config \
+  /opt/ultrakil/import-reports
 ```
 
 Clone the repository into `/opt/ultrakil/app`, check out the exact reviewed
@@ -35,9 +45,37 @@ Replace every `replace-with-...` value. Generate unrelated random values for
 PostgreSQL, Redis, JWT signing and the first admin password. If a password has
 URL-reserved characters, URL-encode it in `DATABASE_URL`.
 
+Passwords must have at least 24 characters; JWT must have at least 32. The
+preflight rejects missing, placeholder, reused and short secrets without
+printing values. `DATABASE_URL` must name the configured user/password/database
+on `postgres:5432`, with only the optional `schema=public` query parameter.
+Use a private credential manager for the first admin handover. Re-import leaves
+existing accounts and passwords untouched.
+
+Set `IMPORT_UID` and `IMPORT_GID` to the deployment operator's numeric
+`id -u` and `id -g`, never zero. The nonroot import runner uses these IDs, so
+operator-owned 0600 workbooks remain readable without granting public access.
+Do not grant the API process access to the private inputs or report directory.
+
+Give every validation stack a unique `COMPOSE_PROJECT_NAME`, for example
+`ultrakil-validation-20260907-01`, and a new database ending in `_test`.
+Use the same project name for every command; volumes and the BullMQ prefix are
+scoped to it. Never run the destructive integration suites against staging.
+
 Set `NEXT_PUBLIC_API_BASE_URL` and `API_CORS_ORIGINS` to the browser-visible
 staging URLs. The API URL is baked into the portal image, so rebuild `web` after
 changing it. Do not paste `deploy/staging.env` into ClickUp, GitHub or chat.
+
+For example, configure the host reverse proxy to send
+`https://pilot.example.test/` to `http://127.0.0.1:3000`, and
+`https://api.pilot.example.test/api/` to `http://127.0.0.1:3001/api/`, preserving
+the `/api` prefix and forwarding Host/X-Forwarded-Proto. Set
+`NEXT_PUBLIC_API_BASE_URL=https://api.pilot.example.test/api` and
+`API_CORS_ORIGINS=https://pilot.example.test`; use the actual authorized names.
+Terminate TLS with valid certificates, configure a 60-second proxy read timeout,
+and verify login, CORS and API readiness through HTTPS before inviting users.
+The examples' localhost URLs are only for an operator tunnel/local validation.
+Never publish expanded `docker compose config` output: it contains secrets.
 
 ## 3. Place the approved source workbooks
 
@@ -48,52 +86,87 @@ Copy the user-supplied files to these exact, space-free host paths:
 /opt/ultrakil/import/master-schedule-2026.xlsx
 ```
 
-Restrict them to the deployment operator:
+Copy them as the deployment operator and restrict both explicit files:
 
 ```bash
-chmod 0600 /opt/ultrakil/import/*.xlsx
+chmod 0600 /opt/ultrakil/import/technician-matrix.xlsx \
+  /opt/ultrakil/import/master-schedule-2026.xlsx
 ```
 
-The directory is mounted read-only into the API container. The images and Git
-build context explicitly exclude workbook data.
+Only these two individual files are mounted read-only into the import runner;
+missing source files are never replaced with auto-created host directories.
+Place an approved optional `matrix-mapping.json` in `/opt/ultrakil/import-config`
+with mode 0600. An absent mapping uses the existing parser defaults. Keep that
+directory 0700 even when empty. The images and Git build context exclude
+workbooks, private mappings, runtime env files, reports and backups at any depth.
 
 ## 4. Build, migrate and import
 
-Use one Compose invocation consistently:
+Use one Compose invocation consistently in the same operator shell:
 
 ```bash
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml build
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml up -d postgres redis scheduler
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml run --rm api pnpm --filter @ultrakil/api db:deploy
+compose() { docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml "$@"; }
+compose --profile tools config --quiet
+compose --profile tools build
+compose run --rm --no-deps migrate node deploy/staging-tool.mjs preflight
+compose run --rm --no-deps import node deploy/staging-tool.mjs check-inputs
+compose up -d --wait postgres redis scheduler
+compose run --rm migrate
 ```
 
-Inspect both imports without writing first. Keep the console output as C08
-evidence and investigate any new parser error before proceeding:
+The one-shot `migrate` service runs only `prisma migrate deploy`. Both API and
+the queue worker it hosts depend on that service completing successfully; a
+failed migration prevents startup. A separate import command is always required.
+Never use migrate reset/dev or demo fixtures on staging.
+
+Inspect both inputs before any database writes. The wrapper fails nonzero for a
+missing, unreadable, world-accessible or empty workbook, zero employees/vehicles,
+zero customers/sites, or zero importable agreements. It parses both workbooks
+before any real import. Keep its numeric summary as shared evidence:
 
 ```bash
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml run --rm api pnpm --filter @ultrakil/api db:seed -- --dry-run
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml run --rm api pnpm --filter @ultrakil/api schedule:import -- --dry-run
+compose run --rm import
 ```
 
 Then load the clean staging database:
 
 ```bash
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml run --rm api pnpm --filter @ultrakil/api db:seed
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml run --rm api pnpm --filter @ultrakil/api schedule:import
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml up -d api web backup
+compose run --rm import node deploy/staging-tool.mjs import
+compose up -d --wait api web
 ```
 
-Do not load demo fixtures into staging. Re-running either real import is safe:
-both importers use stable keys and update rather than duplicate.
+The dedicated tooling image invokes packaged Prisma/tsx with Node directly;
+it never downloads pnpm on the private runtime network. API carries production
+dependencies and compiled code; web uses Next standalone output. All three
+application images run nonroot, with an init process, read-only root, bounded
+temporary storage, PID/memory/CPU limits and rotated logs. The API worker and
+scheduler have a 180-second shutdown grace; validate draining before rollback.
+The pilot limits leave host headroom, but must be load-tested on the actual host.
+
+Re-running imports updates stable keys and preserves inactive history. It does
+not close data decisions: the summary explicitly counts uncertain site branches,
+and imported opening hours remain assumed/unconfirmed. A failed master import
+can leave previously committed customer batches; investigate privately, correct
+the input and rerun. It is not an all-or-nothing transaction across both files.
+
+Dry run makes no database writes, but writes a detailed issue report to a new
+0700 subdirectory under `/opt/ultrakil/import-reports`, with a 0600 JSON file.
+The wrapper shares only counts and issue codes; child stdout/stderr and raw
+exception messages are withheld. Detailed reports include private names and
+source values: access them only in the protected operator session, retain only
+for the approved import review period, and never attach them or raw import logs
+to GitHub/ClickUp. The regular local seed/import commands retain their existing
+optional-file behavior and verbose diagnostics; do not use them for shared
+staging evidence. Use the wrapper above.
 
 ## 5. Verify health and logs
 
 ```bash
 docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml ps
-curl -fsS "http://staging-host:3001/api/health/live"
-curl -fsS "http://staging-host:3001/api/health/ready"
-curl -fsS "http://staging-host:3001/api/docs" >/dev/null
-curl -fsS "http://staging-host:3000/login" >/dev/null
+curl -fsS "https://api.pilot.example.test/api/health/live"
+curl -fsS "https://api.pilot.example.test/api/health/ready"
+curl -fsS "https://api.pilot.example.test/api/docs" >/dev/null
+curl -fsS "https://pilot.example.test/login" >/dev/null
 docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml logs --since=10m api scheduler web
 ```
 
@@ -101,6 +174,14 @@ Every service must be healthy. API readiness must report database, queue and
 scheduler as `up`. Container logs rotate at 10 MB with five files per service.
 Treat any unhandled exception, restart loop, migration warning or failed health
 probe as a release blocker.
+
+Base images are pinned to reviewed patch/distribution tags (Node 22.23.2
+bookworm, Python 3.11.16 bookworm, PostgreSQL 16.15 Alpine 3.23 and Redis 7.4.11
+Alpine 3.21). These tags were checked against the
+[official-image manifests](https://github.com/docker-library/official-images/tree/master/library).
+Tags can still be rebuilt for OS fixes: record the resolved image digests in
+each release and use those exact digests for recovery. Rebuild and rerun image
+checks when updating any pin; no immutable digest is invented here.
 
 ## 6. Prove the C09/O09 change on real data
 
