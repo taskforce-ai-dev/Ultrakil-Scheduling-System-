@@ -55,6 +55,9 @@ private/
 reports/
 import-reports/
 backups/
+export-work/
+export-secrets/
+*.age
 *.sql.gz
 *.dump
 *.pgdump

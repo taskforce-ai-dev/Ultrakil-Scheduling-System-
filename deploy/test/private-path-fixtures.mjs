@@ -6,6 +6,7 @@ const categoryPaths = [
   'matrix-mapping.json', 'deploy/matrix-mapping.json', 'job-types.json', 'nested/job-types.json',
   'incoming/fixture.txt', 'private/fixture.txt', 'nested/reports/fixture.txt',
   'backups/fixture.txt', 'nested/import-reports/fixture.txt',
+  'export-secrets/ssh-key', 'nested/export-work/bundle.tar', 'backup.tar.age',
   'nested/master-schedule-import-report.json', 'nested/import-report-details.json',
   'archive.sql.gz', 'nested/archive.sql.xz', 'archive.sql.zip', 'snapshot.dump',
   'nested/snapshot.backup', 'snapshot.bak', 'nested/snapshot.pgdump', 'credential.pem', 'nested/credential.key',

@@ -10,9 +10,9 @@ export function privatePathReason(path) {
   if (/(^|\/)\.env($|\.)|\.env($|\.)/i.test(path)) return 'runtime environment';
   if (/\.(xlsx?|xlsm|csv)$/i.test(path)) return 'private workbook/data';
   if (/(^|\/)(matrix-mapping|job-types)\.json$/i.test(path)) return 'private mapping';
-  if (/(^|\/)(incoming|private|reports|backups|import-reports)(\/|$)/i.test(path)
+  if (/(^|\/)(incoming|private|reports|backups|import-reports|export-work|export-secrets)(\/|$)/i.test(path)
     || /import-report[^/]*\.json$/i.test(path)) return 'private report or backup';
-  if (/\.(sql\.(gz|xz|zip)|dump|backup|bak|pgdump|pem|key)$/i.test(path)) return 'backup or key';
+  if (/\.(sql\.(gz|xz|zip)|dump|backup|bak|pgdump|pem|key|age)$/i.test(path)) return 'backup or key';
   return null;
 }
 
