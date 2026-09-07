@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { privatePathReason } from '../../scripts/check-private-files.mjs';
 import { validateReleaseConfig, validateImportFiles, runTool, safeImportSummary } from '../staging-tool.mjs';
+import { privatePathFixtures, publicPathFixtures } from './private-path-fixtures.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
 const valid = () => ({
@@ -30,6 +31,11 @@ test('private paths are rejected at every depth while explicit examples remain a
     'apps/api/prisma/migrations/20260420_init/migration.sql', 'deploy/test/foundation.test.mjs']) {
     assert.equal(privatePathReason(path), null, path);
   }
+});
+
+test('Docker privacy fixture corpus agrees with every scanner category in all letter cases', () => {
+  for (const path of privatePathFixtures) assert.ok(privatePathReason(path), path);
+  for (const path of publicPathFixtures) assert.equal(privatePathReason(path), null, path);
 });
 
 test('git ignores runtime env variants and private inputs, but tracks templates', () => {

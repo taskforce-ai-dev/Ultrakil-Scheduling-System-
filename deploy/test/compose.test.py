@@ -84,18 +84,25 @@ class StagingComposeTest(unittest.TestCase):
         self.assertNotIn("COPY --from=build /workspace /workspace", web)
 
     def test_every_build_context_excludes_private_inputs_at_any_depth(self):
-        required_patterns = {
-            "**/*.[xX][lL][sS]", "**/*.[xX][lL][sS][xXmM]", "**/*.[cC][sS][vV]",
-            "**/matrix-mapping.json", "**/job-types.json", "**/..*",
-            "**/.env", "**/.env.*", "**/*.env", "**/*.env.*",
-            "**/*import-report*.json", "**/private", "**/reports", "**/backups",
+        # Scanner rules use /i. Docker does not: every alphabetic literal in
+        # every category must explicitly match either letter case.
+        private_globs = [
+            "**/*.env", "**/*.env.*", "**/*.xls", "**/*.xlsx", "**/*.xlsm", "**/*.csv",
+            "**/matrix-mapping.json", "**/job-types.json", "**/*import-report*.json",
+            "**/incoming", "**/private", "**/reports", "**/backups", "**/import-reports",
+            "**/*.sql.gz", "**/*.sql.xz", "**/*.sql.zip", "**/*.dump", "**/*.backup",
+            "**/*.bak", "**/*.pgdump", "**/*.pem", "**/*.key",
+        ]
+        required_patterns = {"**/..*"} | {
+            "".join(f"[{letter}{letter.upper()}]" if letter.isalpha() else letter for letter in pattern)
+            for pattern in private_globs
         }
         contexts = {service["build"]["context"] for service in self.services.values() if "build" in service}
         for context in contexts:
             file = (ROOT / "deploy" / context / ".dockerignore").resolve()
             self.assertTrue(file.is_file(), str(file))
             patterns = set(file.read_text().splitlines())
-            self.assertTrue(required_patterns.issubset(patterns), str(file))
+            self.assertTrue(required_patterns.issubset(patterns), f"{file}: missing {sorted(required_patterns - patterns)}")
 
 
 if __name__ == "__main__":

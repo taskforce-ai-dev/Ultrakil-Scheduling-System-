@@ -5,18 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { privatePathFixtures, publicPathFixtures } from './private-path-fixtures.mjs';
 
 const root = resolve(import.meta.dirname, '../..');
-const forbidden = [
-  'matrix-mapping.json', 'job-types.json', 'deploy/matrix-mapping.json', 'config/deep/job-types.json',
-  'data/Staff.xlsx', 'MASTER.XLSX', 'app/Client.XlSx', 'app/legacy.XLS', 'nested/macro.xLsM', 'nested/clients.CsV',
-  '.env', 'app/.env.production', 'deploy/staging.env', 'app/staging.env.bak',
-  'private/data.json', 'nested/reports/issues.json', '..private/import-run/issues.json',
-  'backups/archive.sql.gz', 'nested/master-schedule-import-report.json', '.venv/lib/data.py',
-];
-const allowed = ['app/main.py', 'app/solver/model.py', 'requirements.txt', 'package.json',
-  'apps/api/src/main.ts', 'apps/manager-web/src/app/page.tsx', 'packages/api-contracts/src/index.ts',
-  'deploy/staging-tool.mjs', 'data/matrix-mapping.example.json'];
+const forbidden = [...privatePathFixtures, '.venv/lib/data.py'];
+const allowed = publicPathFixtures;
 
 for (const ignorePath of ['.dockerignore', 'services/scheduler/.dockerignore']) {
   const temporary = mkdtempSync(join(tmpdir(), 'ulk-docker-context-'));
