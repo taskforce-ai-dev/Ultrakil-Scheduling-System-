@@ -16,6 +16,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
+import { lockScheduleVisits } from './schedule-visit-lock';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
@@ -474,21 +475,22 @@ export class ScheduleRunService {
     replaceAssignmentId?: string,
     proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number },
   ) {
-    const visit = await this.prisma.generatedVisit.findUniqueOrThrow({
-      where: { id: visitId },
-      select: { visitDate: true, branchId: true, branchCode: true },
-    });
-
     const pms = await this.prisma.employee.findMany({
       where: { id: { in: dto.crew.map((member) => member.employeeId) } },
       select: { id: true, isPmsGrade: true },
     });
     const pmsById = new Map(pms.map((row) => [row.id, row.isPmsGrade]));
 
-    const at = (minute: number) =>
-      new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
-
     await this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, [visitId]);
+      await this.assertSnapshot(tx, runId, visitId, replaceAssignmentId);
+      const visit = await tx.generatedVisit.findUniqueOrThrow({
+        where: { id: visitId },
+        select: { visitDate: true, branchId: true, branchCode: true },
+      });
+      const at = (minute: number) =>
+        new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
+
       if (replaceAssignmentId) {
         // The predicate is part of the DELETE itself: a separate status read
         // would still let publication win between the check and deletion.
@@ -543,16 +545,17 @@ export class ScheduleRunService {
     if (entries.length === 0) return;
 
     await this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, entries.map((entry) => entry.visitId));
       for (const entry of entries) {
+        await this.assertSnapshot(tx, runId, entry.visitId, entry.replaceAssignmentId);
         if (entry.replaceAssignmentId) {
-          // This path keeps the draft. Lock its exact row so publication
-          // cannot promote it between the lifecycle check and queue writes.
-          const current = await tx.$queryRaw<{ status: AssignmentStatus }[]>(Prisma.sql`
-            SELECT status FROM assignments
-            WHERE id = ${entry.replaceAssignmentId}::uuid
-            FOR UPDATE
-          `);
-          if (current.length !== 1 || !REPLACEABLE_STATUSES.includes(current[0].status)) {
+          // Keep the rejected draft as history, but make it unpublishable in
+          // the same transaction that puts its visit in the unassigned queue.
+          const invalidated = await tx.assignment.updateMany({
+            where: { id: entry.replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+            data: { status: AssignmentStatus.CANCELLED },
+          });
+          if (invalidated.count !== 1) {
             throw new AppException(
               'RESOURCE_CONFLICT',
               'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
@@ -578,6 +581,31 @@ export class ScheduleRunService {
         });
       }
     });
+  }
+
+  /** Called only while holding the visit lock shared with publication. */
+  private async assertSnapshot(
+    tx: Prisma.TransactionClient,
+    runId: string,
+    visitId: string,
+    assignmentId?: string,
+  ) {
+    const current = await tx.assignment.findMany({
+      where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+      select: { id: true, status: true },
+    });
+    const matches = assignmentId
+      ? current.length === 1 && current[0].id === assignmentId &&
+        REPLACEABLE_STATUSES.includes(current[0].status)
+      : current.length === 0;
+    if (!matches) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+        HttpStatus.CONFLICT,
+        { runId, visitId, assignmentId },
+      );
+    }
   }
 
   private async isCancelled(runId: string): Promise<boolean> {

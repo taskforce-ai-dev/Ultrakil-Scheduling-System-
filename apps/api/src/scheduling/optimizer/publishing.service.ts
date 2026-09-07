@@ -5,6 +5,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { lockScheduleVisits } from './schedule-visit-lock';
 
 /**
  * Publishing a schedule, and pinning parts of one.
@@ -95,14 +96,6 @@ export class PublishingService {
     // Everything published earlier for the same visits is superseded, not
     // deleted — the crews were told those, and that stays on the record.
     const visitIds = publishable.map((assignment) => assignment.generatedVisitId);
-    const previouslyPublished = await this.prisma.assignment.findMany({
-      where: {
-        generatedVisitId: { in: visitIds },
-        status: AssignmentStatus.PUBLISHED,
-        id: { notIn: publishable.map((assignment) => assignment.id) },
-      },
-      select: { id: true, scheduleRunId: true },
-    });
 
     const snapshot = publishable.map((assignment) => ({
       assignmentId: assignment.id,
@@ -126,6 +119,17 @@ export class PublishingService {
     }));
 
     const published = await this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, visitIds);
+      // Another publication may have finished while this one waited. Read
+      // supersession targets under the same visit locks used by the solver.
+      const previouslyPublished = await tx.assignment.findMany({
+        where: {
+          generatedVisitId: { in: visitIds },
+          status: AssignmentStatus.PUBLISHED,
+          id: { notIn: publishable.map((assignment) => assignment.id) },
+        },
+        select: { id: true, scheduleRunId: true },
+      });
       const publishedAt = new Date();
 
       // Claim the run with one conditional write. Two managers can click

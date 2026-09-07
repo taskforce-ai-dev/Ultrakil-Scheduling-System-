@@ -8,6 +8,7 @@ import {
 import { Job } from 'bullmq';
 
 import { AuditService } from '../../audit/audit.service';
+import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import {
@@ -16,6 +17,7 @@ import {
 } from './schedule-run.processor';
 import { ScheduleRunService } from './schedule-run.service';
 import { SchedulerClient, SolveResponse } from './scheduler.client';
+import { PublishingService } from './publishing.service';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -86,6 +88,12 @@ function fixture(
     return 1;
   };
   const assignment = {
+    findMany: jest.fn(
+      async ({ where }: { where: { status: { in: AssignmentStatus[] } } }) =>
+        assignments
+          .filter((entry) => where.status.in.includes(entry.status))
+          .map((entry) => ({ ...entry })),
+    ),
     delete: jest.fn(async ({ where }: { where: { id: string } }) =>
       remove(where.id),
     ),
@@ -95,6 +103,23 @@ function fixture(
       }: {
         where: { id: string; status?: { in: AssignmentStatus[] } };
       }) => ({ count: remove(where.id, where.status?.in) }),
+    ),
+    updateMany: jest.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string; status: { in: AssignmentStatus[] } };
+        data: { status: AssignmentStatus };
+      }) => {
+        const current = assignments.find(
+          (entry) =>
+            entry.id === where.id && where.status.in.includes(entry.status),
+        );
+        if (!current) return { count: 0 };
+        current.status = data.status;
+        return { count: 1 };
+      },
     ),
     create: jest.fn(async () =>
       assignments.push({
@@ -118,9 +143,11 @@ function fixture(
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
     $queryRaw: jest.fn(async (query: Prisma.Sql) =>
-      assignments
-        .filter((entry) => entry.id === query.values[0])
-        .map((entry) => ({ status: entry.status })),
+      query.sql.includes('generated_visits')
+        ? [{ id: visit.id }]
+        : assignments
+            .filter((entry) => entry.id === query.values[0])
+            .map((entry) => ({ status: entry.status })),
     ),
   };
   const prisma = {
@@ -211,10 +238,202 @@ function fixture(
     generatedVisit,
     eligibility,
     reasons: tx.visitUnassignedReason,
+    prisma,
+    tx,
   };
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it.each(['assignment', 'unassigned'])(
+    'accepts %s when the snapshot and current visit both have no assignment',
+    async (outcome) => {
+      const f = fixture('2027-03-04');
+      f.assignments.splice(0);
+      const pending = f.processor.process(f.job);
+      await f.started.promise;
+      f.release(outcome === 'unassigned');
+      await pending;
+
+      expect(f.run.status).toBe(ScheduleRunStatus.SUCCEEDED);
+      expect(f.assignments).toHaveLength(outcome === 'assignment' ? 1 : 0);
+      expect(f.visit.status).toBe(
+        outcome === 'assignment'
+          ? VisitStatus.SCHEDULED
+          : VisitStatus.UNASSIGNED,
+      );
+    },
+  );
+
+  it('invalidates a draft before a waiting publisher can promote it after unassignment', async () => {
+    const f = fixture();
+    const snapshotRead = deferred<void>();
+    const returnSnapshot = deferred<void>();
+    const atUnassignedWrite = deferred<void>();
+    const commitUnassigned = deferred<void>();
+    const publisherWaiting = deferred<void>();
+    const unassignedFinished = deferred<void>();
+    const publishable = {
+      ...f.oldAssignment,
+      generatedVisitId: f.visit.id,
+      plannedStart: new Date('2027-03-03T09:00:00Z'),
+      plannedEnd: new Date('2027-03-03T10:30:00Z'),
+      generatedVisit: {
+        ...f.visit,
+        serviceAgreement: {
+          customer: { name: 'Customer' },
+          serviceSite: { name: 'Site' },
+        },
+      },
+      crewMembers: [
+        {
+          employeeId: 'employee',
+          employee: { fullName: 'Employee' },
+          role: 'SUPERVISOR',
+          isPmsSupervisor: true,
+        },
+      ],
+    };
+    const notices = { createMany: jest.fn() };
+    const publishedRun = {
+      id: 'original-run',
+      status: ScheduleRunStatus.SUCCEEDED,
+      publishedAt: null,
+      assignments: [publishable],
+    };
+    const publishTx = {
+      $queryRaw: jest.fn(async () => [{ id: f.visit.id }]),
+      scheduleRun: {
+        updateMany: jest.fn(async () => ({ count: 1 })),
+        findUniqueOrThrow: jest.fn(async () => publishedRun),
+      },
+      assignment: {
+        findMany: jest.fn(async () => []),
+        updateMany: jest.fn(async () => {
+          if (f.oldAssignment.status !== AssignmentStatus.DRAFT)
+            return { count: 0 };
+          f.oldAssignment.status = AssignmentStatus.PUBLISHED;
+          return { count: 1 };
+        }),
+      },
+      assignmentNotificationOutbox: notices,
+    };
+    const publishingPrisma = {
+      scheduleRun: {
+        findUnique: jest.fn(async () => {
+          snapshotRead.resolve();
+          // The read occurred before invalidation; deliver its response while
+          // the unassigned transaction holds the write fence.
+          await returnSnapshot.promise;
+          return publishedRun;
+        }),
+      },
+      assignment: { findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(
+        async (work: (tx: typeof publishTx) => Promise<unknown>) => {
+          publisherWaiting.resolve();
+          await unassignedFinished.promise;
+          return work(publishTx);
+        },
+      ),
+    };
+    const publishing = new PublishingService(
+      publishingPrisma as unknown as PrismaService,
+      { record: jest.fn() } as unknown as AuditService,
+    );
+    f.reasons.createMany.mockImplementation(async () => {
+      atUnassignedWrite.resolve();
+      await commitUnassigned.promise;
+    });
+    const publication = publishing
+      .publish('original-run', null, { id: 'actor' } as AuthenticatedUser)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    await snapshotRead.promise;
+    const running = f.processor.process(f.job);
+    await f.started.promise;
+    f.release(true);
+    await atUnassignedWrite.promise;
+    returnSnapshot.resolve();
+    await publisherWaiting.promise;
+    commitUnassigned.resolve();
+    await running;
+    unassignedFinished.resolve();
+    const failure = await publication;
+
+    expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.oldAssignment.status).toBe(AssignmentStatus.CANCELLED);
+    expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    expect(notices.createMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { date: '2027-03-03', outcome: 'assignment' },
+    { date: '2027-03-04', outcome: 'assignment' },
+    { date: '2027-03-04', outcome: 'rejected' },
+    { date: '2027-03-04', outcome: 'unassigned' },
+  ])(
+    'protects a publication absent from the empty snapshot: $outcome on $date',
+    async ({ date, outcome }) => {
+      const f = fixture(date);
+      f.assignments.splice(0);
+      if (outcome === 'rejected')
+        f.eligibility.evaluate.mockResolvedValue({
+          isEligible: false,
+          conflicts: [],
+        });
+      const pending = f.processor.process(f.job).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await f.started.promise;
+      f.oldAssignment.status = AssignmentStatus.PUBLISHED;
+      f.assignments.push(f.oldAssignment);
+      f.outbox.push({
+        id: 'notice',
+        assignmentId: f.oldAssignment.id,
+        payload: { visitDate: '2027-03-03' },
+      });
+      const visitBefore = { ...f.visit };
+      const outboxBefore = structuredClone(f.outbox);
+      f.release(outcome === 'unassigned');
+      const failure = await pending;
+
+      expect(f.assignments).toEqual([f.oldAssignment]);
+      expect(f.visit).toEqual(visitBefore);
+      expect(f.outbox).toEqual(outboxBefore);
+      expect(f.reasons.deleteMany).not.toHaveBeenCalled();
+      expect(f.reasons.createMany).not.toHaveBeenCalled();
+      expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    },
+  );
+
+  it.each(['assignment', 'unassigned'])(
+    'rejects an extra published assignment alongside the snapshot for %s',
+    async (outcome) => {
+      const f = fixture('2027-03-04');
+      const pending = f.processor.process(f.job).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await f.started.promise;
+      f.assignments.push({
+        ...f.oldAssignment,
+        id: 'another-publication',
+        status: AssignmentStatus.PUBLISHED,
+      });
+      const assignmentsBefore = structuredClone(f.assignments);
+      const visitBefore = { ...f.visit };
+      f.release(outcome === 'unassigned');
+      const failure = await pending;
+
+      expect(f.assignments).toEqual(assignmentsBefore);
+      expect(f.visit).toEqual(visitBefore);
+      expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    },
+  );
+
   it.each(['rejected', 'unassigned'])(
     'preserves a publication when the stale result is %s',
     async (result) => {
@@ -258,6 +477,7 @@ describe('solver replacement lifecycle fence', () => {
     await pending;
 
     expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    expect(f.oldAssignment.status).toBe(AssignmentStatus.CANCELLED);
     expect(f.reasons.createMany).toHaveBeenCalledWith({
       data: [
         {
