@@ -88,6 +88,60 @@ beforeEach(async () => {
 });
 
 describe('importing the workforce matrix', () => {
+  it('imports a no-capacity DAC header with three equal permissions and preserves them on re-import', async () => {
+    const fixturePath = join(workDir, 'no-capacity-dac.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Bolero Truck DAC- 2485', 'Safety Level 2'],
+      ['Colombo Branch', 1, 'Fixture Aspen', '', 'SPMS', '✓', '✓'],
+      ['', 2, 'Fixture Birch', '', 'Junior PMT', '✓', ''],
+      ['', 3, 'Fixture Cedar', '', 'Junior PMT', '✓', ''],
+      ['', 4, 'Fixture Elm', '', 'Junior PMT', '', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+
+    const first = await importMatrix(prisma, parsed);
+    expect(first.vehiclesCreated).toBe(1);
+    expect(first.authorizationsLinked).toBe(3);
+    const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { code: 'DAC-2485' } });
+    expect(vehicle.label).toBe('Bolero Truck DAC-2485');
+    expect(vehicle.seatCapacity).toBeNull();
+    const employees = await prisma.employee.findMany({ orderBy: { fullName: 'asc' } });
+    expect(employees.map(({ fullName }) => fullName)).toEqual([
+      'Fixture Aspen', 'Fixture Birch', 'Fixture Cedar', 'Fixture Elm',
+    ]);
+    const authorizations = await prisma.vehicleAuthorization.findMany({
+      orderBy: { employee: { fullName: 'asc' } },
+    });
+    // This is the complete authorization record: each checked employee gets
+    // the same permission; there is no owner, primary driver, or preference.
+    expect(authorizations).toEqual(employees.slice(0, 3).map(({ id }) => ({
+      id: expect.any(String), employeeId: id, vehicleId: vehicle.id,
+      createdAt: expect.any(Date), updatedAt: expect.any(Date),
+    })));
+    expect(await prisma.vehicleAuthorization.count({ where: { employeeId: employees[3].id } })).toBe(0);
+    expect(await prisma.vehicle.count()).toBe(1);
+    expect(await prisma.employeeSkill.findMany({ select: { skillCode: true } })).toEqual([
+      { skillCode: 'SAFETY_LEVEL_2' }, { skillCode: 'SAFETY_LEVEL_2' },
+    ]);
+
+    const second = await importMatrix(prisma, parsed);
+    expect(second.vehiclesCreated).toBe(0);
+    expect(second.employeesCreated).toBe(0);
+    expect(second.authorizationsLinked).toBe(3);
+    expect(await prisma.vehicle.findMany()).toEqual([
+      { ...vehicle, updatedAt: expect.any(Date) },
+    ]);
+    expect(await prisma.employee.findMany({ select: { id: true }, orderBy: { fullName: 'asc' } }))
+      .toEqual(employees.map(({ id }) => ({ id })));
+    expect(await prisma.vehicleAuthorization.findMany({ orderBy: { employee: { fullName: 'asc' } } }))
+      .toEqual(authorizations);
+  });
+
   it('reads merged section labels and assigns the right branch', async () => {
     await importFixture();
 

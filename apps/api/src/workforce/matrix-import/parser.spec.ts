@@ -81,6 +81,16 @@ describe('parseVehicleHeader', () => {
     });
   });
 
+  it.each([
+    'Safety Level 2', 'Safety Level 2026', 'Safety ABCDEF-2485',
+    'Training 123456', 'Training 1234567', 'Training 12345678',
+  ])(
+    'does not extract a partial registration from %s',
+    (label) => {
+      expect(parseVehicleHeader(label)).toEqual({ code: null, seatCapacity: null });
+    },
+  );
+
   it('rejects a heading with no registration in it', () => {
     // "Public Vehicles" is a tick column in the real workbook, not a vehicle.
     // Accepting it would create a vehicle record named after a group heading.
@@ -92,6 +102,51 @@ describe('parseVehicleHeader', () => {
       code: null,
       seatCapacity: null,
     });
+  });
+});
+
+describe('a no-capacity vehicle without group or merge context', () => {
+  const grid: Grid = [
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+      'Bolero Truck DAC- 2485', 'Safety Level 2', 'Safety Level 2026'],
+    ['Colombo Branch', '1', 'Fixture Aspen', '', 'SPMS', '✓', '✓', '✓'],
+    ['', '2', 'Fixture Birch', '', 'Junior PMT', '✓', '', ''],
+    ['', '3', 'Fixture Cedar', '', 'Junior PMT', '✓', '', ''],
+    ['', '4', 'Fixture Elm', '', 'Junior PMT', '', '✓', ''],
+  ];
+
+  it('normalizes DAC-2485 and gives all three checked employees equal authorizations', () => {
+    const result = parseMatrix(grid);
+
+    expect(result.issues).toEqual([]);
+    expect(result.vehicleColumns).toEqual([
+      { index: 5, label: 'Bolero Truck DAC- 2485', group: null },
+    ]);
+    expect(result.vehicles).toEqual([
+      { code: 'DAC-2485', label: 'Bolero Truck DAC-2485', seatCapacity: null, ownershipGroup: null },
+    ]);
+    // Exact reference shapes: every check means the same permission, without
+    // any primary-driver, owner, or preference field. Unchecked means none.
+    expect(result.employees.map(({ fullName, vehicles }) => ({ fullName, vehicles }))).toEqual([
+      { fullName: 'Fixture Aspen', vehicles: [{ vehicleCode: 'DAC-2485' }] },
+      { fullName: 'Fixture Birch', vehicles: [{ vehicleCode: 'DAC-2485' }] },
+      { fullName: 'Fixture Cedar', vehicles: [{ vehicleCode: 'DAC-2485' }] },
+      { fullName: 'Fixture Elm', vehicles: [] },
+    ]);
+    expect(result.skillColumns.map(({ label }) => label)).toEqual(['Safety Level 2', 'Safety Level 2026']);
+    expect(result.employees[0].skills.map(({ skillCode }) => skillCode)).toEqual([
+      'SAFETY_LEVEL_2', 'SAFETY_LEVEL_2026',
+    ]);
+  });
+
+  it('still reports a capacity-only vehicle when no registration or group exists', () => {
+    const withoutRegistration = grid.map((row) => [...row]);
+    withoutRegistration[0][5] = 'Spare Van( 04 People)';
+    const result = parseMatrix(withoutRegistration);
+
+    expect(result.vehicleColumns).toHaveLength(1);
+    expect(result.vehicles).toEqual([]);
+    expect(result.issues.map(({ code }) => code)).toEqual(['MATRIX_VEHICLE_NO_REGISTRATION']);
   });
 });
 

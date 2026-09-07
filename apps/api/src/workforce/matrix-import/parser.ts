@@ -275,7 +275,7 @@ function findHeaderBottom(grid: Grid, identityRowIndex: number, identity: Identi
  * heading, which is the one that names the column. Everything above it is
  * group context: "Transport" over "Personal" over the registration. Both are
  * needed, because a column is recognised as a vehicle either by its group or by
- * a capacity in its own title.
+ * a registration or capacity in its own title.
  *
  * Values are forward-filled across each row as a fallback for headings that are
  * visually grouped but not actually merged, which the reader cannot resolve.
@@ -388,11 +388,13 @@ function classifyColumns(
     const normalizedGroup = group ? normalizeHeader(group) : '';
 
     const groupSaysVehicle = vehicleGroups.some((candidate) => normalizedGroup.includes(candidate));
-    // A registration in the header is decisive even if the group heading is
-    // missing, which happens when a column is added without extending the merge.
-    const headerHasRegistration = /\(\s*\d+\s*(People|Person)\s*\)/i.test(label);
+    // Use the same strict parser as vehicle creation so no-capacity headings
+    // are recognized without group context. Capacity-only headings still enter
+    // buildVehicles, which reports their missing registration instead of
+    // silently treating the checkmarks as a skill.
+    const { code, seatCapacity } = parseVehicleHeader(label);
 
-    if (groupSaysVehicle || headerHasRegistration) {
+    if (groupSaysVehicle || code !== null || seatCapacity !== null) {
       vehicleColumns.push({ index, label, group });
     } else {
       skillColumns.push({ index, label, group });

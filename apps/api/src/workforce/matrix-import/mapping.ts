@@ -124,8 +124,8 @@ export function toSkillCode(label: string): string {
  * Pulls the registration out of a vehicle header.
  *
  * Headers look like "Van( 04 People) 253-4289" or
- * "Motor Bike( 01 Person) BJG 4419". The registration is the trailing token
- * after the capacity bracket.
+ * "Motor Bike( 01 Person) BJG 4419". The registration is the trailing token;
+ * the description and capacity bracket are optional.
  */
 export function parseVehicleHeader(label: string): {
   code: string | null;
@@ -141,16 +141,15 @@ export function parseVehicleHeader(label: string): {
 
   const compact = afterBracket.trim().replace(/\s+/g, ' ');
 
-  // Some headers include a vehicle description without a capacity bracket
-  // (for example "Bolero Truck DAC- 2485"). In that case take the trailing
-  // registration rather than storing the whole description as the key.
-  const registration = compact.match(/((?:[A-Za-z]{1,3}|\d{2,3})\s*(?:-\s*)?\d{4})$/)?.[1];
-  const candidate = (registration ?? compact).replace(/\s*-\s*/g, '-');
-
-  // A registration always contains digits. Without this, a grouping column such
-  // as "Public Vehicles" — a tick column with no registration — would become a
-  // vehicle record named after the group heading.
-  const code = candidate && /\d/.test(candidate) ? candidate : null;
+  // Match a complete trailing registration, including when there is no capacity
+  // bracket ("Bolero Truck DAC- 2485"). The leading boundary prevents numeric
+  // skill labels such as "Safety Level 2026" from yielding "vel 2026". Numeric
+  // prefixes need a separator so an ordinary six/seven-digit skill number is
+  // not mistaken for a registration. Never fall back to arbitrary text.
+  const registration = compact.match(
+    /(?:^|\s)((?:[A-Za-z]{1,3}\s*(?:-\s*)?|\d{2,3}(?:\s*-\s*|\s+))\d{4})$/,
+  )?.[1];
+  const code = registration?.replace(/\s*-\s*/g, '-') ?? null;
 
   return { code, seatCapacity };
 }
