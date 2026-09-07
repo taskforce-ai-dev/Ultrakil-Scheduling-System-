@@ -398,7 +398,11 @@ function classifyColumns(
       ? label.trim().replace(/\s+/g, ' ').replace(/\s*-\s*/g, '-').slice(0, -code.length).trim()
       : '';
     const headerDescribesVehicle = /\b(?:van|truck|motor bike)$/i.test(description);
-    const standaloneProvincialRegistration = description === '' && /^[A-Za-z]{2} /.test(code ?? '');
+    // The province must precede another complete registration segment. A
+    // two-letter skill followed only by a year ("IT 2026") is not a province
+    // plus a registration, even though it is itself a plate-shaped token.
+    const standaloneProvincialRegistration = description === '' &&
+      /^[A-Za-z]{2} (?:[A-Za-z]{1,3}(?:-| )?|\d{2,3}(?:-| ))\d{4}$/.test(code ?? '');
 
     // Capacity-only headings still report their missing registration in
     // buildVehicles instead of silently becoming skills.

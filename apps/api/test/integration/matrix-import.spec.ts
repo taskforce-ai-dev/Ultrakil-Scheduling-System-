@@ -95,8 +95,8 @@ describe('importing the workforce matrix', () => {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Matrix');
       const prefix = context === 'capacity' ? 'Van( 04 People) ' : context === 'description' ? 'Van ' : '';
-      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'];
-      if (context === 'group') sheet.addRow([...Array<string>(10).fill(''), 'Transport']);
+      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026', 'IT 2026', 'QA 2026'];
+      if (context === 'group') sheet.addRow([...Array<string>(5 + skills.length).fill(''), 'Transport']);
       sheet.addRows([
         ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', ...skills,
           `${prefix}WP CAB-1234`, `${prefix}CP CAB-1234`, 'Bolero Truck DAC- 2485'],
@@ -122,7 +122,7 @@ describe('importing the workforce matrix', () => {
       expect(employees.map(({ vehicleAuthorizations }) => vehicleAuthorizations.map(({ vehicle }) => vehicle.code)))
         .toEqual([['DAC-2485', 'WP CAB-1234'], ['CP CAB-1234', 'DAC-2485'], []]);
       expect(employees[0].skills.map(({ skillCode }) => skillCode)).toEqual([
-        'CPR_2026', 'FIRST_AID_2026', 'ISO_9001', 'VAN_FIRST_AID_2026',
+        'CPR_2026', 'FIRST_AID_2026', 'ISO_9001', 'IT_2026', 'QA_2026', 'VAN_FIRST_AID_2026',
       ]);
       const authorizations = await prisma.vehicleAuthorization.findMany({ orderBy: { id: 'asc' } });
       const second = await importMatrix(prisma, parsed);

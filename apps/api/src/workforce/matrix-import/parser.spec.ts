@@ -148,7 +148,7 @@ describe('a no-capacity vehicle without group or merge context', () => {
     ]);
   });
 
-  it.each(['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'])(
+  it.each(['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026', 'IT 2026', 'QA 2026'])(
     'preserves the ordinary numeric skill %s alongside DAC-2485',
     (skillLabel) => {
       const mixedGrid: Grid = [
@@ -195,7 +195,7 @@ describe('distinct provincial vehicle registrations', () => {
     'keeps provincial plates and checkmarks distinct with %s context',
     (context) => {
       const prefix = context === 'capacity' ? 'Van( 04 People) ' : context === 'description' ? 'Van ' : '';
-      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'];
+      const skills = ['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026', 'IT 2026', 'QA 2026'];
       const grid: Grid = [
         ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', ...skills,
           `${prefix}WP CAB-1234`, `${prefix}CP CAB-1234`, 'Bolero Truck DAC- 2485'],
@@ -203,7 +203,7 @@ describe('distinct provincial vehicle registrations', () => {
         ['', '2', 'Fixture Birch', '', 'Junior PMT', ...skills.map(() => ''), '', '✓', '✓'],
         ['', '3', 'Fixture Cedar', '', 'Junior PMT', ...skills.map(() => ''), '', '', ''],
       ];
-      if (context === 'group') grid.unshift([...Array<string>(10).fill(''), 'Transport']);
+      if (context === 'group') grid.unshift([...Array<string>(5 + skills.length).fill(''), 'Transport']);
       const parsed = parseMatrix(grid);
 
       expect(parsed.issues).toEqual([]);
