@@ -28,6 +28,51 @@ def run(label, command, env=None, expected=0, stdin=None):
     return result.stdout.strip()
 
 
+def assert_dependencies_healthy(dependencies):
+    if set(dependencies) != {'postgres', 'redis', 'scheduler'} or any(
+            state.get('Status') != 'running' or state.get('Running') is not True
+            or state.get('Health', {}).get('Status') != 'healthy' for state in dependencies.values()):
+        raise RuntimeError('Migration failure proof requires healthy dependencies')
+
+
+def assert_migration_failure(compose_exit, dependencies, migration, api_state, expected_image):
+    assert_dependencies_healthy(dependencies)
+    state = migration.get('State', {})
+    if (compose_exit != 1 or migration.get('Image') != expected_image
+            or migration.get('Config', {}).get('Cmd') != ['node', '-e', 'process.exit(23)']
+            or state.get('Status') != 'exited' or state.get('Running') is not False
+            or state.get('ExitCode') != 23 or state.get('OOMKilled') is not False
+            or state.get('Error') or not state.get('StartedAt')
+            or state['StartedAt'].startswith('0001-')):
+        raise RuntimeError('Migration failure proof did not observe the intended exit 23 from the recorded image')
+    # A container that started and subsequently failed does not prove startup
+    # gating. It must either be absent or still never-started in created state.
+    if api_state is not None and (api_state.get('Status') != 'created' or api_state.get('Running') is not False
+            or not api_state.get('StartedAt', '').startswith('0001-')):
+        raise RuntimeError('API started despite the failed migration')
+
+
+def cleanup_projects(compose, env, project, directory, original_error=None, execute=subprocess.run):
+    failures = 0
+    for name in [project, f'{project}-fail']:
+        try:
+            result = execute([*compose, '-p', name, 'down', '--remove-orphans'], cwd=ROOT, env=env,
+                             capture_output=True, timeout=180)
+            failed = result.returncode != 0
+        except (OSError, subprocess.TimeoutExpired):
+            failed = True
+        failures += int(failed)
+        print(json.dumps({'teardownProject': name, 'failed': int(failed)}), flush=True)
+    print(json.dumps({'privateEvidenceDirectory': str(directory), 'volumesPreserved': 1,
+                      'teardownFailures': failures}), flush=True)
+    if failures:
+        message = f'Rehearsal teardown failed for {failures} project(s); raw diagnostics withheld; inspect private state.'
+        if original_error is not None:
+            original_error.add_note(message)
+        else:
+            raise RuntimeError(message)
+
+
 def main():
     os.umask(0o077)
     if os.getuid() == 0:
@@ -79,6 +124,7 @@ def main():
            '-v', f'{ROOT / "deploy/test/maintenance-probe.mjs"}:/workspace/deploy/test/maintenance-probe.mjs:ro',
            'migrate', 'node', 'deploy/test/maintenance-probe.mjs', action)
 
+    original_error = None
     try:
         run('synthetic workbook generation', ['node', 'deploy/test/rehearsal-fixture.mjs', 'workbooks', str(paths['import'])])
         dc('Compose config', '--profile', 'tools', '--profile', 'offhost', 'config', '--quiet')
@@ -123,6 +169,10 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
         run('offline recovery encryption and SSH parsing', ['docker', 'run', '--rm', '--network', 'none', '--read-only',
             '--tmpfs', '/tmp:mode=1777', '--entrypoint', 'sh', resolved['backup'], '-c', recovery_probe])
         dc('start isolated dependencies', 'up', '-d', '--wait', '--wait-timeout', '180', 'postgres', 'redis', 'scheduler')
+        for service in ['postgres', 'redis']:
+            cid = dc(f'{service} dependency container', 'ps', '-q', service)
+            resolved[service] = run(f'{service} dependency image ID', ['docker', 'inspect', '--format', '{{.Image}}', cid])
+        (directory / 'release-images.json').write_text(json.dumps({'commit': sha, 'images': resolved}))
         dc('clean migrations', 'run', '--rm', '-T', 'migrate')
         dc('idempotent migrations', 'run', '--rm', '-T', 'migrate')
         dry = tool('strict import dry run', 'import', 'node', 'deploy/staging-tool.mjs', 'import', '--dry-run')
@@ -199,22 +249,37 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
         dc('stop rehearsal applications', 'stop', 'api', 'web', 'scheduler', 'backup')
         failed_project = f'{project}-fail'
         bad = directory / 'failed-migration.json'
-        bad.write_text(json.dumps({'services': {'migrate': {'command': ['node', '-e', 'process.exit(23)']}}}))
+        services = {service: {'image': resolved[service], 'pull_policy': 'never'}
+                    for service in ['postgres', 'redis', 'scheduler', 'migrate', 'api']}
+        services['migrate']['command'] = ['node', '-e', 'process.exit(23)']
+        bad.write_text(json.dumps({'services': services}))
         failed_compose = [*compose, '-p', failed_project, '-f', str(bad)]
-        result = subprocess.run([*failed_compose, 'up', '-d', 'api'], cwd=ROOT, env=child_env, capture_output=True)
-        if result.returncode == 0:
-            raise RuntimeError('Injected migration failure did not stop startup')
-        running = run('failed migration API gate', ['docker', 'ps', '-q', '--filter', f'label=com.docker.compose.project={failed_project}',
-            '--filter', 'label=com.docker.compose.service=api'])
-        if running:
-            raise RuntimeError('API ran after migration failure')
+        def inspect_failure_service(service, optional=False):
+            cid = run(f'failure project {service} container', [*failed_compose, 'ps', '-a', '-q', service], child_env)
+            if optional and not cid:
+                return None
+            if not cid or len(cid.splitlines()) != 1:
+                raise RuntimeError('Failure project container evidence missing or ambiguous')
+            return json.loads(run(f'failure project {service} state', ['docker', 'inspect', '--format', '{{json .}}', cid]))
+
+        run('start failure project dependencies', [*failed_compose, 'up', '-d', '--no-build', '--pull', 'never',
+            '--wait', '--wait-timeout', '180', 'postgres', 'redis', 'scheduler'], child_env)
+        dependencies = {service: inspect_failure_service(service)['State'] for service in ['postgres', 'redis', 'scheduler']}
+        assert_dependencies_healthy(dependencies)
+        result = subprocess.run([*failed_compose, 'up', '-d', '--no-build', '--pull', 'never', 'api'],
+                                cwd=ROOT, env=child_env, capture_output=True)
+        migration = inspect_failure_service('migrate')
+        api = inspect_failure_service('api', optional=True)
+        dependencies = {service: inspect_failure_service(service)['State'] for service in ['postgres', 'redis', 'scheduler']}
+        assert_migration_failure(result.returncode, dependencies, migration, api['State'] if api else None, resolved['migrate'])
         print(json.dumps({'migrationFailureBlockedApi': 1, 'strictAcceptanceCompleted': 1, 'requiredBrowserJourneys': 48}), flush=True)
+    except BaseException as error:
+        original_error = error
+        raise
     finally:
         # Preserve volumes and private evidence. CI runners dispose of their
         # own filesystem; this script never deletes a volume or flushes Redis.
-        for name in [project, f'{project}-fail']:
-            subprocess.run([*compose, '-p', name, 'down', '--remove-orphans'], cwd=ROOT, env=child_env, capture_output=True)
-        print(json.dumps({'privateEvidenceDirectory': str(directory), 'volumesPreserved': 1}), flush=True)
+        cleanup_projects(compose, child_env, project, directory, original_error)
 
 
 if __name__ == '__main__':

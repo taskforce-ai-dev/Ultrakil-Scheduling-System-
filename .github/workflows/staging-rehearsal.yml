@@ -28,6 +28,7 @@ jobs:
         run: |
           node --test deploy/test/*.test.mjs
           python3 deploy/test/recovery.test.py
+          python3 deploy/test/rehearsal.test.py
       - name: Install browser
         run: pnpm --filter @ultrakil/manager-web exec playwright install --with-deps chromium
       - name: Rehearse built release with fabricated workbooks
