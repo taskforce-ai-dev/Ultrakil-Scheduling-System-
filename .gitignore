@@ -13,6 +13,9 @@ out/
 .env
 .env.*
 !.env.example
+*.env
+*.env.*
+!deploy/staging.env.example
 
 # Python
 __pycache__/
@@ -42,6 +45,21 @@ Thumbs.db
 data/*.xlsx
 data/*.xls
 data/*.csv
+**/*.xlsx
+**/*.xls
+**/*.xlsm
+**/*.csv
+incoming/
+private/
+reports/
+import-reports/
+backups/
+*.sql.gz
+*.dump
+*.pgdump
+*.backup
+*.pem
+*.key
 # The live mapping names real sites and their branches; only the template is
 # committed.
 data/matrix-mapping.json
