@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { type Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * ULK-O07's "verify laptop/tablet layouts" requirement. Two viewport sizes:

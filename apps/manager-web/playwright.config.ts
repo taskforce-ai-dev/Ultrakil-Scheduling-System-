@@ -1,4 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
+import { validateStrictEnvironment } from './e2e/strict-policy.mjs';
+
+if (process.env.E2E_STRICT === '1') validateStrictEnvironment(process.env);
 
 /**
  * Runs against a real dev stack (web + API + database), never against
@@ -36,6 +39,7 @@ export default defineConfig({
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "../../.playwright-artifacts/playwright-report" }],
+    ...(process.env.E2E_STRICT === '1' ? [["./e2e/strict-reporter.mjs"] as [string]] : []),
   ],
   timeout: 30_000,
   use: {

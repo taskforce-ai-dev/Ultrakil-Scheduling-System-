@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * Manual override (dispatch board → Edit crew) and locking a visit
@@ -15,6 +15,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
 }) => {
   await page.goto("/dispatch-board");
   await expect(page.getByRole("heading", { name: "Dispatch Board" })).toBeVisible();
+  await page.waitForLoadState('networkidle');
 
   const editCrewButton = page.getByRole("button", { name: "Edit crew" }).first();
   if ((await editCrewButton.count()) === 0) {
@@ -48,6 +49,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
 test("visit calendar: locks and releases a visit", async ({ page }) => {
   await page.goto("/visits");
   await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
+  await page.waitForLoadState('networkidle');
 
   const visitButton = page.locator('button[aria-label*=" at "][aria-label*=" on "]').first();
   if ((await visitButton.count()) === 0) {

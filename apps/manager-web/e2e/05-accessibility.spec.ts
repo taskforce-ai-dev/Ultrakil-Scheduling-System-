@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * Automated accessibility scan (axe-core) of every top-level page, plus the
@@ -88,6 +88,7 @@ test("dispatch board's manual override drawer has no serious accessibility viola
   page,
 }) => {
   await page.goto("/dispatch-board");
+  await page.waitForLoadState('networkidle');
   const editCrewButton = page.getByRole("button", { name: "Edit crew" }).first();
   if ((await editCrewButton.count()) === 0) {
     test.skip(true, "No scheduled visit for today in this environment — nothing to open.");
@@ -101,6 +102,7 @@ test("schedule run publish confirmation dialog has no serious accessibility viol
   page,
 }) => {
   await page.goto("/schedule-history");
+  await page.waitForLoadState('networkidle');
   const publishButton = page
     .locator("li", { has: page.getByText("Draft — ready to publish") })
     .first()

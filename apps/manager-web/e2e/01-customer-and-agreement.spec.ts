@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * The first half of the Phase 1 workflow: a customer and a site must exist
@@ -60,7 +60,7 @@ test("creates a customer with a site, then a service agreement for it, and sees 
     await page.locator(`label[for="allowed-${day}"]`).click();
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = process.env.E2E_DATE ?? new Date().toISOString().slice(0, 10);
   await page.locator("#startDate").fill(today);
 
   await page.getByRole("button", { name: "Save agreement" }).click();

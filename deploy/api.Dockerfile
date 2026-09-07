@@ -31,6 +31,7 @@ COPY --from=build /workspace/apps/api/src ./apps/api/src
 COPY --from=build /workspace/apps/api/tsconfig.json ./apps/api/tsconfig.json
 COPY --from=build /workspace/apps/api/package.json ./apps/api/package.json
 COPY deploy/staging-tool.mjs ./deploy/staging-tool.mjs
+COPY deploy/lifecycle.mjs ./deploy/lifecycle.mjs
 USER node
 CMD ["node", "deploy/staging-tool.mjs", "preflight"]
 

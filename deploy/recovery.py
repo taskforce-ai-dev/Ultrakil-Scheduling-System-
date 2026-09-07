@@ -369,7 +369,7 @@ def main():
     signal.signal(signal.SIGTERM, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
-    for name in ("backup", "schedule", "health"):
+    for name in ("backup", "schedule", "health", "counts"):
         actions.add_parser(name)
     for name in ("verify", "restore", "export"):
         action = actions.add_parser(name)
@@ -388,6 +388,7 @@ def main():
         with lock(directory, exclusive=args.action in ("backup", "cleanup")):
             if args.action == "backup": result = backup(directory)
             elif args.action == "health": result = health(directory)
+            elif args.action == "counts": result = {"counts": counts(source_database())}
             elif args.action == "verify":
                 result = {"verifiedArchive": str(verify(directory, args.archive))}
             elif args.action == "restore": result = restore(directory, args.archive, args.target)
