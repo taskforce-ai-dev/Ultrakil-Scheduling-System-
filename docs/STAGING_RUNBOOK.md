@@ -211,7 +211,9 @@ That is an operational data blocker, not permission to weaken the PMS rule.
 
 ## 7. Backup and restore proof
 
-The `backup` service writes an immediate backup on startup, then one per day.
+The `backup` service waits for successful migrations, writes an immediate backup
+on startup, then one per day. Start it after the explicit import for the first
+workforce snapshot, as shown above.
 It uses PostgreSQL 16's compressed custom format (`pg_dump --format=custom
 --file`), checks the process exit status, archive header and `pg_restore --list`,
 and calculates SHA-256. This avoids a compression pipeline masking dump errors.

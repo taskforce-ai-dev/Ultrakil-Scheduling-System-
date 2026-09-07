@@ -86,6 +86,7 @@ class StagingComposeTest(unittest.TestCase):
     def test_backup_is_private_testable_and_has_a_staleness_probe(self):
         backup = self.services["backup"]
         self.assertEqual(backup["command"], ["schedule"])
+        self.assertEqual(backup["depends_on"]["migrate"]["condition"], "service_completed_successfully")
         self.assertEqual(backup["build"]["dockerfile"], "deploy/recovery.Dockerfile")
         self.assertIn("BACKUP_UID", backup["user"])
         self.assertTrue(backup["read_only"])

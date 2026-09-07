@@ -278,6 +278,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "/opt/ultrakil/recovery.py", "health"]
       interval: 5m
