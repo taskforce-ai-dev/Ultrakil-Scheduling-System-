@@ -156,6 +156,120 @@ Screenshots: `screenshots/vehicle-authorized-driver-picker.png`,
 
 ---
 
+---
+
+## O09 change-request UAT
+
+All 7 required sub-scenarios were run against demo data (real vehicle code
+`DAC-2485` doesn't exist in this dataset — see Known limitations; `LM-3067`,
+a demo vehicle with 3 checked drivers spanning both branches, stood in for
+it).
+
+### 1. All checked drivers shown for one company vehicle (+ DAC-2485)
+
+**PASS.** Vehicle detail page for `LM-3067` lists all 3 authorized drivers
+(Ajith Dissanayake, Bandula Herath, Chaminda Peiris) as equal rows, each
+just "Authorized to drive" — with an explicit disclaimer: *"Every employee
+listed here is authorized to drive this vehicle — this is not an ownership
+or primary-driver assignment."* No ownership/primary-driver language
+anywhere. **DAC-2485 itself still needs to be checked once real data is
+available.**
+
+Screenshot: `screenshots/o09-all-checked-drivers-lm3067.png`
+
+### 2. Same multi-driver vehicle assigned via two different checked drivers, two valid scenarios
+
+**PASS.** Used `CAB-2288` (2 checked drivers, Chaminda Peiris and Kamala
+Wijesinghe) instead of LM-3067, to stay inside vehicle seat capacity (see
+note under Defects/observations). Saved two separate real assignments:
+Harbour View — Main Building (2026-09-08) with driver Chaminda Peiris, and
+Harbour View — Kitchens (2026-09-09) with driver Kamala Wijesinghe. Both
+persisted successfully and independently.
+
+Screenshots: `screenshots/o09-scenarioA-driver-chaminda-saved.png`,
+`screenshots/o09-scenarioB-driver-kamala-saved.png`
+
+### 3. An unchecked employee cannot be selected or saved as driver
+
+**PASS.** With Nadeeka Kumarasiri (not authorized for LM-3067) added to the
+crew alongside Ajith Dissanayake (who is), the Driver dropdown for LM-3067
+offers only "Ajith Dissanayake" — Nadeeka cannot even be selected, let
+alone saved.
+
+Screenshot: `screenshots/o09-unauthorized-driver-excluded.png`
+
+### 4. A driver removed from the crew is revalidated
+
+**PASS.** Built a valid crew+vehicle+driver assignment (Ruwan Gunasekara as
+driver of PJ-5510), then removed Ruwan from "Supervisor & crew" without
+touching the vehicle section directly. The vehicle's driver field cleared
+itself and validation immediately produced `NO_AUTHORIZED_DRIVER`, correctly
+pointing at the remaining crew member (Sunil Abeykoon) as the fix.
+
+Screenshots: `screenshots/before-driver-removed-from-crew.png`,
+`screenshots/after-driver-removed-revalidated.png`
+
+### 5. Inactive clients/sites labelled in text, not colour alone
+
+**PASS.** Deactivated one site on an otherwise-active customer (Harbour
+View — Kitchens) and one whole customer (Greenfield Brewery) — demo data
+had no inactive examples, so this was set directly in the local database,
+not through a manager-web control (see Known limitations: there is no
+deactivate action in the UI itself in this phase). Customers list shows
+"1 active, 1 inactive" as text for the partially-inactive customer, and a
+clearly-labelled "Inactive" badge (with icon, not just colour) when
+filtering to inactive customers.
+
+Screenshots: `screenshots/o09-active-customer-with-inactive-site-label.png`,
+`screenshots/o09-inactive-customer-labeled.png`
+
+### 6. Inactive records excluded from scheduling controls, generate no visits
+
+**PASS.** The inactive site no longer appears in the "Add agreement" site
+picker for its (still-active) customer, the inactive customer no longer
+appears in the customer picker at all, and re-running "Generate visits"
+produces nothing for either — confirmed by checking the generation preview
+text directly rather than only visually.
+
+Screenshot: `screenshots/o09-inactive-site-excluded-from-picker.png`
+
+### 7. Historical information remains accessible
+
+**PASS.** A visit that was generated for Greenfield Brewery before it was
+deactivated is still visible and still editable on the Dispatch Board after
+deactivation — becoming inactive hides a customer/site from future
+scheduling, not from records that already exist.
+
+Screenshot: `screenshots/o09-historical-info-still-accessible.png`
+
+---
+
+## Additional validation coverage found along the way (bonus evidence for the manager guide)
+
+Beyond the specific rules O08/O09 named, the same UAT pass surfaced two more
+validation categories worth including in the manager guide's error-recovery
+section, since a manager will hit them in real use:
+
+- **`SKILL_NOT_HELD`** — "This job needs MBR_FUMIGATION and nobody in the
+  crew holds it." (crew has the right headcount and PMS grade, but not the
+  right skill).
+- **`VEHICLE_CAPACITY_EXCEEDED`** — "Bolero Truck LM-3067 seats 2 and the
+  crew is 3." Capacity is checked per assigned vehicle against the full
+  onsite crew count; assigning a second, smaller vehicle to carry the
+  overflow does **not** currently satisfy this check (each vehicle
+  individually is validated against the whole crew, not a portion of it) —
+  worth a manager-guide callout so managers don't assume they can split a
+  crew across multiple vehicles.
+
+Also worth noting for the guide: **"Save assignment" stays disabled until
+"Reason for this change" is filled in**, even once the Validation panel says
+"This crew is eligible to take the visit." This isn't announced anywhere in
+the UI — a manager could stare at a silently-disabled Save button with no
+visible error. Recommend the guide calls this out explicitly as a recovery
+step.
+
+---
+
 ## Defects found
 
 ### 1. Re-opening an already-assigned visit shows false "double-booked" errors against itself — investigating severity
@@ -219,10 +333,19 @@ wrong).
    not a code or migration change. Worth a demo-seed follow-up (owner: API)
    so a fresh demo environment can exercise vehicle assignment out of the
    box.
-3. **No inactive customer/site exists in demo data yet**, so the O09
-   inactive-label/exclusion scenarios still need to be run (see O09 section,
-   in progress).
-4. **Release gate "screenshots match the deployed staging interface"
+3. **No inactive customer/site existed in demo data**, so one site
+   (Harbour View — Kitchens) and one whole customer (Greenfield Brewery)
+   were deactivated directly in the local database to exercise the O09
+   inactive-record scenarios. Also revealed: **manager-web has no
+   deactivate/reactivate control in the UI itself** — `isActive` is
+   read-only in this phase, set only by the master-schedule import. If a
+   manager is expected to deactivate a customer/site themselves during the
+   pilot (rather than it always coming from a re-import), that's a gap
+   worth confirming with the Project Lead before sign-off.
+4. **`DAC-2485` (the real vehicle named explicitly in O09) doesn't exist in
+   demo data** — sub-scenario 1 used a demo vehicle with an equivalent
+   shape (3 checked drivers) instead. Needs a real-data re-run.
+5. **Release gate "screenshots match the deployed staging interface"
    cannot be satisfied yet** — there is no staging deployment. All
    screenshots in this document are from local dev.
 
@@ -230,7 +353,7 @@ wrong).
 
 ## Still to do
 
-- O09 change-request UAT (7 sub-scenarios) — in progress.
 - Variable service hours: dedicated site operating-hours screenshot.
 - Manager guide, demonstration script, final known-limitations doc.
-- Re-run everything above against real data once available.
+- Re-run everything above against real data once available, including the
+  specific DAC-2485 check.
