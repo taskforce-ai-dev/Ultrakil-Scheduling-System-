@@ -1,24 +1,23 @@
+# This directory is a separate build context; root .dockerignore does not apply.
 .git
 .github
-.next
-**/.next
-**/dist
 **/node_modules
-node_modules
 .pnpm-store
-.playwright-artifacts
-coverage
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache
 **/.venv
+.venv
+venv
+tests
+coverage
+*.log
 .env
 .env.*
 **/.env
 **/.env.*
 **/*.env
 **/*.env.*
-# Docker patterns are case-sensitive; workbook extensions need explicit cases.
 **/*.[xX][lL][sS]
 **/*.[xX][lL][sS][xXmM]
 **/*.[cC][sS][vV]
@@ -37,4 +36,3 @@ coverage
 **/*.backup
 **/*.pem
 **/*.key
-*.log

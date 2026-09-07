@@ -83,6 +83,20 @@ class StagingComposeTest(unittest.TestCase):
         self.assertIn('"apps/manager-web/server.js"', web)
         self.assertNotIn("COPY --from=build /workspace /workspace", web)
 
+    def test_every_build_context_excludes_private_inputs_at_any_depth(self):
+        required_patterns = {
+            "**/*.[xX][lL][sS]", "**/*.[xX][lL][sS][xXmM]", "**/*.[cC][sS][vV]",
+            "**/matrix-mapping.json", "**/job-types.json", "**/..*",
+            "**/.env", "**/.env.*", "**/*.env", "**/*.env.*",
+            "**/*import-report*.json", "**/private", "**/reports", "**/backups",
+        }
+        contexts = {service["build"]["context"] for service in self.services.values() if "build" in service}
+        for context in contexts:
+            file = (ROOT / "deploy" / context / ".dockerignore").resolve()
+            self.assertTrue(file.is_file(), str(file))
+            patterns = set(file.read_text().splitlines())
+            self.assertTrue(required_patterns.issubset(patterns), str(file))
+
 
 if __name__ == "__main__":
     unittest.main()

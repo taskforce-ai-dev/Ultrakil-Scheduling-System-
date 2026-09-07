@@ -214,3 +214,5 @@ jobs:
           python3 -m pip install PyYAML==6.0.2
           python3 deploy/test/compose.test.py
           docker compose --env-file deploy/staging.env.example -f deploy/compose.staging.yml config --quiet
+      - name: Verify private files never enter either Docker build context
+        run: node deploy/test/docker-context.mjs
