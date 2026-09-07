@@ -31,6 +31,8 @@ sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" \
 sudo install -d -m 0700 -o 10001 -g 10001 /opt/ultrakil/backups
 ```
 
+Also create `/opt/ultrakil/releases` as a 0700 operator-owned directory for
+private release manifests and set `umask 077` in the deployment shell.
 Clone the repository into `/opt/ultrakil/app`, check out the exact reviewed
 commit, and record its SHA in the C08 handover.
 
@@ -206,7 +208,9 @@ Before O08 is signed off, record screenshots and API/DB evidence for:
 3. An unchecked driver is rejected through both manual assignment and the
    optimizer path.
 4. A vehicle with one checked driver is unavailable when that person cannot
-   join the crew; the visit remains Unassigned with a structured reason.
+   join the crew. If no compliant crew/transport choice exists, the visit stays
+   Unassigned with a structured reason; optional-vehicle work can still use a
+   compliant crew without a vehicle.
 5. Clearly red client/site records are inactive and produce no future visits.
 6. Red headers, date cells and schedule marks do not deactivate valid records.
 7. Historical visits for inactive records remain queryable.
@@ -350,19 +354,141 @@ python3 deploy/test/compose.test.py
 # PostgreSQL 16 client tools must be on PATH. The test requires explicit local
 # PGHOST/PGPORT/PGUSER and installed API dependencies; it creates its own DBs.
 PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/recovery.postgres.test.py
+PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/rehearsal.postgres.test.py
 ```
 
 ## 8. Rollback
 
-Application rollback is a commit rollback, not a database reset:
+Application rollback restarts the previously verified image IDs. It must not
+build, pull a mutable tag, run a down migration, reset PostgreSQL, delete volumes
+or flush Redis. Review compatibility of the prior API with the current schema
+before entering the release window. First release has no prior accepted build;
+its rehearsal proves exact-artifact restart, not cross-version compatibility.
 
-1. Record the failing SHA and logs.
-2. Check out the last green release SHA.
-3. Rebuild `api` and `web`, then run `up -d` again.
-4. Do not run a down migration unless a reviewed migration-specific rollback
-   exists. Prisma migrations are forward-only by default.
-5. Restore data only for confirmed corruption, using a verified backup and a
-   separately approved maintenance window.
+Before each release, record the source SHA and all resolved image IDs in a
+private release record. Keep prior images locally; exclude them from automated
+image pruning while they remain rollback candidates:
+
+```bash
+git rev-parse HEAD
+for service in api web scheduler migrate backup; do
+  container_id=$(compose ps -a -q "$service")
+  test -n "$container_id"
+  docker inspect --format '{{.Image}}' "$container_id"
+done
+```
+
+Copy the exact previously accepted IDs into a private
+`/opt/ultrakil/releases/previous-images.json` file (0700 parent, 0600 file):
+
+```json
+{"services":{"api":{"image":"sha256:REPLACE_API_ID","pull_policy":"never"},"web":{"image":"sha256:REPLACE_WEB_ID","pull_policy":"never"},"scheduler":{"image":"sha256:REPLACE_SCHEDULER_ID","pull_policy":"never"}}}
+```
+
+Close both portal and API reverse-proxy ingress with the authorized host's
+maintenance response, block any additional writers/import jobs, and wait for
+in-flight HTTP writes to finish. Verify an external write request cannot reach
+the API. The environment acknowledgment below records this operator check; it
+does not itself configure a proxy or firewall. Keep PostgreSQL and Redis running.
+
+```bash
+compose stop web
+maintenance() {
+  compose run --rm --no-deps -T \
+    -e MAINTENANCE_GATE_CONFIRMED=yes -e REDIS_HOST=redis \
+    -e BULLMQ_PREFIX=ultrakil-staging \
+    migrate node deploy/lifecycle.mjs "$@"
+}
+# Use the EXACT configured COMPOSE_PROJECT_NAME for BULLMQ_PREFIX above.
+maintenance pause
+```
+
+`pause` globally pauses both registered BullMQ queues, then fails if any queued
+or running schedule run, active job, waiting/paused job, delayed retry,
+prioritized job or waiting child remains. Completed/failed retained job history
+is preserved. If it fails, leave ingress closed, inspect the numeric queue/run
+state in a protected session, `maintenance resume`, allow legitimate pending
+work to finish (or explicitly cancel it through the application's supported
+workflow), and retry `maintenance pause`. Do not kill a live solve or delete its
+Redis keys. A stuck run/failed retry requiring data repair needs a separate
+review; this tool does not silently mark it successful.
+
+After a successful pause, stop the API (which also hosts the BullMQ worker) and
+scheduler using their 180-second shutdown grace. Confirm they stopped before
+recording a consistent publication snapshot and one-shot backup:
+
+```bash
+compose stop api scheduler
+maintenance check
+maintenance snapshot > /opt/ultrakil/releases/before-rollback.json
+compose run --rm --no-deps backup counts
+compose run --rm --no-deps backup backup
+```
+
+Protect the snapshot with `umask 077` in the operator shell. It contains only
+counts and a SHA-256 digest over assignment/crew/vehicle, outbox and run state.
+Verify and restore the exact returned archive to a new disposable database as
+in section 7; match counts before proceeding and clean that exact target.
+The snapshot catches publication mutations even if row counts remain the same.
+
+Use the stored prior IDs with no build/pull/dependency recreation:
+
+```bash
+rollback_compose() {
+  docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml \
+    -f /opt/ultrakil/releases/previous-images.json "$@"
+}
+rollback_compose up -d --no-deps --no-build --pull never --wait scheduler
+rollback_compose up -d --no-deps --no-build --pull never --wait api
+maintenance snapshot > /opt/ultrakil/releases/after-rollback.json
+cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-rollback.json
+maintenance resume
+# Ingress is still closed; check there is no replay before reopening it.
+maintenance pause
+maintenance snapshot > /opt/ultrakil/releases/after-resume.json
+cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-resume.json
+maintenance resume
+rollback_compose up -d --no-deps --no-build --pull never --wait web
+```
+
+Stop immediately on any nonzero command (`set -e` in a scripted operator
+session). Compare each running container's `.Image` with the recorded ID; check
+readiness, login, paused state cleared, no duplicate outbox entries and no new
+publication before reopening ingress. Save count-only evidence and observe the
+stack for ten minutes. Preserve DB/Redis volumes and job history throughout.
+Data replacement after corruption is a distinct, explicitly approved restore
+procedure; disposable restore proof never authorizes replacing staging data.
+
+## 8a. Automated release rehearsal
+
+`Staging lifecycle rehearsal` runs for every PR base (including stacked C08)
+and manual workflow dispatch, with no deployment or registry push. On a
+Docker-authorized nonroot Linux operator account with passwordless permission
+to chown the newly created test backup directory to UID 10001:
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm --filter @ultrakil/api prisma:generate
+corepack pnpm --filter @ultrakil/manager-web exec playwright install --with-deps chromium
+python3 deploy/rehearse.py
+```
+
+The runner creates unique project/database/queue namespaces and private
+temporary directories outside the checkout, fabricates the two workbook
+layouts, builds all release images, checks nonroot passwd identities and
+offline Prisma/OpenSSL/import/recovery/SSH tooling, migrates twice, dry-runs and
+imports twice, starts every service, and runs all 48 browser journeys with a
+fixed synthetic date. Required skips, missing journeys, expected failures and
+failed results block strict acceptance. It then proves checksum/restore/count
+parity, exact-artifact restart without publication replay and migration-failure
+startup gating in a second disposable project. Raw logs, credentials, auth
+storage state, workbooks and backups are never uploaded as public artifacts.
+It stops containers but preserves volumes and private evidence for inspection;
+the disposable CI runner owns eventual cleanup. Never run it on the staging
+database or point its generated paths at real inputs.
+
+This is synthetic regression evidence. It cannot substitute for Oshadi's
+real-data UAT, staging screenshots or the authorized remote backup restore drill.
 
 ## 9. Handover evidence
 
