@@ -125,13 +125,18 @@ Screenshot: `screenshots/service-agreements-allowed-vs-preferred-days.png`
 
 ## Scenario: variable service hours
 
-**Result: evidenced structurally; full walk-through still pending** (see
-Follow-ups). The visit-generation preview (`screenshots/generate-visits-preview.png`)
-confirms visits are generated per agreement/site rather than from a single
-global schedule, which is the mechanism that lets service hours vary by
-site and day. A dedicated screenshot of the site operating-hours editor
-showing two different days with different hours for the same site is still
-needed for the manager guide.
+**Result: PASS.**
+
+The site operating-hours editor (used when adding/editing a customer's
+site) configures opening hours independently per weekday, with support for
+more than one window on the same day (e.g. a lunch break). Confirmed by
+setting Monday to 08:00 AM–05:00 PM and Wednesday to 06:00 AM–12:00 PM on
+the same site, with Tuesday/Thursday left "Closed" — each day is genuinely
+independent, not a single global window applied everywhere. The helper text
+is explicit: *"A day with no window is closed. Add more than one window
+(e.g. a lunch break) for the same day."*
+
+Screenshot: `screenshots/variable-service-hours-per-day.png`
 
 ---
 
