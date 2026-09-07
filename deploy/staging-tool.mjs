@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, lstatSync, realpathSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
@@ -54,7 +54,7 @@ export function validateImportFiles(env) {
     try {
       const stat = lstatSync(env.STAGING_REPORT_DIR);
       const fromRepository = relative(root, realpathSync(env.STAGING_REPORT_DIR));
-      if (!fromRepository.startsWith('..')) fail('STAGING_REPORT_DIR');
+      if (fromRepository !== '..' && !fromRepository.startsWith(`..${sep}`)) fail('STAGING_REPORT_DIR');
       if (!stat.isDirectory() || (stat.mode & 0o077) || stat.uid !== process.getuid()) fail('STAGING_REPORT_DIR');
       accessSync(env.STAGING_REPORT_DIR, constants.W_OK | constants.X_OK);
     } catch { fail('STAGING_REPORT_DIR'); }

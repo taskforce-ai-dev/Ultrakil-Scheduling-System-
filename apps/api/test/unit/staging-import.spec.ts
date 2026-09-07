@@ -48,6 +48,13 @@ describe('staging import aggregate output', () => {
 });
 
 describe('private detailed import reports', () => {
+  it('rejects a private repository child named with a two-dot prefix', async () => {
+    const dir = await mkdtemp(resolve(__dirname, '../../../..', '..private-test-'));
+    try {
+      await expect(writePrivateReport(dir, matrix, schedule)).rejects.toThrow('PRIVATE_REPORT_DIRECTORY_REQUIRED');
+      expect(await readdir(dir)).toEqual([]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
   it('refuses public report directories', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ulk-report-test-'));
     try {

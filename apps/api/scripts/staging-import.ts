@@ -1,6 +1,6 @@
 /** Invoked only through deploy/staging-tool.mjs; stdout is numeric evidence only. */
 import { lstat, mkdtemp, realpath, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { seedReferenceData } from '../prisma/reference-data';
 import { decideBranch } from '../src/catalog/schedule-import/branch-match';
@@ -48,7 +48,7 @@ export async function writePrivateReport(directory: string, matrix: ParsedMatrix
   const parent = await lstat(directory);
   const fromRepository = relative(resolve(__dirname, '../../..'), await realpath(directory));
   if (!parent.isDirectory() || (parent.mode & 0o077) || parent.uid !== process.getuid?.()
-    || !fromRepository.startsWith('..')) throw new Error('PRIVATE_REPORT_DIRECTORY_REQUIRED');
+    || (fromRepository !== '..' && !fromRepository.startsWith(`..${sep}`))) throw new Error('PRIVATE_REPORT_DIRECTORY_REQUIRED');
   const runDirectory = await mkdtemp(join(directory, 'import-'));
   await writeFile(join(runDirectory, 'issues.json'), JSON.stringify({ matrix: matrix.issues, schedule: schedule.issues }, null, 2),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' });

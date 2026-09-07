@@ -51,6 +51,7 @@ data/*.csv
 **/*.csv
 incoming/
 private/
+..*/
 reports/
 import-reports/
 backups/

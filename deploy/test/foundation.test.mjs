@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
@@ -22,7 +22,8 @@ test('private paths are rejected at every depth while explicit examples remain a
   for (const path of ['.env', 'apps/api/.env.production', 'deploy/staging.env', 'deploy/staging.env.bak',
     'deploy/staging.local.env', 'incoming/Workbook.XLSX', 'nested/data/matrix-mapping.json',
     'data/job-types.json', 'data/master-schedule-import-report.json', 'deploy/reports/issues.json',
-    'private/a.json', 'backups/archive.sql.gz', 'snapshot.dump', 'dump.sql.gz']) {
+    'private/a.json', '..private/import-run/issues.json', 'nested/..private/report.json',
+    'backups/archive.sql.gz', 'snapshot.dump', 'dump.sql.gz']) {
     assert.ok(privatePathReason(path), path);
   }
   for (const path of ['.env.example', 'deploy/staging.env.example', 'data/matrix-mapping.example.json',
@@ -106,6 +107,24 @@ test('tool rejects unsupported commands before invoking anything', async () => {
   let called = false;
   await assert.rejects(runTool(['db:reset'], valid(), () => { called = true; }), /command/);
   assert.equal(called, false);
+});
+
+test('report preflight rejects a repository child whose name begins with two dots', () => {
+  const inputs = mkdtempSync(resolve(tmpdir(), 'ulk-input-test-'));
+  const reportDirectory = mkdtempSync(resolve(root, '..private-test-'));
+  try {
+    const env = {
+      TECHNICIAN_MATRIX_PATH: resolve(inputs, 'matrix.xlsx'), MASTER_SCHEDULE_PATH: resolve(inputs, 'schedule.xlsx'),
+      STAGING_REPORT_DIR: reportDirectory,
+    };
+    writeFileSync(env.TECHNICIAN_MATRIX_PATH, 'synthetic', { mode: 0o600 });
+    writeFileSync(env.MASTER_SCHEDULE_PATH, 'synthetic', { mode: 0o600 });
+    assert.throws(() => validateImportFiles(env), /STAGING_REPORT_DIR/);
+    assert.deepEqual(readdirSync(reportDirectory), []);
+  } finally {
+    rmSync(reportDirectory, { recursive: true, force: true });
+    rmSync(inputs, { recursive: true, force: true });
+  }
 });
 
 test('failed migration preserves failure without exposing child secret output', async () => {

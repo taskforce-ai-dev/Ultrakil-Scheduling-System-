@@ -6,6 +6,7 @@ const examples = new Set(['.env.example', 'deploy/staging.env.example',
 
 export function privatePathReason(path) {
   if (examples.has(path)) return null;
+  if (/(^|\/)\.\.[^/]+(\/|$)/.test(path)) return 'ambiguous private path';
   if (/(^|\/)\.env($|\.)|\.env($|\.)/i.test(path)) return 'runtime environment';
   if (/\.(xlsx?|xlsm|csv)$/i.test(path)) return 'private workbook/data';
   if (/(^|\/)(matrix-mapping|job-types)\.json$/i.test(path)) return 'private mapping';
