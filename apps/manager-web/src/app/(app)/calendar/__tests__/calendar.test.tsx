@@ -10,7 +10,7 @@ vi.mock("@/lib/api-client", async () => {
 import CalendarPage from "../page";
 import { fetchCalendar } from "@/lib/api-client";
 import { buildCalendarAssignment, buildCalendarEntry } from "@/test/fixtures";
-import { todayIso } from "@/lib/calendar";
+import { daysInView, todayIso, type CalendarView } from "@/lib/calendar";
 
 const unassigned = buildCalendarEntry({
   visitId: "visit-unassigned",
@@ -67,6 +67,29 @@ beforeEach(() => {
 });
 
 describe("CalendarPage", () => {
+  it.each<CalendarView>(["month", "week"])("gives the populated %s calendar valid accessible rows and column headers", async (view) => {
+    const user = userEvent.setup();
+    render(<CalendarPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+    if (view === "week") await user.click(screen.getByRole("button", { name: "Week" }));
+
+    const grid = await screen.findByRole("grid", { name: view === "month" ? "Month calendar" : "Week calendar" });
+    const rows = within(grid).getAllByRole("row");
+    const days = daysInView(todayIso(), view);
+    expect(rows).toHaveLength(1 + days.length / 7);
+    const headers = within(rows[0]).getAllByRole("columnheader");
+    expect(headers.map((header) => header.textContent)).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+    for (const header of headers) expect(header.closest('[role="row"]')).toBe(rows[0]);
+    const cells = within(grid).getAllByRole("gridcell");
+    expect(cells).toHaveLength(days.length);
+    for (const row of rows.slice(1)) {
+      const rowCells = within(row).getAllByRole("gridcell");
+      expect(rowCells).toHaveLength(7);
+      for (const cell of rowCells) expect(cell.closest('[role="row"]')).toBe(row);
+    }
+    for (const row of rows) expect(row.closest('[role="grid"]')).toBe(grid);
+  });
+
   it("uses the assigned appointment time in the chip and detail, not the permitted window", async () => {
     const user = userEvent.setup();
     render(<CalendarPage />);

@@ -482,66 +482,71 @@ export default function CalendarPage() {
           role="grid"
           aria-label={view === "month" ? "Month calendar" : "Week calendar"}
         >
-          <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40">
+          <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
             {WEEKDAY_INITIALS.map((day) => (
               <div
                 key={day}
+                role="columnheader"
                 className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
               >
                 {day}
               </div>
             ))}
           </div>
-          <div className="grid min-w-3xl grid-cols-7">
-            {days.map((day) => {
-              const dayEntries = byDay.get(day) ?? [];
-              const outsideMonth = view === "month" && !isSameMonth(day, anchor);
-              const shown =
-                view === "month" ? dayEntries.slice(0, MAX_CHIPS_PER_MONTH_CELL) : dayEntries;
-              const hiddenCount = dayEntries.length - shown.length;
+          {Array.from({ length: days.length / 7 }, (_, week) =>
+            days.slice(week * 7, week * 7 + 7),
+          ).map((week) => (
+            <div key={week[0]} className="grid min-w-3xl grid-cols-7" role="row">
+              {week.map((day) => {
+                const dayEntries = byDay.get(day) ?? [];
+                const outsideMonth = view === "month" && !isSameMonth(day, anchor);
+                const shown =
+                  view === "month" ? dayEntries.slice(0, MAX_CHIPS_PER_MONTH_CELL) : dayEntries;
+                const hiddenCount = dayEntries.length - shown.length;
 
-              return (
-                <div
-                  key={day}
-                  role="gridcell"
-                  className={cn(
-                    "min-h-28 space-y-1 border-b border-r border-border p-1.5",
-                    outsideMonth && "bg-muted/30",
-                    day === today && "bg-primary/5",
-                  )}
-                >
-                  <span
+                return (
+                  <div
+                    key={day}
+                    role="gridcell"
                     className={cn(
-                      "block text-xs tabular-nums",
-                      outsideMonth ? "text-muted-foreground/60" : "text-muted-foreground",
-                      day === today && "font-semibold text-primary",
+                      "min-h-28 space-y-1 border-b border-r border-border p-1.5",
+                      outsideMonth && "bg-muted/30",
+                      day === today && "bg-primary/5",
                     )}
                   >
-                    {Number(day.slice(8, 10))}
-                  </span>
-                  {shown.map((entry) => (
-                    <EntryChip
-                      key={entry.visitId}
-                      entry={entry}
-                      onOpen={() => setOpenEntry(entry)}
-                    />
-                  ))}
-                  {hiddenCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAnchor(day);
-                        setView("week");
-                      }}
-                      className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    <span
+                      className={cn(
+                        "block text-xs tabular-nums",
+                        outsideMonth ? "text-muted-foreground/60" : "text-muted-foreground",
+                        day === today && "font-semibold text-primary",
+                      )}
                     >
-                      + {hiddenCount} more
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                      {Number(day.slice(8, 10))}
+                    </span>
+                    {shown.map((entry) => (
+                      <EntryChip
+                        key={entry.visitId}
+                        entry={entry}
+                        onOpen={() => setOpenEntry(entry)}
+                      />
+                    ))}
+                    {hiddenCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAnchor(day);
+                          setView("week");
+                        }}
+                        className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        + {hiddenCount} more
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
 
