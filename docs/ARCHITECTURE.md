@@ -71,10 +71,10 @@ by whom, and what it produced.
 
 Phase 1 registers two queues:
 
-| Queue | Purpose |
-| --- | --- |
+| Queue              | Purpose                                                               |
+| ------------------ | --------------------------------------------------------------------- |
 | `visit-generation` | Turn service agreement frequency rules into concrete visits (ULK-C04) |
-| `schedule-run` | Run the optimizer over generated visits (ULK-C06) |
+| `schedule-run`     | Run the optimizer over generated visits (ULK-C06)                     |
 
 ---
 
@@ -82,15 +82,15 @@ Phase 1 registers two queues:
 
 Every hard rule is enforced in `apps/api`, in one place, with tests.
 
-| Rule | Enforced by |
-| --- | --- |
-| Branch separation | `branchCode` carried on employee, site, agreement, visit and assignment |
-| Permanently stationed staff | `PermanentAssignment` excludes an employee from mobile crew selection |
+| Rule                        | Enforced by                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| Branch separation           | `branchCode` carried on employee, site, agreement, visit and assignment          |
+| Permanently stationed staff | `PermanentAssignment` excludes an employee from mobile crew selection            |
 | At least one PMS supervisor | `isPmsGrade` on Employee, denormalised to `AssignmentCrewMember.isPmsSupervisor` |
-| Authorized driver only | `VehicleAuthorization` must exist for `AssignmentVehicle.driverEmployeeId` |
-| Allowed vs preferred days | `ServiceAgreementDayRule.kind` — `ALLOWED` filters, `PREFERRED` only ranks |
-| Service hours | `SiteOperatingHours` per weekday, plus the agreement's optional window |
-| No double booking | Overlap check across `Assignment.plannedStart`/`plannedEnd` |
+| Authorized driver only      | `VehicleAuthorization` must exist for `AssignmentVehicle.driverEmployeeId`       |
+| Allowed vs preferred days   | `ServiceAgreementDayRule.kind` — `ALLOWED` filters, `PREFERRED` only ranks       |
+| Service hours               | `SiteOperatingHours` per weekday, plus the agreement's optional window           |
+| No double booking           | Overlap check across `Assignment.plannedStart`/`plannedEnd`                      |
 
 When a rule cannot be satisfied, the visit stays `UNASSIGNED` and a
 `VisitUnassignedReason` row records a stable code and a manager-readable
@@ -108,5 +108,13 @@ are not built now, but Phase 1 does not paint them into a corner:
 - `AssignmentStatus` already includes `ACKNOWLEDGED` and `IN_PROGRESS`.
 - `AuditEvent` is generic (`entityType`, `entityId`, `action`, `before`, `after`),
   so new event types need no migration.
+- Publishing a schedule writes an `AssignmentNotificationOutbox` row per crew
+  member (ULK-C07). Nothing reads these rows in Phase 1 — no push
+  notification is sent — but a future consumer can send them and mark
+  `processedAt` without any change to how they are written.
+- `GET /api/schedule/calendar` and `GET /api/employees/{id}/assignments`
+  (ULK-C07) already return the crew roster, supervisor, instructions,
+  assignment status and published-schedule identity a PMS tablet or worker
+  app would need — see [`docs/API_INTEGRATION.md`](API_INTEGRATION.md).
 - Every entity uses a stable UUID, so a mobile client can hold a reference across
   sessions.

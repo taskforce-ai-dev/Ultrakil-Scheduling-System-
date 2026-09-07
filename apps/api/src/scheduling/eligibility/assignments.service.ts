@@ -11,6 +11,8 @@ import {
   AssignmentDto,
   ConflictDto,
   EligibilityResultDto,
+  EmployeeAssignmentDto,
+  EmployeeAssignmentQueryDto,
   UnassignedVisitDto,
 } from './dto';
 import { EligibilityService } from './eligibility.service';
@@ -22,6 +24,15 @@ const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.PUBLISHED,
   AssignmentStatus.ACKNOWLEDGED,
   AssignmentStatus.IN_PROGRESS,
+];
+
+/** States descended from a published assignment and therefore still visible
+ * to the employee who was told about the job. */
+const EMPLOYEE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.PUBLISHED,
+  AssignmentStatus.ACKNOWLEDGED,
+  AssignmentStatus.IN_PROGRESS,
+  AssignmentStatus.COMPLETED,
 ];
 
 const ASSIGNMENT_INCLUDE = {
@@ -166,7 +177,9 @@ export class AssignmentsService {
       });
 
       // The visit is staffed, so it is no longer in the queue.
-      await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
+      await tx.visitUnassignedReason.deleteMany({
+        where: { generatedVisitId: visitId },
+      });
       await tx.generatedVisit.update({
         where: { id: visitId },
         data: { status: VisitStatus.SCHEDULED },
@@ -283,11 +296,11 @@ export class AssignmentsService {
       // Finished and cancelled work is history; it needs nobody.
       status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
       ...(query.withConflictsOnly ? { unassignedReasons: { some: {} } } : {}),
-      ...(query.serviceAgreementId
-        ? { serviceAgreementId: query.serviceAgreementId }
-        : {}),
+      ...(query.serviceAgreementId ? { serviceAgreementId: query.serviceAgreementId } : {}),
       ...(query.branchCode
-        ? { branchCode: query.branchCode as Prisma.EnumBranchCodeFilter['equals'] }
+        ? {
+            branchCode: query.branchCode as Prisma.EnumBranchCodeFilter['equals'],
+          }
         : {}),
       ...(query.from || query.to
         ? {
@@ -329,8 +342,7 @@ export class AssignmentsService {
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,
         message: reason.message,
-        remediation:
-          (reason.details as { remediation?: string } | null)?.remediation ?? '',
+        remediation: (reason.details as { remediation?: string } | null)?.remediation ?? '',
         resources: normaliseResources(
           (reason.details as { resources?: Record<string, unknown> } | null)?.resources,
         ),
@@ -343,6 +355,110 @@ export class AssignmentsService {
   }
 
   /**
+   * One employee's published daily assignments — the Phase 2-compatible read
+   * model a PMS tablet or worker app would call. Drafts and proposals are not
+   * shown; a published job stays visible as it is acknowledged, started and
+   * completed.
+   */
+  async employeeAssignments(employeeId: string, query: EmployeeAssignmentQueryDto) {
+    const page = query.page ?? 1;
+    const pageSize = query.pageSize ?? 50;
+
+    if (query.from && query.to && query.to < query.from) {
+      throw new AppException(
+        'VALIDATION_FAILED',
+        '"to" must be on or after "from".',
+        HttpStatus.BAD_REQUEST,
+        { from: query.from, to: query.to },
+      );
+    }
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { id: true },
+    });
+    if (!employee) {
+      throw new AppException(
+        'RESOURCE_NOT_FOUND',
+        `Employee "${employeeId}" was not found.`,
+        HttpStatus.NOT_FOUND,
+        { employeeId },
+      );
+    }
+
+    const where: Prisma.AssignmentWhereInput = {
+      status: { in: EMPLOYEE_ASSIGNMENT_STATUSES },
+      crewMembers: { some: { employeeId } },
+      ...(query.from || query.to
+        ? {
+            generatedVisit: {
+              visitDate: {
+                ...(query.from ? { gte: new Date(`${query.from}T00:00:00.000Z`) } : {}),
+                ...(query.to ? { lte: new Date(`${query.to}T00:00:00.000Z`) } : {}),
+              },
+            },
+          }
+        : {}),
+    };
+
+    const [total, assignments] = await Promise.all([
+      this.prisma.assignment.count({ where }),
+      this.prisma.assignment.findMany({
+        where,
+        include: {
+          crewMembers: { where: { employeeId } },
+          generatedVisit: {
+            include: {
+              serviceAgreement: {
+                include: {
+                  customer: { select: { name: true } },
+                  serviceSite: { select: { name: true } },
+                  jobType: { select: { name: true } },
+                },
+              },
+            },
+          },
+        },
+        orderBy: { plannedStart: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+    ]);
+
+    const items: EmployeeAssignmentDto[] = assignments.map((assignment) => {
+      const midnight = new Date(
+        Date.UTC(
+          assignment.plannedStart.getUTCFullYear(),
+          assignment.plannedStart.getUTCMonth(),
+          assignment.plannedStart.getUTCDate(),
+        ),
+      ).getTime();
+      const minutes = (moment: Date) => Math.round((moment.getTime() - midnight) / 60_000);
+      const membership = assignment.crewMembers[0];
+
+      return {
+        assignmentId: assignment.id,
+        visitId: assignment.generatedVisitId,
+        visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+        plannedStartMinute: minutes(assignment.plannedStart),
+        plannedEndMinute: minutes(assignment.plannedEnd),
+        branchCode: assignment.branchCode,
+        customerName: assignment.generatedVisit.serviceAgreement.customer.name,
+        siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
+        jobTypeName: assignment.generatedVisit.serviceAgreement.jobType.name,
+        role: membership.role,
+        isPmsSupervisor: membership.isPmsSupervisor,
+        publishedAt: assignment.publishedAt?.toISOString() ?? null,
+        acknowledgedAt: assignment.acknowledgedAt?.toISOString() ?? null,
+        startedAt: assignment.startedAt?.toISOString() ?? null,
+        completedAt: assignment.completedAt?.toISOString() ?? null,
+      };
+    });
+
+    return { items, total, page, pageSize };
+  }
+
+  /**
    * Replaces the visit's queue entry with the current reasons.
    *
    * Replaced rather than appended: a stale reason a manager has already fixed
@@ -350,7 +466,9 @@ export class AssignmentsService {
    */
   private async recordUnassigned(visitId: string, conflicts: Conflict[]) {
     await this.prisma.$transaction(async (tx) => {
-      await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
+      await tx.visitUnassignedReason.deleteMany({
+        where: { generatedVisitId: visitId },
+      });
       await tx.visitUnassignedReason.createMany({
         data: conflicts.map((conflict) => ({
           generatedVisitId: visitId,

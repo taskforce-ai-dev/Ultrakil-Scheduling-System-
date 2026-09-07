@@ -139,7 +139,13 @@ export function parseVehicleHeader(label: string): {
     ? label.slice(label.indexOf(')', capacityMatch.index ?? 0) + 1)
     : label;
 
-  const candidate = afterBracket.trim().replace(/\s+/g, ' ');
+  const compact = afterBracket.trim().replace(/\s+/g, ' ');
+
+  // Some headers include a vehicle description without a capacity bracket
+  // (for example "Bolero Truck DAC- 2485"). In that case take the trailing
+  // registration rather than storing the whole description as the key.
+  const registration = compact.match(/((?:[A-Za-z]{1,3}|\d{2,3})\s*(?:-\s*)?\d{4})$/)?.[1];
+  const candidate = (registration ?? compact).replace(/\s*-\s*/g, '-');
 
   // A registration always contains digits. Without this, a grouping column such
   // as "Public Vehicles" — a tick column with no registration — would become a

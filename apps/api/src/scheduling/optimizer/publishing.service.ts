@@ -33,7 +33,9 @@ export class PublishingService {
       include: {
         assignments: {
           include: {
-            crewMembers: { include: { employee: { select: { fullName: true } } } },
+            crewMembers: {
+              include: { employee: { select: { fullName: true } } },
+            },
             vehicles: { include: { vehicle: { select: { label: true } } } },
             generatedVisit: {
               include: {
@@ -124,14 +126,49 @@ export class PublishingService {
     }));
 
     const published = await this.prisma.$transaction(async (tx) => {
-      await tx.assignment.updateMany({
-        where: { id: { in: publishable.map((assignment) => assignment.id) } },
-        data: { status: AssignmentStatus.PUBLISHED, publishedAt: new Date() },
+      const publishedAt = new Date();
+
+      // Claim the run with one conditional write. Two managers can click
+      // Publish at almost the same moment; only the transaction that changes
+      // this row is allowed to continue and create notifications.
+      const claim = await tx.scheduleRun.updateMany({
+        where: {
+          id: runId,
+          status: ScheduleRunStatus.SUCCEEDED,
+          publishedAt: null,
+        },
+        data: { publishedAt, publishedByUserId: actor.id },
       });
+      if (claim.count !== 1) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'This schedule was already published or is no longer publishable.',
+          HttpStatus.CONFLICT,
+          { runId },
+        );
+      }
+
+      const promoted = await tx.assignment.updateMany({
+        where: {
+          id: { in: publishable.map((assignment) => assignment.id) },
+          status: AssignmentStatus.DRAFT,
+        },
+        data: { status: AssignmentStatus.PUBLISHED, publishedAt },
+      });
+      if (promoted.count !== publishable.length) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'One or more assignments changed while the schedule was being published. Nothing was published; refresh and try again.',
+          HttpStatus.CONFLICT,
+          { runId, expected: publishable.length, found: promoted.count },
+        );
+      }
 
       if (previouslyPublished.length > 0) {
         await tx.assignment.updateMany({
-          where: { id: { in: previouslyPublished.map((assignment) => assignment.id) } },
+          where: {
+            id: { in: previouslyPublished.map((assignment) => assignment.id) },
+          },
           data: { status: AssignmentStatus.SUPERSEDED },
         });
 
@@ -145,14 +182,37 @@ export class PublishingService {
         if (supersededRunIds.length > 0) {
           await tx.scheduleRun.updateMany({
             where: { id: { in: supersededRunIds } },
-            data: { status: ScheduleRunStatus.SUPERSEDED, supersededByRunId: runId },
+            data: {
+              status: ScheduleRunStatus.SUPERSEDED,
+              supersededByRunId: runId,
+            },
           });
         }
       }
 
-      const updated = await tx.scheduleRun.update({
-        where: { id: runId },
-        data: { publishedAt: new Date(), publishedByUserId: actor.id },
+      // One outbox row per crew member per published assignment — everything a
+      // future notification would need to say, snapshotted now so it stays
+      // correct even if the employee or visit changes later. Nothing reads
+      // these yet; Phase 2 adds the sender, not this write.
+      await tx.assignmentNotificationOutbox.createMany({
+        data: publishable.flatMap((assignment) =>
+          assignment.crewMembers.map((member) => ({
+            assignmentId: assignment.id,
+            employeeId: member.employeeId,
+            eventType: 'assignment.published',
+            payload: {
+              visitId: assignment.generatedVisitId,
+              customerName: assignment.generatedVisit.serviceAgreement.customer.name,
+              siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
+              visitDate: assignment.generatedVisit.visitDate.toISOString().slice(0, 10),
+              plannedStart: assignment.plannedStart.toISOString(),
+              plannedEnd: assignment.plannedEnd.toISOString(),
+              role: member.role,
+              isPmsSupervisor: member.isPmsSupervisor,
+            } as unknown as Prisma.InputJsonValue,
+          })),
+        ),
+        skipDuplicates: true,
       });
 
       await this.audit.record(
@@ -174,7 +234,7 @@ export class PublishingService {
         tx,
       );
 
-      return updated;
+      return tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } });
     });
 
     return { run: published, publishedCount: publishable.length };

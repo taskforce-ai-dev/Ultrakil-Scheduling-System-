@@ -29,10 +29,7 @@ import {
  * an issue rather than guess. A wrong guess here becomes a wrong crew on a real
  * job.
  */
-export function parseMatrix(
-  grid: Grid,
-  mapping: MatrixMapping = DEFAULT_MAPPING,
-): ParsedMatrix {
+export function parseMatrix(grid: Grid, mapping: MatrixMapping = DEFAULT_MAPPING): ParsedMatrix {
   const issues: ImportIssue[] = [];
 
   const identityRowIndex = findIdentityRow(grid, mapping);
@@ -73,14 +70,14 @@ export function parseMatrix(
   // name every vehicle column "Transport" and treat rows inside the header as
   // employees.
   const headerBottomIndex = findHeaderBottom(grid, identityRowIndex, identity);
-  const { headerRow, groupLabels } = buildHeaderBlock(
-    grid,
-    identityRowIndex,
-    headerBottomIndex,
-  );
+  const { headerRow, groupLabels } = buildHeaderBlock(grid, identityRowIndex, headerBottomIndex);
 
-  const { skillColumns, vehicleColumns, publicTransportColumn } =
-    classifyColumns(headerRow, groupLabels, identity, mapping);
+  const { skillColumns, vehicleColumns, publicTransportColumn } = classifyColumns(
+    headerRow,
+    groupLabels,
+    identity,
+    mapping,
+  );
 
   const vehicles = buildVehicles(vehicleColumns, groupLabels, issues);
   const vehicleCodeByColumn = new Map<number, string>();
@@ -101,10 +98,7 @@ export function parseMatrix(
 
     // Section labels sit in the left margin and are merged down several rows,
     // so carry the last non-empty one forward.
-    const marginText = row
-      .slice(0, Math.max(identity.sourceNumber, 0))
-      .filter(Boolean)
-      .join(' ');
+    const marginText = row.slice(0, Math.max(identity.sourceNumber, 0)).filter(Boolean).join(' ');
     if (marginText) currentSection = marginText;
 
     const fullName = (row[identity.fullName] ?? '').trim();
@@ -121,13 +115,11 @@ export function parseMatrix(
     }
 
     const stationLocation =
-      identity.stationLocation === -1
-        ? ''
-        : (row[identity.stationLocation] ?? '').trim();
+      identity.stationLocation === -1 ? '' : (row[identity.stationLocation] ?? '').trim();
 
     const section = normalizeHeader(currentSection);
-    const isPermanentlyStationed = mapping.sections.permanentMarkers.some(
-      (marker) => section.includes(normalizeHeader(marker)),
+    const isPermanentlyStationed = mapping.sections.permanentMarkers.some((marker) =>
+      section.includes(normalizeHeader(marker)),
     );
 
     const branchCode = resolveBranch({
@@ -192,9 +184,7 @@ export function parseMatrix(
       sourceKey,
       rowNumber,
       sourceNumber:
-        identity.sourceNumber === -1
-          ? null
-          : (row[identity.sourceNumber] ?? '').trim() || null,
+        identity.sourceNumber === -1 ? null : (row[identity.sourceNumber] ?? '').trim() || null,
       fullName,
       gradeLabel,
       isPmsGrade: isPms,
@@ -244,10 +234,7 @@ function findIdentityRow(grid: Grid, mapping: MatrixMapping): number {
 
   for (let r = 0; r < Math.min(grid.length, 30); r += 1) {
     const row = grid[r] ?? [];
-    if (
-      wanted(mapping.columns.fullName, row) &&
-      wanted(mapping.columns.designation, row)
-    ) {
+    if (wanted(mapping.columns.fullName, row) && wanted(mapping.columns.designation, row)) {
       return r;
     }
   }
@@ -262,16 +249,10 @@ function findIdentityRow(grid: Grid, mapping: MatrixMapping): number {
  * repetition is the signal: keep descending while it holds. Capped so a
  * workbook with a stray repeated value cannot swallow the data.
  */
-function findHeaderBottom(
-  grid: Grid,
-  identityRowIndex: number,
-  identity: IdentityColumns,
-): number {
+function findHeaderBottom(grid: Grid, identityRowIndex: number, identity: IdentityColumns): number {
   if (identity.fullName === -1) return identityRowIndex;
 
-  const headerText = normalizeHeader(
-    grid[identityRowIndex]?.[identity.fullName] ?? '',
-  );
+  const headerText = normalizeHeader(grid[identityRowIndex]?.[identity.fullName] ?? '');
   if (!headerText) return identityRowIndex;
 
   const maxDepth = Math.min(identityRowIndex + 5, grid.length - 1);
@@ -359,10 +340,7 @@ interface IdentityColumns {
   designation: number;
 }
 
-function locateIdentityColumns(
-  headerRow: string[],
-  mapping: MatrixMapping,
-): IdentityColumns {
+function locateIdentityColumns(headerRow: string[], mapping: MatrixMapping): IdentityColumns {
   const find = (candidates: string[]) =>
     headerRow.findIndex((cell) => candidates.includes(normalizeHeader(cell)));
 
@@ -409,9 +387,7 @@ function classifyColumns(
 
     const normalizedGroup = group ? normalizeHeader(group) : '';
 
-    const groupSaysVehicle = vehicleGroups.some(
-      (candidate) => normalizedGroup.includes(candidate),
-    );
+    const groupSaysVehicle = vehicleGroups.some((candidate) => normalizedGroup.includes(candidate));
     // A registration in the header is decisive even if the group heading is
     // missing, which happens when a column is added without extending the merge.
     const headerHasRegistration = /\(\s*\d+\s*(People|Person)\s*\)/i.test(label);
@@ -456,7 +432,9 @@ function buildVehicles(
 
     byCode.set(code, {
       code,
-      label: column.label,
+      // Keep the useful workbook wording, but do not leak stray spaces around
+      // a registration hyphen into the manager UI or a second natural key.
+      label: column.label.replace(/\s*-\s*(?=\d{4}\b)/g, '-'),
       seatCapacity,
       ownershipGroup: groupLabels[column.index]?.trim() || null,
     });
@@ -472,15 +450,12 @@ function resolveBranch(input: {
   isPermanentlyStationed: boolean;
   mapping: MatrixMapping;
 }): BranchCode | null {
-  const { section, stationLocation, fullName, isPermanentlyStationed, mapping } =
-    input;
+  const { section, stationLocation, fullName, isPermanentlyStationed, mapping } = input;
 
   if (isPermanentlyStationed) {
     // The workbook gives these people a site, not a branch.
     const site = normalizeHeader(stationLocation);
-    for (const [name, branch] of Object.entries(
-      mapping.permanentSiteBranches,
-    )) {
+    for (const [name, branch] of Object.entries(mapping.permanentSiteBranches)) {
       if (normalizeHeader(name) === site) return branch;
     }
     return null;

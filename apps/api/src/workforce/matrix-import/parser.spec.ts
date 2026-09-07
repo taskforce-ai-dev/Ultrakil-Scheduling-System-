@@ -30,7 +30,17 @@ function buildGrid(): Grid {
     ['', '2', 'B Silva', '', 'Junior PMT', '', '✓', '', '✓'],
     ['', '3', 'C Fernando', '', 'Assistant PMS', '✓', '', '', ''],
     // Permanently stationed section.
-    ['Station Technicians at Serveral Location at permanen', '4', 'D Jayasuriya', 'Lion Brewery', 'APMS', '✓', '✓', '', ''],
+    [
+      'Station Technicians at Serveral Location at permanen',
+      '4',
+      'D Jayasuriya',
+      'Lion Brewery',
+      'APMS',
+      '✓',
+      '✓',
+      '',
+      '',
+    ],
     ['', '5', 'E Bandara', 'Unknown Site', 'JPMT', '', '✓', '', ''],
     // Kandy section.
     ['Kandy Branch', '6', 'F Kumara', '', 'Junior PMT', '', '✓', '', ''],
@@ -59,8 +69,15 @@ describe('parseVehicleHeader', () => {
 
   it('reports no capacity when the header does not give one', () => {
     expect(parseVehicleHeader('Bolero Truck DAC- 2485')).toEqual({
-      code: 'Bolero Truck DAC- 2485',
+      code: 'DAC-2485',
       seatCapacity: null,
+    });
+  });
+
+  it('normalises stray spaces around a registration hyphen', () => {
+    expect(parseVehicleHeader('Bolero( 02 People) DAC- 2485')).toEqual({
+      code: 'DAC-2485',
+      seatCapacity: 2,
     });
   });
 
@@ -84,10 +101,16 @@ describe('the "Public Vehicles" column', () => {
   // vehicles, but nobody is "authorised to drive" a bus — so it is a capability
   // on the employee, not a vehicle.
   const grid: Grid = [
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'Transport', 'Transport'],
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'Public Vehicles', 'Van( 04 People) 253-4289'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'Transport', 'Transport'],
+    [
+      '',
+      'No.',
+      'Name Of Technician',
+      'Station Location',
+      'Designation',
+      'Public Vehicles',
+      'Van( 04 People) 253-4289',
+    ],
     ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓'],
     ['', '2', 'B Silva', '', 'Junior PMT', '', '✓'],
   ];
@@ -96,9 +119,7 @@ describe('the "Public Vehicles" column', () => {
 
   it('is not treated as a vehicle', () => {
     expect(result.vehicles.map((v) => v.code)).toEqual(['253-4289']);
-    expect(result.vehicleColumns.map((c) => c.label)).toEqual([
-      'Van( 04 People) 253-4289',
-    ]);
+    expect(result.vehicleColumns.map((c) => c.label)).toEqual(['Van( 04 People) 253-4289']);
   });
 
   it('is not treated as a skill either', () => {
@@ -126,10 +147,16 @@ describe('the "Public Vehicles" column', () => {
 
 describe('a vehicle column that really is unidentifiable', () => {
   const grid: Grid = [
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'Transport', 'Transport'],
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'Spare Van( 04 People)', 'Van( 04 People) 253-4289'],
+    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'Transport', 'Transport'],
+    [
+      '',
+      'No.',
+      'Name Of Technician',
+      'Station Location',
+      'Designation',
+      'Spare Van( 04 People)',
+      'Van( 04 People) 253-4289',
+    ],
     ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓'],
   ];
 
@@ -140,9 +167,7 @@ describe('a vehicle column that really is unidentifiable', () => {
   });
 
   it('says which column it ignored, rather than dropping it silently', () => {
-    const issue = result.issues.find(
-      (i) => i.code === 'MATRIX_VEHICLE_NO_REGISTRATION',
-    );
+    const issue = result.issues.find((i) => i.code === 'MATRIX_VEHICLE_NO_REGISTRATION');
     expect(issue?.message).toContain('Spare Van');
   });
 
@@ -159,10 +184,7 @@ describe('parseMatrix', () => {
   });
 
   it('separates skill columns from vehicle columns', () => {
-    expect(result.skillColumns.map((c) => c.label)).toEqual([
-      'MBr Fumigation',
-      'Gel Application',
-    ]);
+    expect(result.skillColumns.map((c) => c.label)).toEqual(['MBr Fumigation', 'Gel Application']);
     expect(result.vehicleColumns.map((c) => c.label)).toEqual([
       'Van( 04 People) 253-4289',
       'Motor Bike( 01 Person) BJG 4419',
@@ -190,11 +212,7 @@ describe('parseMatrix', () => {
     const colombo = result.employees.filter(
       (e) => e.branchCode === BranchCode.COLOMBO && !e.isPermanentlyStationed,
     );
-    expect(colombo.map((e) => e.fullName)).toEqual([
-      'A Perera',
-      'B Silva',
-      'C Fernando',
-    ]);
+    expect(colombo.map((e) => e.fullName)).toEqual(['A Perera', 'B Silva', 'C Fernando']);
   });
 
   it('assigns the Kandy section to the Kandy branch', () => {
@@ -269,9 +287,9 @@ describe('parseMatrix — refusing to guess', () => {
 
     const result = parseMatrix(grid, mapping);
     expect(result.employees.some((e) => e.fullName === 'G Nolan')).toBe(false);
-    expect(
-      result.issues.find((i) => i.code === 'MATRIX_ROW_INVALID')?.message,
-    ).toContain('G Nolan');
+    expect(result.issues.find((i) => i.code === 'MATRIX_ROW_INVALID')?.message).toContain(
+      'G Nolan',
+    );
   });
 
   it('skips a duplicate name in the same branch rather than merging silently', () => {
@@ -280,9 +298,9 @@ describe('parseMatrix — refusing to guess', () => {
 
     const result = parseMatrix(grid, mapping);
     expect(result.employees.filter((e) => e.fullName === 'F Kumara')).toHaveLength(1);
-    expect(
-      result.issues.find((i) => i.code === 'MATRIX_ROW_DUPLICATE')?.message,
-    ).toContain('F Kumara');
+    expect(result.issues.find((i) => i.code === 'MATRIX_ROW_DUPLICATE')?.message).toContain(
+      'F Kumara',
+    );
   });
 });
 
@@ -299,15 +317,41 @@ describe('a three-row header block, as in the real workbook', () => {
    */
   const grid: Grid = [
     // Row 1 — identity headers (merged down), group names.
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'Fumigations', 'Fumigations', 'Transport', 'Transport'],
+    [
+      '',
+      'No.',
+      'Name Of Technician',
+      'Station Location',
+      'Designation',
+      'Fumigations',
+      'Fumigations',
+      'Transport',
+      'Transport',
+    ],
     // Row 2 — identity repeats (merged), vehicle ownership sub-groups.
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      '', '', 'Public Vehicles', 'Personal'],
+    [
+      '',
+      'No.',
+      'Name Of Technician',
+      'Station Location',
+      'Designation',
+      '',
+      '',
+      'Public Vehicles',
+      'Personal',
+    ],
     // Row 3 — identity repeats, the real column names.
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-      'MBr Fumigation', 'Phosphin Fumigation',
-      'Van( 04 People) 253-4289', 'Motor Bike( 01 Person) BJG 4419'],
+    [
+      '',
+      'No.',
+      'Name Of Technician',
+      'Station Location',
+      'Designation',
+      'MBr Fumigation',
+      'Phosphin Fumigation',
+      'Van( 04 People) 253-4289',
+      'Motor Bike( 01 Person) BJG 4419',
+    ],
     // Data.
     ['Colombo Branch', '1', 'A Perera', '', 'Senoir PMS', '✓', '✓', '✓', ''],
     ['', '2', 'B Silva', '', 'Junior PMT', '', '✓', '', '✓'],
@@ -317,13 +361,8 @@ describe('a three-row header block, as in the real workbook', () => {
 
   it('treats the whole block as header, not as employees', () => {
     expect(result.headerRowNumber).toBe(3);
-    expect(result.employees.map((e) => e.fullName)).toEqual([
-      'A Perera',
-      'B Silva',
-    ]);
-    expect(
-      result.employees.some((e) => e.fullName === 'Name Of Technician'),
-    ).toBe(false);
+    expect(result.employees.map((e) => e.fullName)).toEqual(['A Perera', 'B Silva']);
+    expect(result.employees.some((e) => e.fullName === 'Name Of Technician')).toBe(false);
   });
 
   it('takes each column name from the deepest header row', () => {

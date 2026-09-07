@@ -2,6 +2,8 @@ import type {
   Assignment,
   AssignmentLock,
   AuthorizedDrivers,
+  CalendarAssignment,
+  CalendarEntry,
   Conflict,
   Customer,
   EligibilityResult,
@@ -66,10 +68,15 @@ export function buildEmployee(overrides: Partial<Employee> = {}): Employee {
 }
 
 export function buildAuthorizedDrivers(
-  overrides: Partial<AuthorizedDrivers> = {}
+  overrides: Partial<AuthorizedDrivers> = {},
 ): AuthorizedDrivers {
   return {
-    vehicle: { id: "vehicle-1", code: "253-4289", label: "Van( 04 People) 253-4289", seatCapacity: 4 },
+    vehicle: {
+      id: "vehicle-1",
+      code: "253-4289",
+      label: "Van( 04 People) 253-4289",
+      seatCapacity: 4,
+    },
     drivers: [],
     total: 0,
     ...overrides,
@@ -86,8 +93,18 @@ export function buildServiceSite(overrides: Partial<ServiceSite> = {}): ServiceS
     branchCode: "COLOMBO",
     isActive: true,
     operatingHours: [
-      { id: "hours-1", weekday: "MONDAY", opensAtMinute: 6 * 60, closesAtMinute: 22 * 60 },
-      { id: "hours-2", weekday: "WEDNESDAY", opensAtMinute: 8 * 60, closesAtMinute: 18 * 60 },
+      {
+        id: "hours-1",
+        weekday: "MONDAY",
+        opensAtMinute: 6 * 60,
+        closesAtMinute: 22 * 60,
+      },
+      {
+        id: "hours-2",
+        weekday: "WEDNESDAY",
+        opensAtMinute: 8 * 60,
+        closesAtMinute: 18 * 60,
+      },
     ],
     serviceAgreementCount: 0,
     createdAt: "2026-08-24T00:00:00.000Z",
@@ -129,9 +146,7 @@ export function buildJobType(overrides: Partial<JobType> = {}): JobType {
   };
 }
 
-export function buildServiceAgreement(
-  overrides: Partial<ServiceAgreement> = {}
-): ServiceAgreement {
+export function buildServiceAgreement(overrides: Partial<ServiceAgreement> = {}): ServiceAgreement {
   return {
     id: "agreement-1",
     customerId: "customer-1",
@@ -170,7 +185,12 @@ export function buildServiceAgreement(
 }
 
 export function buildSkill(overrides: Partial<SkillListItem> = {}): SkillListItem {
-  return { skillCode: "TERMITE", skillLabel: "Termite Control", employeeCount: 3, ...overrides };
+  return {
+    skillCode: "TERMITE",
+    skillLabel: "Termite Control",
+    employeeCount: 3,
+    ...overrides,
+  };
 }
 
 export function buildSchedulePreview(overrides: Partial<SchedulePreview> = {}): SchedulePreview {
@@ -285,9 +305,7 @@ export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment
   };
 }
 
-export function buildUnassignedVisit(
-  overrides: Partial<UnassignedVisit> = {}
-): UnassignedVisit {
+export function buildUnassignedVisit(overrides: Partial<UnassignedVisit> = {}): UnassignedVisit {
   return {
     visitId: "visit-2",
     visitDate: "2026-09-09",
@@ -303,7 +321,7 @@ export function buildUnassignedVisit(
 }
 
 export function buildEligibilityResult(
-  overrides: Partial<EligibilityResult> = {}
+  overrides: Partial<EligibilityResult> = {},
 ): EligibilityResult {
   return {
     isEligible: true,
@@ -350,9 +368,52 @@ export function buildAssignmentLock(overrides: Partial<AssignmentLock> = {}): As
   };
 }
 
-export function buildGenerationImpact(
-  overrides: Partial<GenerationImpact> = {}
-): GenerationImpact {
+export function buildCalendarAssignment(
+  overrides: Partial<CalendarAssignment> = {},
+): CalendarAssignment {
+  return {
+    id: "assignment-1",
+    status: "DRAFT",
+    supervisorEmployeeId: "employee-1",
+    supervisorName: "A Perera",
+    crew: [
+      {
+        employeeId: "employee-1",
+        fullName: "A Perera",
+        role: "SUPERVISOR",
+        isPmsSupervisor: true,
+      },
+    ],
+    vehicles: [],
+    scheduleRunId: null,
+    publishedAt: null,
+    acknowledgedAt: null,
+    startedAt: null,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+export function buildCalendarEntry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
+  return {
+    visitId: "visit-1",
+    visitDate: "2026-09-09",
+    windowStartMinute: 540,
+    windowEndMinute: 630,
+    durationMinutes: 90,
+    visitStatus: "SCHEDULED",
+    branchCode: "COLOMBO",
+    serviceAgreementId: "agreement-1",
+    customerName: "Cinnamon Grand Colombo",
+    siteName: "Main Kitchen",
+    jobTypeName: "Termite Control",
+    instructions: null,
+    assignment: null,
+    ...overrides,
+  };
+}
+
+export function buildGenerationImpact(overrides: Partial<GenerationImpact> = {}): GenerationImpact {
   return {
     from: "2026-08-31",
     to: "2026-10-04",
