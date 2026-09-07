@@ -500,22 +500,7 @@ export class ScheduleRunService {
       const at = (minute: number) =>
         new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
 
-      if (replaceAssignmentId) {
-        // The predicate is part of the DELETE itself: a separate status read
-        // would still let publication win between the check and deletion.
-        const replaced = await tx.assignment.deleteMany({
-          where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
-        });
-        if (replaced.count !== 1) {
-          throw new AppException(
-            'RESOURCE_CONFLICT',
-            'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
-            HttpStatus.CONFLICT,
-            { runId, visitId, assignmentId: replaceAssignmentId },
-          );
-        }
-      }
-      await tx.assignment.create({
+      const replacement = await tx.assignment.create({
         data: {
           generatedVisitId: visitId,
           branchId: visit.branchId,
@@ -539,6 +524,26 @@ export class ScheduleRunService {
           },
         },
       });
+      if (replaceAssignmentId) {
+        // Move every pin (including released history) before the FK cascade
+        // can remove it. Keep a new assignment identity so concurrent manual
+        // and publication writers still reject their stale snapshot.
+        await tx.assignmentLock.updateMany({
+          where: { assignmentId: replaceAssignmentId },
+          data: { assignmentId: replacement.id },
+        });
+        const replaced = await tx.assignment.deleteMany({
+          where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+        });
+        if (replaced.count !== 1) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+            HttpStatus.CONFLICT,
+            { runId, visitId, assignmentId: replaceAssignmentId },
+          );
+        }
+      }
       await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
       await tx.generatedVisit.update({
         where: { id: visitId },

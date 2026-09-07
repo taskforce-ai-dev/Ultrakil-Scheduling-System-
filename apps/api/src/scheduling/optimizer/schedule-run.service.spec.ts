@@ -124,13 +124,15 @@ function fixture(
         return { count: 1 };
       },
     ),
-    create: jest.fn(async () =>
-      assignments.push({
+    create: jest.fn(async () => {
+      const replacement = {
         ...oldAssignment,
         id: 'replacement',
         status: AssignmentStatus.DRAFT,
-      }),
-    ),
+      };
+      assignments.push(replacement);
+      return replacement;
+    }),
   };
   const generatedVisit = {
     findMany: jest.fn(async () => [
@@ -143,6 +145,7 @@ function fixture(
   };
   const tx = {
     assignment,
+    assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
     $queryRaw: jest.fn(async (query: Prisma.Sql) =>

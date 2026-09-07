@@ -471,13 +471,26 @@ describe('locks survive a rerun', () => {
       .send({ scope: LockScope.CREW, reason: 'Customer asked for this crew' });
     expect(locked.status).toBe(200);
 
-    await solve();
+    for (let rerun = 0; rerun < 3; rerun++) {
+      await solve();
 
-    const after = await prisma.assignment.findFirstOrThrow({
-      where: { generatedVisitId: visitId },
-      include: { crewMembers: true },
-    });
-    expect(after.crewMembers.map((member) => member.employeeId).sort()).toEqual(lockedCrew);
+      const after = await prisma.assignment.findFirstOrThrow({
+        where: { generatedVisitId: visitId, status: 'DRAFT' },
+        include: { crewMembers: true, locks: true },
+      });
+      expect(after.crewMembers.map((member) => member.employeeId).sort()).toEqual(lockedCrew);
+      expect(after.locks).toEqual([
+        expect.objectContaining({
+          id: locked.body.id,
+          assignmentId: after.id,
+          scope: LockScope.CREW,
+          reason: 'Customer asked for this crew',
+          lockedByUserId: locked.body.lockedByUserId,
+          releasedAt: null,
+        }),
+      ]);
+      expect(after.locks[0].createdAt.toISOString()).toBe(locked.body.createdAt);
+    }
   });
 
   it('releases a lock when asked', async () => {
@@ -502,6 +515,73 @@ describe('locks survive a rerun', () => {
       where: { assignmentId: assignment.id, scope: LockScope.CREW },
     });
     expect(lock.releasedAt).not.toBeNull();
+  });
+});
+
+describe('assignment lock concurrency', () => {
+  it.each(['lock', 'solver'].flatMap((first) =>
+    ['assignment', 'rejected', 'unassigned'].map((outcome) => ({ first, outcome })),
+  ))('serializes $outcome when $first acquires the visit lock first', async ({ first, outcome }) => {
+    const f = await manualPublicationFixture();
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const solver = transactionProbe(first === 'solver');
+    const locker = transactionProbe(first === 'lock');
+    const started = deferred<void>();
+    const answer = deferred<SolveResponse>();
+    const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
+    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService));
+    const publishing = new PublishingService(locker.client, app.get(AuditService));
+    const solved = service.execute(run.id).then((value) => ({ value }), (error: unknown) => ({ error }));
+    let locked: Promise<{ value: unknown } | { error: unknown }> | undefined;
+    const solution: SolveResponse = {
+      run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 1,
+      assignments: outcome === 'unassigned' ? [] : [{
+        visit_id: f.visitId, employee_ids: outcome === 'rejected' ? [] : [supervisorIds[0], technicianIds[1]],
+        vehicles: [], start_minute: 600, scheduled_date: '2027-03-03',
+      }],
+      unassigned: outcome === 'unassigned' ? [{ visit_id: f.visitId, reason_codes: ['NO_CREW'], message: 'No crew available' }] : [],
+    };
+    try {
+      await started.promise;
+      if (first === 'solver') {
+        answer.resolve(solution);
+        await solver.locked.promise;
+      }
+      locked = publishing.lock(f.draft!.id, LockScope.CREW, 'Keep this crew', f.actor)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      // A missing transaction must fail the test rather than wait forever.
+      expect(await Promise.race([
+        (first === 'lock' ? locker.locked.promise : locker.pid.promise).then(() => 'transaction'),
+        locked.then(() => 'finished without the shared lock'),
+      ])).toBe('transaction');
+      if (first === 'lock') answer.resolve(solution);
+      const [solverPid, lockerPid] = await Promise.all([solver.pid.promise, locker.pid.promise]);
+      await waitForBlocked(first === 'lock' ? solverPid : lockerPid, first === 'lock' ? lockerPid : solverPid);
+      (first === 'lock' ? locker : solver).release.resolve();
+      const [solveResult, lockResult] = await Promise.all([solved, locked]);
+      const locks = await prisma.assignmentLock.findMany({ where: { assignment: { generatedVisitId: f.visitId } } });
+      if (first === 'lock') {
+        expect(lockResult).toHaveProperty('value');
+        expect(solveResult).toMatchObject({ error: { code: 'RESOURCE_CONFLICT' } });
+        expect(locks).toHaveLength(1);
+        expect(locks[0]).toMatchObject({ assignmentId: f.draft!.id, scope: LockScope.CREW, releasedAt: null });
+        expect(await prisma.assignment.findUnique({ where: { id: f.draft!.id } })).toEqual(f.draft);
+        expect(await prisma.assignment.count({ where: { scheduleRunId: run.id } })).toBe(0);
+        expect(await prisma.visitUnassignedReason.count({ where: { generatedVisitId: f.visitId } })).toBe(0);
+      } else {
+        expect(solveResult).toHaveProperty('value');
+        expect(lockResult).toMatchObject({ error: { code: 'RESOURCE_CONFLICT' } });
+        expect(locks).toHaveLength(0);
+      }
+    } finally {
+      answer.resolve(solution);
+      solver.release.resolve();
+      locker.release.resolve();
+      await Promise.all([solved, locked]);
+    }
   });
 });
 

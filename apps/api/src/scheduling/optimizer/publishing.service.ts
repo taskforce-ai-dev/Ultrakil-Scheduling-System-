@@ -284,7 +284,7 @@ export class PublishingService {
   ) {
     const assignment = await this.prisma.assignment.findUnique({
       where: { id: assignmentId },
-      select: { id: true, status: true },
+      select: { id: true, generatedVisitId: true, updatedAt: true },
     });
 
     if (!assignment) {
@@ -296,22 +296,24 @@ export class PublishingService {
       );
     }
 
-    const lock = await this.prisma.assignmentLock.upsert({
-      where: { assignmentId_scope: { assignmentId, scope } },
-      create: { assignmentId, scope, reason, lockedByUserId: actor.id },
-      update: { reason, lockedByUserId: actor.id, releasedAt: null },
+    return this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, [assignment.generatedVisitId]);
+      const current = await tx.assignment.findUnique({ where: { id: assignmentId } });
+      if (!current || current.updatedAt.getTime() !== assignment.updatedAt.getTime()) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      const lock = await tx.assignmentLock.upsert({
+        where: { assignmentId_scope: { assignmentId, scope } },
+        create: { assignmentId, scope, reason, lockedByUserId: actor.id },
+        update: { reason, lockedByUserId: actor.id, releasedAt: null },
+      });
+      await this.reviseVisit(tx, assignment.generatedVisitId);
+      await this.audit.record({
+        entityType: 'Assignment', entityId: assignmentId, action: 'assignment.locked',
+        actor, before: null, after: lock,
+      }, tx);
+      return lock;
     });
-
-    await this.audit.record({
-      entityType: 'Assignment',
-      entityId: assignmentId,
-      action: 'assignment.locked',
-      actor,
-      before: null,
-      after: lock,
-    });
-
-    return lock;
   }
 
   async unlock(
@@ -319,11 +321,12 @@ export class PublishingService {
     scope: LockScope,
     actor: AuthenticatedUser,
   ) {
-    const existing = await this.prisma.assignmentLock.findUnique({
+    const snapshot = await this.prisma.assignmentLock.findUnique({
       where: { assignmentId_scope: { assignmentId, scope } },
+      include: { assignment: { select: { generatedVisitId: true } } },
     });
 
-    if (!existing || existing.releasedAt) {
+    if (!snapshot || snapshot.releasedAt) {
       throw new AppException(
         'RESOURCE_NOT_FOUND',
         `No ${scope.toLowerCase()} lock is held on this assignment.`,
@@ -332,20 +335,43 @@ export class PublishingService {
       );
     }
 
-    const released = await this.prisma.assignmentLock.update({
-      where: { assignmentId_scope: { assignmentId, scope } },
-      data: { releasedAt: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, [snapshot.assignment.generatedVisitId]);
+      const existing = await tx.assignmentLock.findUnique({
+        where: { assignmentId_scope: { assignmentId, scope } },
+      });
+      if (!existing || existing.releasedAt || existing.updatedAt.getTime() !== snapshot.updatedAt.getTime()) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      const released = await tx.assignmentLock.update({
+        where: { assignmentId_scope: { assignmentId, scope } },
+        data: { releasedAt: new Date() },
+      });
+      await this.reviseVisit(tx, snapshot.assignment.generatedVisitId);
+      await this.audit.record({
+        entityType: 'Assignment', entityId: assignmentId, action: 'assignment.unlocked',
+        actor, before: existing, after: released,
+      }, tx);
+      return released;
     });
+  }
 
-    await this.audit.record({
-      entityType: 'Assignment',
-      entityId: assignmentId,
-      action: 'assignment.unlocked',
-      actor,
-      before: existing,
-      after: released,
+  private assignmentChanged(assignmentId: string) {
+    return new AppException(
+      'RESOURCE_CONFLICT',
+      'This assignment changed while its lock was being updated. Refresh and try again.',
+      HttpStatus.CONFLICT,
+      { assignmentId },
+    );
+  }
+
+  /** A solve or generation plan made before this decision must be retried. */
+  private async reviseVisit(tx: Prisma.TransactionClient, visitId: string) {
+    const visit = await tx.generatedVisit.findUniqueOrThrow({ where: { id: visitId }, select: { updatedAt: true } });
+    await tx.generatedVisit.update({
+      where: { id: visitId },
+      // Avoid equal millisecond timestamps when two writes arrive together.
+      data: { updatedAt: new Date(Math.max(Date.now(), visit.updatedAt.getTime() + 1)) },
     });
-
-    return released;
   }
 }
