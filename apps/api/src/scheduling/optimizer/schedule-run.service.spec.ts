@@ -143,7 +143,14 @@ function fixture(
       Object.assign(visit, data),
     ),
   };
+  const scheduleRun = {
+    findUnique: jest.fn(async () => ({ ...run })),
+    update: jest.fn(async ({ data }: { data: Partial<typeof run> }) =>
+      Object.assign(run, data),
+    ),
+  };
   const tx = {
+    scheduleRun,
     assignment,
     assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
@@ -158,12 +165,6 @@ function fixture(
   };
   const prisma = {
     ...tx,
-    scheduleRun: {
-      findUnique: jest.fn(async () => ({ ...run })),
-      update: jest.fn(async ({ data }: { data: Partial<typeof run> }) =>
-        Object.assign(run, data),
-      ),
-    },
     employee: {
       findMany: jest.fn(async () => [
         {
@@ -231,6 +232,7 @@ function fixture(
       visits_considered: 1,
     });
   return {
+    answer,
     started,
     release,
     processor,
@@ -250,6 +252,28 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it.each(['assignment', 'unassigned'])('rejects duplicate %s outcomes for an empty assignment snapshot', async (duplicate) => {
+    const f = fixture();
+    f.assignments.length = 0;
+    const pending = f.processor.process(f.job).then(() => undefined, (error: unknown) => error);
+    await f.started.promise;
+    const proposal = {
+      visit_id: f.visit.id, employee_ids: ['employee'], vehicles: [], start_minute: 600,
+      scheduled_date: '2027-03-03',
+    };
+    f.answer.resolve({
+      run_id: f.run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 1,
+      assignments: duplicate === 'assignment' ? [proposal, proposal] : [proposal],
+      unassigned: duplicate === 'unassigned'
+        ? [{ visit_id: f.visit.id, reason_codes: ['NO_CREW'], message: 'No crew' }]
+        : [],
+    });
+    expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignments).toEqual([]);
+    expect(f.generatedVisit.update).not.toHaveBeenCalled();
+    expect(f.reasons.createMany).not.toHaveBeenCalled();
+  });
+
   it.each(
     ['present', 'absent'].flatMap((snapshot) =>
       ['same-date', 'moved-date', 'rejected', 'unassigned'].flatMap((outcome) =>

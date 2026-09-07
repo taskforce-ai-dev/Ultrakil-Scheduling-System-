@@ -16,6 +16,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AssignmentStatus, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { Job } from 'bullmq';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
@@ -27,7 +28,7 @@ import { EligibilityService } from '../../src/scheduling/eligibility/eligibility
 import { AssignmentsService } from '../../src/scheduling/eligibility/assignments.service';
 import { VisitsService } from '../../src/scheduling/visits/visits.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
-import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
+import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 import { SchedulerClient, SolveResponse } from '../../src/scheduling/optimizer/scheduler.client';
 
@@ -642,6 +643,83 @@ async function manualPublicationFixture(withDraft = true) {
 }
 
 describe('standard writer publication protocol', () => {
+  it.each(['assignment', 'rejected', 'unassigned'].flatMap((firstOutcome) =>
+    ['assignment', 'rejected', 'unassigned'].map((laterOutcome) => ({ firstOutcome, laterOutcome })),
+  ))('rolls back the complete solver result: $firstOutcome before stale $laterOutcome', async ({ firstOutcome, laterOutcome }) => {
+    const first = await manualPublicationFixture();
+    const later = await manualPublicationFixture();
+    await prisma.assignment.update({ where: { id: later.draft!.id }, data: {
+      plannedStart: new Date('2027-03-03T13:00:00Z'), plannedEnd: new Date('2027-03-03T14:30:00Z'),
+    } });
+    await app.get(PublishingService).lock(first.draft!.id, LockScope.CREW, 'Keep the assigned crew', first.actor);
+    await prisma.visitUnassignedReason.create({ data: {
+      generatedVisitId: first.visitId, scheduleRunId: first.run.id,
+      code: 'PREVIOUS_REASON', message: 'Existing scheduling explanation',
+    } });
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const started = deferred<void>();
+    const answer = deferred<SolveResponse>();
+    const service = new ScheduleRunService(
+      prisma as unknown as PrismaService,
+      { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient,
+      // The solver and eligibility boundary are controlled; persistence, the
+      // manager adjustment and the queue's FAILED classification use real SQL.
+      { evaluate: async (visitId: string) => {
+        const outcome = visitId === first.visitId ? firstOutcome : laterOutcome;
+        return outcome === 'rejected'
+          ? { isEligible: false, conflicts: [{ code: 'NO_CREW', message: 'No eligible crew' }] }
+          : { isEligible: true, conflicts: [] };
+      } } as unknown as EligibilityService,
+      app.get(AuditService),
+    );
+    const pending = new ScheduleRunProcessor(service).process({
+      data: { runId: run.id, timeLimitSeconds: 1 }, updateProgress: async () => undefined,
+    } as unknown as Job<ScheduleRunJobData>).then(() => undefined, (error: unknown) => error);
+    const solution: SolveResponse = {
+      run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 2,
+      assignments: [{ fixture: first, outcome: firstOutcome }, { fixture: later, outcome: laterOutcome }].flatMap(({ fixture, outcome }) => {
+        const visitId = fixture.visitId;
+        return outcome === 'unassigned' ? [] : [{
+          visit_id: visitId, employee_ids: [supervisorIds[0], technicianIds[0]],
+          vehicles: [], start_minute: 600, scheduled_date: '2027-03-04',
+        }];
+      }),
+      unassigned: [{ fixture: first, outcome: firstOutcome }, { fixture: later, outcome: laterOutcome }].flatMap(({ fixture, outcome }) =>
+        outcome !== 'unassigned' ? [] : [{
+          visit_id: fixture.visitId, reason_codes: ['NO_CREW'], message: 'No crew available',
+        }],
+      ),
+    };
+    const state = (id: string) => prisma.generatedVisit.findUniqueOrThrow({
+      where: { id },
+      include: {
+        assignments: { orderBy: { id: 'asc' }, include: {
+          crewMembers: true, vehicles: true, locks: true, notificationOutboxEntries: true,
+        } },
+        unassignedReasons: { orderBy: { id: 'asc' } },
+      },
+    });
+    try {
+      await started.promise;
+      await app.get(VisitsService).adjust(later.visitId, { durationMinutes: 120 }, later.actor);
+      const before = await Promise.all([state(first.visitId), state(later.visitId)]);
+      answer.resolve(solution);
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(await prisma.scheduleRun.findUnique({ where: { id: run.id } })).toMatchObject({
+        status: 'FAILED', errorCode: 'RESOURCE_CONFLICT',
+      });
+      expect(await Promise.all([state(first.visitId), state(later.visitId)])).toEqual(before);
+      expect(await prisma.assignment.count({ where: { scheduleRunId: run.id } })).toBe(0);
+      expect(await prisma.visitUnassignedReason.count({ where: { scheduleRunId: run.id } })).toBe(0);
+    } finally {
+      answer.resolve(solution);
+      await pending;
+    }
+  });
+
   it.each(
     ['present', 'absent'].flatMap((snapshot) =>
       ['same-date', 'moved-date', 'rejected', 'unassigned'].map((outcome) => ({

@@ -75,6 +75,27 @@ const VEHICLE_FOR_SOLVE = {
 
 type VehicleForSolve = Prisma.VehicleGetPayload<{ include: typeof VEHICLE_FOR_SOLVE }>;
 
+interface SolveSnapshot {
+  visitId: string;
+  expectedUpdatedAt: Date;
+  replaceAssignmentId?: string;
+}
+
+interface AcceptedAssignment extends SolveSnapshot {
+  dto: {
+    plannedStartMinute: number;
+    plannedEndMinute: number;
+    crew: { employeeId: string; role: CrewRole }[];
+    vehicles: { vehicleId: string; driverEmployeeId: string }[];
+  };
+  proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number };
+}
+
+interface UnassignedResult extends SolveSnapshot {
+  codes: string[];
+  message: string;
+}
+
 function dateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
@@ -257,7 +278,7 @@ export class ScheduleRunService {
     if (await this.isCancelled(runId)) return this.markCancelled(runId);
 
     const byId = new Map(visits.map((visit) => [visit.id, visit]));
-    let scheduled = 0;
+    const accepted: AcceptedAssignment[] = [];
     const rejected: { visitId: string; codes: string[]; message: string }[] = [];
 
     for (const proposal of solution.assignments) {
@@ -318,8 +339,13 @@ export class ScheduleRunService {
         continue;
       }
 
-      await this.persist(runId, visit.id, visit.updatedAt, dto, existing?.id, proposedVisit);
-      scheduled += 1;
+      accepted.push({
+        visitId: visit.id,
+        expectedUpdatedAt: visit.updatedAt,
+        dto,
+        replaceAssignmentId: existing?.id,
+        proposedVisit,
+      });
     }
 
     await progress(90);
@@ -333,8 +359,9 @@ export class ScheduleRunService {
       ...rejected,
     ];
 
-    await this.recordUnassigned(
+    return this.persistResult(
       runId,
+      accepted,
       unassigned.map((entry) => {
         const visit = byId.get(entry.visitId);
         if (!visit) {
@@ -349,8 +376,6 @@ export class ScheduleRunService {
         };
       }),
     );
-
-    return this.finish(runId, scheduled, unassigned.length);
   }
 
   private buildSolveRequest(
@@ -470,95 +495,33 @@ export class ScheduleRunService {
     };
   }
 
-  private async persist(
+  private async persistResult(
     runId: string,
-    visitId: string,
-    expectedUpdatedAt: Date,
-    dto: {
-      plannedStartMinute: number;
-      plannedEndMinute: number;
-      crew: { employeeId: string; role: CrewRole }[];
-      vehicles: { vehicleId: string; driverEmployeeId: string }[];
-    },
-    replaceAssignmentId?: string,
-    proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number },
+    accepted: AcceptedAssignment[],
+    unassigned: UnassignedResult[],
   ) {
+    const entries = [...accepted, ...unassigned];
+    if (new Set(entries.map((entry) => entry.visitId)).size !== entries.length) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'The solver returned multiple outcomes for one visit. Run the scheduler again.',
+        HttpStatus.CONFLICT,
+        { runId },
+      );
+    }
+    const employeeIds = [...new Set(accepted.flatMap((entry) =>
+      entry.dto.crew.map((member) => member.employeeId),
+    ))];
     const pms = await this.prisma.employee.findMany({
-      where: { id: { in: dto.crew.map((member) => member.employeeId) } },
+      where: { id: { in: employeeIds } },
       select: { id: true, isPmsGrade: true },
     });
     const pmsById = new Map(pms.map((row) => [row.id, row.isPmsGrade]));
 
-    await this.prisma.$transaction(async (tx) => {
-      await lockScheduleVisits(tx, [visitId]);
-      await assertScheduleSnapshot(tx, visitId, replaceAssignmentId);
-      const visit = await tx.generatedVisit.findUniqueOrThrow({
-        where: { id: visitId },
-        select: { visitDate: true, branchId: true, branchCode: true, updatedAt: true },
-      });
-      assertVisitRevision(visitId, expectedUpdatedAt, visit.updatedAt);
-      const at = (minute: number) =>
-        new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
-
-      const replacement = await tx.assignment.create({
-        data: {
-          generatedVisitId: visitId,
-          branchId: visit.branchId,
-          branchCode: visit.branchCode,
-          status: AssignmentStatus.DRAFT,
-          scheduleRunId: runId,
-          plannedStart: at(dto.plannedStartMinute),
-          plannedEnd: at(dto.plannedEndMinute),
-          crewMembers: {
-            create: dto.crew.map((member) => ({
-              employeeId: member.employeeId,
-              role: member.role,
-              isPmsSupervisor: pmsById.get(member.employeeId) ?? false,
-            })),
-          },
-          vehicles: {
-            create: dto.vehicles.map((entry) => ({
-              vehicleId: entry.vehicleId,
-              driverEmployeeId: entry.driverEmployeeId,
-            })),
-          },
-        },
-      });
-      if (replaceAssignmentId) {
-        // Move every pin (including released history) before the FK cascade
-        // can remove it. Keep a new assignment identity so concurrent manual
-        // and publication writers still reject their stale snapshot.
-        await tx.assignmentLock.updateMany({
-          where: { assignmentId: replaceAssignmentId },
-          data: { assignmentId: replacement.id },
-        });
-        const replaced = await tx.assignment.deleteMany({
-          where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
-        });
-        if (replaced.count !== 1) {
-          throw new AppException(
-            'RESOURCE_CONFLICT',
-            'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
-            HttpStatus.CONFLICT,
-            { runId, visitId, assignmentId: replaceAssignmentId },
-          );
-        }
-      }
-      await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
-      await tx.generatedVisit.update({
-        where: { id: visitId },
-        data: { status: VisitStatus.SCHEDULED, ...proposedVisit },
-      });
-    });
-  }
-
-  private async recordUnassigned(
-    runId: string,
-    entries: { visitId: string; expectedUpdatedAt: Date; codes: string[]; message: string; replaceAssignmentId?: string }[],
-  ) {
-    if (entries.length === 0) return;
-
-    await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
+      // One solver response is one atomic change. Lock the entire affected set
+      // in the shared deterministic order, then validate every revision before
+      // creating drafts, transferring locks, moving dates or changing reasons.
       await lockScheduleVisits(tx, entries.map((entry) => entry.visitId));
       for (const entry of entries) {
         await assertScheduleSnapshot(tx, entry.visitId, entry.replaceAssignmentId);
@@ -566,42 +529,120 @@ export class ScheduleRunService {
           where: { id: entry.visitId },
           select: { updatedAt: true },
         });
+        // Lock/unlock decisions also advance this revision under the same
+        // visit lock, so a stale lock snapshot rejects the complete response.
         assertVisitRevision(entry.visitId, entry.expectedUpdatedAt, visit.updatedAt);
       }
-      for (const entry of entries) {
-        if (entry.replaceAssignmentId) {
-          // Keep the rejected draft as history, but make it unpublishable in
-          // the same transaction that puts its visit in the unassigned queue.
-          const invalidated = await tx.assignment.updateMany({
-            where: { id: entry.replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
-            data: { status: AssignmentStatus.CANCELLED },
-          });
-          if (invalidated.count !== 1) {
-            throw new AppException(
-              'RESOURCE_CONFLICT',
-              'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
-              HttpStatus.CONFLICT,
-              { runId, visitId: entry.visitId, assignmentId: entry.replaceAssignmentId },
-            );
-          }
-        }
-        await tx.visitUnassignedReason.deleteMany({
-          where: { generatedVisitId: entry.visitId },
-        });
-        await tx.visitUnassignedReason.createMany({
-          data: entry.codes.map((code) => ({
-            generatedVisitId: entry.visitId,
-            scheduleRunId: runId,
-            code,
-            message: entry.message,
-          })),
-        });
-        await tx.generatedVisit.update({
-          where: { id: entry.visitId },
-          data: { status: VisitStatus.UNASSIGNED },
-        });
+      for (const entry of accepted) {
+        await this.persist(tx, runId, entry, pmsById);
       }
+      await this.recordUnassigned(tx, runId, unassigned);
+      return this.finish(runId, accepted.length, unassigned.length, tx);
+    }, { timeout: 30_000 });
+  }
+
+  private async persist(
+    tx: Prisma.TransactionClient,
+    runId: string,
+    { visitId, dto, replaceAssignmentId, proposedVisit }: AcceptedAssignment,
+    pmsById: Map<string, boolean>,
+  ) {
+    const visit = await tx.generatedVisit.findUniqueOrThrow({
+      where: { id: visitId },
+      select: { visitDate: true, branchId: true, branchCode: true },
     });
+    const at = (minute: number) =>
+      new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
+
+    const replacement = await tx.assignment.create({
+      data: {
+        generatedVisitId: visitId,
+        branchId: visit.branchId,
+        branchCode: visit.branchCode,
+        status: AssignmentStatus.DRAFT,
+        scheduleRunId: runId,
+        plannedStart: at(dto.plannedStartMinute),
+        plannedEnd: at(dto.plannedEndMinute),
+        crewMembers: {
+          create: dto.crew.map((member) => ({
+            employeeId: member.employeeId,
+            role: member.role,
+            isPmsSupervisor: pmsById.get(member.employeeId) ?? false,
+          })),
+        },
+        vehicles: {
+          create: dto.vehicles.map((entry) => ({
+            vehicleId: entry.vehicleId,
+            driverEmployeeId: entry.driverEmployeeId,
+          })),
+        },
+      },
+    });
+    if (replaceAssignmentId) {
+      // Move every pin (including released history) before the FK cascade
+      // can remove it. Keep a new assignment identity so concurrent manual
+      // and publication writers still reject their stale snapshot.
+      await tx.assignmentLock.updateMany({
+        where: { assignmentId: replaceAssignmentId },
+        data: { assignmentId: replacement.id },
+      });
+      const replaced = await tx.assignment.deleteMany({
+        where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+      });
+      if (replaced.count !== 1) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+          HttpStatus.CONFLICT,
+          { runId, visitId, assignmentId: replaceAssignmentId },
+        );
+      }
+    }
+    await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
+    await tx.generatedVisit.update({
+      where: { id: visitId },
+      data: { status: VisitStatus.SCHEDULED, ...proposedVisit },
+    });
+  }
+
+  private async recordUnassigned(
+    tx: Prisma.TransactionClient,
+    runId: string,
+    entries: UnassignedResult[],
+  ) {
+    for (const entry of entries) {
+      if (entry.replaceAssignmentId) {
+        // Keep the rejected draft as history, but make it unpublishable in
+        // the same transaction that puts its visit in the unassigned queue.
+        const invalidated = await tx.assignment.updateMany({
+          where: { id: entry.replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+          data: { status: AssignmentStatus.CANCELLED },
+        });
+        if (invalidated.count !== 1) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+            HttpStatus.CONFLICT,
+            { runId, visitId: entry.visitId, assignmentId: entry.replaceAssignmentId },
+          );
+        }
+      }
+      await tx.visitUnassignedReason.deleteMany({
+        where: { generatedVisitId: entry.visitId },
+      });
+      await tx.visitUnassignedReason.createMany({
+        data: entry.codes.map((code) => ({
+          generatedVisitId: entry.visitId,
+          scheduleRunId: runId,
+          code,
+          message: entry.message,
+        })),
+      });
+      await tx.generatedVisit.update({
+        where: { id: entry.visitId },
+        data: { status: VisitStatus.UNASSIGNED },
+      });
+    }
   }
 
   private async isCancelled(runId: string): Promise<boolean> {
@@ -624,8 +665,13 @@ export class ScheduleRunService {
     return { scheduled: 0, unassigned: 0, cancelled: true };
   }
 
-  private async finish(runId: string, scheduled: number, unassigned: number) {
-    await this.prisma.scheduleRun.update({
+  private async finish(
+    runId: string,
+    scheduled: number,
+    unassigned: number,
+    client: Pick<Prisma.TransactionClient, 'scheduleRun'> = this.prisma,
+  ) {
+    await client.scheduleRun.update({
       where: { id: runId },
       data: {
         status: ScheduleRunStatus.SUCCEEDED,
