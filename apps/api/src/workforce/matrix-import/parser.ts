@@ -275,7 +275,7 @@ function findHeaderBottom(grid: Grid, identityRowIndex: number, identity: Identi
  * heading, which is the one that names the column. Everything above it is
  * group context: "Transport" over "Personal" over the registration. Both are
  * needed, because a column is recognised as a vehicle either by its group or by
- * a registration or capacity in its own title.
+ * a capacity or explicitly described vehicle registration in its own title.
  *
  * Values are forward-filled across each row as a fallback for headings that are
  * visually grouped but not actually merged, which the reader cannot resolve.
@@ -388,13 +388,19 @@ function classifyColumns(
     const normalizedGroup = group ? normalizeHeader(group) : '';
 
     const groupSaysVehicle = vehicleGroups.some((candidate) => normalizedGroup.includes(candidate));
-    // Use the same strict parser as vehicle creation so no-capacity headings
-    // are recognized without group context. Capacity-only headings still enter
-    // buildVehicles, which reports their missing registration instead of
-    // silently treating the checkmarks as a skill.
+    // Registration syntax alone is ambiguous: "First Aid 2026" and "ISO 9001"
+    // are skills, yet end in valid-looking plates. Without group/capacity
+    // context, require an established vehicle description immediately before
+    // the parsed registration (e.g. "Bolero Truck DAC- 2485").
     const { code, seatCapacity } = parseVehicleHeader(label);
+    const description = code
+      ? label.trim().replace(/\s+/g, ' ').replace(/\s*-\s*/g, '-').slice(0, -code.length).trim()
+      : '';
+    const headerDescribesVehicle = /\b(?:van|truck|motor bike)$/i.test(description);
 
-    if (groupSaysVehicle || code !== null || seatCapacity !== null) {
+    // Capacity-only headings still report their missing registration in
+    // buildVehicles instead of silently becoming skills.
+    if (groupSaysVehicle || seatCapacity !== null || (code !== null && headerDescribesVehicle)) {
       vehicleColumns.push({ index, label, group });
     } else {
       skillColumns.push({ index, label, group });

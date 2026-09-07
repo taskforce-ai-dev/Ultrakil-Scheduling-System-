@@ -94,11 +94,11 @@ describe('importing the workforce matrix', () => {
     const sheet = workbook.addWorksheet('Matrix');
     sheet.addRows([
       ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
-        'Bolero Truck DAC- 2485', 'Safety Level 2'],
-      ['Colombo Branch', 1, 'Fixture Aspen', '', 'SPMS', '✓', '✓'],
-      ['', 2, 'Fixture Birch', '', 'Junior PMT', '✓', ''],
-      ['', 3, 'Fixture Cedar', '', 'Junior PMT', '✓', ''],
-      ['', 4, 'Fixture Elm', '', 'Junior PMT', '', '✓'],
+        'Bolero Truck DAC- 2485', 'First Aid 2026', 'ISO 9001'],
+      ['Colombo Branch', 1, 'Fixture Aspen', '', 'SPMS', '✓', '✓', '✓'],
+      ['', 2, 'Fixture Birch', '', 'Junior PMT', '✓', '', ''],
+      ['', 3, 'Fixture Cedar', '', 'Junior PMT', '✓', '', ''],
+      ['', 4, 'Fixture Elm', '', 'Junior PMT', '', '✓', ''],
     ]);
     await workbook.xlsx.writeFile(fixturePath);
     const { grid } = await readMatrixFile(fixturePath, null);
@@ -125,8 +125,10 @@ describe('importing the workforce matrix', () => {
     })));
     expect(await prisma.vehicleAuthorization.count({ where: { employeeId: employees[3].id } })).toBe(0);
     expect(await prisma.vehicle.count()).toBe(1);
-    expect(await prisma.employeeSkill.findMany({ select: { skillCode: true } })).toEqual([
-      { skillCode: 'SAFETY_LEVEL_2' }, { skillCode: 'SAFETY_LEVEL_2' },
+    expect(await prisma.employeeSkill.findMany({
+      select: { skillCode: true }, orderBy: { skillCode: 'asc' },
+    })).toEqual([
+      { skillCode: 'FIRST_AID_2026' }, { skillCode: 'FIRST_AID_2026' }, { skillCode: 'ISO_9001' },
     ]);
 
     const second = await importMatrix(prisma, parsed);

@@ -139,6 +139,37 @@ describe('a no-capacity vehicle without group or merge context', () => {
     ]);
   });
 
+  it.each(['First Aid 2026', 'ISO 9001', 'ISO-9001', 'CPR 2026', 'Van First Aid 2026'])(
+    'preserves the ordinary numeric skill %s alongside DAC-2485',
+    (skillLabel) => {
+      const mixedGrid: Grid = [
+        ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+          'Bolero Truck DAC- 2485', skillLabel],
+        ['Colombo Branch', '1', 'Fixture Aspen', '', 'SPMS', '✓', '✓'],
+      ];
+      const result = parseMatrix(mixedGrid);
+
+      expect(result.issues).toEqual([]);
+      expect(result.vehicles.map(({ code }) => code)).toEqual(['DAC-2485']);
+      expect(result.vehicleColumns.map(({ label }) => label)).toEqual(['Bolero Truck DAC- 2485']);
+      expect(result.skillColumns.map(({ label }) => label)).toEqual([skillLabel]);
+      expect(result.employees[0].vehicles).toEqual([{ vehicleCode: 'DAC-2485' }]);
+      expect(result.employees[0].skills.map(({ skillLabel: label }) => label)).toEqual([skillLabel]);
+    },
+  );
+
+  it.each(['Van BJG 4419', 'Motor Bike BJG 4419', 'Bolero Truck BJG 4419'])(
+    'recognizes an explicitly described vehicle %s without group or capacity',
+    (vehicleLabel) => {
+      const vehicleGrid = grid.map((row) => [...row]);
+      vehicleGrid[0][5] = vehicleLabel;
+      const result = parseMatrix(vehicleGrid);
+
+      expect(result.vehicles.map(({ code }) => code)).toEqual(['BJG 4419']);
+      expect(result.employees[0].vehicles).toEqual([{ vehicleCode: 'BJG 4419' }]);
+    },
+  );
+
   it('still reports a capacity-only vehicle when no registration or group exists', () => {
     const withoutRegistration = grid.map((row) => [...row]);
     withoutRegistration[0][5] = 'Spare Van( 04 People)';
