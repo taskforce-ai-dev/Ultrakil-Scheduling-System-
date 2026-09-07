@@ -26,6 +26,9 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
   // The drawer's own data (visit + employees + vehicles) is a real fetch,
   // not instant, so the default 5s assertion timeout is too tight here.
   await expect(page.getByText(/^Edit crew — /)).toBeVisible({ timeout: 10_000 });
+  if (process.env.E2E_STRICT === '1') {
+    await expect(page.getByText('This crew is eligible to take the visit.')).toBeVisible({ timeout: 10_000 });
+  }
   await page.getByRole("button", { name: "Add crew member" }).click();
   await page.getByLabel("Employee").click();
   await page.getByRole("option").first().click();

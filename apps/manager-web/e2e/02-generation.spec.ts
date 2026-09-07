@@ -28,6 +28,10 @@ test("previews visit generation for the current month, then confirms it", async 
   ).toBeVisible({ timeout: 15_000 });
 
   const generateButton = page.getByRole("button", { name: /^Generate$/ });
+  if (process.env.E2E_STRICT === '1') {
+    await expect(page.getByText('Nothing has been written yet.')).toBeVisible();
+    await expect(generateButton).toBeEnabled();
+  }
   const isDisabled = await generateButton.isDisabled();
 
   if (isDisabled) {

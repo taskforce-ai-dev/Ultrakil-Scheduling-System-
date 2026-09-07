@@ -53,6 +53,7 @@ def main():
             run(["node", str(ROOT / "deploy/test/recovery-fixture.mjs")], env)
             before = recovery.counts(source)
             tool = [sys.executable, str(ROOT / "deploy/recovery.py")]
+            assert json.loads(run(tool + ["counts"], env))["counts"] == before
             backed_up = json.loads(run(tool + ["backup"], env))
             archive = Path(backed_up["archive"])
             assert backed_up["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
