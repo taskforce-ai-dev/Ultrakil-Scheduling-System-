@@ -45,7 +45,7 @@ Every other endpoint below requires `Authorization: Bearer <token>`.
 | `GET/POST /api/vehicles`, `GET/PATCH /api/vehicles/{id}`                | Vehicle directory and edit form.                                                                                                                                                                   |
 | `GET /api/vehicles/{id}/authorized-drivers`                             | Driver picker when assigning a vehicle.                                                                                                                                                            |
 | `POST /api/vehicles/{id}/(de)activate`                                  | Deactivate/reactivate a vehicle.                                                                                                                                                                   |
-| `GET /api/employees/{employeeId}/assignments` **(new, ULK-C07)**        | Phase 2-compatible read model — an employee's published daily assignments. Not called by any Phase 1 screen; exists so a PMS tablet or worker app can be added later without a new endpoint shape. |
+| `GET /api/employees/{employeeId}/assignments` **(new, ULK-C07)**        | Manager/admin read model of an employee's published daily assignments, prepared for a future worker app. Not called by a Phase 1 screen. Worker self-scope authorization still must be added. |
 
 ## Customers, sites and agreements (`apps/api/src/catalog`)
 
@@ -97,6 +97,26 @@ the same row a PMS tablet could read later needs no reshaping.
 worker-app hooks already carried on `Assignment` (see
 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#phase-2-compatibility)) — always
 `null` in Phase 1, because nothing writes them yet.
+
+## Employee published assignments
+
+`GET /api/employees/{employeeId}/assignments?from=<date>&to=<date>` requires
+the `ADMIN` or `MANAGER` role. Phase 1 has no User-to-Employee identity link;
+Phase 2 must add that link and enforce worker self-scope before enabling worker
+access. An arbitrary employee ID is currently a manager/admin lookup.
+
+The response preserves the selected employee's `role` and `isPmsSupervisor`
+and includes the full `crew`, supervisor ID/name, vehicles and their driver
+IDs/names, assignment `status`, instructions, and lifecycle timestamps. Only
+published-descended assignments with non-null `scheduleRunId` and `publishedAt`
+are visible, including completed work. Dates and inclusive date filters use
+the assignment's `plannedStart`, so moving the planning visit later does not
+rewrite the published planned date. Pagination orders by planned start and
+assignment ID. Instructions are the current agreement notes, not a historical
+snapshot of those notes.
+
+Both calendar and employee date queries require real `YYYY-MM-DD` calendar
+dates; impossible dates, timestamps and reversed ranges are rejected.
 
 ## The assignment notification outbox
 

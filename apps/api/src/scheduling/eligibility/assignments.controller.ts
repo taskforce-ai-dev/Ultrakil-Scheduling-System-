@@ -152,10 +152,11 @@ export class AssignmentsController {
   }
 
   @Get('employees/:employeeId/assignments')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
   @ApiOperation({
     summary: "An employee's published daily assignments",
     description:
-      'The Phase 2-compatible read model a PMS tablet or worker mobile app would call: published visits only, with the acknowledgement/start/completion hooks already on Assignment, always null until Phase 2 writes them.',
+      'Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
@@ -172,6 +173,7 @@ export class AssignmentsController {
     example: '2026-10-04',
   })
   @ApiResponse({ status: 200, type: PaginatedEmployeeAssignmentsDto })
+  @ApiResponse({ status: 403, description: 'ADMIN or MANAGER role required.' })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   employeeAssignments(
     @Param('employeeId', ParseUUIDPipe) employeeId: string,

@@ -1,19 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AssignmentStatus, BranchCode, VisitStatus } from '@prisma/client';
-import { IsDateString, IsEnum, IsOptional, Matches } from 'class-validator';
+import { IsEnum, IsOptional } from 'class-validator';
+
+import { IsDateOnly } from '../../common/validation/is-date-only';
 
 export class CalendarQueryDto {
   @ApiProperty({ format: 'date', description: 'Visits on or after this date.' })
-  @IsDateString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'from must be a YYYY-MM-DD date' })
+  @IsDateOnly()
   from!: string;
 
   @ApiProperty({
     format: 'date',
     description: 'Visits on or before this date.',
   })
-  @IsDateString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'to must be a YYYY-MM-DD date' })
+  @IsDateOnly()
   to!: string;
 
   @ApiPropertyOptional({ enum: BranchCode })

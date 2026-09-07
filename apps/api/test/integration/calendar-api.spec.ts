@@ -37,10 +37,12 @@ const ADMIN = {
 let app: INestApplication;
 let http: string;
 let adminToken: string;
+let managerToken: string;
 let jobTypeId: string;
 let siteId: string;
 let supervisorId: string;
 let technicianId: string;
+let vehicleId: string;
 const scheduleRunIds: string[] = [];
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
@@ -96,6 +98,7 @@ async function assignCrew(visitId: string): Promise<string> {
         { employeeId: supervisorId, role: 'SUPERVISOR' },
         { employeeId: technicianId, role: 'TECHNICIAN' },
       ],
+      vehicles: [{ vehicleId, driverEmployeeId: supervisorId }],
     });
   expect(res.status).toBe(200);
   return res.body.id as string;
@@ -163,6 +166,12 @@ beforeAll(async () => {
     update: { role: UserRole.ADMIN, isActive: true },
   });
   adminToken = await login(ADMIN.email, ADMIN.password);
+  const managerEmail = `c07-manager-${suffix}@ultrakil.test`;
+  await prisma.user.create({ data: {
+    email: managerEmail, fullName: 'C07 Manager', role: UserRole.MANAGER,
+    passwordHash: await AuthService.hashPassword(ADMIN.password),
+  } });
+  managerToken = await login(managerEmail, ADMIN.password);
 
   const colombo = await prisma.branch.findUniqueOrThrow({
     where: { code: BranchCode.COLOMBO },
@@ -190,6 +199,12 @@ beforeAll(async () => {
     },
   });
   technicianId = technician.id;
+  const vehicle = await prisma.vehicle.create({ data: {
+    code: `C07-VAN-${suffix}`, label: `C07 Van ${suffix}`, seatCapacity: 4,
+    branchId: colombo.id,
+    authorizations: { create: { employeeId: supervisorId } },
+  } });
+  vehicleId = vehicle.id;
 
   const jobType = await request(http)
     .post('/api/job-types')
@@ -218,6 +233,12 @@ beforeAll(async () => {
   siteId = site.body.id;
 });
 
+beforeEach(async () => {
+  await prisma.assignment.deleteMany({
+    where: { crewMembers: { some: { employeeId: { in: [supervisorId, technicianId] } } } },
+  });
+});
+
 afterAll(async () => {
   const ids = [supervisorId, technicianId];
   await prisma.assignmentNotificationOutbox.deleteMany({
@@ -231,20 +252,21 @@ afterAll(async () => {
   });
   await prisma.serviceAgreement.deleteMany({
     where: {
-      serviceSite: { customer: { name: { startsWith: 'C07 Customer' } } },
+      serviceSiteId: siteId,
     },
   });
   await prisma.serviceSite.deleteMany({
-    where: { customer: { name: { startsWith: 'C07 Customer' } } },
+    where: { id: siteId },
   });
   await prisma.customer.deleteMany({
-    where: { name: { startsWith: 'C07 Customer' } },
+    where: { name: `C07 Customer ${suffix}` },
   });
-  await prisma.jobType.deleteMany({ where: { code: { startsWith: 'C07_' } } });
+  await prisma.jobType.deleteMany({ where: { id: jobTypeId } });
   await prisma.employee.deleteMany({
     where: { sourceKey: { contains: suffix } },
   });
-  await prisma.user.deleteMany({ where: { email: ADMIN.email } });
+  await prisma.vehicle.deleteMany({ where: { id: vehicleId } });
+  await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, `c07-manager-${suffix}@ultrakil.test`] } } });
   await prisma.$disconnect();
   await app.close();
 });
@@ -309,6 +331,74 @@ describe('unified calendar', () => {
 });
 
 describe('employee published assignments', () => {
+  it('requires authentication and permits manager/admin read access', async () => {
+    expect((await request(http).get(`/api/employees/${supervisorId}/assignments`)).status).toBe(401);
+    expect((await request(http).get(`/api/employees/${supervisorId}/assignments`)
+      .set(auth(managerToken))).status).toBe(200);
+  });
+
+  it.each([
+    { publishedAt: null, withRun: false },
+    { publishedAt: null, withRun: true },
+    { publishedAt: new Date('2026-09-07T00:00:00Z'), withRun: false },
+  ])('hides forced published status without full publication provenance: %p', async ({ publishedAt, withRun }) => {
+    const assignmentId = await assignCrew(await makeVisit());
+    let scheduleRunId: string | null = null;
+    if (withRun) {
+      const run = await prisma.scheduleRun.create({ data: {
+        status: ScheduleRunStatus.SUCCEEDED,
+        rangeStart: new Date(`${HORIZON.from}T00:00:00Z`),
+        rangeEnd: new Date(`${HORIZON.to}T00:00:00Z`),
+      } });
+      scheduleRunIds.push(run.id);
+      scheduleRunId = run.id;
+    }
+    await prisma.assignment.update({ where: { id: assignmentId }, data: {
+      status: AssignmentStatus.PUBLISHED, publishedAt, scheduleRunId,
+    } });
+    const result = await request(http).get(`/api/employees/${supervisorId}/assignments`)
+      .set(auth(adminToken));
+    expect(result.body.items).toEqual([]);
+    expect(result.body.total).toBe(0);
+  });
+
+  it.each([
+    ['2026-09-08T23:59:59.999Z', 0],
+    ['2026-09-09T00:00:00.000Z', 1],
+    ['2026-09-09T23:59:59.999Z', 1],
+    ['2026-09-10T00:00:00.000Z', 0],
+  ])('filters the entire inclusive day at the timestamp boundary %s', async (plannedStart, count) => {
+    const assignmentId = await assignCrew(await makeVisit());
+    await publish(assignmentId);
+    // Fixture timestamps isolate the read filter from working-hour eligibility.
+    await prisma.assignment.update({ where: { id: assignmentId }, data: {
+      plannedStart: new Date(plannedStart),
+      plannedEnd: new Date(new Date(plannedStart).getTime() + 60_000),
+    } });
+    const result = await request(http).get(`/api/employees/${supervisorId}/assignments`)
+      .set(auth(adminToken)).query({ from: VISIT_DATE, to: VISIT_DATE });
+    expect(result.status).toBe(200);
+    expect(result.body.items).toHaveLength(count);
+    expect(result.body.total).toBe(count);
+  });
+
+  it('uses the published planned date after the mutable visit date changes, with inclusive bounds', async () => {
+    const visitId = await makeVisit();
+    const assignmentId = await assignCrew(visitId);
+    await publish(assignmentId);
+    await prisma.generatedVisit.update({ where: { id: visitId }, data: {
+      visitDate: new Date('2026-09-16T00:00:00Z'),
+    } });
+    const result = await request(http).get(`/api/employees/${technicianId}/assignments`)
+      .set(auth(managerToken)).query({ from: VISIT_DATE, to: VISIT_DATE });
+    expect(result.body.items).toHaveLength(1);
+    expect(result.body.items[0]).toMatchObject({ assignmentId, visitDate: VISIT_DATE,
+      role: 'TECHNICIAN', isPmsSupervisor: false, plannedStartMinute: 540, plannedEndMinute: 690 });
+    const nextDay = await request(http).get(`/api/employees/${technicianId}/assignments`)
+      .set(auth(managerToken)).query({ from: '2026-09-10', to: '2026-09-16' });
+    expect(nextDay.body.items).toEqual([]);
+  });
+
   it('is empty for a draft crew — nothing has been published yet', async () => {
     const visitId = await makeVisit();
     await assignCrew(visitId);
@@ -337,6 +427,18 @@ describe('employee published assignments', () => {
     expect(item.assignmentId).toBe(assignmentId);
     expect(item.visitDate).toBe(VISIT_DATE);
     expect(item.isPmsSupervisor).toBe(true);
+    const saved = await prisma.assignment.findUniqueOrThrow({ where: { id: assignmentId } });
+    expect(item).toMatchObject({
+      status: 'PUBLISHED', scheduleRunId: saved.scheduleRunId,
+      publishedAt: saved.publishedAt!.toISOString(),
+      instructions: `C07 instructions ${suffix}`,
+      supervisorEmployeeId: supervisorId, supervisorName: `C07 Supervisor ${suffix}`,
+      crew: [
+        { employeeId: supervisorId, fullName: `C07 Supervisor ${suffix}`, role: 'SUPERVISOR', isPmsSupervisor: true },
+        { employeeId: technicianId, fullName: `C07 Technician ${suffix}`, role: 'TECHNICIAN', isPmsSupervisor: false },
+      ],
+      vehicles: [{ vehicleId, label: `C07 Van ${suffix}`, driverEmployeeId: supervisorId, driverName: `C07 Supervisor ${suffix}` }],
+    });
     // Phase 2 hooks — nothing writes these in Phase 1.
     expect(item.acknowledgedAt).toBeNull();
     expect(item.startedAt).toBeNull();
@@ -372,6 +474,13 @@ describe('employee published assignments', () => {
         (entry: { assignmentId: string }) => entry.assignmentId === assignmentId,
       ),
     ).toBe(true);
+    await prisma.assignment.update({ where: { id: assignmentId }, data: {
+      status: AssignmentStatus.COMPLETED, completedAt: new Date(),
+    } });
+    const completed = await request(http).get(`/api/employees/${supervisorId}/assignments`)
+      .set(auth(adminToken));
+    expect(completed.body.items[0].status).toBe('COMPLETED');
+    expect(completed.body.items[0].completedAt).not.toBeNull();
   });
 
   it('allows only one of two concurrent publish attempts to create notifications', async () => {

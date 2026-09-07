@@ -238,6 +238,26 @@ describe('authorization', () => {
 });
 
 describe('checking writes nothing', () => {
+  it('can check a reopened assignment without overlapping its own crew and vehicle', async () => {
+    const visitId = await visitForAssignment();
+    await prisma.vehicleAuthorization.upsert({
+      where: { employeeId_vehicleId: { employeeId: supervisorId, vehicleId } },
+      create: { employeeId: supervisorId, vehicleId },
+      update: {},
+    });
+    const proposal = { ...goodCrew(), vehicles: [{ vehicleId, driverEmployeeId: supervisorId }] };
+    const assigned = await request(http).put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken)).send(proposal);
+    expect(assigned.status).toBe(200);
+    const before = await prisma.assignment.findUniqueOrThrow({ where: { id: assigned.body.id } });
+
+    const checked = await request(http).post(`/api/visits/${visitId}/assignment/check`)
+      .set(auth(managerToken)).send(proposal);
+    expect(checked.status).toBe(200);
+    expect(checked.body).toEqual({ isEligible: true, conflicts: [] });
+    expect(await prisma.assignment.findUniqueOrThrow({ where: { id: assigned.body.id } })).toEqual(before);
+  });
+
   it('reports eligibility without creating an assignment', async () => {
     const visitId = await visitForAssignment();
 

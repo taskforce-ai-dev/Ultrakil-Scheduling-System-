@@ -81,7 +81,13 @@ export class AssignmentsService {
     visitId: string,
     dto: AssignCrewDto,
   ): Promise<EligibilityResultDto> {
-    const result = await this.eligibility.evaluate(visitId, toProposal(dto));
+    const existing = await this.prisma.assignment.findFirst({
+      where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+      select: { id: true },
+    });
+    const result = await this.eligibility.evaluate(visitId, toProposal(dto), {
+      excludeAssignmentId: existing?.id,
+    });
     return {
       isEligible: result.isEligible,
       conflicts: result.conflicts.map(toConflictDto),
@@ -360,10 +366,10 @@ export class AssignmentsService {
   }
 
   /**
-   * One employee's published daily assignments — the Phase 2-compatible read
-   * model a PMS tablet or worker app would call. Drafts and proposals are not
-   * shown; a published job stays visible as it is acknowledged, started and
-   * completed.
+   * Manager/admin view of one employee's published daily assignments.
+   * A future worker app needs self-scope authorization before it can use this
+   * read model. Published jobs stay visible through completion, dated by the
+   * assignment's planned start rather than the mutable planning visit.
    */
   async employeeAssignments(
     employeeId: string,
@@ -396,18 +402,22 @@ export class AssignmentsService {
 
     const where: Prisma.AssignmentWhereInput = {
       status: { in: EMPLOYEE_ASSIGNMENT_STATUSES },
+      scheduleRunId: { not: null },
+      publishedAt: { not: null },
       crewMembers: { some: { employeeId } },
       ...(query.from || query.to
         ? {
-            generatedVisit: {
-              visitDate: {
-                ...(query.from
-                  ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
-                  : {}),
-                ...(query.to
-                  ? { lte: new Date(`${query.to}T00:00:00.000Z`) }
-                  : {}),
-              },
+            plannedStart: {
+              ...(query.from
+                ? { gte: new Date(`${query.from}T00:00:00.000Z`) }
+                : {}),
+              ...(query.to
+                ? {
+                    lt: new Date(
+                      new Date(`${query.to}T00:00:00.000Z`).getTime() + 86_400_000,
+                    ),
+                  }
+                : {}),
             },
           }
         : {}),
@@ -418,7 +428,8 @@ export class AssignmentsService {
       this.prisma.assignment.findMany({
         where,
         include: {
-          crewMembers: { where: { employeeId } },
+          crewMembers: ASSIGNMENT_INCLUDE.crewMembers,
+          vehicles: ASSIGNMENT_INCLUDE.vehicles,
           generatedVisit: {
             include: {
               serviceAgreement: {
@@ -431,7 +442,7 @@ export class AssignmentsService {
             },
           },
         },
-        orderBy: { plannedStart: 'asc' },
+        orderBy: [{ plannedStart: 'asc' }, { id: 'asc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -447,23 +458,51 @@ export class AssignmentsService {
       ).getTime();
       const minutes = (moment: Date) =>
         Math.round((moment.getTime() - midnight) / 60_000);
-      const membership = assignment.crewMembers[0];
+      const crew = assignment.crewMembers
+        .map((member) => ({
+          employeeId: member.employeeId,
+          fullName: member.employee.fullName,
+          role: member.role,
+          isPmsSupervisor: member.isPmsSupervisor,
+        }))
+        .sort((left, right) =>
+          left.fullName.localeCompare(right.fullName) || left.employeeId.localeCompare(right.employeeId),
+        );
+      // Membership and publication provenance are guaranteed by the query.
+      const membership = crew.find((member) => member.employeeId === employeeId)!;
+      const supervisor =
+        crew.find((member) => member.isPmsSupervisor && member.role === CrewRole.SUPERVISOR) ??
+        crew.find((member) => member.isPmsSupervisor);
 
       return {
         assignmentId: assignment.id,
+        status: assignment.status,
+        scheduleRunId: assignment.scheduleRunId!,
         visitId: assignment.generatedVisitId,
-        visitDate: assignment.generatedVisit.visitDate
-          .toISOString()
-          .slice(0, 10),
+        visitDate: assignment.plannedStart.toISOString().slice(0, 10),
         plannedStartMinute: minutes(assignment.plannedStart),
         plannedEndMinute: minutes(assignment.plannedEnd),
         branchCode: assignment.branchCode,
         customerName: assignment.generatedVisit.serviceAgreement.customer.name,
         siteName: assignment.generatedVisit.serviceAgreement.serviceSite.name,
         jobTypeName: assignment.generatedVisit.serviceAgreement.jobType.name,
+        instructions: assignment.generatedVisit.serviceAgreement.notes?.trim() || null,
+        crew,
+        supervisorEmployeeId: supervisor?.employeeId ?? null,
+        supervisorName: supervisor?.fullName ?? null,
+        vehicles: assignment.vehicles
+          .map((entry) => ({
+            vehicleId: entry.vehicleId,
+            label: entry.vehicle.label,
+            driverEmployeeId: entry.driverEmployeeId,
+            driverName: entry.driverEmployee?.fullName ?? null,
+          }))
+          .sort((left, right) =>
+            left.label.localeCompare(right.label) || left.vehicleId.localeCompare(right.vehicleId),
+          ),
         role: membership.role,
         isPmsSupervisor: membership.isPmsSupervisor,
-        publishedAt: assignment.publishedAt?.toISOString() ?? null,
+        publishedAt: assignment.publishedAt!.toISOString(),
         acknowledgedAt: assignment.acknowledgedAt?.toISOString() ?? null,
         startedAt: assignment.startedAt?.toISOString() ?? null,
         completedAt: assignment.completedAt?.toISOString() ?? null,

@@ -960,7 +960,7 @@ export interface paths {
         };
         /**
          * An employee's published daily assignments
-         * @description The Phase 2-compatible read model a PMS tablet or worker mobile app would call: published visits only, with the acknowledgement/start/completion hooks already on Assignment, always null until Phase 2 writes them.
+         * @description Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.
          */
         get: operations["AssignmentsController_employeeAssignments"];
         put?: never;
@@ -1880,6 +1880,10 @@ export interface components {
         EmployeeAssignmentDto: {
             /** Format: uuid */
             assignmentId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /** Format: uuid */
+            scheduleRunId: string;
             /** Format: uuid */
             visitId: string;
             /** Format: date */
@@ -1890,11 +1894,18 @@ export interface components {
             customerName: string;
             siteName: string;
             jobTypeName: string;
+            /** @description Current agreement notes for the visit. */
+            instructions: string | null;
+            crew: components["schemas"]["AssignedCrewMemberDto"][];
+            /** Format: uuid */
+            supervisorEmployeeId: string | null;
+            supervisorName: string | null;
+            vehicles: components["schemas"]["AssignedVehicleDto"][];
             /** @enum {string} */
             role: "SUPERVISOR" | "TECHNICIAN" | "DRIVER" | "HELPER";
             isPmsSupervisor: boolean;
             /** Format: date-time */
-            publishedAt: string | null;
+            publishedAt: string;
             /** Format: date-time */
             acknowledgedAt: string | null;
             /** Format: date-time */
@@ -3994,6 +4005,13 @@ export interface operations {
             };
             /** @description Missing or invalid token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description ADMIN or MANAGER role required. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

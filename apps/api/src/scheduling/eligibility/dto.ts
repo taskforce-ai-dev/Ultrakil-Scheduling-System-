@@ -1,22 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CrewRole } from '@prisma/client';
+import { AssignmentStatus, CrewRole } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsDateString,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
   IsUUID,
-  Matches,
   Max,
   MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
 
+import { IsDateOnly } from '../../common/validation/is-date-only';
 import { CONFLICT_CODES } from './conflict-codes';
 
 export class ProposedCrewMemberDto {
@@ -195,8 +194,7 @@ export class EmployeeAssignmentQueryDto {
     description: 'Assignments on or after this date.',
   })
   @IsOptional()
-  @IsDateString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'from must be a YYYY-MM-DD date' })
+  @IsDateOnly()
   from?: string;
 
   @ApiPropertyOptional({
@@ -204,19 +202,19 @@ export class EmployeeAssignmentQueryDto {
     description: 'Assignments on or before this date.',
   })
   @IsOptional()
-  @IsDateString()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'to must be a YYYY-MM-DD date' })
+  @IsDateOnly()
   to?: string;
 }
 
 /**
- * A Phase 2-compatible read model: what a PMS tablet or worker app would show
- * one employee about a published visit. `acknowledgedAt`/`startedAt`/
- * `completedAt` are the Phase 2 hooks already carried on `Assignment` —
- * always null in Phase 1, since nothing writes them yet.
+ * Manager/admin read model prepared for a future worker app. Worker self-scope
+ * authorization still requires a User-to-Employee identity link in Phase 2.
  */
 export class EmployeeAssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) assignmentId!: string;
+  @ApiProperty({ type: String, enum: Object.values(AssignmentStatus) })
+  status!: AssignmentStatus;
+  @ApiProperty({ type: String, format: 'uuid' }) scheduleRunId!: string;
   @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
   @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;
@@ -225,10 +223,16 @@ export class EmployeeAssignmentDto {
   @ApiProperty({ type: String }) customerName!: string;
   @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ type: String }) jobTypeName!: string;
+  @ApiProperty({ type: String, nullable: true, description: 'Current agreement notes for the visit.' })
+  instructions!: string | null;
+  @ApiProperty({ type: [AssignedCrewMemberDto] }) crew!: AssignedCrewMemberDto[];
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supervisorEmployeeId!: string | null;
+  @ApiProperty({ type: String, nullable: true }) supervisorName!: string | null;
+  @ApiProperty({ type: [AssignedVehicleDto] }) vehicles!: AssignedVehicleDto[];
   @ApiProperty({ type: String, enum: Object.values(CrewRole) }) role!: CrewRole;
   @ApiProperty({ type: Boolean }) isPmsSupervisor!: boolean;
-  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
-  publishedAt!: string | null;
+  @ApiProperty({ type: String, format: 'date-time' }) publishedAt!: string;
   @ApiProperty({ type: String, nullable: true, format: 'date-time' })
   acknowledgedAt!: string | null;
   @ApiProperty({ type: String, nullable: true, format: 'date-time' })

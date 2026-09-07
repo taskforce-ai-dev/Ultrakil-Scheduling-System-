@@ -116,5 +116,8 @@ are not built now, but Phase 1 does not paint them into a corner:
   (ULK-C07) already return the crew roster, supervisor, instructions,
   assignment status and published-schedule identity a PMS tablet or worker
   app would need — see [`docs/API_INTEGRATION.md`](API_INTEGRATION.md).
+  The employee endpoint is currently restricted to managers/admins. Worker
+  access requires a User-to-Employee identity link and self-scope authorization
+  in Phase 2; the read model alone does not provide worker authentication.
 - Every entity uses a stable UUID, so a mobile client can hold a reference across
   sessions.

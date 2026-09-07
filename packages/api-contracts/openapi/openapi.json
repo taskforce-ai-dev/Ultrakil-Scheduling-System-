@@ -2521,7 +2521,7 @@
     },
     "/api/employees/{employeeId}/assignments": {
       "get": {
-        "description": "The Phase 2-compatible read model a PMS tablet or worker mobile app would call: published visits only, with the acknowledgement/start/completion hooks already on Assignment, always null until Phase 2 writes them.",
+        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
         "operationId": "AssignmentsController_employeeAssignments",
         "parameters": [
           {
@@ -2574,6 +2574,9 @@
           },
           "401": {
             "description": "Missing or invalid token."
+          },
+          "403": {
+            "description": "ADMIN or MANAGER role required."
           },
           "404": {
             "description": "RESOURCE_NOT_FOUND"
@@ -5203,6 +5206,23 @@
             "type": "string",
             "format": "uuid"
           },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "visitId": {
             "type": "string",
             "format": "uuid"
@@ -5229,6 +5249,32 @@
           "jobTypeName": {
             "type": "string"
           },
+          "instructions": {
+            "type": "string",
+            "nullable": true,
+            "description": "Current agreement notes for the visit."
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedCrewMemberDto"
+            }
+          },
+          "supervisorEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "supervisorName": {
+            "type": "string",
+            "nullable": true
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedVehicleDto"
+            }
+          },
           "role": {
             "type": "string",
             "enum": [
@@ -5243,7 +5289,6 @@
           },
           "publishedAt": {
             "type": "string",
-            "nullable": true,
             "format": "date-time"
           },
           "acknowledgedAt": {
@@ -5264,6 +5309,8 @@
         },
         "required": [
           "assignmentId",
+          "status",
+          "scheduleRunId",
           "visitId",
           "visitDate",
           "plannedStartMinute",
@@ -5272,6 +5319,11 @@
           "customerName",
           "siteName",
           "jobTypeName",
+          "instructions",
+          "crew",
+          "supervisorEmployeeId",
+          "supervisorName",
+          "vehicles",
           "role",
           "isPmsSupervisor",
           "publishedAt",
