@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -41,11 +42,15 @@ const NAV_ITEMS = [
 
 function Brand() {
   return (
-    <div className="flex items-center gap-2.5">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-        U
-      </span>
-      <span className="text-base font-semibold tracking-tight text-white">UltraKIL</span>
+    <div className="inline-flex rounded-lg bg-white px-2 py-1.5 shadow-sm">
+      <Image
+        src="/ultrakil-logo.png"
+        alt="UltraKIL — will keep them STiL"
+        width={307}
+        height={119}
+        priority
+        className="h-6 w-auto"
+      />
     </div>
   );
 }
