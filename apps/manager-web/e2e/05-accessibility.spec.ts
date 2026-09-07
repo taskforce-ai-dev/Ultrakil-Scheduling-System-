@@ -19,15 +19,16 @@ import { test, expect } from "@playwright/test";
  * this baseline is clean.
  */
 const PAGES = [
-  "/dashboard",
-  "/customers",
-  "/service-agreements",
-  "/visits",
-  "/workforce",
-  "/vehicles",
-  "/dispatch-board",
-  "/unassigned-visits",
-  "/schedule-history",
+  { path: "/dashboard", heading: "Dashboard" },
+  { path: "/customers", heading: "Customers" },
+  { path: "/service-agreements", heading: "Service Agreements" },
+  { path: "/visits", heading: "Visit Calendar" },
+  { path: "/calendar", heading: "Calendar" },
+  { path: "/workforce", heading: "Workforce" },
+  { path: "/vehicles", heading: "Vehicles" },
+  { path: "/dispatch-board", heading: "Dispatch Board" },
+  { path: "/unassigned-visits", heading: "Unassigned Visits" },
+  { path: "/schedule-history", heading: "Schedule History" },
 ];
 
 async function expectNoSeriousViolations(page: import("@playwright/test").Page, label: string) {
@@ -50,13 +51,14 @@ async function expectNoSeriousViolations(page: import("@playwright/test").Page, 
   expect(serious, `${label} — serious/critical accessibility violations:${details}`).toHaveLength(0);
 }
 
-for (const path of PAGES) {
+for (const { path, heading } of PAGES) {
   test(`${path} has no serious accessibility violations`, async ({ page }) => {
     await page.goto(path);
     // Let the page's own data load rather than scanning a loading skeleton —
     // that would just tell us loading states are accessible, not the real
     // content managers spend their day looking at.
     await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
     await expectNoSeriousViolations(page, path);
   });
 }

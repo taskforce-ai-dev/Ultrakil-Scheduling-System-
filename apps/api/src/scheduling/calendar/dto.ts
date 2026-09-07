@@ -43,6 +43,17 @@ export class CalendarAssignmentDto {
   status!: AssignmentStatus;
 
   @ApiProperty({
+    type: Number,
+    description: 'Assigned start, in minutes from visitDate at UTC midnight; distinct from the allowed service window.',
+  })
+  plannedStartMinute!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'Assigned end, in minutes from visitDate at UTC midnight; 1440 denotes the following midnight.',
+  })
+  plannedEndMinute!: number;
+
+  @ApiProperty({
     type: String,
     nullable: true,
     format: 'uuid',

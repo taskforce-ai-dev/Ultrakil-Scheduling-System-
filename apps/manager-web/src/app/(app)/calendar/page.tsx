@@ -63,6 +63,7 @@ const MAX_CHIPS_PER_MONTH_CELL = 3;
 function stageOf(entry: CalendarEntry): Exclude<StageFilter, "ALL"> {
   if (entry.visitStatus === "COMPLETED" || entry.visitStatus === "CANCELLED") return "DONE";
   if (!entry.assignment) return "UNASSIGNED";
+  if (entry.assignment.status === "COMPLETED") return "DONE";
   if (entry.assignment.status === "DRAFT" || entry.assignment.status === "PROPOSED") return "DRAFT";
   return "PUBLISHED";
 }
@@ -110,6 +111,15 @@ const BRANCH_DOT: Record<"COLOMBO" | "KANDY", string> = {
   KANDY: "bg-violet-500",
 };
 
+function startMinute(entry: CalendarEntry): number {
+  return entry.assignment?.plannedStartMinute ?? entry.windowStartMinute;
+}
+
+function timeRange(entry: CalendarEntry): string {
+  const end = entry.assignment?.plannedEndMinute ?? entry.windowEndMinute;
+  return `${formatMinuteOfDay(startMinute(entry))}–${formatMinuteOfDay(end)}`;
+}
+
 function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void }) {
   const stage = stageOf(entry);
   const style = STAGE_STYLES[stage];
@@ -119,19 +129,19 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${entry.customerName} at ${formatMinuteOfDay(entry.windowStartMinute)} on ${entry.visitDate}, ${style.label.toLowerCase()}`}
+      aria-label={`${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`}
       className={cn(
-        "flex w-full items-center gap-1 rounded border px-1.5 py-1 text-left text-xs transition-colors",
+        "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
       )}
     >
+      <span className="w-full tabular-nums opacity-80">
+        {timeRange(entry)}
+      </span>
       <span
         aria-hidden="true"
         className={cn("h-1.5 w-1.5 shrink-0 rounded-full", BRANCH_DOT[entry.branchCode])}
       />
-      <span className="shrink-0 tabular-nums opacity-80">
-        {formatMinuteOfDay(entry.windowStartMinute)}
-      </span>
       <span className="min-w-0 flex-1 truncate font-medium">{entry.customerName}</span>
       {crewCount > 0 && (
         <span className="flex shrink-0 items-center gap-0.5 opacity-80">
@@ -165,8 +175,7 @@ function DetailDialog({
               <DialogTitle>{entry.customerName}</DialogTitle>
               <DialogDescription>
                 {entry.siteName} — {formatLongDate(entry.visitDate)},{" "}
-                {formatMinuteOfDay(entry.windowStartMinute)}–
-                {formatMinuteOfDay(entry.windowEndMinute)}
+                {timeRange(entry)}
               </DialogDescription>
             </DialogHeader>
 
@@ -268,10 +277,12 @@ export default function CalendarPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [openEntry, setOpenEntry] = React.useState<CalendarEntry | null>(null);
+  const requestGeneration = React.useRef(0);
 
   const { from, to } = rangeForView(anchor, view);
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     fetchCalendar({
@@ -279,8 +290,11 @@ export default function CalendarPage() {
       to,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
     })
-      .then((response) => setEntries(response.items))
+      .then((response) => {
+        if (generation === requestGeneration.current) setEntries(response.items);
+      })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
@@ -290,12 +304,17 @@ export default function CalendarPage() {
               }),
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [from, to, branch]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    return () => {
+      requestGeneration.current += 1;
+    };
   }, [load]);
 
   const visible = React.useMemo(
@@ -311,7 +330,7 @@ export default function CalendarPage() {
       else grouped.set(entry.visitDate, [entry]);
     }
     for (const bucket of grouped.values()) {
-      bucket.sort((left, right) => left.windowStartMinute - right.windowStartMinute);
+      bucket.sort((left, right) => startMinute(left) - startMinute(right));
     }
     return grouped;
   }, [visible]);

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -26,7 +26,11 @@ const published = buildCalendarEntry({
   customerName: "Cinnamon Grand Colombo",
   branchCode: "COLOMBO",
   instructions: "Focus on the kitchen and store room.",
+  windowStartMinute: 540,
+  windowEndMinute: 1020,
   assignment: buildCalendarAssignment({
+    plannedStartMinute: 540,
+    plannedEndMinute: 690,
     status: "PUBLISHED",
     publishedAt: "2026-09-01T10:00:00.000Z",
     crew: [
@@ -63,6 +67,79 @@ beforeEach(() => {
 });
 
 describe("CalendarPage", () => {
+  it("uses the assigned appointment time in the chip and detail, not the permitted window", async () => {
+    const user = userEvent.setup();
+    render(<CalendarPage />);
+    const chip = await screen.findByRole("button", {
+      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayIso()}, published`,
+    });
+    expect(within(chip).getByText("09:00–11:30")).toBeInTheDocument();
+    await user.click(chip);
+    expect(within(await screen.findByRole("dialog")).getByText(/09:00–11:30/)).toBeInTheDocument();
+    expect(screen.queryByText(/09:00–17:00/)).not.toBeInTheDocument();
+  });
+
+  it("sorts by assigned start time and uses the allowed window for unassigned visits", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({ items: [
+      { ...published, windowStartMinute: 480, assignment: buildCalendarAssignment({
+        plannedStartMinute: 660, plannedEndMinute: 750,
+      }) },
+      { ...unassigned, windowStartMinute: 600, windowEndMinute: 1020 },
+    ], total: 2 });
+    render(<CalendarPage />);
+    const earlier = await screen.findByRole("button", {
+      name: `Grandview Hotel at 10:00–17:00 on ${todayIso()}, needs a crew`,
+    });
+    const later = screen.getByRole("button", { name: /Cinnamon Grand Colombo at 11:00–12:30/ });
+    expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it.each(["assignment", "visit", "cancelled visit"])("shows completed stage for a %s", async (source) => {
+    vi.mocked(fetchCalendar).mockResolvedValue({ items: [{
+      ...published,
+      visitStatus: source === "visit" ? "COMPLETED" : source === "cancelled visit" ? "CANCELLED" : "SCHEDULED",
+      assignment: buildCalendarAssignment({ status: source === "assignment" ? "COMPLETED" : "PUBLISHED" }),
+    }], total: 1 });
+    render(<CalendarPage />);
+    expect(await screen.findByRole("button", { name: /Cinnamon Grand Colombo.*completed \/ cancelled/ })).toBeInTheDocument();
+    expect(screen.getByText("Completed / cancelled (1)")).toBeInTheDocument();
+    expect(screen.getByText("Published (0)")).toBeInTheDocument();
+  });
+
+  it.each(["success", "failure"])("ignores an older request's %s after a newer success", async (outcome) => {
+    const user = userEvent.setup();
+    const older = deferred<Awaited<ReturnType<typeof fetchCalendar>>>();
+    const newer = deferred<Awaited<ReturnType<typeof fetchCalendar>>>();
+    vi.mocked(fetchCalendar).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    render(<CalendarPage />);
+    await user.click(screen.getByRole("button", { name: "Week" }));
+    expect(fetchCalendar).toHaveBeenCalledTimes(2);
+    await act(async () => newer.resolve({ items: [published], total: 1 }));
+    expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    await act(async () => {
+      if (outcome === "success") older.resolve({ items: [unassigned], total: 1 });
+      else older.reject(new Error("Old request failed"));
+    });
+    expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    expect(screen.queryByText("Grandview Hotel")).not.toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load the calendar")).not.toBeInTheDocument();
+  });
+
+  it("keeps loading the newest request when an older request finishes first", async () => {
+    const user = userEvent.setup();
+    const older = deferred<Awaited<ReturnType<typeof fetchCalendar>>>();
+    const newer = deferred<Awaited<ReturnType<typeof fetchCalendar>>>();
+    vi.mocked(fetchCalendar).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    render(<CalendarPage />);
+    await user.click(screen.getByRole("button", { name: "Week" }));
+    await act(async () => older.resolve({ items: [unassigned], total: 1 }));
+    expect(screen.queryByText("Grandview Hotel")).not.toBeInTheDocument();
+    expect(screen.queryByRole("grid")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing in this range")).not.toBeInTheDocument();
+    await act(async () => newer.resolve({ items: [published], total: 1 }));
+    expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+  });
+
   it("renders both an unassigned and a published visit for today", async () => {
     render(<CalendarPage />);
 
@@ -122,3 +199,13 @@ describe("CalendarPage", () => {
     expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

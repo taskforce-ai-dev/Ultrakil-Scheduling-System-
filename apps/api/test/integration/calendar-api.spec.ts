@@ -330,6 +330,14 @@ describe('unified calendar', () => {
     expect(entry.assignment.status).toBe('DRAFT');
     expect(entry.assignment.supervisorEmployeeId).toBe(supervisorId);
     expect(entry.assignment.crew).toHaveLength(2);
+    expect(entry.windowStartMinute).toBe(540);
+    expect(entry.windowEndMinute).toBe(1020);
+    expect(entry.assignment.plannedStartMinute).toBe(540);
+    expect(entry.assignment.plannedEndMinute).toBe(690);
+    expect(entry.assignment.vehicles).toEqual([{
+      vehicleId, label: `C07 Van ${suffix}`,
+      driverEmployeeId: supervisorId, driverName: `C07 Supervisor ${suffix}`,
+    }]);
   });
 
   it('leaves an unstaffed visit with a null assignment', async () => {
@@ -342,6 +350,21 @@ describe('unified calendar', () => {
 
     const entry = res.body.items.find((item: { visitId: string }) => item.visitId === visitId);
     expect(entry.assignment).toBeNull();
+  });
+
+  it('measures assignment times from the UTC visit date, preserving the next midnight', async () => {
+    const visitId = await makeVisit();
+    const assignmentId = await assignCrew(visitId);
+    // Isolate read-model arithmetic from daytime eligibility and local timezones.
+    await prisma.assignment.update({ where: { id: assignmentId }, data: {
+      plannedStart: new Date(`${VISIT_DATE}T23:30:00.000Z`),
+      plannedEnd: new Date('2026-09-10T00:00:00.000Z'),
+    } });
+    const res = await request(http).get('/api/schedule/calendar')
+      .set(auth(adminToken)).query(HORIZON);
+    expect(res.status).toBe(200);
+    const entry = res.body.items.find((item: { visitId: string }) => item.visitId === visitId);
+    expect(entry.assignment).toMatchObject({ plannedStartMinute: 1410, plannedEndMinute: 1440 });
   });
 });
 

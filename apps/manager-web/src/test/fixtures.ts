@@ -374,6 +374,8 @@ export function buildCalendarAssignment(
   return {
     id: "assignment-1",
     status: "DRAFT",
+    plannedStartMinute: 540,
+    plannedEndMinute: 630,
     supervisorEmployeeId: "employee-1",
     supervisorName: "A Perera",
     crew: [

@@ -93,6 +93,13 @@ the read model behind the manager portal's unified calendar page
 2-compatible crew-roster/instructions/status read model ULK-C07 asks for —
 the same row a PMS tablet could read later needs no reshaping.
 
+Visit `windowStartMinute`/`windowEndMinute` describe the allowed service window.
+When an assignment exists, its `plannedStartMinute`/`plannedEndMinute` describe
+the actual appointment, measured from `visitDate` at UTC midnight. The calendar
+uses those assigned times for labels, detail and ordering; only unassigned
+visits display the allowed window. Completed assignments show the completed
+stage even before the visit status is synchronized.
+
 `acknowledgedAt`/`startedAt`/`completedAt` on each assignment are the Phase 2
 worker-app hooks already carried on `Assignment` (see
 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#phase-2-compatibility)) — always

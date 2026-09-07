@@ -2323,6 +2323,9 @@
           },
           "404": {
             "description": "RESOURCE_NOT_FOUND"
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check."
           }
         },
         "security": [
@@ -5560,6 +5563,14 @@
               "SUPERSEDED"
             ]
           },
+          "plannedStartMinute": {
+            "type": "number",
+            "description": "Assigned start, in minutes from visitDate at UTC midnight; distinct from the allowed service window."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "description": "Assigned end, in minutes from visitDate at UTC midnight; 1440 denotes the following midnight."
+          },
           "supervisorEmployeeId": {
             "type": "string",
             "nullable": true,
@@ -5613,6 +5624,8 @@
         "required": [
           "id",
           "status",
+          "plannedStartMinute",
+          "plannedEndMinute",
           "supervisorEmployeeId",
           "supervisorName",
           "crew",

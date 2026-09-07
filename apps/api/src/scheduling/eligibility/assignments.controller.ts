@@ -43,6 +43,10 @@ export class AssignmentsController {
   })
   @ApiResponse({ status: 200, type: EligibilityResultDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  @ApiResponse({
+    status: 409,
+    description: 'RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check.',
+  })
   check(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignCrewDto,

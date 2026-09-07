@@ -1979,6 +1979,10 @@ export interface components {
             id: string;
             /** @enum {string} */
             status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /** @description Assigned start, in minutes from visitDate at UTC midnight; distinct from the allowed service window. */
+            plannedStartMinute: number;
+            /** @description Assigned end, in minutes from visitDate at UTC midnight; 1440 denotes the following midnight. */
+            plannedEndMinute: number;
             /**
              * Format: uuid
              * @description The employee carrying the required PMS-grade supervisor on this crew.
@@ -3854,6 +3858,13 @@ export interface operations {
             };
             /** @description RESOURCE_NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

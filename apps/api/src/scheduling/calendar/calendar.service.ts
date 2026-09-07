@@ -141,6 +141,12 @@ function toCalendarEntry(visit: VisitWithCalendarRelations): CalendarEntryDto {
       ? {
           id: assignment.id,
           status: assignment.status,
+          plannedStartMinute: Math.round(
+            (assignment.plannedStart.getTime() - visit.visitDate.getTime()) / 60_000,
+          ),
+          plannedEndMinute: Math.round(
+            (assignment.plannedEnd.getTime() - visit.visitDate.getTime()) / 60_000,
+          ),
           supervisorEmployeeId:
             assignment.crewMembers.find((member) => member.isPmsSupervisor)?.employeeId ?? null,
           supervisorName:
