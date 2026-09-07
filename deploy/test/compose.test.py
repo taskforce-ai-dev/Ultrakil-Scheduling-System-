@@ -83,6 +83,29 @@ class StagingComposeTest(unittest.TestCase):
         self.assertIn('"apps/manager-web/server.js"', web)
         self.assertNotIn("COPY --from=build /workspace /workspace", web)
 
+    def test_backup_is_private_testable_and_has_a_staleness_probe(self):
+        backup = self.services["backup"]
+        self.assertEqual(backup["command"], ["schedule"])
+        self.assertEqual(backup["build"]["dockerfile"], "deploy/recovery.Dockerfile")
+        self.assertIn("BACKUP_UID", backup["user"])
+        self.assertTrue(backup["read_only"])
+        self.assertEqual(backup["healthcheck"]["test"], ["CMD", "python3", "/opt/ultrakil/recovery.py", "health"])
+        mount = backup["volumes"][0]
+        self.assertEqual(mount["target"], "/backups")
+        self.assertFalse(mount["bind"]["create_host_path"])
+        self.assertNotIn("postgres_backups", self.config["volumes"])
+
+    def test_optional_export_has_separate_egress_and_read_only_backup_access(self):
+        exporter = self.services["backup-export"]
+        self.assertEqual(exporter["profiles"], ["offhost"])
+        self.assertEqual(exporter["networks"], ["export-egress"])
+        self.assertNotIn("PGPASSWORD", exporter["environment"])
+        mounts = {mount["target"]: mount for mount in exporter["volumes"]}
+        self.assertTrue(mounts["/backups"]["read_only"])
+        self.assertTrue(mounts["/export-secrets/ssh-key"]["read_only"])
+        self.assertTrue(mounts["/export-secrets/known-hosts"]["read_only"])
+        self.assertFalse(self.config["networks"]["export-egress"].get("internal", False))
+
     def test_every_build_context_excludes_private_inputs_at_any_depth(self):
         # Scanner rules use /i. Docker does not: every alphabetic literal in
         # every category must explicitly match either letter case.
@@ -90,6 +113,7 @@ class StagingComposeTest(unittest.TestCase):
             "**/*.env", "**/*.env.*", "**/*.xls", "**/*.xlsx", "**/*.xlsm", "**/*.csv",
             "**/matrix-mapping.json", "**/job-types.json", "**/*import-report*.json",
             "**/incoming", "**/private", "**/reports", "**/backups", "**/import-reports",
+            "**/export-work", "**/export-secrets", "**/*.age",
             "**/*.sql.gz", "**/*.sql.xz", "**/*.sql.zip", "**/*.dump", "**/*.backup",
             "**/*.bak", "**/*.pgdump", "**/*.pem", "**/*.key",
         ]

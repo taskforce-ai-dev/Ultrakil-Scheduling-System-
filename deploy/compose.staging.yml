@@ -251,7 +251,11 @@ services:
     logging: *default-logging
 
   backup:
-    image: postgres:16.15-alpine3.23
+    <<: *runtime
+    build:
+      context: ..
+      dockerfile: deploy/recovery.Dockerfile
+    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
     mem_limit: 128m
     cpus: 0.5
     pids_limit: 64
@@ -263,30 +267,70 @@ services:
       PGDATABASE: ${POSTGRES_DB}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
-    command:
-      - sh
-      - -ec
-      - |
-        while true; do
-          target="/backups/ultrakil-$$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
-          pg_dump --no-owner --no-acl | gzip > "$$target"
-          gzip -t "$$target"
-          find /backups -type f -name 'ultrakil-*.sql.gz' -mtime "+$$BACKUP_RETENTION_DAYS" -delete
-          sleep "$$BACKUP_INTERVAL_SECONDS"
-        done
+      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-93600}
+    command: ["schedule"]
     volumes:
-      - postgres_backups:/backups
+      - type: bind
+        source: ${BACKUP_DIR:?Set BACKUP_DIR}
+        target: /backups
+        bind: {create_host_path: false}
     networks: [backend]
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "/opt/ultrakil/recovery.py", "health"]
+      interval: 5m
+      timeout: 60s
+      retries: 1
+      start_period: 5m
     logging: *default-logging
+
+  backup-export:
+    <<: *runtime
+    profiles: [offhost]
+    build:
+      context: ..
+      dockerfile: deploy/recovery.Dockerfile
+    user: "${BACKUP_UID:-1000}:${BACKUP_GID:-1000}"
+    restart: "no"
+    mem_limit: 256m
+    cpus: 0.5
+    command: ["export"]
+    environment:
+      EXPORT_AGE_RECIPIENT: ${EXPORT_AGE_RECIPIENT:-}
+      EXPORT_SSH_HOST: ${EXPORT_SSH_HOST:-}
+      EXPORT_SSH_PORT: ${EXPORT_SSH_PORT:-22}
+      EXPORT_SSH_USER: ${EXPORT_SSH_USER:-}
+      EXPORT_REMOTE_DIR: ${EXPORT_REMOTE_DIR:-}
+      EXPORT_WORK_DIR: /export-work
+    volumes:
+      - type: bind
+        source: ${BACKUP_DIR:?Set BACKUP_DIR}
+        target: /backups
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${EXPORT_WORK_DIR:-/opt/ultrakil/export-work}
+        target: /export-work
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${EXPORT_SSH_KEY_PATH:-/opt/ultrakil/export-secrets/ssh-key}
+        target: /export-secrets/ssh-key
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${EXPORT_KNOWN_HOSTS_PATH:-/opt/ultrakil/export-secrets/known-hosts}
+        target: /export-secrets/known-hosts
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [export-egress]
 
 networks:
   backend:
     internal: true
+  export-egress: {}
 
 volumes:
   postgres_data:
   redis_data:
-  postgres_backups:

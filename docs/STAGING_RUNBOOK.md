@@ -27,7 +27,7 @@ Create the deployment and import directories:
 test "$(id -u)" -ne 0
 sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" \
   /opt/ultrakil/app /opt/ultrakil/import /opt/ultrakil/import-config \
-  /opt/ultrakil/import-reports
+  /opt/ultrakil/import-reports /opt/ultrakil/backups
 ```
 
 Clone the repository into `/opt/ultrakil/app`, check out the exact reviewed
@@ -56,11 +56,17 @@ Set `IMPORT_UID` and `IMPORT_GID` to the deployment operator's numeric
 `id -u` and `id -g`, never zero. The nonroot import runner uses these IDs, so
 operator-owned 0600 workbooks remain readable without granting public access.
 Do not grant the API process access to the private inputs or report directory.
+Set `BACKUP_UID`/`BACKUP_GID` to the same operator IDs and `BACKUP_DIR` to the
+operator-owned 0700 backup directory. The backup tool refuses other ownership,
+group/world access and symlinks. Its bind mount never creates a missing host path.
 
 Give every validation stack a unique `COMPOSE_PROJECT_NAME`, for example
 `ultrakil-validation-20260907-01`, and a new database ending in `_test`.
 Use the same project name for every command; volumes and the BullMQ prefix are
 scoped to it. Never run the destructive integration suites against staging.
+Give each stack its own `BACKUP_DIR`, import/report directories and export work
+directory as well: bind-mounted host paths are not scoped by the Compose project
+name. Never point a disposable validation stack at the staging backup directory.
 
 Set `NEXT_PUBLIC_API_BASE_URL` and `API_CORS_ORIGINS` to the browser-visible
 staging URLs. The API URL is baked into the portal image, so rebuild `web` after
@@ -133,6 +139,7 @@ Then load the clean staging database:
 ```bash
 compose run --rm import node deploy/staging-tool.mjs import
 compose up -d --wait api web
+compose up -d --wait backup
 ```
 
 The dedicated tooling image invokes packaged Prisma/tsx with Node directly;
@@ -204,24 +211,124 @@ That is an operational data blocker, not permission to weaken the PMS rule.
 
 ## 7. Backup and restore proof
 
-The `backup` service writes one compressed logical backup per day and retains
-seven days. Confirm the first archive and its gzip checksum:
+The `backup` service writes an immediate backup on startup, then one per day.
+It uses PostgreSQL 16's compressed custom format (`pg_dump --format=custom
+--file`), checks the process exit status, archive header and `pg_restore --list`,
+and calculates SHA-256. This avoids a compression pipeline masking dump errors.
+The archive and manifest are built in one private temporary directory on the
+backup filesystem, fsynced, then published using atomic hard links that cannot
+overwrite existing names. The `.dump.sha256` manifest is the completion marker;
+an archive without its valid manifest is never a usable backup. Files are 0600.
+
+Seven-day retention runs only after successful publication and deletes only
+exact UltraKIL archive/manifest pairs owned by the operator with matching
+checksums. Unrelated, corrupt, symlinked and incomplete files are preserved for
+inspection. Graceful interruption removes only that invocation's temporary
+files and any incomplete publication it created. SIGKILL, host loss or filesystem
+failure can leave a private `.pending-*` directory or an unmarked archive;
+inspect it and remove only its explicit validated path. Never bulk-delete the
+backup directory. These incomplete files cannot pass verification or restore.
+
+Create a one-shot backup before a release or rollback and keep its JSON evidence:
 
 ```bash
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml exec backup sh -c 'ls -lh /backups && gzip -t /backups/*.sql.gz'
+compose run --rm --no-deps backup backup
+compose exec backup python3 /opt/ultrakil/recovery.py health
 ```
 
-Test restore into a disposable database, never over the active staging
-database:
+Set `archive` to the exact `/backups/...dump` path returned by that command,
+not an arbitrary newest filename. Use a new unique restore target each time:
 
 ```bash
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml exec postgres sh -c 'createdb -U "$$POSTGRES_USER" ultrakil_restore_test'
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml exec backup sh -c 'gzip -dc "$$(ls -1t /backups/ultrakil-*.sql.gz | head -1)"' | docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml exec -T postgres sh -c 'psql -U "$$POSTGRES_USER" -d ultrakil_restore_test'
-docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml exec postgres sh -c 'dropdb -U "$$POSTGRES_USER" ultrakil_restore_test'
+archive='/backups/ultrakil-YYYYMMDDTHHMMSSZ-12hex.dump' # replace with recorded path
+restore_target='ultrakil_restore_20260907_01_test'     # replace with a new ID
+compose run --rm --no-deps backup verify "$archive"
+compose run --rm --no-deps backup restore "$archive" "$restore_target"
 ```
 
-Record the backup filename, size, checksum result and disposable restore result
-in C08. Never attach the database dump itself.
+Restore accepts only a new `ultrakil_restore_<id>_test` database, distinct from
+the configured source. It refuses unsafe names, an existing target, missing or
+malformed manifests, corrupt archives and symlinks before creating anything.
+It revokes public connection access, marks the target as disposable, and uses
+`pg_restore --single-transaction --exit-on-error --no-owner --no-acl`. The tool
+checks 26 required tables, at least nine successful migrations, no unfinished
+migration, no reactivated imported-inactive records and no duplicate outbox
+keys. It emits only numeric workforce/authorization/assignment/outbox/inactive/
+history counts. Compare those with the pre-change count evidence in a quiescent
+release window. A format check or a checksum alone is not restore proof.
+
+Failed restores preserve the disposable database for authorized inspection;
+client messages that could contain private rows are withheld from shared logs.
+After reviewing the evidence, remove only the exact database created above:
+
+```bash
+compose run --rm --no-deps backup cleanup "$restore_target"
+```
+
+Cleanup refuses the source database, unsafe names and databases without the
+tool's disposable marker. It does not force-disconnect active sessions. It can
+remove a marked failed restore after its evidence is reviewed. If creating the
+marker itself failed, cleanup refuses; inspect that exact new target before a
+separately approved manual removal. This tool never replaces the staging DB.
+
+The health probe fails when no completed backup exists, its timestamp is more
+than `BACKUP_MAX_AGE_SECONDS` old (26 hours by default), or the newest completed
+archive fails its checksum/format check. Keep the limit above the configured
+daily interval and alert the operator on an unhealthy container; Docker health
+alone does not send an alert. Host clock synchronization is required.
+
+Record filename, bytes, checksum, restore counts and exact cleanup result in
+C08. Never attach archives, private reports, decrypted bundles or SQL logs.
+
+### Optional encrypted off-host copy
+
+The `offhost` profile is disabled until Thivarrakesh supplies an authorized SSH
+destination/user/path, upload credential, independently verified SSH host key,
+an age public recipient, and a separately held recovery identity with a named
+custodian and tested access procedure. Agree remote retention, capacity and
+server-side immutability before enabling it. The decryption identity must never
+be stored on the staging host or in this repository. Local backups alone do not
+survive loss of the host.
+
+Create operator-owned 0700 `/opt/ultrakil/export-work` and
+`/opt/ultrakil/export-secrets`; put the upload key and pinned `known-hosts` file
+at the configured exact paths with mode 0600. Reserve at least twice the largest
+archive size in the work directory for the temporary plaintext bundle and
+encrypted output. Fill the `EXPORT_*` settings in the private staging env file.
+The remote directory must already exist and be dedicated to UltraKIL. The
+upload account should have no application/database privileges.
+
+```bash
+compose --profile offhost build backup-export
+compose --profile offhost run --rm --no-deps backup-export export "$archive"
+```
+
+The exporter verifies the local pair, packages that archive and its original
+manifest, encrypts it with age, then uploads only ciphertext with an outer
+SHA-256 manifest. Temporary remote names are renamed after successful transfer,
+and the remote manifest is published last. SSH uses batch mode and strict host
+key checking. The service has read-only backup/key mounts, no DB password and
+its own egress network; the application network stays private. Output reports
+transfer success separately from remote restore proof. A failed transfer can
+leave encrypted `.part` files remotely; retain them for operator inspection,
+then remove only exact names. No remote deletion/retention is automated here.
+
+For an independent recovery drill, retrieve one exact completed encrypted pair
+on the authorized recovery host; verify its outer checksum, decrypt the bundle
+using the vault-held age identity, list its two expected archive/manifest names
+before extracting into a new 0700 directory, and run `verify` then `restore`
+against an isolated PostgreSQL 16 instance. Record count-only results. Do not
+declare off-host recovery operational until this drill actually succeeds.
+
+Local reproducible tests (synthetic data only):
+
+```bash
+python3 deploy/test/recovery.test.py
+python3 deploy/test/compose.test.py
+# PostgreSQL 16 client tools must be on PATH. The test requires explicit local
+# PGHOST/PGPORT/PGUSER and installed API dependencies; it creates its own DBs.
+PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/recovery.postgres.test.py
+```
 
 ## 8. Rollback
 
