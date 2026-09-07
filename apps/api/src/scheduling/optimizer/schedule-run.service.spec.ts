@@ -35,6 +35,7 @@ function fixture(
   const answer = deferred<SolveResponse>();
   const visit = {
     id: 'visit',
+    updatedAt: new Date('2027-02-01T00:00:00Z'),
     branchId: 'branch',
     branchCode: BranchCode.COLOMBO,
     visitDate: new Date('2027-03-03T00:00:00Z'),
@@ -246,6 +247,66 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it.each(
+    ['present', 'absent'].flatMap((snapshot) =>
+      ['same-date', 'moved-date', 'rejected', 'unassigned'].flatMap((outcome) =>
+        ['after-snapshot', 'before-persistence'].map((barrier) => ({
+          snapshot,
+          outcome,
+          barrier,
+        })),
+      ),
+    ),
+  )(
+    'rejects a revised visit for $outcome with $snapshot snapshot at $barrier',
+    async ({ snapshot, outcome, barrier }) => {
+      const f = fixture(outcome === 'same-date' ? '2027-03-03' : '2027-03-04');
+      if (snapshot === 'absent') f.assignments.length = 0;
+      if (outcome === 'rejected') {
+        f.eligibility.evaluate.mockResolvedValue({
+          isEligible: false,
+          conflicts: [],
+        });
+      }
+      const adjust = () =>
+        Object.assign(f.visit, {
+          updatedAt: new Date('2027-02-01T00:00:01Z'),
+          durationMinutes: 120,
+          requiredCrewSize: 2,
+          windowEndMinute: 900,
+        });
+      if (barrier === 'before-persistence') {
+        f.prisma.$transaction.mockImplementationOnce(async (work) => {
+          if (outcome !== 'unassigned')
+            expect(f.eligibility.evaluate).toHaveBeenCalledTimes(1);
+          adjust();
+          return work(f.tx);
+        });
+      }
+      const result = f.processor.process(f.job).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await f.started.promise;
+      if (barrier === 'after-snapshot') adjust();
+      f.release(outcome === 'unassigned');
+      expect(await result).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.visit).toMatchObject({
+        durationMinutes: 120,
+        requiredCrewSize: 2,
+        windowEndMinute: 900,
+      });
+      expect(f.assignment.deleteMany).not.toHaveBeenCalled();
+      expect(f.assignment.updateMany).not.toHaveBeenCalled();
+      expect(f.assignment.create).not.toHaveBeenCalled();
+      expect(f.generatedVisit.update).not.toHaveBeenCalled();
+      expect(f.reasons.deleteMany).not.toHaveBeenCalled();
+      expect(f.reasons.createMany).not.toHaveBeenCalled();
+      expect(f.outbox).toEqual([]);
+      expect(f.assignments).toHaveLength(snapshot === 'present' ? 1 : 0);
+    },
+  );
+
   it.each(['assignment', 'unassigned'])(
     'accepts %s when the snapshot and current visit both have no assignment',
     async (outcome) => {

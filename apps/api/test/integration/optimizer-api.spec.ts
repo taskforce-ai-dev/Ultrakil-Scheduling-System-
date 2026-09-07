@@ -562,6 +562,146 @@ async function manualPublicationFixture(withDraft = true) {
 }
 
 describe('standard writer publication protocol', () => {
+  it.each(
+    ['present', 'absent'].flatMap((snapshot) =>
+      ['same-date', 'moved-date', 'rejected', 'unassigned'].map((outcome) => ({
+        snapshot,
+        outcome,
+      })),
+    ),
+  )(
+    'rejects a stale $outcome solve after eligibility and adjustment with $snapshot assignment snapshot',
+    async ({ snapshot, outcome }) => {
+      const f = await manualPublicationFixture(snapshot === 'present');
+      const staleRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'QUEUED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      const ready = deferred<void>();
+      const resume = deferred<void>();
+      let evaluated = false;
+      const probe = transactionProbe(false, async () => {
+        if (outcome !== 'unassigned') expect(evaluated).toBe(true);
+        ready.resolve();
+        await resume.promise;
+      });
+      const eligibility = app.get(EligibilityService);
+      const service = new ScheduleRunService(
+        probe.client,
+        {
+          solve: async () => ({
+            run_id: staleRun.id,
+            status: 'OPTIMAL',
+            solve_seconds: 0,
+            objective_value: 0,
+            visits_considered: 1,
+            assignments:
+              outcome === 'unassigned'
+                ? []
+                : [
+                    {
+                      visit_id: f.visitId,
+                      employee_ids:
+                        outcome === 'rejected'
+                          ? []
+                          : [supervisorIds[0], technicianIds[0]],
+                      vehicles: [],
+                      start_minute: 540,
+                      scheduled_date:
+                        outcome === 'same-date' ? '2027-03-03' : '2027-03-04',
+                    },
+                  ],
+            unassigned:
+              outcome === 'unassigned'
+                ? [
+                    {
+                      visit_id: f.visitId,
+                      reason_codes: ['NO_CREW'],
+                      message: 'No crew',
+                    },
+                  ]
+                : [],
+          }),
+        } as unknown as SchedulerClient,
+        {
+          evaluate: async (
+            ...args: Parameters<EligibilityService['evaluate']>
+          ) => {
+            const result = await eligibility.evaluate(...args);
+            expect(result.isEligible).toBe(outcome !== 'rejected');
+            evaluated = true;
+            return result;
+          },
+        } as EligibilityService,
+        app.get(AuditService),
+      );
+      const pending = service.execute(staleRun.id).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await ready.promise;
+        await app.get(VisitsService).adjust(
+          f.visitId,
+          {
+            durationMinutes: 120,
+            windowEndMinute: 900,
+          },
+          f.actor,
+        );
+        const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: f.visitId },
+        });
+        const assignmentsBefore = await prisma.assignment.findMany({
+          where: { generatedVisitId: f.visitId },
+          include: { crewMembers: true },
+          orderBy: { id: 'asc' },
+        });
+        const reasonsBefore = await prisma.visitUnassignedReason.findMany({
+          where: { generatedVisitId: f.visitId },
+          orderBy: { id: 'asc' },
+        });
+        const outboxBefore = await prisma.assignmentNotificationOutbox.findMany(
+          {
+            where: { assignment: { generatedVisitId: f.visitId } },
+            orderBy: { id: 'asc' },
+          },
+        );
+        resume.resolve();
+        expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+        expect(
+          await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+        ).toEqual(visitBefore);
+        expect(
+          await prisma.assignment.findMany({
+            where: { generatedVisitId: f.visitId },
+            include: { crewMembers: true },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(assignmentsBefore);
+        expect(
+          await prisma.visitUnassignedReason.findMany({
+            where: { generatedVisitId: f.visitId },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(reasonsBefore);
+        expect(
+          await prisma.assignmentNotificationOutbox.findMany({
+            where: { assignment: { generatedVisitId: f.visitId } },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(outboxBefore);
+      } finally {
+        resume.resolve();
+        await pending;
+      }
+    },
+  );
+
   it('preserves a draft and visit when an adjustment violates crew eligibility', async () => {
     const f = await manualPublicationFixture();
     const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({

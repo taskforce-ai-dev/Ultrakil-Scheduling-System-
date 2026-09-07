@@ -3,7 +3,19 @@ import { AssignmentStatus, Prisma } from '@prisma/client';
 
 import { AppException } from '../../common/errors/app.exception';
 
-/** All solver/publication writes lock visits before touching their assignments. */
+/** Compare the exact plan/solve revision only after acquiring the visit lock. */
+export function assertVisitRevision(visitId: string, expected: Date, current: Date) {
+  if (expected.getTime() !== current.getTime()) {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'A visit changed while this schedule was being prepared. Refresh and try again.',
+      HttpStatus.CONFLICT,
+      { visitId },
+    );
+  }
+}
+
+/** All schedule writers lock visits before changing visits or assignments. */
 export async function lockScheduleVisits(
   tx: Prisma.TransactionClient,
   visitIds: string[],

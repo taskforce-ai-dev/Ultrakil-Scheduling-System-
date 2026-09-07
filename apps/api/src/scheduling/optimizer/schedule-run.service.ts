@@ -16,7 +16,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
-import { assertScheduleSnapshot, lockScheduleVisits } from './schedule-visit-lock';
+import { assertScheduleSnapshot, assertVisitRevision, lockScheduleVisits } from './schedule-visit-lock';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
@@ -318,7 +318,7 @@ export class ScheduleRunService {
         continue;
       }
 
-      await this.persist(runId, visit.id, dto, existing?.id, proposedVisit);
+      await this.persist(runId, visit.id, visit.updatedAt, dto, existing?.id, proposedVisit);
       scheduled += 1;
     }
 
@@ -335,12 +335,19 @@ export class ScheduleRunService {
 
     await this.recordUnassigned(
       runId,
-      unassigned.map((entry) => ({
-        ...entry,
-        replaceAssignmentId: byId.get(entry.visitId)?.assignments.find((assignment) =>
-          REPLACEABLE_STATUSES.includes(assignment.status),
-        )?.id,
-      })),
+      unassigned.map((entry) => {
+        const visit = byId.get(entry.visitId);
+        if (!visit) {
+          throw new AppException('RESOURCE_CONFLICT', 'The solver returned a visit outside its snapshot.', HttpStatus.CONFLICT, { visitId: entry.visitId });
+        }
+        return {
+          ...entry,
+          expectedUpdatedAt: visit.updatedAt,
+          replaceAssignmentId: visit.assignments.find((assignment) =>
+            REPLACEABLE_STATUSES.includes(assignment.status),
+          )?.id,
+        };
+      }),
     );
 
     return this.finish(runId, scheduled, unassigned.length);
@@ -466,6 +473,7 @@ export class ScheduleRunService {
   private async persist(
     runId: string,
     visitId: string,
+    expectedUpdatedAt: Date,
     dto: {
       plannedStartMinute: number;
       plannedEndMinute: number;
@@ -486,8 +494,9 @@ export class ScheduleRunService {
       await assertScheduleSnapshot(tx, visitId, replaceAssignmentId);
       const visit = await tx.generatedVisit.findUniqueOrThrow({
         where: { id: visitId },
-        select: { visitDate: true, branchId: true, branchCode: true },
+        select: { visitDate: true, branchId: true, branchCode: true, updatedAt: true },
       });
+      assertVisitRevision(visitId, expectedUpdatedAt, visit.updatedAt);
       const at = (minute: number) =>
         new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
 
@@ -540,7 +549,7 @@ export class ScheduleRunService {
 
   private async recordUnassigned(
     runId: string,
-    entries: { visitId: string; codes: string[]; message: string; replaceAssignmentId?: string }[],
+    entries: { visitId: string; expectedUpdatedAt: Date; codes: string[]; message: string; replaceAssignmentId?: string }[],
   ) {
     if (entries.length === 0) return;
 
@@ -548,6 +557,13 @@ export class ScheduleRunService {
       await lockScheduleVisits(tx, entries.map((entry) => entry.visitId));
       for (const entry of entries) {
         await assertScheduleSnapshot(tx, entry.visitId, entry.replaceAssignmentId);
+        const visit = await tx.generatedVisit.findUniqueOrThrow({
+          where: { id: entry.visitId },
+          select: { updatedAt: true },
+        });
+        assertVisitRevision(entry.visitId, entry.expectedUpdatedAt, visit.updatedAt);
+      }
+      for (const entry of entries) {
         if (entry.replaceAssignmentId) {
           // Keep the rejected draft as history, but make it unpublishable in
           // the same transaction that puts its visit in the unassigned queue.

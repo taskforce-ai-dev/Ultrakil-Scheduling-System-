@@ -33,6 +33,8 @@ export interface RequiredVisit {
 /** A visit already in the calendar. */
 export interface ExistingVisit {
   id: string;
+  /** Internal optimistic fence; never part of the impact DTO. */
+  updatedAt: Date;
   serviceAgreementId: string;
   visitDate: string;
   windowStartMinute: number;
@@ -67,7 +69,9 @@ const PROTECTED_STATUSES: Record<string, ProtectionReason> = {
 };
 
 /** Why this visit cannot be touched, or null when it can. */
-export function protectionReasonFor(visit: ExistingVisit): ProtectionReason | null {
+export function protectionReasonFor(
+  visit: Omit<ExistingVisit, 'updatedAt'>,
+): ProtectionReason | null {
   if (visit.isLocked) return 'LOCKED';
   if (visit.isManuallyAdjusted) return 'MANUALLY_ADJUSTED';
   if (PROTECTED_STATUSES[visit.status]) return PROTECTED_STATUSES[visit.status];
@@ -82,6 +86,7 @@ export interface PlannedAddition {
 
 export interface PlannedUpdate {
   visitId: string;
+  expectedUpdatedAt: Date;
   required: RequiredVisit;
   /** Field-by-field, so a manager can see exactly what would move. */
   changes: { field: string; from: number | string; to: number | string }[];
@@ -89,6 +94,7 @@ export interface PlannedUpdate {
 
 export interface PlannedRemoval {
   visitId: string;
+  expectedUpdatedAt: Date;
   serviceAgreementId: string;
   visitDate: string;
   /** Why the agreement no longer asks for it. */
@@ -209,7 +215,7 @@ export function planGeneration(
       continue;
     }
 
-    plan.updates.push({ visitId: found.id, required: want, changes });
+    plan.updates.push({ visitId: found.id, expectedUpdatedAt: found.updatedAt, required: want, changes });
   }
 
   // Anything left over is no longer required by the agreement.
@@ -230,6 +236,7 @@ export function planGeneration(
 
     plan.removals.push({
       visitId: visit.id,
+      expectedUpdatedAt: visit.updatedAt,
       serviceAgreementId: visit.serviceAgreementId,
       visitDate: visit.visitDate,
       reason: 'NO_LONGER_REQUIRED',
