@@ -21,6 +21,16 @@ const LIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.IN_PROGRESS,
 ];
 
+interface EligibilityOptions {
+  excludeAssignmentId?: string;
+  /** Evaluate a solver's proposed move without changing the stored visit. */
+  proposedVisit?: {
+    visitDate: Date;
+    windowStartMinute: number;
+    windowEndMinute: number;
+  };
+}
+
 /** Minutes from midnight, in the same UTC terms the visit window uses. */
 function minuteOfDay(moment: Date): number {
   return moment.getUTCHours() * 60 + moment.getUTCMinutes();
@@ -47,7 +57,7 @@ export class EligibilityService {
   async buildContext(
     visitId: string,
     proposal: AssignmentProposal,
-    options: { excludeAssignmentId?: string } = {},
+    options: EligibilityOptions = {},
   ): Promise<EligibilityContext> {
     const visit = await this.prisma.generatedVisit.findUnique({
       where: { id: visitId },
@@ -77,10 +87,11 @@ export class EligibilityService {
 
     const employeeIds = [...new Set(proposal.crew.map((member) => member.employeeId))];
     const vehicleIds = [...new Set(proposal.vehicles.map((entry) => entry.vehicleId))];
+    const timing = options.proposedVisit ?? visit;
 
     const [employees, vehicles, pmsCount] = await Promise.all([
-      this.loadEmployees(employeeIds, visit.visitDate, options.excludeAssignmentId),
-      this.loadVehicles(vehicleIds, visit.visitDate, options.excludeAssignmentId),
+      this.loadEmployees(employeeIds, timing.visitDate, options.excludeAssignmentId),
+      this.loadVehicles(vehicleIds, timing.visitDate, options.excludeAssignmentId),
       this.prisma.employee.count({
         where: { branchCode: visit.branchCode, isPmsGrade: true, isActive: true },
       }),
@@ -100,9 +111,9 @@ export class EligibilityService {
       visit: {
         id: visit.id,
         branchCode: visit.branchCode,
-        visitDate: visit.visitDate.toISOString().slice(0, 10),
-        windowStartMinute: visit.windowStartMinute,
-        windowEndMinute: visit.windowEndMinute,
+        visitDate: timing.visitDate.toISOString().slice(0, 10),
+        windowStartMinute: timing.windowStartMinute,
+        windowEndMinute: timing.windowEndMinute,
         durationMinutes: visit.durationMinutes,
         requiredCrewSize: visit.requiredCrewSize,
         serviceSiteId: visit.serviceAgreement.serviceSite.id,
@@ -123,7 +134,7 @@ export class EligibilityService {
   async evaluate(
     visitId: string,
     proposal: AssignmentProposal,
-    options: { excludeAssignmentId?: string } = {},
+    options: EligibilityOptions = {},
   ): Promise<EligibilityResult> {
     const context = await this.buildContext(visitId, proposal, options);
     return evaluateAssignment(proposal, context);

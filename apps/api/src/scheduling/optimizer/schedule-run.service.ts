@@ -263,35 +263,22 @@ export class ScheduleRunService {
       const visit = byId.get(proposal.visit_id);
       if (!visit) continue;
 
-      // The solver may have chosen a different allowed day. The move has to
-      // land before the engine re-checks, because the checks that matter most
-      // here — double-booking, the site being open — are answered against the
-      // date the visit is on. Validating the old date and writing the new one
-      // would be checking a schedule nobody is going to run.
-      const originalDate = visit.visitDate;
-      const originalWindowStart = visit.windowStartMinute;
-      const originalWindowEnd = visit.windowEndMinute;
+      // Validate the proposed date/window without changing the stored visit.
+      // A manager can publish the snapshotted draft while the solver runs;
+      // only the guarded persistence transaction may commit a move.
       const moved =
         proposal.scheduled_date !== undefined &&
         proposal.scheduled_date !== dateOnly(visit.visitDate);
-
-      if (moved) {
-        // The window moves with the date. A visit left advertising its old
-        // hours would show one time on the calendar and another on the
-        // assignment, and the pair of them is the confusion this change set
-        // exists to remove.
-        await this.prisma.generatedVisit.update({
-          where: { id: visit.id },
-          data: {
+      const proposedVisit = moved
+        ? {
             visitDate: new Date(`${proposal.scheduled_date}T00:00:00.000Z`),
             windowStartMinute: proposal.start_minute,
             windowEndMinute: Math.max(
               visit.windowEndMinute,
               proposal.start_minute + visit.durationMinutes,
             ),
-          },
-        });
-      }
+          }
+        : undefined;
 
       const dto = {
         plannedStartMinute: proposal.start_minute,
@@ -313,24 +300,10 @@ export class ScheduleRunService {
       );
       const verdict = await this.eligibility.evaluate(visit.id, dto, {
         excludeAssignmentId: existing?.id,
+        proposedVisit,
       });
 
       if (!verdict.isEligible) {
-        // Put the day back. A refused proposal should leave nothing behind: a
-        // visit silently sitting on a date nobody chose, with no assignment
-        // against it, is exactly the half-applied state this whole change set
-        // out to remove.
-        if (moved) {
-          await this.prisma.generatedVisit.update({
-            where: { id: visit.id },
-            data: {
-              visitDate: originalDate,
-              windowStartMinute: originalWindowStart,
-              windowEndMinute: originalWindowEnd,
-            },
-          });
-        }
-
         this.logger.warn(
           `Solver proposed an assignment the engine refused for visit ${visit.id}: ${verdict.conflicts
             .map((conflict) => conflict.code)
@@ -344,7 +317,7 @@ export class ScheduleRunService {
         continue;
       }
 
-      await this.persist(runId, visit.id, dto, existing?.id);
+      await this.persist(runId, visit.id, dto, existing?.id, proposedVisit);
       scheduled += 1;
     }
 
@@ -359,7 +332,15 @@ export class ScheduleRunService {
       ...rejected,
     ];
 
-    await this.recordUnassigned(runId, unassigned);
+    await this.recordUnassigned(
+      runId,
+      unassigned.map((entry) => ({
+        ...entry,
+        replaceAssignmentId: byId.get(entry.visitId)?.assignments.find((assignment) =>
+          REPLACEABLE_STATUSES.includes(assignment.status),
+        )?.id,
+      })),
+    );
 
     return this.finish(runId, scheduled, unassigned.length);
   }
@@ -491,6 +472,7 @@ export class ScheduleRunService {
       vehicles: { vehicleId: string; driverEmployeeId: string }[];
     },
     replaceAssignmentId?: string,
+    proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number },
   ) {
     const visit = await this.prisma.generatedVisit.findUniqueOrThrow({
       where: { id: visitId },
@@ -503,11 +485,24 @@ export class ScheduleRunService {
     });
     const pmsById = new Map(pms.map((row) => [row.id, row.isPmsGrade]));
 
-    const at = (minute: number) => new Date(visit.visitDate.getTime() + minute * 60_000);
+    const at = (minute: number) =>
+      new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
 
     await this.prisma.$transaction(async (tx) => {
       if (replaceAssignmentId) {
-        await tx.assignment.delete({ where: { id: replaceAssignmentId } });
+        // The predicate is part of the DELETE itself: a separate status read
+        // would still let publication win between the check and deletion.
+        const replaced = await tx.assignment.deleteMany({
+          where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+        });
+        if (replaced.count !== 1) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+            HttpStatus.CONFLICT,
+            { runId, visitId, assignmentId: replaceAssignmentId },
+          );
+        }
       }
       await tx.assignment.create({
         data: {
@@ -536,19 +531,36 @@ export class ScheduleRunService {
       await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
       await tx.generatedVisit.update({
         where: { id: visitId },
-        data: { status: VisitStatus.SCHEDULED },
+        data: { status: VisitStatus.SCHEDULED, ...proposedVisit },
       });
     });
   }
 
   private async recordUnassigned(
     runId: string,
-    entries: { visitId: string; codes: string[]; message: string }[],
+    entries: { visitId: string; codes: string[]; message: string; replaceAssignmentId?: string }[],
   ) {
     if (entries.length === 0) return;
 
     await this.prisma.$transaction(async (tx) => {
       for (const entry of entries) {
+        if (entry.replaceAssignmentId) {
+          // This path keeps the draft. Lock its exact row so publication
+          // cannot promote it between the lifecycle check and queue writes.
+          const current = await tx.$queryRaw<{ status: AssignmentStatus }[]>(Prisma.sql`
+            SELECT status FROM assignments
+            WHERE id = ${entry.replaceAssignmentId}::uuid
+            FOR UPDATE
+          `);
+          if (current.length !== 1 || !REPLACEABLE_STATUSES.includes(current[0].status)) {
+            throw new AppException(
+              'RESOURCE_CONFLICT',
+              'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
+              HttpStatus.CONFLICT,
+              { runId, visitId: entry.visitId, assignmentId: entry.replaceAssignmentId },
+            );
+          }
+        }
         await tx.visitUnassignedReason.deleteMany({
           where: { generatedVisitId: entry.visitId },
         });
