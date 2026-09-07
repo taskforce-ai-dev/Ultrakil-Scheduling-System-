@@ -41,17 +41,20 @@ const NAV_ITEMS = [
 ];
 
 function Brand() {
+  // The real logo is a full-colour lockup (navy wordmark, black subtext) —
+  // it needs a light surface to read against, not a floating white card
+  // dropped onto a dark one. It gets that from its containing header strip
+  // (see the light-bg wrappers below) instead of carrying its own
+  // background, so it sits flush rather than looking like a sticker.
   return (
-    <div className="inline-flex rounded-lg bg-white px-2 py-1.5 shadow-sm">
-      <Image
-        src="/ultrakil-logo.png"
-        alt="UltraKIL — will keep them STiL"
-        width={307}
-        height={119}
-        priority
-        className="h-6 w-auto"
-      />
-    </div>
+    <Image
+      src="/ultrakil-logo.png"
+      alt="UltraKIL — will keep them STiL"
+      width={307}
+      height={119}
+      priority
+      className="h-8 w-auto"
+    />
   );
 }
 
@@ -118,7 +121,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-background">
       <aside className="hidden w-64 shrink-0 bg-sidebar lg:flex lg:flex-col">
-        <div className="flex h-14 items-center px-4">
+        <div className="flex h-16 shrink-0 items-center border-b border-black/5 bg-white px-4">
           <Brand />
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-4">
@@ -133,7 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           overflow-x-auto container) would otherwise escape that container
           and force the whole page to scroll horizontally. */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center gap-3 bg-sidebar px-4 lg:hidden">
+        <header className="flex h-16 items-center gap-3 border-b border-black/5 bg-white px-4 lg:hidden">
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
             <SheetTrigger
               render={
@@ -141,14 +144,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   variant="ghost"
                   size="icon"
                   aria-label="Open navigation menu"
-                  className="text-sidebar-foreground hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                  className="text-foreground hover:bg-accent"
                 >
                   <Menu className="h-5 w-5" />
                 </Button>
               }
             />
             <SheetContent side="left" className="w-64 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
-              <SheetTitle className="flex h-14 items-center px-4">
+              <SheetTitle className="flex h-16 shrink-0 items-center border-b border-black/5 bg-white px-4">
                 <Brand />
               </SheetTitle>
               <div className="flex-1 px-3 py-4">

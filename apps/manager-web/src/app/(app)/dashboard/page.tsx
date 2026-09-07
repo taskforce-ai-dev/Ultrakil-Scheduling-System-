@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Image from "next/image";
 import { GitBranch, Clock, MapPin, ShieldCheck } from "lucide-react";
 
 import { LoadingState } from "@/components/shared/loading-state";
@@ -75,21 +74,7 @@ export default function DashboardPage() {
           U
         </span>
 
-        {/* The real logo's own wordmark is navy-on-transparent, which reads
-            poorly straight on this dark hero — a small white lockup card
-            keeps it exactly as-is and legible, the same idea as a badge. */}
-        <div className="relative inline-flex rounded-xl bg-white px-3 py-2 shadow-sm">
-          <Image
-            src="/ultrakil-logo.png"
-            alt="UltraKIL — will keep them STiL"
-            width={307}
-            height={119}
-            priority
-            className="h-8 w-auto"
-          />
-        </div>
-
-        <h1 className="relative mt-6 font-[family-name:var(--font-display)] text-4xl leading-[1.1] font-bold tracking-tight sm:text-5xl">
+        <h1 className="relative font-[family-name:var(--font-display)] text-4xl leading-[1.1] font-bold tracking-tight sm:text-5xl">
           Dashboard
         </h1>
         <p className="relative mt-3 max-w-xl font-[family-name:var(--font-display)] text-xl leading-snug font-medium text-white/90">
