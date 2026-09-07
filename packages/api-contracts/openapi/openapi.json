@@ -5657,6 +5657,10 @@
           "durationMinutes": {
             "type": "number"
           },
+          "hoursUnconfirmed": {
+            "type": "boolean",
+            "description": "True when no site opening hours are recorded; the assumed working day remains unconfirmed."
+          },
           "visitStatus": {
             "type": "string",
             "enum": [
@@ -5709,6 +5713,7 @@
           "windowStartMinute",
           "windowEndMinute",
           "durationMinutes",
+          "hoursUnconfirmed",
           "visitStatus",
           "branchCode",
           "serviceAgreementId",

@@ -287,6 +287,25 @@ afterAll(async () => {
 });
 
 describe('unified calendar', () => {
+  it.each([true, false])('reports hoursUnconfirmed=%s consistently with the visit read model', async (unconfirmed) => {
+    const visitId = await makeVisit();
+    const originalHours = await prisma.siteOperatingHours.findMany({ where: { serviceSiteId: siteId! } });
+    try {
+      if (unconfirmed) await prisma.siteOperatingHours.deleteMany({ where: { serviceSiteId: siteId! } });
+      const [calendar, visit] = await Promise.all([
+        request(http).get('/api/schedule/calendar').set(auth(adminToken)).query(HORIZON),
+        request(http).get(`/api/visits/${visitId}`).set(auth(adminToken)),
+      ]);
+      expect(calendar.status).toBe(200);
+      expect(visit.status).toBe(200);
+      expect(visit.body.hoursUnconfirmed).toBe(unconfirmed);
+      expect(calendar.body.items.find((item: { visitId: string }) => item.visitId === visitId))
+        .toHaveProperty('hoursUnconfirmed', unconfirmed);
+    } finally {
+      if (unconfirmed) await prisma.siteOperatingHours.createMany({ data: originalHours });
+    }
+  });
+
   it('refuses an anonymous caller', async () => {
     const res = await request(http)
       .get('/api/schedule/calendar')

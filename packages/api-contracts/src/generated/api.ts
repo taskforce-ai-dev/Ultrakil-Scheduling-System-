@@ -2016,6 +2016,8 @@ export interface components {
             windowStartMinute: number;
             windowEndMinute: number;
             durationMinutes: number;
+            /** @description True when no site opening hours are recorded; the assumed working day remains unconfirmed. */
+            hoursUnconfirmed: boolean;
             /** @enum {string} */
             visitStatus: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
             /** @enum {string} */

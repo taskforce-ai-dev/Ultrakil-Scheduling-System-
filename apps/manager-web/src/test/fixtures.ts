@@ -398,6 +398,7 @@ export function buildCalendarAssignment(
 
 export function buildCalendarEntry(overrides: Partial<CalendarEntry> = {}): CalendarEntry {
   return {
+    hoursUnconfirmed: false,
     visitId: "visit-1",
     visitDate: "2026-09-09",
     windowStartMinute: 540,

@@ -135,13 +135,13 @@ this is the write half of the outbox pattern; Phase 2 adds a consumer that
 sends the notification and sets `processedAt`, without touching how
 publishing writes them. No push notification is sent in Phase 1.
 
-## Still on mocks
+## Workforce and vehicle details
 
-`apps/manager-web/src/lib/mock-data` still backs two screens directly rather
-than calling the real API:
+The workforce badges and vehicle detail screen use the live API:
 
-- `workforce-badges.tsx` (`mockVehicles`, `mockEmployees`)
-- `vehicles/[vehicleId]/page.tsx` (`mockVehicles`)
+- `workforce-badges.tsx` renders API-typed employee and vehicle properties supplied by its parent screens.
+- `vehicles/[vehicleId]/page.tsx` reads `GET /api/vehicles/{id}` and its authorized-drivers endpoint.
 
-Both are wired to `GET /api/vehicles` and `GET /api/employees` as part of this
-task. Everything else the manager portal reads is already live.
+The calendar also carries `hoursUnconfirmed`, using the same missing-opening-hours
+rule as the visits read model. Its chips and detail dialog visibly warn that the
+08:00–17:00 working day is assumed until real site hours are recorded.

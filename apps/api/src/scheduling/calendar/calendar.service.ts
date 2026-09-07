@@ -38,7 +38,7 @@ const CALENDAR_INCLUDE = {
   serviceAgreement: {
     include: {
       customer: { select: { name: true } },
-      serviceSite: { select: { name: true } },
+      serviceSite: { select: { name: true, _count: { select: { operatingHours: true } } } },
       jobType: { select: { name: true } },
     },
   },
@@ -130,6 +130,7 @@ function toCalendarEntry(visit: VisitWithCalendarRelations): CalendarEntryDto {
     windowStartMinute: visit.windowStartMinute,
     windowEndMinute: visit.windowEndMinute,
     durationMinutes: visit.durationMinutes,
+    hoursUnconfirmed: agreement.serviceSite._count.operatingHours === 0,
     visitStatus: visit.status,
     branchCode: visit.branchCode,
     serviceAgreementId: agreement.id,

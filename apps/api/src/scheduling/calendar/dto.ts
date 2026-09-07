@@ -96,6 +96,8 @@ export class CalendarEntryDto {
   @ApiProperty({ type: Number }) windowStartMinute!: number;
   @ApiProperty({ type: Number }) windowEndMinute!: number;
   @ApiProperty({ type: Number }) durationMinutes!: number;
+  @ApiProperty({ type: Boolean, description: 'True when no site opening hours are recorded; the assumed working day remains unconfirmed.' })
+  hoursUnconfirmed!: boolean;
   @ApiProperty({ type: String, enum: Object.values(VisitStatus) })
   visitStatus!: VisitStatus;
   @ApiProperty({ type: String, enum: Object.values(BranchCode) })
