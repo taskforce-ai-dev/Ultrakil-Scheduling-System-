@@ -13,7 +13,7 @@
  * create and solves them concurrently, which is how "cancels a queued run"
  * ends up seeing RUNNING.
  */
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AssignmentStatus, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import { Job } from 'bullmq';
@@ -22,6 +22,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuditService } from '../../src/audit/audit.service';
 import { AuthService } from '../../src/auth/auth.service';
+import { AppException } from '../../src/common/errors/app.exception';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { EligibilityService } from '../../src/scheduling/eligibility/eligibility.service';
@@ -47,6 +48,7 @@ let jobTypeId: string;
 let siteId: string;
 const supervisorIds: string[] = [];
 const technicianIds: string[] = [];
+const batchVehicleIds: string[] = [];
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 /**
@@ -307,6 +309,7 @@ afterAll(async () => {
     },
   });
   await clearFixtures();
+  await prisma.vehicle.deleteMany({ where: { id: { in: batchVehicleIds } } });
   await prisma.employee.deleteMany({ where: { id: { in: ids } } });
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
   await prisma.$disconnect();
@@ -643,6 +646,105 @@ async function manualPublicationFixture(withDraft = true) {
 }
 
 describe('standard writer publication protocol', () => {
+  async function batchFixture(withVehicle = false) {
+    const visits = [await manualPublicationFixture(), await manualPublicationFixture()];
+    const vehicle = withVehicle ? await prisma.vehicle.create({ data: {
+      code: `C06-BATCH-${suffix}-${batchVehicleIds.length}`, label: 'C06 shared vehicle', seatCapacity: 2,
+      authorizations: { create: { employeeId: supervisorIds[0] } },
+    } }) : undefined;
+    if (vehicle) batchVehicleIds.push(vehicle.id);
+    for (const [index, fixture] of visits.entries()) {
+      await prisma.generatedVisit.update({ where: { id: fixture.visitId }, data: { durationMinutes: 60 } });
+      await prisma.assignment.update({ where: { id: fixture.draft!.id }, data: {
+        plannedStart: new Date(`2027-03-03T${index === 0 ? '09' : '11'}:00:00Z`),
+        plannedEnd: new Date(`2027-03-03T${index === 0 ? '10' : '12'}:00:00Z`),
+      } });
+      if (vehicle) await prisma.assignmentVehicle.create({ data: {
+        assignmentId: fixture.draft!.id, vehicleId: vehicle.id, driverEmployeeId: supervisorIds[0],
+      } });
+    }
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const solve = (plans: { index: number; start: number }[], eligibility = app.get(EligibilityService)) => {
+      const service = new ScheduleRunService(prisma as unknown as PrismaService, {
+        solve: async (): Promise<SolveResponse> => ({
+          run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 2,
+          assignments: plans.map(({ index, start }) => ({
+            visit_id: visits[index].visitId, employee_ids: [supervisorIds[0], technicianIds[0]],
+            vehicles: vehicle ? [{ vehicle_id: vehicle.id, driver_employee_id: supervisorIds[0] }] : [],
+            start_minute: start, scheduled_date: '2027-03-03',
+          })),
+          unassigned: [],
+        }),
+      } as unknown as SchedulerClient, eligibility, app.get(AuditService));
+      return service.execute(run.id);
+    };
+    return { visits, run, solve };
+  }
+
+  it.each(['crew', 'crew and vehicle'])('reuses a %s slot freed by an earlier accepted result in the same transaction', async (resource) => {
+    const f = await batchFixture(resource === 'crew and vehicle');
+    expect(await f.solve([{ index: 0, start: 720 }, { index: 1, start: 540 }]))
+      .toEqual({ scheduled: 2, unassigned: 0, cancelled: false });
+    expect(await prisma.assignment.findMany({
+      where: { scheduleRunId: f.run.id }, select: { generatedVisitId: true, plannedStart: true },
+      orderBy: { plannedStart: 'asc' },
+    })).toEqual([
+      { generatedVisitId: f.visits[1].visitId, plannedStart: new Date('2027-03-03T09:00:00Z') },
+      { generatedVisitId: f.visits[0].visitId, plannedStart: new Date('2027-03-03T12:00:00Z') },
+    ]);
+  });
+
+  it.each([[0, 1], [1, 0]])('counts the earlier proposed crew occupancy in order %s then %s', async (first, later) => {
+    const f = await batchFixture();
+    expect(await f.solve([{ index: first, start: 720 }, { index: later, start: 720 }]))
+      .toEqual({ scheduled: 1, unassigned: 1, cancelled: false });
+    expect(await prisma.assignment.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual([expect.objectContaining({ generatedVisitId: f.visits[first].visitId, status: 'DRAFT' })]);
+    expect(await prisma.assignment.findUnique({ where: { id: f.visits[later].draft!.id } }))
+      .toMatchObject({ status: 'CANCELLED' });
+    expect(await prisma.visitUnassignedReason.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual(Array(2).fill(expect.objectContaining({ generatedVisitId: f.visits[later].visitId, code: 'EMPLOYEE_DOUBLE_BOOKED' })));
+  });
+
+  it('still counts an external retained draft when evaluating the atomic batch', async () => {
+    const f = await batchFixture();
+    const retained = await prisma.assignment.findUnique({ where: { id: f.visits[1].draft!.id } });
+    expect(await f.solve([{ index: 0, start: 660 }]))
+      .toEqual({ scheduled: 0, unassigned: 1, cancelled: false });
+    expect(await prisma.assignment.findUnique({ where: { id: f.visits[1].draft!.id } })).toEqual(retained);
+    expect(await prisma.visitUnassignedReason.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual(Array(2).fill(expect.objectContaining({ code: 'EMPLOYEE_DOUBLE_BOOKED' })));
+  });
+
+  it('rolls back an earlier accepted result when a later transactional eligibility check throws a conflict', async () => {
+    const f = await batchFixture();
+    await app.get(PublishingService).lock(f.visits[0].draft!.id, LockScope.CREW, 'Retain this crew', f.visits[0].actor);
+    const state = () => prisma.generatedVisit.findMany({
+      where: { id: { in: f.visits.map(({ visitId }) => visitId) } }, orderBy: { id: 'asc' },
+      include: { assignments: { include: { crewMembers: true, vehicles: true, locks: true } }, unassignedReasons: true },
+    });
+    const before = await state();
+    const eligibility = app.get(EligibilityService);
+    const transactionalEligibility = { evaluate: async (...args: Parameters<EligibilityService['evaluate']>) => {
+      if (args[0] === f.visits[1].visitId) {
+        // The next result must observe the first draft inside the transaction,
+        // while the independent connection still sees no committed changes.
+        const client = args[3] ?? prisma;
+        expect(await client.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(1);
+        expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+        throw new AppException('RESOURCE_CONFLICT', 'A later eligibility fact changed', HttpStatus.CONFLICT);
+      }
+      return eligibility.evaluate(...args);
+    } } as EligibilityService;
+    await expect(f.solve([{ index: 0, start: 720 }, { index: 1, start: 540 }], transactionalEligibility))
+      .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(await state()).toEqual(before);
+    expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+  });
+
   it.each(['assignment', 'rejected', 'unassigned'].flatMap((firstOutcome) =>
     ['assignment', 'rejected', 'unassigned'].map((laterOutcome) => ({ firstOutcome, laterOutcome })),
   ))('rolls back the complete solver result: $firstOutcome before stale $laterOutcome', async ({ firstOutcome, laterOutcome }) => {
@@ -728,7 +830,7 @@ describe('standard writer publication protocol', () => {
       })),
     ),
   )(
-    'rejects a stale $outcome solve after eligibility and adjustment with $snapshot assignment snapshot',
+    'rejects a stale $outcome solve before eligibility after adjustment with $snapshot assignment snapshot',
     async ({ snapshot, outcome }) => {
       const f = await manualPublicationFixture(snapshot === 'present');
       const staleRun = await prisma.scheduleRun.create({
@@ -743,7 +845,7 @@ describe('standard writer publication protocol', () => {
       const resume = deferred<void>();
       let evaluated = false;
       const probe = transactionProbe(false, async () => {
-        if (outcome !== 'unassigned') expect(evaluated).toBe(true);
+        expect(evaluated).toBe(false);
         ready.resolve();
         await resume.promise;
       });

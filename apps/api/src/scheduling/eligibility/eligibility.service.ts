@@ -60,8 +60,9 @@ export class EligibilityService {
     visitId: string,
     proposal: AssignmentProposal,
     options: EligibilityOptions = {},
+    client: Prisma.TransactionClient = this.prisma,
   ): Promise<EligibilityContext> {
-    const visit = await this.prisma.generatedVisit.findUnique({
+    const visit = await client.generatedVisit.findUnique({
       where: { id: visitId },
       include: {
         serviceAgreement: {
@@ -92,9 +93,9 @@ export class EligibilityService {
     const timing = options.proposedVisit ?? visit;
 
     const [employees, vehicles, pmsCount] = await Promise.all([
-      this.loadEmployees(employeeIds, timing.visitDate, options.excludeAssignmentId),
-      this.loadVehicles(vehicleIds, timing.visitDate, options.excludeAssignmentId),
-      this.prisma.employee.count({
+      this.loadEmployees(client, employeeIds, timing.visitDate, options.excludeAssignmentId),
+      this.loadVehicles(client, vehicleIds, timing.visitDate, options.excludeAssignmentId),
+      client.employee.count({
         where: { branchCode: visit.branchCode, isPmsGrade: true, isActive: true },
       }),
     ]);
@@ -137,19 +138,23 @@ export class EligibilityService {
     visitId: string,
     proposal: AssignmentProposal,
     options: EligibilityOptions = {},
+    client: Prisma.TransactionClient = this.prisma,
   ): Promise<EligibilityResult> {
-    const context = await this.buildContext(visitId, proposal, options);
+    // A schedule batch supplies its transaction so subsequent proposals see
+    // earlier accepted replacements and all retained/external assignments.
+    const context = await this.buildContext(visitId, proposal, options, client);
     return evaluateAssignment(proposal, context);
   }
 
   private async loadEmployees(
+    client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
     excludeAssignmentId?: string,
   ): Promise<EmployeeFacts[]> {
     if (ids.length === 0) return [];
 
-    const employees = await this.prisma.employee.findMany({
+    const employees = await client.employee.findMany({
       where: { id: { in: ids } },
       include: {
         skills: { select: { skillCode: true } },
@@ -208,13 +213,14 @@ export class EligibilityService {
   }
 
   private async loadVehicles(
+    client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
     excludeAssignmentId?: string,
   ): Promise<VehicleFacts[]> {
     if (ids.length === 0) return [];
 
-    const vehicles = await this.prisma.vehicle.findMany({
+    const vehicles = await client.vehicle.findMany({
       where: { id: { in: ids } },
       include: {
         branch: { select: { code: true } },

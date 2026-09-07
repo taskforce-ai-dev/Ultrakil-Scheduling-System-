@@ -304,8 +304,7 @@ describe('solver replacement lifecycle fence', () => {
         });
       if (barrier === 'before-persistence') {
         f.prisma.$transaction.mockImplementationOnce(async (work) => {
-          if (outcome !== 'unassigned')
-            expect(f.eligibility.evaluate).toHaveBeenCalledTimes(1);
+          expect(f.eligibility.evaluate).not.toHaveBeenCalled();
           adjust();
           return work(f.tx);
         });
@@ -654,6 +653,7 @@ describe('solver replacement lifecycle fence', () => {
             windowEndMinute: 720,
           },
         },
+        f.tx,
       );
       expect(f.assignment.create).toHaveBeenCalledWith({
         data: expect.objectContaining({

@@ -81,7 +81,7 @@ interface SolveSnapshot {
   replaceAssignmentId?: string;
 }
 
-interface AcceptedAssignment extends SolveSnapshot {
+interface ProposedAssignment extends SolveSnapshot {
   dto: {
     plannedStartMinute: number;
     plannedEndMinute: number;
@@ -278,8 +278,7 @@ export class ScheduleRunService {
     if (await this.isCancelled(runId)) return this.markCancelled(runId);
 
     const byId = new Map(visits.map((visit) => [visit.id, visit]));
-    const accepted: AcceptedAssignment[] = [];
-    const rejected: { visitId: string; codes: string[]; message: string }[] = [];
+    const proposals: ProposedAssignment[] = [];
 
     for (const proposal of solution.assignments) {
       const visit = byId.get(proposal.visit_id);
@@ -315,31 +314,10 @@ export class ScheduleRunService {
         })),
       };
 
-      // The second check. If the solver and the engine ever disagree, the
-      // engine wins and the visit goes to the queue — never the other way.
       const existing = visit.assignments.find((a) =>
         REPLACEABLE_STATUSES.includes(a.status),
       );
-      const verdict = await this.eligibility.evaluate(visit.id, dto, {
-        excludeAssignmentId: existing?.id,
-        proposedVisit,
-      });
-
-      if (!verdict.isEligible) {
-        this.logger.warn(
-          `Solver proposed an assignment the engine refused for visit ${visit.id}: ${verdict.conflicts
-            .map((conflict) => conflict.code)
-            .join(', ')}`,
-        );
-        rejected.push({
-          visitId: visit.id,
-          codes: verdict.conflicts.map((conflict) => conflict.code),
-          message: verdict.conflicts.map((conflict) => conflict.message).join(' '),
-        });
-        continue;
-      }
-
-      accepted.push({
+      proposals.push({
         visitId: visit.id,
         expectedUpdatedAt: visit.updatedAt,
         dto,
@@ -350,18 +328,15 @@ export class ScheduleRunService {
 
     await progress(90);
 
-    const unassigned = [
-      ...solution.unassigned.map((entry) => ({
-        visitId: entry.visit_id,
-        codes: entry.reason_codes,
-        message: entry.message,
-      })),
-      ...rejected,
-    ];
+    const unassigned = solution.unassigned.map((entry) => ({
+      visitId: entry.visit_id,
+      codes: entry.reason_codes,
+      message: entry.message,
+    }));
 
     return this.persistResult(
       runId,
-      accepted,
+      proposals,
       unassigned.map((entry) => {
         const visit = byId.get(entry.visitId);
         if (!visit) {
@@ -497,10 +472,10 @@ export class ScheduleRunService {
 
   private async persistResult(
     runId: string,
-    accepted: AcceptedAssignment[],
+    proposals: ProposedAssignment[],
     unassigned: UnassignedResult[],
   ) {
-    const entries = [...accepted, ...unassigned];
+    const entries = [...proposals, ...unassigned];
     if (new Set(entries.map((entry) => entry.visitId)).size !== entries.length) {
       throw new AppException(
         'RESOURCE_CONFLICT',
@@ -509,7 +484,7 @@ export class ScheduleRunService {
         { runId },
       );
     }
-    const employeeIds = [...new Set(accepted.flatMap((entry) =>
+    const employeeIds = [...new Set(proposals.flatMap((entry) =>
       entry.dto.crew.map((member) => member.employeeId),
     ))];
     const pms = await this.prisma.employee.findMany({
@@ -533,18 +508,42 @@ export class ScheduleRunService {
         // visit lock, so a stale lock snapshot rejects the complete response.
         assertVisitRevision(entry.visitId, entry.expectedUpdatedAt, visit.updatedAt);
       }
-      for (const entry of accepted) {
+      let scheduled = 0;
+      let rejected = 0;
+      for (const entry of proposals) {
+        // Evaluate and apply in order inside this transaction. Later checks
+        // must see the slots freed or occupied by earlier accepted results.
+        // The engine still wins whenever it disagrees with the solver.
+        const verdict = await this.eligibility.evaluate(entry.visitId, entry.dto, {
+          excludeAssignmentId: entry.replaceAssignmentId,
+          proposedVisit: entry.proposedVisit,
+        }, tx);
+        if (!verdict.isEligible) {
+          this.logger.warn(
+            `Solver proposed an assignment the engine refused for visit ${entry.visitId}: ${verdict.conflicts
+              .map((conflict) => conflict.code)
+              .join(', ')}`,
+          );
+          await this.recordUnassigned(tx, runId, [{
+            ...entry,
+            codes: verdict.conflicts.map((conflict) => conflict.code),
+            message: verdict.conflicts.map((conflict) => conflict.message).join(' '),
+          }]);
+          rejected += 1;
+          continue;
+        }
         await this.persist(tx, runId, entry, pmsById);
+        scheduled += 1;
       }
       await this.recordUnassigned(tx, runId, unassigned);
-      return this.finish(runId, accepted.length, unassigned.length, tx);
+      return this.finish(runId, scheduled, unassigned.length + rejected, tx);
     }, { timeout: 30_000 });
   }
 
   private async persist(
     tx: Prisma.TransactionClient,
     runId: string,
-    { visitId, dto, replaceAssignmentId, proposedVisit }: AcceptedAssignment,
+    { visitId, dto, replaceAssignmentId, proposedVisit }: ProposedAssignment,
     pmsById: Map<string, boolean>,
   ) {
     const visit = await tx.generatedVisit.findUniqueOrThrow({
