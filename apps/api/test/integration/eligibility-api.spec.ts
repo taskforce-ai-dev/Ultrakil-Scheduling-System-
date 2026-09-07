@@ -8,7 +8,7 @@
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
@@ -238,7 +238,65 @@ describe('authorization', () => {
 });
 
 describe('checking writes nothing', () => {
-  it('can check a reopened assignment without overlapping its own crew and vehicle', async () => {
+  it.each([
+    AssignmentStatus.PUBLISHED,
+    AssignmentStatus.ACKNOWLEDGED,
+    AssignmentStatus.IN_PROGRESS,
+    AssignmentStatus.COMPLETED,
+    AssignmentStatus.SUPERSEDED,
+  ])('refuses to promise a replacement for published-descended %s history', async (status) => {
+    const visitId = await visitForAssignment();
+    const assigned = await request(http).put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken)).send(goodCrew());
+    expect(assigned.status).toBe(200);
+    await prisma.assignment.update({ where: { id: assigned.body.id }, data: { status } });
+    const checked = await request(http).post(`/api/visits/${visitId}/assignment/check`)
+      .set(auth(managerToken)).send(goodCrew());
+    expect(checked.status).toBe(409);
+    expect(checked.body.code).toBe('RESOURCE_CONFLICT');
+  });
+
+  it.each(['publishedAt', 'notificationOutbox'])(
+    'refuses a draft-shaped assignment carrying %s publication history', async (history) => {
+      const visitId = await visitForAssignment();
+      const assigned = await request(http).put(`/api/visits/${visitId}/assignment`)
+        .set(auth(adminToken)).send(goodCrew());
+      expect(assigned.status).toBe(200);
+      if (history === 'publishedAt') {
+        await prisma.assignment.update({ where: { id: assigned.body.id }, data: { publishedAt: new Date() } });
+      } else {
+        await prisma.assignmentNotificationOutbox.create({ data: {
+          assignmentId: assigned.body.id, employeeId: supervisorId,
+          eventType: 'assignment.published', payload: {},
+        } });
+      }
+      const checked = await request(http).post(`/api/visits/${visitId}/assignment/check`)
+        .set(auth(managerToken)).send(goodCrew());
+      expect(checked.status).toBe(409);
+      expect(checked.body.code).toBe('RESOURCE_CONFLICT');
+    },
+  );
+
+  it('refuses ambiguous multiple replaceable assignments rather than excluding an arbitrary row', async () => {
+    const visitId = await visitForAssignment();
+    const assigned = await request(http).put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken)).send(goodCrew());
+    expect(assigned.status).toBe(200);
+    const original = await prisma.assignment.findUniqueOrThrow({ where: { id: assigned.body.id } });
+    await prisma.assignment.create({ data: {
+      generatedVisitId: visitId, branchId: original.branchId, branchCode: original.branchCode,
+      plannedStart: original.plannedStart, plannedEnd: original.plannedEnd,
+      status: AssignmentStatus.PROPOSED,
+      crewMembers: { create: { employeeId: supervisorId, role: 'SUPERVISOR', isPmsSupervisor: true } },
+    } });
+    const checked = await request(http).post(`/api/visits/${visitId}/assignment/check`)
+      .set(auth(managerToken)).send(goodCrew());
+    expect(checked.status).toBe(409);
+    expect(checked.body.code).toBe('RESOURCE_CONFLICT');
+    expect(await prisma.assignment.count({ where: { generatedVisitId: visitId } })).toBe(2);
+  });
+
+  it.each([AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED])('can check a reopened %s assignment without overlapping its own crew and vehicle', async (status) => {
     const visitId = await visitForAssignment();
     await prisma.vehicleAuthorization.upsert({
       where: { employeeId_vehicleId: { employeeId: supervisorId, vehicleId } },
@@ -249,6 +307,7 @@ describe('checking writes nothing', () => {
     const assigned = await request(http).put(`/api/visits/${visitId}/assignment`)
       .set(auth(adminToken)).send(proposal);
     expect(assigned.status).toBe(200);
+    await prisma.assignment.update({ where: { id: assigned.body.id }, data: { status } });
     const before = await prisma.assignment.findUniqueOrThrow({ where: { id: assigned.body.id } });
 
     const checked = await request(http).post(`/api/visits/${visitId}/assignment/check`)

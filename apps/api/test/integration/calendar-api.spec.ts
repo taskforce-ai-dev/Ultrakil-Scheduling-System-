@@ -25,6 +25,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
+import { cleanupCapturedIds } from '../support/fixture-cleanup';
 
 const prisma = new PrismaClient();
 
@@ -34,16 +35,18 @@ const ADMIN = {
   password: 'c07-admin-password',
 };
 
-let app: INestApplication;
+let app: INestApplication | undefined;
 let http: string;
 let adminToken: string;
 let managerToken: string;
-let jobTypeId: string;
-let siteId: string;
-let supervisorId: string;
-let technicianId: string;
-let vehicleId: string;
+let jobTypeId: string | undefined;
+let customerId: string | undefined;
+let siteId: string | undefined;
+let supervisorId: string | undefined;
+let technicianId: string | undefined;
+let vehicleId: string | undefined;
 const scheduleRunIds: string[] = [];
+const userIds: string[] = [];
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 const HORIZON = { from: '2026-09-07', to: '2026-09-13' }; // one week, Mon-Sun
@@ -52,6 +55,7 @@ const VISIT_DATE = '2026-09-09'; // the Wednesday in that week
 async function login(email: string, password: string): Promise<string> {
   const res = await request(http).post('/api/auth/login').send({ email, password });
   expect(res.status).toBe(200);
+  expect(res.body.accessToken).toEqual(expect.any(String));
   return res.body.accessToken as string;
 }
 
@@ -72,6 +76,7 @@ async function makeVisit(): Promise<string> {
       notes: `C07 instructions ${suffix}`,
     });
   expect(agreement.status).toBe(201);
+  expect(agreement.body.id).toEqual(expect.any(String));
 
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
@@ -83,6 +88,9 @@ async function makeVisit(): Promise<string> {
     .get('/api/visits')
     .set(auth(adminToken))
     .query({ serviceAgreementId: agreement.body.id });
+  expect(listed.status).toBe(200);
+  expect(listed.body.items).toHaveLength(1);
+  expect(listed.body.items[0].id).toEqual(expect.any(String));
   return listed.body.items[0].id as string;
 }
 
@@ -101,6 +109,7 @@ async function assignCrew(visitId: string): Promise<string> {
       vehicles: [{ vehicleId, driverEmployeeId: supervisorId }],
     });
   expect(res.status).toBe(200);
+  expect(res.body.id).toEqual(expect.any(String));
   return res.body.id as string;
 }
 
@@ -155,7 +164,7 @@ beforeAll(async () => {
       update: {},
     });
   }
-  await prisma.user.upsert({
+  const admin = await prisma.user.upsert({
     where: { email: ADMIN.email },
     create: {
       email: ADMIN.email,
@@ -165,12 +174,14 @@ beforeAll(async () => {
     },
     update: { role: UserRole.ADMIN, isActive: true },
   });
+  userIds.push(admin.id);
   adminToken = await login(ADMIN.email, ADMIN.password);
   const managerEmail = `c07-manager-${suffix}@ultrakil.test`;
-  await prisma.user.create({ data: {
+  const manager = await prisma.user.create({ data: {
     email: managerEmail, fullName: 'C07 Manager', role: UserRole.MANAGER,
     passwordHash: await AuthService.hashPassword(ADMIN.password),
   } });
+  userIds.push(manager.id);
   managerToken = await login(managerEmail, ADMIN.password);
 
   const colombo = await prisma.branch.findUniqueOrThrow({
@@ -210,15 +221,20 @@ beforeAll(async () => {
     .post('/api/job-types')
     .set(auth(adminToken))
     .send({ code: `C07_${suffix}`, name: 'C07 Job', defaultCrewSize: 2 });
+  expect(jobType.status).toBe(201);
+  expect(jobType.body.id).toEqual(expect.any(String));
   jobTypeId = jobType.body.id;
 
   const customer = await request(http)
     .post('/api/customers')
     .set(auth(adminToken))
     .send({ name: `C07 Customer ${suffix}`, branchCode: BranchCode.COLOMBO });
+  expect(customer.status).toBe(201);
+  expect(customer.body.id).toEqual(expect.any(String));
+  customerId = customer.body.id;
 
   const site = await request(http)
-    .post(`/api/customers/${customer.body.id}/sites`)
+    .post(`/api/customers/${customerId}/sites`)
     .set(auth(adminToken))
     .send({
       name: `C07 Site ${suffix}`,
@@ -230,45 +246,44 @@ beforeAll(async () => {
         },
       ],
     });
+  expect(site.status).toBe(201);
+  expect(site.body.id).toEqual(expect.any(String));
   siteId = site.body.id;
 });
 
 beforeEach(async () => {
-  await prisma.assignment.deleteMany({
-    where: { crewMembers: { some: { employeeId: { in: [supervisorId, technicianId] } } } },
-  });
+  await cleanupCapturedIds([supervisorId, technicianId], (ids) =>
+    prisma.assignment.deleteMany({
+      where: { crewMembers: { some: { employeeId: { in: ids } } } },
+    }),
+  );
 });
 
 afterAll(async () => {
-  const ids = [supervisorId, technicianId];
-  await prisma.assignmentNotificationOutbox.deleteMany({
-    where: { employeeId: { in: ids } },
-  });
-  await prisma.assignment.deleteMany({
-    where: { crewMembers: { some: { employeeId: { in: ids } } } },
-  });
-  await prisma.scheduleRun.deleteMany({
-    where: { id: { in: scheduleRunIds } },
-  });
-  await prisma.serviceAgreement.deleteMany({
-    where: {
-      serviceSiteId: siteId,
-    },
-  });
-  await prisma.serviceSite.deleteMany({
-    where: { id: siteId },
-  });
-  await prisma.customer.deleteMany({
-    where: { name: `C07 Customer ${suffix}` },
-  });
-  await prisma.jobType.deleteMany({ where: { id: jobTypeId } });
-  await prisma.employee.deleteMany({
-    where: { sourceKey: { contains: suffix } },
-  });
-  await prisma.vehicle.deleteMany({ where: { id: vehicleId } });
-  await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, `c07-manager-${suffix}@ultrakil.test`] } } });
-  await prisma.$disconnect();
-  await app.close();
+  const employees = [supervisorId, technicianId];
+  try {
+    await cleanupCapturedIds(employees, (ids) => prisma.assignmentNotificationOutbox.deleteMany({
+      where: { employeeId: { in: ids } },
+    }));
+    await cleanupCapturedIds(employees, (ids) => prisma.assignment.deleteMany({
+      where: { crewMembers: { some: { employeeId: { in: ids } } } },
+    }));
+    await cleanupCapturedIds(scheduleRunIds, (ids) => prisma.scheduleRun.deleteMany({
+      where: { id: { in: ids } },
+    }));
+    await cleanupCapturedIds([siteId], (ids) => prisma.serviceAgreement.deleteMany({
+      where: { serviceSiteId: { in: ids } },
+    }));
+    await cleanupCapturedIds([siteId], (ids) => prisma.serviceSite.deleteMany({ where: { id: { in: ids } } }));
+    await cleanupCapturedIds([customerId], (ids) => prisma.customer.deleteMany({ where: { id: { in: ids } } }));
+    await cleanupCapturedIds([jobTypeId], (ids) => prisma.jobType.deleteMany({ where: { id: { in: ids } } }));
+    await cleanupCapturedIds(employees, (ids) => prisma.employee.deleteMany({ where: { id: { in: ids } } }));
+    await cleanupCapturedIds([vehicleId], (ids) => prisma.vehicle.deleteMany({ where: { id: { in: ids } } }));
+    await cleanupCapturedIds(userIds, (ids) => prisma.user.deleteMany({ where: { id: { in: ids } } }));
+  } finally {
+    await prisma.$disconnect();
+    await app?.close();
+  }
 });
 
 describe('unified calendar', () => {

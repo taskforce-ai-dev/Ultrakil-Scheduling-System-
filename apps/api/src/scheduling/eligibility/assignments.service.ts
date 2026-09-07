@@ -5,7 +5,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
-import { assertScheduleSnapshot, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import { assertScheduleSnapshot, assertUnpublishedVisit, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
 import {
   AssignCrewDto,
@@ -81,12 +81,19 @@ export class AssignmentsService {
     visitId: string,
     dto: AssignCrewDto,
   ): Promise<EligibilityResultDto> {
-    const existing = await this.prisma.assignment.findFirst({
-      where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
-      select: { id: true },
-    });
+    // A dry-run must obey the same publication boundary as assign(), rather
+    // than promise an eligible replacement that the write path must refuse.
+    const replaceable = await assertUnpublishedVisit(this.prisma, visitId);
+    if (replaceable.length > 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This visit has multiple assignments. Refresh and resolve the conflicting schedule before changing its crew.',
+        HttpStatus.CONFLICT,
+        { visitId },
+      );
+    }
     const result = await this.eligibility.evaluate(visitId, toProposal(dto), {
-      excludeAssignmentId: existing?.id,
+      excludeAssignmentId: replaceable[0]?.id,
     });
     return {
       isEligible: result.isEligible,

@@ -49,13 +49,15 @@ const PUBLISHED_HISTORY: AssignmentStatus[] = [
   AssignmentStatus.SUPERSEDED,
 ];
 
-/** Under the visit lock, protect every record descended from publication. */
+/** Inspect publication history. Writers hold the visit lock; dry-run readers
+ * get a point-in-time check and must revalidate before writing. */
 export async function assertUnpublishedVisit(
   tx: Prisma.TransactionClient,
   visitId: string,
 ) {
   const assignments = await tx.assignment.findMany({
     where: { generatedVisitId: visitId },
+    orderBy: { id: 'asc' },
     select: {
       id: true,
       status: true,
