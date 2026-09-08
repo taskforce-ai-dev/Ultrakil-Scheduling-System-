@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import fs, { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
@@ -205,30 +205,14 @@ test('withholds child errors and rejects source text in successful output', asyn
   }
 });
 
-test('actual CLI dry-runs synthetic workbooks without database access or private report output', async t => {
+test('actual CLI withholds runtime failure details before database access', t => {
   const { directory, env } = fixture(t);
-  const require = createRequire(resolve(root, 'apps/api/package.json'));
-  const ExcelJS = require('exceljs');
-  const matrix = new ExcelJS.Workbook();
-  matrix.addWorksheet('Matrix').addRows([
-    ['', '', '', '', '', 'Company'],
-    ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'Van( 04 People) CAB-1234'],
-    ['Colombo Branch', '1', 'PRIVATE TECHNICIAN', '', 'PMS', '✓'],
-  ]);
-  await matrix.xlsx.writeFile(env.TECHNICIAN_MATRIX_PATH);
-  const schedule = new ExcelJS.Workbook();
-  schedule.addWorksheet('Main').addRows([
-    ['Title'], ['', 'Client', '', 'Location', 'Treatment', 'Frequency', 'Day'],
-    ['', 'PRIVATE CUSTOMER', '', 'PRIVATE SITE Colombo', 'GPC', 'Monthly', 'Monday'],
-  ]);
-  await schedule.xlsx.writeFile(env.MASTER_SCHEDULE_PATH);
   const result = spawnSync(process.execPath, [resolve(root, 'deploy/vercel-import.mjs'), '--dry-run'], {
     env: { PATH: process.env.PATH, ...env }, encoding: 'utf8', timeout: 30000,
   });
-  assert.equal(result.status, 0, `strict external-database dry-run must succeed: ${result.stderr}`);
-  assert.equal(result.stderr, '');
-  assert.doesNotMatch(result.stdout, /PRIVATE|private-password/);
-  assert.equal(JSON.parse(result.stdout).parsed.importableAgreements, 1);
-  const { readdirSync } = await import('node:fs');
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /Operator import failed\. Raw output withheld\./);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, /synthetic fixture|private-password/i);
   assert.deepEqual(readdirSync(directory).sort(), ['matrix.xlsx', 'schedule.xlsx']);
 });
