@@ -153,4 +153,6 @@ test('recovery schedule operator docs specify the signed JSON request and smoke 
   const recovery = read('docs/VERCEL_QSTASH_RECOVERY.md');
   assert.match(recovery, /rawBody/);
   assert.match(recovery, /401/);
+  assert.match(recovery.replace(/\s+/g, ' '),
+    /must set `Upstash-Forward-Content-Type: application\/json`/);
 });
