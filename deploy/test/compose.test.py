@@ -22,6 +22,13 @@ class StagingComposeTest(unittest.TestCase):
         self.assertEqual(migrate["command"], ["node", "deploy/staging-tool.mjs", "migrate"])
         self.assertEqual(migrate["build"]["target"], "tooling")
 
+    def test_private_scheduler_explicitly_opts_out_of_authentication(self):
+        self.assertEqual(
+            self.services["scheduler"]["environment"]["SCHEDULER_ALLOW_UNAUTHENTICATED"],
+            "true",
+        )
+        self.assertNotIn("SCHEDULER_API_TOKEN", self.services["scheduler"]["environment"])
+
     def test_private_services_have_no_host_ports_and_default_ports_are_loopback(self):
         backend_only = ("postgres", "redis", "scheduler", "migrate", "import", "backup")
         for name, service in self.services.items():

@@ -33,8 +33,8 @@ test('uses the current Nest and FastAPI entrypoints with a Hobby-safe duration',
   const api = readJson('apps/api/vercel.json');
   const scheduler = readJson('services/scheduler/vercel.json');
 
-  assert.equal(api.functions['src/main.ts'].maxDuration, 300);
-  assert.equal(scheduler.functions['app/main.py'].maxDuration, 300);
+  assert.equal(api.functions['src/main.ts'].maxDuration, 60);
+  assert.equal(scheduler.functions['app/main.py'].maxDuration, 60);
   assert.equal(api.buildCommand, 'pnpm prisma:generate && pnpm build');
   assert.match(read('apps/api/src/main.ts'), /NestFactory/);
   assert.match(read('services/scheduler/app/main.py'), /app = FastAPI\(/);
@@ -67,6 +67,7 @@ test('documents stable Vercel project URLs and non-secret environment setup', ()
   assert.match(env, /^API_CORS_ORIGINS=https:\/\/YOUR_MANAGER_PROJECT\.vercel\.app$/m);
   assert.match(env, /^SCHEDULER_BASE_URL=https:\/\/YOUR_SCHEDULER_PROJECT\.vercel\.app$/m);
   assert.match(env, /^SCHEDULER_API_TOKEN=$/m);
+  assert.doesNotMatch(env, /^SCHEDULER_ALLOW_UNAUTHENTICATED=/m);
   assert.doesNotMatch(env, /postgres(?:ql)?:\/\/[^\s]+:[^\s@]+@/i);
 });
 

@@ -18,6 +18,7 @@ path.
 - [ ] `SCHEDULER_BASE_URL` is the stable Production scheduler domain over HTTPS.
 - [ ] The same randomly generated `SCHEDULER_API_TOKEN` is present in the API
   and scheduler Production variables; it is absent from Git and chat.
+- [ ] `SCHEDULER_ALLOW_UNAUTHENTICATED` is not set in either Vercel project.
 - [ ] API Production variables include Neon `DATABASE_URL`, reachable managed
   Redis settings, a non-default `JWT_SECRET`, and a non-default seed password.
 - [ ] `GET /api/health/live` and `GET /api/health/ready` return the expected

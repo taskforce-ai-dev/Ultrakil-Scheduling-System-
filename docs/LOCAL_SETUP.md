@@ -155,7 +155,7 @@ Open a terminal per service.
 
 ```bash
 pnpm dev:api            # NestJS API   -> http://localhost:3001/api
-pnpm dev:scheduler      # Python       -> http://localhost:8000
+pnpm dev:scheduler      # Python       -> http://localhost:8000 (loopback-only auth opt-out)
 ```
 
 And a third for the manager portal:

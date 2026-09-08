@@ -7,12 +7,26 @@ which is the promise the API depends on when a manager reruns a schedule.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.settings import settings
+from app.settings import Settings, settings
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def private_local_runtime(monkeypatch):
+    """Existing wire tests model the explicitly opted-in private runtime."""
+    monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "allow_unauthenticated", True)
+
+
+def test_unauthenticated_mode_defaults_to_disabled(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_ALLOW_UNAUTHENTICATED", raising=False)
+
+    assert Settings().allow_unauthenticated is False
 
 PAYLOAD = {
     "run_id": "run-1",
@@ -93,16 +107,16 @@ def test_requires_the_configured_service_token(monkeypatch):
 
 def test_allows_local_solves_when_no_service_token_is_configured(monkeypatch):
     monkeypatch.setattr(settings, "api_token", None)
-    monkeypatch.setattr(settings, "vercel", False)
+    monkeypatch.setattr(settings, "allow_unauthenticated", True)
 
     response = client.post("/solve", json=PAYLOAD)
 
     assert response.status_code == 200
 
 
-def test_rejects_public_solves_when_vercel_token_is_missing(monkeypatch):
+def test_rejects_solves_by_default_when_token_is_missing(monkeypatch):
     monkeypatch.setattr(settings, "api_token", None)
-    monkeypatch.setattr(settings, "vercel", True)
+    monkeypatch.setattr(settings, "allow_unauthenticated", False)
 
     response = client.post("/solve", json=PAYLOAD)
 

@@ -73,6 +73,9 @@ services:
     restart: unless-stopped
     environment:
       SCHEDULER_PORT: 8000
+      # This compose service is private/local; public deployments must leave
+      # the opt-out unset and provide SCHEDULER_API_TOKEN instead.
+      SCHEDULER_ALLOW_UNAUTHENTICATED: "true"
     ports:
       - '${SCHEDULER_PORT:-8000}:8000'
     healthcheck:

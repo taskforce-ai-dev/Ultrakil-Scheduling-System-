@@ -24,10 +24,10 @@ Vercel's monorepo support creates a separate deployment/domain for each root;
 it does not require copying the repository three times.
 
 The checked-in `vercel.json` files keep the install/build commands and function
-duration explicit. Both backend functions are capped at 300 seconds, which is
-the Hobby plan ceiling. The scheduler's `app/main.py` exports the FastAPI
-instance that Vercel detects, and the Nest API keeps its existing
-`src/main.ts` entrypoint.
+duration explicit. Both backend functions are capped at 60 seconds, the Hobby
+plan ceiling when Fluid Compute is not enabled. The scheduler's `app/main.py`
+exports the FastAPI instance that Vercel detects, and the Nest API keeps its
+existing `src/main.ts` entrypoint.
 
 ## Environment variables
 
@@ -52,9 +52,9 @@ cross-wire a manager Preview to the matching API and scheduler Preview; do not
 claim that they do or put a deployment-specific URL into shared configuration.
 Keep the shared `SCHEDULER_API_TOKEN` secret identical in the API and scheduler
 projects. The scheduler leaves `/health/live` and `/health/ready` public for
-probes but requires that bearer token on `/solve` when configured. Production
-Vercel API validation requires the token and explicit HTTPS CORS and scheduler
-URLs.
+probes but requires that bearer token on `/solve`; its unauthenticated opt-out
+defaults to false and is not set in the Vercel environment. Production Vercel
+API validation requires the token and explicit HTTPS CORS and scheduler URLs.
 
 Neon supplies the production PostgreSQL `DATABASE_URL`; Redis must be a
 reachable managed Redis service because Vercel does not provide the local
@@ -75,7 +75,11 @@ Production variables are entered.
    scheduler-authenticated request after each production deployment.
 
 The existing Docker/Compose path remains the local and worker-compatible path:
-`docker compose up postgres redis scheduler` still runs the full local stack.
+`docker compose up postgres redis scheduler` still runs the full local stack;
+those documented private Compose scheduler services explicitly set
+`SCHEDULER_ALLOW_UNAUTHENTICATED=true`. The native `pnpm dev:scheduler`
+launcher applies the same loopback-only opt-out. Never carry that setting into a
+public deployment.
 This deployment change does not add QStash or alter the schedule queue/lease
 logic. Vercel Functions are request-driven and can scale to zero, so the
 BullMQ schedule worker is not treated as a durable always-on worker by this

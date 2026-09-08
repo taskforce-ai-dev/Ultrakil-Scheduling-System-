@@ -85,15 +85,15 @@ def ready() -> ReadinessResponse:
 def _require_scheduler_token(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> None:
-    """Require the shared API/scheduler token when one is configured.
+    """Require the shared API/scheduler token unless explicitly opted out.
 
-    Local Docker development intentionally leaves the token unset. Vercel
-    projects set it in both environments, so the public scheduler cannot be
-    used as an unauthenticated compute endpoint.
+    Authentication is required unless a private/local runtime explicitly sets
+    SCHEDULER_ALLOW_UNAUTHENTICATED=true. Public deployments must never use
+    that opt-out.
     """
     expected = settings.api_token
     if expected is None:
-        if settings.vercel:
+        if not settings.allow_unauthenticated:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Scheduler authentication is not configured",
