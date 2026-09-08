@@ -28,6 +28,7 @@ export const envSchema = z.object({
 
   SCHEDULER_BASE_URL: z.string().url().default('http://localhost:8000'),
   SCHEDULER_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
+  SCHEDULER_API_TOKEN: z.string().min(32).optional(),
 
   /**
    * Hard ceiling on every health probe. A readiness check must always answer:
@@ -70,6 +71,22 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     if (parsed.data.SEED_ADMIN_PASSWORD === 'ultrakil-change-me') {
       throw new Error(
         'Invalid environment configuration:\n  - SEED_ADMIN_PASSWORD: the default password must not be used in production',
+      );
+    }
+    if (!parsed.data.SCHEDULER_API_TOKEN) {
+      throw new Error(
+        'Invalid environment configuration:\n  - SCHEDULER_API_TOKEN: required in production (at least 32 characters)',
+      );
+    }
+    if (!parsed.data.SCHEDULER_BASE_URL.startsWith('https://')) {
+      throw new Error(
+        'Invalid environment configuration:\n  - SCHEDULER_BASE_URL: production scheduler URL must use HTTPS',
+      );
+    }
+    const corsOrigins = parsed.data.API_CORS_ORIGINS.split(',').map((origin) => origin.trim());
+    if (corsOrigins.some((origin) => origin === '*' || !origin.startsWith('https://'))) {
+      throw new Error(
+        'Invalid environment configuration:\n  - API_CORS_ORIGINS: production origins must be explicit HTTPS URLs',
       );
     }
   }

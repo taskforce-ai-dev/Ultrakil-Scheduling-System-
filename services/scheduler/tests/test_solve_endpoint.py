@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.settings import settings
 
 client = TestClient(app)
 
@@ -76,3 +77,23 @@ def test_rejects_a_malformed_request():
     response = client.post("/solve", json={"run_id": "x"})
 
     assert response.status_code == 422
+
+
+def test_requires_the_configured_service_token(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "scheduler-token")
+
+    unauthorized = client.post("/solve", json=PAYLOAD)
+    authorized = client.post(
+        "/solve", json=PAYLOAD, headers={"Authorization": "Bearer scheduler-token"}
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_allows_local_solves_when_no_service_token_is_configured(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", None)
+
+    response = client.post("/solve", json=PAYLOAD)
+
+    assert response.status_code == 200

@@ -30,6 +30,7 @@ export const schedulerConfig = registerAs('scheduler', () => {
   return {
     baseUrl: env.SCHEDULER_BASE_URL,
     healthTimeoutMs: Number(env.SCHEDULER_HEALTH_TIMEOUT_MS),
+    apiToken: env.SCHEDULER_API_TOKEN,
   };
 });
 

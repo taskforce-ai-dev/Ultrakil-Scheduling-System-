@@ -1,5 +1,11 @@
 # C08 release evidence and O08 handoff
 
+> Current deployment target: Vercel Preview/Production. There is no dedicated
+> staging server; the historical Docker-host procedure is retained in
+> [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md) for the preserved Compose path.
+> Use [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) for current deployment
+> evidence.
+
 Record links/results against the exact release SHA; unchecked items remain open.
 This C08 checklist complements Oshadi's separate O08 guide, screenshots and demo
 script. It does not transfer O08 ownership or include branding PR #36.

@@ -113,6 +113,7 @@ export class HealthService {
 
   private async pingScheduler(): Promise<Record<string, unknown>> {
     const baseUrl = this.config.getOrThrow<string>('scheduler.baseUrl');
+    const token = this.config.get<string>('scheduler.apiToken');
     const timeoutMs = this.config.getOrThrow<number>(
       'scheduler.healthTimeoutMs',
     );
@@ -122,6 +123,7 @@ export class HealthService {
 
     try {
       const response = await fetch(`${baseUrl}/health/live`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: controller.signal,
       });
       if (!response.ok) {
