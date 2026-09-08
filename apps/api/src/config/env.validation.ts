@@ -3,6 +3,11 @@ import { z } from 'zod';
 const port = (fallback: number) =>
   z.coerce.number().int().min(1).max(65535).default(fallback);
 
+const optionalSecret = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().min(32).optional(),
+);
+
 /**
  * Environment contract for the API. Validated once at boot so a misconfigured
  * deployment fails immediately and loudly instead of at first request.
@@ -11,6 +16,8 @@ export const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
     .default('development'),
+  /** Set automatically by Vercel; used for public-backend-only checks. */
+  VERCEL: z.string().optional(),
   TZ: z.string().default('Asia/Colombo'),
 
   DATABASE_URL: z
@@ -28,7 +35,7 @@ export const envSchema = z.object({
 
   SCHEDULER_BASE_URL: z.string().url().default('http://localhost:8000'),
   SCHEDULER_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(2000),
-  SCHEDULER_API_TOKEN: z.string().min(32).optional(),
+  SCHEDULER_API_TOKEN: optionalSecret,
 
   /**
    * Hard ceiling on every health probe. A readiness check must always answer:
@@ -46,7 +53,7 @@ export const envSchema = z.object({
    * random secret at boot and says so; tokens then stop working on restart,
    * which is a fair trade for not having to configure anything to run locally.
    */
-  JWT_SECRET: z.string().min(32).optional(),
+  JWT_SECRET: optionalSecret,
   JWT_EXPIRES_IN: z.string().default('12h'),
 
   /** Seeds the first admin account. Only used when no user exists yet. */
@@ -73,21 +80,23 @@ export function validateEnv(raw: Record<string, unknown>): Env {
         'Invalid environment configuration:\n  - SEED_ADMIN_PASSWORD: the default password must not be used in production',
       );
     }
-    if (!parsed.data.SCHEDULER_API_TOKEN) {
-      throw new Error(
-        'Invalid environment configuration:\n  - SCHEDULER_API_TOKEN: required in production (at least 32 characters)',
-      );
-    }
-    if (!parsed.data.SCHEDULER_BASE_URL.startsWith('https://')) {
-      throw new Error(
-        'Invalid environment configuration:\n  - SCHEDULER_BASE_URL: production scheduler URL must use HTTPS',
-      );
-    }
-    const corsOrigins = parsed.data.API_CORS_ORIGINS.split(',').map((origin) => origin.trim());
-    if (corsOrigins.some((origin) => origin === '*' || !origin.startsWith('https://'))) {
-      throw new Error(
-        'Invalid environment configuration:\n  - API_CORS_ORIGINS: production origins must be explicit HTTPS URLs',
-      );
+    if (parsed.data.VERCEL === '1') {
+      if (!parsed.data.SCHEDULER_API_TOKEN) {
+        throw new Error(
+          'Invalid environment configuration:\n  - SCHEDULER_API_TOKEN: required for Vercel (at least 32 characters)',
+        );
+      }
+      if (!parsed.data.SCHEDULER_BASE_URL.startsWith('https://')) {
+        throw new Error(
+          'Invalid environment configuration:\n  - SCHEDULER_BASE_URL: Vercel scheduler URL must use HTTPS',
+        );
+      }
+      const corsOrigins = parsed.data.API_CORS_ORIGINS.split(',').map((origin) => origin.trim());
+      if (corsOrigins.some((origin) => origin === '*' || !origin.startsWith('https://'))) {
+        throw new Error(
+          'Invalid environment configuration:\n  - API_CORS_ORIGINS: Vercel origins must be explicit HTTPS URLs',
+        );
+      }
     }
   }
 

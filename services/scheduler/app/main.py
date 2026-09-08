@@ -93,6 +93,11 @@ def _require_scheduler_token(
     """
     expected = settings.api_token
     if expected is None:
+        if settings.vercel:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Scheduler authentication is not configured",
+            )
         return
 
     supplied = credentials.credentials if credentials else None

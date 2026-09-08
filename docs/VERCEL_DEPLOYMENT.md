@@ -45,12 +45,16 @@ api:         API_CORS_ORIGINS=https://<manager-production-domain>.vercel.app
 api:         SCHEDULER_BASE_URL=https://<scheduler-production-domain>.vercel.app
 ```
 
-For Preview, set matching Preview URLs/variables in the Vercel project
-settings. Keep the shared `SCHEDULER_API_TOKEN` secret identical in the API and
-scheduler projects. The scheduler leaves `/health/live` and `/health/ready`
-public for probes but requires that bearer token on `/solve` when configured.
-Production API validation also requires the token and explicit HTTPS CORS and
-scheduler URLs.
+The current integrated UAT uses the three projects' stable production
+`.vercel.app` domains. Preview deployments are still useful for checking an
+individual change, but these static URL settings do not automatically
+cross-wire a manager Preview to the matching API and scheduler Preview; do not
+claim that they do or put a deployment-specific URL into shared configuration.
+Keep the shared `SCHEDULER_API_TOKEN` secret identical in the API and scheduler
+projects. The scheduler leaves `/health/live` and `/health/ready` public for
+probes but requires that bearer token on `/solve` when configured. Production
+Vercel API validation requires the token and explicit HTTPS CORS and scheduler
+URLs.
 
 Neon supplies the production PostgreSQL `DATABASE_URL`; Redis must be a
 reachable managed Redis service because Vercel does not provide the local
@@ -62,8 +66,9 @@ Production variables are entered.
 
 1. Open a pull request. Vercel creates Preview deployments for the three
    connected projects, subject to the Hobby plan's build concurrency limit.
-2. Exercise the manager portal against the Preview API and scheduler using
-   Preview-only URLs and credentials.
+2. For integrated UAT today, exercise the manager portal against the stable
+   Production API and scheduler domains. Preview deployments can be checked
+   individually, but their service URLs are not automatically cross-wired.
 3. Merge only after CI and review are green. The production branch deploys the
    three Production projects.
 4. Verify `/api/health/live`, `/api/health/ready`, manager login, CORS, and a

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
@@ -23,7 +23,9 @@ test('declares three independent Vercel project configurations', () => {
   for (const [configPath, rootDirectory] of projects) {
     const config = readJson(configPath);
     assert.equal(config.$schema, 'https://openapi.vercel.sh/vercel.json');
-    assert.ok(rootDirectory);
+    const projectRoot = resolve(root, rootDirectory);
+    assert.equal(statSync(projectRoot).isDirectory(), true);
+    assert.equal(existsSync(resolve(projectRoot, 'package.json')) || rootDirectory === 'services/scheduler', true);
   }
 });
 
@@ -36,6 +38,18 @@ test('uses the current Nest and FastAPI entrypoints with a Hobby-safe duration',
   assert.equal(api.buildCommand, 'pnpm prisma:generate && pnpm build');
   assert.match(read('apps/api/src/main.ts'), /NestFactory/);
   assert.match(read('services/scheduler/app/main.py'), /app = FastAPI\(/);
+});
+
+test('declares scheduler runtime dependencies for Vercel Python builds', () => {
+  const pyproject = read('services/scheduler/pyproject.toml');
+
+  assert.match(pyproject, /dependencies\s*=\s*\[/);
+  for (const dependency of ['fastapi', 'ortools', 'uvicorn', 'pydantic', 'pydantic-settings']) {
+    assert.match(pyproject, new RegExp(`^\\s*"${dependency}[^\\n]*"`, 'm'));
+  }
+  for (const developmentOnly of ['pytest', 'httpx', 'ruff']) {
+    assert.doesNotMatch(pyproject, new RegExp(`^\\s*"${developmentOnly}[^\\n]*"`, 'm'));
+  }
 });
 
 test('keeps the manager build explicit for the monorepo package', () => {
@@ -75,6 +89,11 @@ test('explains Vercel preview/production deployment and preserves Docker locally
   assert.match(docs, /services\/scheduler/);
   assert.match(docs, /Preview/);
   assert.match(docs, /Production/);
+  assert.match(docs, /stable production/);
+  assert.match(docs, /not automatically[\s\S]*cross-wired/);
+  assert.doesNotMatch(docs, /set matching Preview URLs/);
+  assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /Production/);
+  assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
   assert.match(docs, /docker compose/);
   assert.match(docs, /No dedicated[\s\S]*staging server/);
 });

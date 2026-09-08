@@ -7,6 +7,13 @@ description = "UltraKIL scheduling service — constraint solving for visit assi
 # compiling pydantic-core from Rust source, which needs the MSVC toolchain and
 # fails on a normal Windows dev machine. CI and the server both run 3.11.
 requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi==0.115.12",
+    "ortools==9.11.4210",
+    "uvicorn[standard]==0.34.0",
+    "pydantic==2.11.1",
+    "pydantic-settings==2.8.1",
+]
 
 [tool.ruff]
 line-length = 100

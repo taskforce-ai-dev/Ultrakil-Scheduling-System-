@@ -93,7 +93,17 @@ def test_requires_the_configured_service_token(monkeypatch):
 
 def test_allows_local_solves_when_no_service_token_is_configured(monkeypatch):
     monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "vercel", False)
 
     response = client.post("/solve", json=PAYLOAD)
 
     assert response.status_code == 200
+
+
+def test_rejects_public_solves_when_vercel_token_is_missing(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "vercel", True)
+
+    response = client.post("/solve", json=PAYLOAD)
+
+    assert response.status_code == 503
