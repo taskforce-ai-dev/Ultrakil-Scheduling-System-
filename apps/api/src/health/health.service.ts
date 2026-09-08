@@ -25,9 +25,10 @@ class ProbeTimeoutError extends Error {
  * for the API, 20 for the portal — so which one wins is a property of the
  * install layout rather than of this code.
  *
- * Naming the four members used makes the file compile the same way in every
- * environment. Aligning the two `@types/node` majors is the real repair and
- * belongs in its own change, since it moves types under the whole workspace.
+ * Naming the four members used, and asserting them at the call site, makes the
+ * file compile the same way in every environment. Aligning the two
+ * `@types/node` majors is the real repair and belongs in its own change, since
+ * it moves types under the whole workspace.
  */
 interface FetchedResponse {
   ok: boolean;
@@ -144,10 +145,15 @@ export class HealthService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response: FetchedResponse = await fetch(`${baseUrl}/health/live`, {
+      // Asserted, not inferred. Node's fetch returns exactly this at runtime;
+      // it is the *type* environments disagree about, in both directions —
+      // locally the ambient Response has these members, on Vercel it has none
+      // of them. An assertion states what the runtime actually provides
+      // instead of letting the build depend on which @types/node won.
+      const response = (await fetch(`${baseUrl}/health/live`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: controller.signal,
-      });
+      })) as unknown as FetchedResponse;
       if (!response.ok) {
         throw new Error(
           `Scheduler responded with HTTP ${response.status} ${response.statusText}`,
