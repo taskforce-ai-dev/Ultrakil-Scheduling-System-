@@ -17,6 +17,7 @@ import {
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { GenerateVisitsDto, GenerationImpactDto } from './dto';
 import {
   ExistingVisit,
@@ -259,6 +260,7 @@ export class VisitGenerationService {
 
     return visits.map((visit) => ({
       id: visit.id,
+      updatedAt: visit.updatedAt,
       serviceAgreementId: visit.serviceAgreementId,
       visitDate: toDateOnly(visit.visitDate),
       windowStartMinute: visit.windowStartMinute,
@@ -286,11 +288,49 @@ export class VisitGenerationService {
     actor: AuthenticatedUser,
   ): Promise<string> {
     const branchIds = new Map(
-      (await this.prisma.branch.findMany()).map((branch) => [branch.code, branch.id]),
+      (await this.prisma.branch.findMany()).map((branch) => [
+        branch.code,
+        branch.id,
+      ]),
     );
     const currentVersions = await this.currentVersionIds(plan);
 
     return this.prisma.$transaction(async (tx) => {
+      const changes = [...plan.updates, ...plan.removals];
+      await lockScheduleVisits(
+        tx,
+        changes.map((change) => change.visitId),
+      );
+      const current = await tx.generatedVisit.findMany({
+        where: { id: { in: changes.map((change) => change.visitId) } },
+        include: { _count: { select: { assignments: true } } },
+      });
+      const byId = new Map(current.map((visit) => [visit.id, visit]));
+      // Validate the whole plan before additions, updates, removals or run/audit
+      // writes. A stale plan is rejected atomically, never partially skipped.
+      for (const change of changes) {
+        const visit = byId.get(change.visitId);
+        if (
+          !visit ||
+          visit._count.assignments !== 0 ||
+          visit.lockedAt !== null ||
+          visit.isManuallyAdjusted ||
+          (visit.status !== VisitStatus.PENDING &&
+            visit.status !== VisitStatus.UNASSIGNED)
+        ) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'A visit became protected after generation was planned. Preview again before confirming.',
+            HttpStatus.CONFLICT,
+            { visitId: change.visitId },
+          );
+        }
+        assertVisitRevision(
+          change.visitId,
+          change.expectedUpdatedAt,
+          visit.updatedAt,
+        );
+      }
       const run = await tx.scheduleRun.create({
         data: {
           status: ScheduleRunStatus.RUNNING,
@@ -326,8 +366,8 @@ export class VisitGenerationService {
       }
 
       for (const update of plan.updates) {
-        await tx.generatedVisit.update({
-          where: { id: update.visitId },
+        const applied = await tx.generatedVisit.updateMany({
+          where: { id: update.visitId, updatedAt: update.expectedUpdatedAt },
           data: {
             windowEndMinute: update.required.windowEndMinute,
             durationMinutes: update.required.durationMinutes,
@@ -337,12 +377,32 @@ export class VisitGenerationService {
               currentVersions.get(update.required.serviceAgreementId) ?? null,
           },
         });
+        if (applied.count !== 1) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'A visit changed after generation was planned.',
+            HttpStatus.CONFLICT,
+            { visitId: update.visitId },
+          );
+        }
       }
 
       if (plan.removals.length > 0) {
-        await tx.generatedVisit.deleteMany({
-          where: { id: { in: plan.removals.map((removal) => removal.visitId) } },
+        const removed = await tx.generatedVisit.deleteMany({
+          where: {
+            OR: plan.removals.map((removal) => ({
+              id: removal.visitId,
+              updatedAt: removal.expectedUpdatedAt,
+            })),
+          },
         });
+        if (removed.count !== plan.removals.length) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'A visit changed after generation was planned.',
+            HttpStatus.CONFLICT,
+          );
+        }
       }
 
       const finished = await tx.scheduleRun.update({
@@ -448,7 +508,10 @@ export class VisitGenerationService {
         changes: asText(update.changes),
       })),
       removals: plan.removals.map((removal) => ({
-        ...removal,
+        visitId: removal.visitId,
+        serviceAgreementId: removal.serviceAgreementId,
+        visitDate: removal.visitDate,
+        reason: removal.reason,
         ...nameFor(removal.serviceAgreementId),
       })),
       protectedVisits: plan.protectedVisits.map((entry) => ({

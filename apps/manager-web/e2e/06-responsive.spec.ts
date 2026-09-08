@@ -25,6 +25,7 @@ const PAGES: Array<{ path: string; heading: string }> = [
   { path: "/customers", heading: "Customers" },
   { path: "/service-agreements", heading: "Service Agreements" },
   { path: "/visits", heading: "Visit Calendar" },
+  { path: "/calendar", heading: "Calendar" },
   { path: "/workforce", heading: "Workforce" },
   { path: "/vehicles", heading: "Vehicles" },
   { path: "/dispatch-board", heading: "Dispatch Board" },

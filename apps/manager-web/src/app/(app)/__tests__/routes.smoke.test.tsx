@@ -26,10 +26,12 @@ vi.mock("@/lib/api-client", async () => {
     fetchVisits: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 500 }),
     fetchCustomers: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 }),
     fetchJobTypes: vi.fn().mockResolvedValue([]),
+    fetchCalendar: vi.fn().mockResolvedValue({ items: [], total: 0 }),
   };
 });
 
 import DashboardPage from "../dashboard/page";
+import CalendarPage from "../calendar/page";
 import CustomersPage from "../customers/page";
 import ServiceAgreementsPage from "../service-agreements/page";
 import WorkforcePage from "../workforce/page";
@@ -42,6 +44,7 @@ import VisitsPage from "../visits/page";
 describe("route smoke tests", () => {
   it.each([
     ["Dashboard", DashboardPage],
+    ["Calendar", CalendarPage],
     ["Customers", CustomersPage],
     ["Service Agreements", ServiceAgreementsPage],
     ["Visit Calendar", VisitsPage],

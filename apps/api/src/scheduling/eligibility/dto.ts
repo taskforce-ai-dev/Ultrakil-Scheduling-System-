@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CrewRole } from '@prisma/client';
+import { AssignmentStatus, CrewRole } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { IsDateOnly } from '../../common/validation/is-date-only';
 import { CONFLICT_CODES } from './conflict-codes';
 
 export class ProposedCrewMemberDto {
@@ -136,7 +137,8 @@ export class AssignmentDto {
   @ApiProperty({ type: String }) branchCode!: string;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;
   @ApiProperty({ type: Number }) plannedEndMinute!: number;
-  @ApiProperty({ type: [AssignedCrewMemberDto] }) crew!: AssignedCrewMemberDto[];
+  @ApiProperty({ type: [AssignedCrewMemberDto] })
+  crew!: AssignedCrewMemberDto[];
   @ApiProperty({ type: [AssignedVehicleDto] }) vehicles!: AssignedVehicleDto[];
   @ApiProperty({ type: Boolean }) isLocked!: boolean;
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
@@ -166,6 +168,82 @@ export class UnassignedVisitDto {
 
 export class PaginatedUnassignedVisitsDto {
   @ApiProperty({ type: [UnassignedVisitDto] }) items!: UnassignedVisitDto[];
+  @ApiProperty({ type: Number }) total!: number;
+  @ApiProperty({ type: Number }) page!: number;
+  @ApiProperty({ type: Number }) pageSize!: number;
+}
+
+export class EmployeeAssignmentQueryDto {
+  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number = 1;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number = 50;
+
+  @ApiPropertyOptional({
+    format: 'date',
+    description: 'Assignments on or after this date.',
+  })
+  @IsOptional()
+  @IsDateOnly()
+  from?: string;
+
+  @ApiPropertyOptional({
+    format: 'date',
+    description: 'Assignments on or before this date.',
+  })
+  @IsOptional()
+  @IsDateOnly()
+  to?: string;
+}
+
+/**
+ * Manager/admin read model prepared for a future worker app. Worker self-scope
+ * authorization still requires a User-to-Employee identity link in Phase 2.
+ */
+export class EmployeeAssignmentDto {
+  @ApiProperty({ type: String, format: 'uuid' }) assignmentId!: string;
+  @ApiProperty({ type: String, enum: Object.values(AssignmentStatus) })
+  status!: AssignmentStatus;
+  @ApiProperty({ type: String, format: 'uuid' }) scheduleRunId!: string;
+  @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
+  @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
+  @ApiProperty({ type: Number }) plannedStartMinute!: number;
+  @ApiProperty({ type: Number }) plannedEndMinute!: number;
+  @ApiProperty({ type: String }) branchCode!: string;
+  @ApiProperty({ type: String }) customerName!: string;
+  @ApiProperty({ type: String }) siteName!: string;
+  @ApiProperty({ type: String }) jobTypeName!: string;
+  @ApiProperty({ type: String, nullable: true, description: 'Current agreement notes for the visit.' })
+  instructions!: string | null;
+  @ApiProperty({ type: [AssignedCrewMemberDto] }) crew!: AssignedCrewMemberDto[];
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supervisorEmployeeId!: string | null;
+  @ApiProperty({ type: String, nullable: true }) supervisorName!: string | null;
+  @ApiProperty({ type: [AssignedVehicleDto] }) vehicles!: AssignedVehicleDto[];
+  @ApiProperty({ type: String, enum: Object.values(CrewRole) }) role!: CrewRole;
+  @ApiProperty({ type: Boolean }) isPmsSupervisor!: boolean;
+  @ApiProperty({ type: String, format: 'date-time' }) publishedAt!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  acknowledgedAt!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  startedAt!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  completedAt!: string | null;
+}
+
+export class PaginatedEmployeeAssignmentsDto {
+  @ApiProperty({ type: [EmployeeAssignmentDto] })
+  items!: EmployeeAssignmentDto[];
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) page!: number;
   @ApiProperty({ type: Number }) pageSize!: number;

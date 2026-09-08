@@ -12,6 +12,7 @@ import {
   Car,
   ClipboardList,
   CalendarDays,
+  CalendarRange,
   AlertTriangle,
   History,
   Menu,
@@ -19,24 +20,24 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetTrigger,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/calendar", label: "Calendar", icon: CalendarRange },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/service-agreements", label: "Service Agreements", icon: FileText },
   { href: "/visits", label: "Visit Calendar", icon: CalendarDays },
   { href: "/workforce", label: "Workforce", icon: HardHat },
   { href: "/vehicles", label: "Vehicles", icon: Car },
   { href: "/dispatch-board", label: "Dispatch Board", icon: ClipboardList },
-  { href: "/unassigned-visits", label: "Unassigned Visits", icon: AlertTriangle },
+  {
+    href: "/unassigned-visits",
+    label: "Unassigned Visits",
+    icon: AlertTriangle,
+  },
   { href: "/schedule-history", label: "Schedule History", icon: History },
 ];
 
@@ -78,7 +79,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
               isActive
                 ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm"
-                : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
             )}
           >
             <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -150,7 +151,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </Button>
               }
             />
-            <SheetContent side="left" className="w-64 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
+            <SheetContent
+              side="left"
+              className="w-64 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
+            >
               <SheetTitle className="flex h-16 shrink-0 items-center border-b border-black/5 bg-white px-4">
                 <Brand />
               </SheetTitle>
