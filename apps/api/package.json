@@ -34,6 +34,7 @@
     "@nestjs/platform-express": "^11.0.12",
     "@nestjs/swagger": "^11.1.0",
     "@prisma/client": "^6.5.0",
+    "@upstash/qstash": "^2.11.3",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.44.0",
     "class-transformer": "^0.5.1",

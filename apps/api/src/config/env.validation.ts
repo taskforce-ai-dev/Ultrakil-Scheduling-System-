@@ -35,11 +35,19 @@ export const envSchema = z.object({
    * A schedule execution always stops before Vercel Hobby's 300 second
    * maximum, leaving time for persistence and a deterministic response.
    */
-  SCHEDULE_EXECUTION_BUDGET_SECONDS: z.coerce.number().int().min(1).max(299).default(240),
-  API_PUBLIC_URL: z.string().url().optional(),
-  QSTASH_TOKEN: z.string().min(1).optional(),
-  QSTASH_CURRENT_SIGNING_KEY: z.string().min(1).optional(),
-  QSTASH_NEXT_SIGNING_KEY: z.string().min(1).optional(),
+  SCHEDULE_EXECUTION_BUDGET_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(45)
+    .max(299)
+    .default(240),
+  // These placeholders are deliberately valid when BullMQ is selected: a
+  // copied .env.example commonly leaves them blank. QStash mode checks the
+  // complete, non-blank set below.
+  API_PUBLIC_URL: z.string().optional(),
+  QSTASH_TOKEN: z.string().optional(),
+  QSTASH_CURRENT_SIGNING_KEY: z.string().optional(),
+  QSTASH_NEXT_SIGNING_KEY: z.string().optional(),
 
   API_PORT: port(3001),
   API_GLOBAL_PREFIX: z.string().default('api'),
@@ -118,7 +126,10 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       'QSTASH_CURRENT_SIGNING_KEY',
       'QSTASH_NEXT_SIGNING_KEY',
       'API_PUBLIC_URL',
-    ].filter((key) => !parsed.data[key as keyof Env]);
+    ].filter((key) => {
+      const value = parsed.data[key as keyof Env];
+      return typeof value !== 'string' || value.trim().length === 0;
+    });
     if (missing.length > 0) {
       throw new Error(
         `Invalid environment configuration:\n${missing
@@ -126,7 +137,14 @@ export function validateEnv(raw: Record<string, unknown>): Env {
           .join('\n')}`,
       );
     }
-    if (!parsed.data.API_PUBLIC_URL?.startsWith('https://')) {
+    let hasHttpsPublicUrl = false;
+    try {
+      hasHttpsPublicUrl =
+        new URL(parsed.data.API_PUBLIC_URL ?? '').protocol === 'https:';
+    } catch {
+      hasHttpsPublicUrl = false;
+    }
+    if (!hasHttpsPublicUrl) {
       throw new Error(
         'Invalid environment configuration:\n  - API_PUBLIC_URL: must use https when SCHEDULE_DISPATCHER=qstash',
       );
@@ -135,7 +153,9 @@ export function validateEnv(raw: Record<string, unknown>): Env {
 
   if (!parsed.success) {
     const details = parsed.error.issues
-      .map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .map(
+        (issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`,
+      )
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${details}`);
   }

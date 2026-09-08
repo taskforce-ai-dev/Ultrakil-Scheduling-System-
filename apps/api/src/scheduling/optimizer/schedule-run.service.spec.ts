@@ -70,10 +70,18 @@ function fixture(
   const run = {
     id: 'run',
     branchCode: BranchCode.COLOMBO,
-    status: ScheduleRunStatus.QUEUED,
+    status: ScheduleRunStatus.QUEUED as ScheduleRunStatus,
     rangeStart: new Date('2027-03-01T00:00:00Z'),
     rangeEnd: new Date('2027-03-07T00:00:00Z'),
-    cancelRequestedAt: null,
+    cancelRequestedAt: null as Date | null,
+    startedAt: null as Date | null,
+    executionLeaseId: null as string | null,
+    executionLeaseExpiresAt: null as Date | null,
+    executionAttempt: 0,
+    timeLimitSeconds: 1,
+    jobId: 'msg_current',
+    errorCode: null as string | null,
+    errorMessage: null as string | null,
   };
   // Model deletion and its FK cascade at the database boundary. The service,
   // snapshot, solver barrier and queue failure handler run unchanged.
@@ -92,10 +100,18 @@ function fixture(
     findMany: jest.fn(
       async ({ where }: { where: { status?: { in: AssignmentStatus[] } } }) =>
         assignments
-          .filter((entry) => !where.status || where.status.in.includes(entry.status))
-          .map((entry) => ({ ...entry, publishedAt: null, _count: {
-            notificationOutboxEntries: outbox.filter((notice) => notice.assignmentId === entry.id).length,
-          } })),
+          .filter(
+            (entry) => !where.status || where.status.in.includes(entry.status),
+          )
+          .map((entry) => ({
+            ...entry,
+            publishedAt: null,
+            _count: {
+              notificationOutboxEntries: outbox.filter(
+                (notice) => notice.assignmentId === entry.id,
+              ).length,
+            },
+          })),
     ),
     delete: jest.fn(async ({ where }: { where: { id: string } }) =>
       remove(where.id),
@@ -147,6 +163,79 @@ function fixture(
     findUnique: jest.fn(async () => ({ ...run })),
     update: jest.fn(async ({ data }: { data: Partial<typeof run> }) =>
       Object.assign(run, data),
+    ),
+    updateMany: jest.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown>;
+        data: Record<string, unknown>;
+      }) => {
+        const matches = (condition: Record<string, unknown>): boolean => {
+          if (condition.id && condition.id !== run.id) return false;
+          if (condition.jobId && condition.jobId !== run.jobId) return false;
+          if (condition.status) {
+            const status = condition.status as
+              ScheduleRunStatus | { in?: ScheduleRunStatus[] };
+            if (typeof status === 'string' && status !== run.status)
+              return false;
+            if (
+              typeof status === 'object' &&
+              status.in &&
+              !status.in.includes(run.status)
+            )
+              return false;
+          }
+          if (condition.cancelRequestedAt === null && run.cancelRequestedAt)
+            return false;
+          if (
+            typeof condition.cancelRequestedAt === 'object' &&
+            condition.cancelRequestedAt &&
+            'not' in condition.cancelRequestedAt &&
+            !run.cancelRequestedAt
+          )
+            return false;
+          if (
+            condition.executionLeaseId !== undefined &&
+            condition.executionLeaseId !== run.executionLeaseId
+          )
+            return false;
+          if (
+            condition.executionLeaseExpiresAt === null &&
+            run.executionLeaseExpiresAt
+          )
+            return false;
+          const expiry = condition.executionLeaseExpiresAt as
+            { gt?: Date; lt?: Date } | undefined;
+          if (
+            expiry?.gt &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt <= expiry.gt)
+          )
+            return false;
+          if (
+            expiry?.lt &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt >= expiry.lt)
+          )
+            return false;
+          const alternatives = condition.OR as
+            Record<string, unknown>[] | undefined;
+          return !alternatives || alternatives.some(matches);
+        };
+        if (!matches(where)) return { count: 0 };
+        for (const [key, value] of Object.entries(data)) {
+          if (typeof value === 'object' && value && 'increment' in value) {
+            (run as Record<string, unknown>)[key] =
+              Number((run as Record<string, unknown>)[key] ?? 0) +
+              Number((value as { increment: number }).increment);
+          } else {
+            (run as Record<string, unknown>)[key] = value;
+          }
+        }
+        return { count: 1 };
+      },
     ),
   };
   const tx = {
@@ -236,6 +325,8 @@ function fixture(
     started,
     release,
     processor,
+    service,
+    scheduler,
     job,
     run,
     visit,
@@ -252,27 +343,48 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
-  it.each(['assignment', 'unassigned'])('rejects duplicate %s outcomes for an empty assignment snapshot', async (duplicate) => {
-    const f = fixture();
-    f.assignments.length = 0;
-    const pending = f.processor.process(f.job).then(() => undefined, (error: unknown) => error);
-    await f.started.promise;
-    const proposal = {
-      visit_id: f.visit.id, employee_ids: ['employee'], vehicles: [], start_minute: 600,
-      scheduled_date: '2027-03-03',
-    };
-    f.answer.resolve({
-      run_id: f.run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 1,
-      assignments: duplicate === 'assignment' ? [proposal, proposal] : [proposal],
-      unassigned: duplicate === 'unassigned'
-        ? [{ visit_id: f.visit.id, reason_codes: ['NO_CREW'], message: 'No crew' }]
-        : [],
-    });
-    expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
-    expect(f.assignments).toEqual([]);
-    expect(f.generatedVisit.update).not.toHaveBeenCalled();
-    expect(f.reasons.createMany).not.toHaveBeenCalled();
-  });
+  it.each(['assignment', 'unassigned'])(
+    'rejects duplicate %s outcomes for an empty assignment snapshot',
+    async (duplicate) => {
+      const f = fixture();
+      f.assignments.length = 0;
+      const pending = f.processor.process(f.job).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await f.started.promise;
+      const proposal = {
+        visit_id: f.visit.id,
+        employee_ids: ['employee'],
+        vehicles: [],
+        start_minute: 600,
+        scheduled_date: '2027-03-03',
+      };
+      f.answer.resolve({
+        run_id: f.run.id,
+        status: 'OPTIMAL',
+        solve_seconds: 0,
+        objective_value: 0,
+        visits_considered: 1,
+        assignments:
+          duplicate === 'assignment' ? [proposal, proposal] : [proposal],
+        unassigned:
+          duplicate === 'unassigned'
+            ? [
+                {
+                  visit_id: f.visit.id,
+                  reason_codes: ['NO_CREW'],
+                  message: 'No crew',
+                },
+              ]
+            : [],
+      });
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.assignments).toEqual([]);
+      expect(f.generatedVisit.update).not.toHaveBeenCalled();
+      expect(f.reasons.createMany).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
     ['present', 'absent'].flatMap((snapshot) =>
@@ -679,5 +791,89 @@ describe('solver replacement lifecycle fence', () => {
     await f.started.promise;
     f.release();
     await pending;
+  });
+});
+
+describe('at-least-once schedule-run delivery leases', () => {
+  const deliveryOptions = { executionBudgetSeconds: 240, retryOnFailure: true };
+
+  it('reports a concurrent duplicate delivery as busy without a second solve', async () => {
+    const f = fixture();
+    const first = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'busy' },
+    );
+    expect(f.scheduler.solve).toHaveBeenCalledTimes(1);
+
+    f.release();
+    await expect(first).resolves.toMatchObject({ kind: 'completed' });
+  });
+
+  it.each([
+    ScheduleRunStatus.SUCCEEDED,
+    ScheduleRunStatus.FAILED,
+    ScheduleRunStatus.CANCELLED,
+  ])('acknowledges a settled %s delivery without invoking the solver', async (status) => {
+    const f = fixture();
+    f.run.status = status;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'settled' },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('reclaims an expired lease and completes the delivery', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(Date.now() - 1_000);
+
+    const pending = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).resolves.toMatchObject({ kind: 'completed' });
+    expect(f.run.executionAttempt).toBe(1);
+    expect(f.run.executionLeaseId).not.toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
+  });
+
+  it('acknowledges a cancelled delivery without invoking the solver', async () => {
+    const f = fixture();
+    f.run.cancelRequestedAt = new Date();
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      {
+        kind: 'cancelled',
+      },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('only accepts a QStash failure callback for the stored delivery ID', async () => {
+    const f = fixture();
+
+    await f.service.failForQStash(
+      f.run.id,
+      'msg_other',
+      'QSTASH_DELIVERY_FAILED',
+      'failed',
+    );
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+
+    await f.service.failForQStash(
+      f.run.id,
+      'msg_current',
+      'QSTASH_DELIVERY_FAILED',
+      'failed',
+    );
+    expect(f.run).toMatchObject({
+      status: ScheduleRunStatus.FAILED,
+      errorCode: 'QSTASH_DELIVERY_FAILED',
+    });
   });
 });

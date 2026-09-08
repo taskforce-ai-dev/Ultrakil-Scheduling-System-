@@ -8,8 +8,14 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Inject,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { LockScope, ScheduleRun, UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -25,7 +31,10 @@ import {
   StartScheduleRunDto,
 } from './dto';
 import { PublishingService } from './publishing.service';
-import { ScheduleRunQueue } from './schedule-run.processor';
+import {
+  SCHEDULE_RUN_DISPATCHER,
+  ScheduleRunDispatcher,
+} from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
 
 function toDto(run: ScheduleRun): ScheduleRunDto {
@@ -58,7 +67,8 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
 export class ScheduleRunsController {
   constructor(
     private readonly runs: ScheduleRunService,
-    private readonly queue: ScheduleRunQueue,
+    @Inject(SCHEDULE_RUN_DISPATCHER)
+    private readonly dispatcher: ScheduleRunDispatcher,
     private readonly publishing: PublishingService,
     private readonly prisma: PrismaService,
   ) {}
@@ -77,10 +87,7 @@ export class ScheduleRunsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
     const run = await this.runs.create(dto, actor);
-    const jobId = await this.queue.enqueue({
-      runId: run.id,
-      timeLimitSeconds: dto.timeLimitSeconds ?? 20,
-    });
+    const jobId = await this.dispatcher.enqueue({ runId: run.id });
     const withJob = await this.prisma.scheduleRun.update({
       where: { id: run.id },
       data: { jobId },
@@ -91,7 +98,9 @@ export class ScheduleRunsController {
   @Get('schedule-runs')
   @ApiOperation({ summary: 'Past and current schedule runs' })
   @ApiResponse({ status: 200, type: PaginatedScheduleRunsDto })
-  async list(@Query() query: ScheduleRunQueryDto): Promise<PaginatedScheduleRunsDto> {
+  async list(
+    @Query() query: ScheduleRunQueryDto,
+  ): Promise<PaginatedScheduleRunsDto> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where = {
@@ -115,12 +124,15 @@ export class ScheduleRunsController {
   @Get('schedule-runs/:id')
   @ApiOperation({
     summary: 'One run, with its progress',
-    description: 'Poll this while a solve is working. `progressPercent` moves as it goes.',
+    description:
+      'Poll this while a solve is working. `progressPercent` moves as it goes.',
   })
   @ApiResponse({ status: 200, type: ScheduleRunDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   async get(@Param('id', ParseUUIDPipe) id: string): Promise<ScheduleRunDto> {
-    const run = await this.prisma.scheduleRun.findUniqueOrThrow({ where: { id } });
+    const run = await this.prisma.scheduleRun.findUniqueOrThrow({
+      where: { id },
+    });
     return toDto(run);
   }
 
@@ -138,7 +150,7 @@ export class ScheduleRunsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
     const run = await this.runs.requestCancel(id, actor);
-    await this.queue.cancel(id);
+    await this.dispatcher.cancel(run.jobId);
     return toDto(run);
   }
 
@@ -153,14 +165,19 @@ export class ScheduleRunsController {
   @ApiResponse({ status: 200, type: ScheduleRunDto })
   @ApiResponse({
     status: 409,
-    description: 'RESOURCE_CONFLICT — already published, unfinished, or nothing to publish.',
+    description:
+      'RESOURCE_CONFLICT — already published, unfinished, or nothing to publish.',
   })
   async publish(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PublishScheduleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
-    const { run } = await this.publishing.publish(id, dto.reason ?? null, actor);
+    const { run } = await this.publishing.publish(
+      id,
+      dto.reason ?? null,
+      actor,
+    );
     return toDto(run);
   }
 

@@ -36,14 +36,14 @@ import { WorkforceModule } from './workforce/workforce.module';
       envFilePath: ['.env', '../../.env'],
     }),
     PrismaModule,
-    QueueModule,
+    QueueModule.register(),
     AuditModule,
     AuthModule,
     HealthModule,
     MetaModule,
     WorkforceModule,
     CatalogModule,
-    SchedulingModule,
+    SchedulingModule.register(),
   ],
 })
 export class AppModule {}

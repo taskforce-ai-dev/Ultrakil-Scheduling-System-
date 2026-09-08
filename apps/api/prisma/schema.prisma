@@ -872,8 +872,18 @@ model ScheduleRun {
   /// watching a spinner with no number assumes it has hung.
   progressPercent Int @default(0)
 
-  /// BullMQ job id, so a queued run can be found and cancelled.
+  /// BullMQ or QStash delivery id, so a queued run can be found and cancelled.
   jobId String?
+
+  /// The requested per-day solver limit is persisted because QStash messages
+  /// intentionally carry only this row's opaque ID.
+  timeLimitSeconds Int @default(20)
+
+  /// At-least-once queue deliveries can overlap. Only the holder of this lease
+  /// may advance, finish or fail the run; an expired lease can be recovered.
+  executionLeaseId        String?   @db.Uuid
+  executionLeaseExpiresAt DateTime?
+  executionAttempt        Int       @default(0)
 
   /// Set when a manager asks to stop. The worker checks it at each safe point
   /// and abandons the run without writing, rather than being killed mid-write.
@@ -898,6 +908,7 @@ model ScheduleRun {
   auditEvents       AuditEvent[]
 
   @@index([status, createdAt])
+  @@index([executionLeaseExpiresAt])
   @@map("schedule_runs")
 }
 

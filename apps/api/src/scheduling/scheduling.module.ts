@@ -1,11 +1,19 @@
-import { Module } from '@nestjs/common';
+import { DynamicModule, Module } from '@nestjs/common';
 
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { PublishingService } from './optimizer/publishing.service';
-import { ScheduleRunProcessor, ScheduleRunQueue } from './optimizer/schedule-run.processor';
+import {
+  ScheduleRunProcessor,
+  ScheduleRunQueue,
+} from './optimizer/schedule-run.processor';
+import {
+  QStashScheduleRunDispatcher,
+  SCHEDULE_RUN_DISPATCHER,
+} from './optimizer/schedule-run.dispatcher';
 import { ScheduleRunService } from './optimizer/schedule-run.service';
 import { ScheduleRunsController } from './optimizer/schedule-runs.controller';
+import { ScheduleRunQStashController } from './optimizer/schedule-run.qstash.controller';
 import { SchedulerClient } from './optimizer/scheduler.client';
 import { AssignmentsController } from './eligibility/assignments.controller';
 import { AssignmentsService } from './eligibility/assignments.service';
@@ -23,26 +31,52 @@ import { VisitsService } from './visits/visits.service';
  * ULK-C06 adds the optimizer that chooses between the legal options, the locks
  * that protect a manager's decisions from it, and publishing.
  */
-@Module({
-  controllers: [
-    VisitGenerationController,
-    VisitsController,
-    AssignmentsController,
-    ScheduleRunsController,
-    CalendarController,
-  ],
-  providers: [
-    VisitGenerationService,
-    VisitsService,
-    EligibilityService,
-    AssignmentsService,
-    SchedulerClient,
-    ScheduleRunService,
-    ScheduleRunQueue,
-    ScheduleRunProcessor,
-    PublishingService,
-    CalendarService,
-  ],
-  exports: [VisitGenerationService, VisitsService, EligibilityService, ScheduleRunService],
-})
-export class SchedulingModule {}
+@Module({})
+export class SchedulingModule {
+  static register(): DynamicModule {
+    const qstash = process.env.SCHEDULE_DISPATCHER === 'qstash';
+    return {
+      module: SchedulingModule,
+      controllers: [
+        VisitGenerationController,
+        VisitsController,
+        AssignmentsController,
+        ScheduleRunsController,
+        CalendarController,
+        ...(qstash ? [ScheduleRunQStashController] : []),
+      ],
+      providers: [
+        VisitGenerationService,
+        VisitsService,
+        EligibilityService,
+        AssignmentsService,
+        SchedulerClient,
+        ScheduleRunService,
+        PublishingService,
+        CalendarService,
+        ...(qstash
+          ? [
+              QStashScheduleRunDispatcher,
+              {
+                provide: SCHEDULE_RUN_DISPATCHER,
+                useExisting: QStashScheduleRunDispatcher,
+              },
+            ]
+          : [
+              ScheduleRunQueue,
+              ScheduleRunProcessor,
+              {
+                provide: SCHEDULE_RUN_DISPATCHER,
+                useExisting: ScheduleRunQueue,
+              },
+            ]),
+      ],
+      exports: [
+        VisitGenerationService,
+        VisitsService,
+        EligibilityService,
+        ScheduleRunService,
+      ],
+    };
+  }
+}

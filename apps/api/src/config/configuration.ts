@@ -27,10 +27,23 @@ export const redisConfig = registerAs('redis', () => {
 
 export const scheduleDispatchConfig = registerAs('scheduleDispatch', () => {
   const env = process.env as unknown as Env;
+  const publicUrl = env.API_PUBLIC_URL;
+  const globalPrefix = env.API_GLOBAL_PREFIX || 'api';
+  const endpoint = (suffix: string) =>
+    publicUrl
+      ? new URL(
+          `/${globalPrefix}/internal/schedule-runs/${suffix}`,
+          publicUrl,
+        ).toString()
+      : undefined;
   return {
-    provider: env.SCHEDULE_DISPATCHER,
-    executionBudgetSeconds: Number(env.SCHEDULE_EXECUTION_BUDGET_SECONDS),
-    publicUrl: env.API_PUBLIC_URL,
+    provider: env.SCHEDULE_DISPATCHER || 'bullmq',
+    executionBudgetSeconds: Number(
+      env.SCHEDULE_EXECUTION_BUDGET_SECONDS || 240,
+    ),
+    publicUrl,
+    executeUrl: endpoint('execute'),
+    failureUrl: endpoint('failure'),
     qstash: {
       token: env.QSTASH_TOKEN,
       currentSigningKey: env.QSTASH_CURRENT_SIGNING_KEY,

@@ -3,11 +3,14 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 
 import { QUEUE_SCHEDULE_RUN } from '../../queue/queue.constants';
+import {
+  ScheduleRunDispatch,
+  ScheduleRunDispatcher,
+} from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
 
-export interface ScheduleRunJobData {
-  runId: string;
-  timeLimitSeconds: number;
+export interface ScheduleRunJobData extends ScheduleRunDispatch {
+  timeLimitSeconds?: number;
 }
 
 export const SCHEDULE_RUN_JOB = 'solve';
@@ -33,39 +36,26 @@ export class ScheduleRunProcessor extends WorkerHost {
     const { runId, timeLimitSeconds } = job.data;
     this.logger.log(`Solving schedule run ${runId}`);
 
-    try {
-      const result = await this.runs.execute(runId, {
-        timeLimitSeconds,
-        onProgress: async (percent) => {
-          await job.updateProgress(percent);
-          await this.runs.setProgress(runId, percent);
-        },
-      });
-      this.logger.log(
-        result.cancelled
-          ? `Schedule run ${runId} cancelled before writing`
-          : `Schedule run ${runId}: ${result.scheduled} staffed, ${result.unassigned} unassigned`,
-      );
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      const code =
-        typeof (caught as { code?: unknown }).code === 'string'
-          ? (caught as { code: string }).code
-          : 'INTERNAL_ERROR';
-      // Recorded on the run itself, so a manager sees why rather than a run
-      // stuck at "running" forever.
-      await this.runs.fail(runId, code, message);
-      throw caught;
-    }
+    const result = await this.runs.execute(runId, {
+      timeLimitSeconds,
+      onProgress: async (percent) => {
+        await job.updateProgress(percent);
+      },
+    });
+    this.logger.log(
+      result.cancelled
+        ? `Schedule run ${runId} cancelled before writing`
+        : `Schedule run ${runId}: ${result.scheduled} staffed, ${result.unassigned} unassigned`,
+    );
   }
 }
 
 /** Puts a run on the queue. Separated so the controller never touches BullMQ. */
 @Injectable()
-export class ScheduleRunQueue {
+export class ScheduleRunQueue implements ScheduleRunDispatcher {
   constructor(@InjectQueue(QUEUE_SCHEDULE_RUN) private readonly queue: Queue) {}
 
-  async enqueue(data: ScheduleRunJobData): Promise<string> {
+  async enqueue(data: ScheduleRunDispatch): Promise<string> {
     const job = await this.queue.add(SCHEDULE_RUN_JOB, data, {
       // The run id is the job id, so submitting the same run twice cannot
       // produce two solves racing each other over the same visits.
@@ -78,8 +68,9 @@ export class ScheduleRunQueue {
     return job.id ?? data.runId;
   }
 
-  async cancel(runId: string): Promise<void> {
-    const job = await this.queue.getJob(runId);
+  async cancel(jobId: string | null): Promise<void> {
+    if (!jobId) return;
+    const job = await this.queue.getJob(jobId);
     // Only a job that has not started can simply be removed. A running solve
     // is stopped by the cancel flag the service checks, never by killing it
     // mid-write.
