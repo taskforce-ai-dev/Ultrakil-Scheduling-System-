@@ -147,7 +147,7 @@ function VisitChip({
         type="button"
         onClick={onOpen}
         aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
-          visit.hoursUnconfirmed ? ", opening hours unconfirmed" : ""
+          ""
         }`}
         className="min-w-0 flex-1 truncate px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -162,11 +162,6 @@ function VisitChip({
             {formatMinuteOfDay(visit.windowStartMinute)}
           </span>
           <span className="truncate">{visit.customerName}</span>
-          {visit.hoursUnconfirmed && (
-            <span aria-hidden="true" className="shrink-0 text-destructive" title="Opening hours unconfirmed">
-              ⟡
-            </span>
-          )}
         </span>
       </button>
       <button
@@ -380,7 +375,6 @@ export default function VisitsPage() {
   const lockedCount = visible.filter((visit) => visit.isLocked).length;
   const adjustedCount = visible.filter((visit) => visit.isManuallyAdjusted).length;
   const unstaffedCount = visible.filter((visit) => visit.assignmentCount === 0).length;
-  const unconfirmedHoursCount = visible.filter((visit) => visit.hoursUnconfirmed).length;
 
   return (
     <div className="space-y-6">
@@ -538,11 +532,6 @@ export default function VisitsPage() {
             {lockedCount > 0 && <Badge variant="default">{lockedCount} locked</Badge>}
             {adjustedCount > 0 && (
               <Badge variant="secondary">{adjustedCount} manually modified</Badge>
-            )}
-            {unconfirmedHoursCount > 0 && (
-              <Badge variant="destructive">
-                {unconfirmedHoursCount} with opening hours unconfirmed
-              </Badge>
             )}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">

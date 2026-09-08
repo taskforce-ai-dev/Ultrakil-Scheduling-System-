@@ -574,6 +574,10 @@ describe('solver replacement lifecycle fence', () => {
           scheduleRunId: 'run',
           code: 'NO_CREW',
           message: 'No crew available',
+          // Each reason carries its own remedy, matching what the manual path
+          // records, so the queue reads the same either way. Null here because
+          // the solver sent no remediation for this code.
+          details: { remediation: null, resources: null },
         },
       ],
     });

@@ -251,6 +251,10 @@ def solve(request: SolveRequest) -> SolveResponse:
             visit_id=visit.id,
             reason_codes=(_why_unstaffable(request, visit) or ["NO_FEASIBLE_CREW"]),
             message=_message_for(_why_unstaffable(request, visit) or ["NO_FEASIBLE_CREW"]),
+            reason_messages={
+                code: _MESSAGES.get(code, code)
+                for code in (_why_unstaffable(request, visit) or ["NO_FEASIBLE_CREW"])
+            },
         )
         for visit in pending.values()
     ]
@@ -685,6 +689,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                         visit_id=visit.id,
                         reason_codes=reasons,
                         message=_message_for(reasons),
+                        reason_messages={code: _MESSAGES.get(code, code) for code in reasons},
                     )
                 )
                 continue
@@ -742,6 +747,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                     visit_id=visit.id,
                     reason_codes=reasons,
                     message=_message_for(reasons),
+                    reason_messages={code: _MESSAGES.get(code, code) for code in reasons},
                 )
             )
 

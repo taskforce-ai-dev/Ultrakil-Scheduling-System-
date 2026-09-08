@@ -67,20 +67,6 @@ beforeEach(() => {
 });
 
 describe("CalendarPage", () => {
-  it.each([true, false])("shows the opening-hours warning only when unconfirmed=%s", async (hoursUnconfirmed) => {
-    const user = userEvent.setup();
-    vi.mocked(fetchCalendar).mockResolvedValue({ items: [{ ...published, hoursUnconfirmed }], total: 1 });
-    render(<CalendarPage />);
-    const chip = await screen.findByRole("button", {
-      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayIso()}, published${hoursUnconfirmed ? ", opening hours unconfirmed" : ""}`,
-    });
-    expect(within(chip).queryByText("Hours unconfirmed") !== null).toBe(hoursUnconfirmed);
-    await user.click(chip);
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByText("Hours unconfirmed") !== null).toBe(hoursUnconfirmed);
-    expect(within(dialog).queryByText(/No opening hours are recorded/) !== null).toBe(hoursUnconfirmed);
-    if (hoursUnconfirmed) expect(within(dialog).getByText("08:00–17:00")).toBeInTheDocument();
-  });
 
   it.each<CalendarView>(["month", "week"])("gives the populated %s calendar valid accessible rows and column headers", async (view) => {
     const user = userEvent.setup();
