@@ -129,8 +129,32 @@ function StatusBadge({ run }: { run: ScheduleRun }) {
  * mount) asks the API for the current truth rather than trusting anything
  * held in memory.
  */
+/**
+ * Which run is actually in force, and whether something newer is waiting.
+ *
+ * The page listed every run a range had ever had — published, draft and failed
+ * together, newest first — which answers "what has happened" and not "what are
+ * my crews doing on Tuesday". A manager looking at a published run staffing 11
+ * of 17, with a later draft staffing 17 of 17 sitting above it and a failed
+ * attempt above that, has no way to tell which one the crews were given.
+ *
+ * Live is the most recent published run. Anything successful and newer is a
+ * proposal waiting on a decision; anything older is history.
+ */
+function currentSchedule(runs: ScheduleRun[]): {
+  live: ScheduleRun | null;
+  pending: ScheduleRun | null;
+} {
+  // The API returns newest first, which is the order these two want.
+  const live = runs.find((run) => run.isPublished) ?? null;
+  const newer = live ? runs.slice(0, runs.indexOf(live)) : runs;
+  const pending = newer.find((run) => run.status === "SUCCEEDED" && !run.isPublished) ?? null;
+  return { live, pending };
+}
+
 export default function ScheduleHistoryPage() {
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
+  const { live, pending } = React.useMemo(() => currentSchedule(runs), [runs]);
   const [total, setTotal] = React.useState(0);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
@@ -337,6 +361,37 @@ export default function ScheduleHistoryPage() {
         />
       ) : (
         <>
+          <section
+            aria-labelledby="current-schedule"
+            className="rounded-xl border bg-card p-4 shadow-sm"
+          >
+            <h2 id="current-schedule" className="text-sm font-semibold">
+              Current schedule
+            </h2>
+            {live ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Published {new Date(live.publishedAt ?? live.createdAt).toLocaleString()} for{" "}
+                {live.rangeStart} – {live.rangeEnd}. {live.visitsScheduled} of{" "}
+                {live.visitsScheduled + live.visitsUnassigned} visits have a crew. This is what
+                the crews were given.
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground">
+                Nothing is published yet, so no schedule is in force. Publish a run below and it
+                becomes the one the crews work to.
+              </p>
+            )}
+
+            {pending && (
+              <p className="mt-3 rounded-lg border border-dashed p-3 text-sm">
+                A newer draft is waiting: <strong>{pending.visitsScheduled}</strong> of{" "}
+                {pending.visitsScheduled + pending.visitsUnassigned} staffed for {pending.rangeStart}{" "}
+                – {pending.rangeEnd}. Nobody has been told about it until you publish it.
+              </p>
+            )}
+          </section>
+
+          <h2 className="text-sm font-semibold">Earlier runs</h2>
           {total > runs.length && (
             <p className="text-sm text-muted-foreground">
               Showing the {runs.length} most recent of {total} runs.

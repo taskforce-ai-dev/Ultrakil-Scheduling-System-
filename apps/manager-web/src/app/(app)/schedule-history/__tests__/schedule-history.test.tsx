@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -83,6 +83,38 @@ describe("ScheduleHistoryPage", () => {
     await act(async () => {
       resolveStart?.();
     });
+  });
+
+  it("names the published run as the one in force, above any newer draft", async () => {
+    // The exact pile a manager reported: a failed attempt, a draft that staffed
+    // everything, and below them the published run the crews actually got. The
+    // list is honest history and answers none of "what are my crews doing".
+    const published = buildScheduleRun({
+      id: "run-live", status: "SUCCEEDED", isPublished: true,
+      publishedAt: "2026-09-08T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
+    });
+    const draft = buildScheduleRun({
+      id: "run-draft", status: "SUCCEEDED", isPublished: false,
+      visitsScheduled: 17, visitsUnassigned: 0,
+    });
+    const failed = buildScheduleRun({ id: "run-failed", status: "FAILED" });
+    mockRuns([failed, draft, published]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/11 of 17 visits have a crew/)).toBeInTheDocument();
+    expect(within(current).getByText(/This is what the crews were given/)).toBeInTheDocument();
+    // And the better draft is offered, not silently preferred.
+    expect(within(current).getByText(/A newer draft is waiting/)).toBeInTheDocument();
+    expect(within(current).getByText(/Nobody has been told about it/)).toBeInTheDocument();
+  });
+
+  it("says plainly when nothing is published, rather than implying the latest run is live", async () => {
+    mockRuns([buildScheduleRun({ id: "run-a", status: "SUCCEEDED", isPublished: false })]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/no schedule is in force/)).toBeInTheDocument();
   });
 
   it("warns before publishing a run that leaves visits unassigned", async () => {
