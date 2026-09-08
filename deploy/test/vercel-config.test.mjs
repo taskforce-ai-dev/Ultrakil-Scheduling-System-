@@ -61,7 +61,7 @@ test('keeps the manager build explicit for the monorepo package', () => {
 });
 
 test('documents stable environment URLs and non-secret Vercel setup', () => {
-  const env = read('deploy/vercel.env.example');
+  const env = read('deploy/vercel-variables.example');
 
   assert.match(env, /^NEXT_PUBLIC_API_BASE_URL=https:\/\/YOUR_API_ENVIRONMENT_DOMAIN\.vercel\.app\/api$/m);
   assert.match(env, /^API_CORS_ORIGINS=https:\/\/YOUR_MANAGER_ENVIRONMENT_DOMAIN\.vercel\.app$/m);
@@ -94,11 +94,17 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /branch-specific Preview variables/);
   assert.match(docs, /SCHEDULE_DISPATCHER=qstash/);
   assert.match(docs, /db:deploy/);
+  assert.match(docs, /dispatch:cutover:check/);
+  assert.match(docs, /Deployment Protection/);
+  assert.match(docs, /SCHEDULER_API_TOKEN/);
+  assert.match(docs, /no browser-exposed bypass secret/i);
+  assert.match(docs, /CRON_SECRET/);
+  assert.match(docs, /not Preview\s+deployments/i);
   assert.doesNotMatch(docs, /Neon supplies/);
   assert.doesNotMatch(docs, /managed Redis/);
   assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /Production/);
   assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /staging/);
-  assert.match(read('deploy/vercel.env.example'), /SCHEDULE_DISPATCHER=qstash/);
+  assert.match(read('deploy/vercel-variables.example'), /SCHEDULE_DISPATCHER=qstash/);
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
   assert.match(docs, /Docker\/Compose/);
   assert.match(docs, /No PostgreSQL service has been selected yet/);

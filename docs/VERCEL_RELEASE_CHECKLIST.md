@@ -34,6 +34,20 @@ Record every result against an exact commit SHA; unchecked items remain open.
   `SCHEDULER_ALLOW_UNAUTHENTICATED` is absent.
 - [ ] Manager/API/scheduler URLs and CORS use the stable URLs for the same
   environment. Secrets and database URLs are absent from Git and chat.
+- [ ] Staging does not rely on the daily `CRON_SECRET` safety net: Vercel cron
+  runs only on Production, so an explicit staging-only signed QStash schedule
+  is configured for the released safety-net/reconciliation endpoint and its ID
+  plus latest successful delivery are retained as private evidence.
+- [ ] Deployment Protection is explicitly configured so stable staging API and
+  scheduler traffic is reachable: on Hobby, set Deployment Protection to None
+  on the two backend projects for UAT and restore Standard Protection after;
+  on an eligible plan, exempt only those stable domains. API JWT, QStash
+  signatures and `SCHEDULER_API_TOKEN` remain enforced. No browser-exposed
+  bypass secret, header or query parameter exists.
+- [ ] Before the QStash cutover, operator maintenance is confirmed, active runs
+  are drained/cancelled through supported flows, a recoverable backup exists,
+  and `pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=qstash`
+  passes before `db:deploy`. The guard has not backfilled any `RUNNING` run.
 
 ## Staging acceptance
 
@@ -52,5 +66,9 @@ Record every result against an exact commit SHA; unchecked items remain open.
 - [ ] Production migrations and any required one-time provisioning pass before
   routing user traffic.
 - [ ] All three Production deployments and post-deploy smoke checks pass.
+- [ ] Any QStash-to-BullMQ rollback keeps maintenance enabled, proves QStash has
+  no scheduled/retrying execute or failure-callback deliveries, and records a
+  passing `pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=bullmq`
+  before changing provider configuration or promoting the prior API.
 - [ ] Rollback target, database recovery point, responsible operator and final
   handover are recorded.

@@ -16,7 +16,6 @@ out/
 *.env
 *.env.*
 !deploy/staging.env.example
-!deploy/vercel.env.example
 
 # Python
 __pycache__/
