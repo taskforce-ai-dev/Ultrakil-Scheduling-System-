@@ -95,10 +95,15 @@ token are valid.
 
 Before connecting the stable staging URLs, open **Settings → Deployment
 Protection** for the API and scheduler Vercel Projects. On the current free
-Hobby plan, set Deployment Protection to **None** on those backend projects for
-the UAT window; this applies to their Preview deployments because Vercel's
-domain-specific Deployment Protection Exceptions are not a Hobby feature.
-Restore Standard Protection after UAT. This makes the stable staging backend
+Hobby plan, set Deployment Protection to **None** on those backend projects
+and retain it as long as staging is operational and its cross-service traffic
+and QStash schedule are active. This applies to their Preview deployments
+because Vercel's domain-specific Deployment Protection Exceptions are not a
+Hobby feature. Restore Standard Protection only when pausing/decommissioning
+staging, or after a paid domain-specific exception has been configured and
+verified for the stable backend URLs. Before taking staging offline, disable
+its QStash schedule and drain/cancel outstanding deliveries; do not leave the
+schedule retrying against protected or offline endpoints. This makes the stable staging backend
 URLs reachable, but does not remove UltraKIL's application controls: API
 requests still require their normal JWT where applicable, QStash
 execute/failure routes still verify their signatures, and `/solve` still
@@ -155,15 +160,78 @@ environment database:
    release SHA.
 6. Confirm `pnpm --filter @ultrakil/api db:status` before routing the manager
    portal to the API.
-7. Run `pnpm --filter @ultrakil/api db:seed` to create the initial administrator
-   only when the target has not already been provisioned.
-8. Run the strict workbook dry-run and import workflow from the preserved C08
-   runbook. Real workbook files and import reports containing personal data
-   stay outside Git and Vercel build artifacts.
+7. Run the external-database operator workflow below. Its explicit apply step
+   creates the initial administrator only if no users exist, preserves existing
+   accounts, and imports both approved workbooks. Do not use the Docker staging
+   command or the ordinary local seed/import commands for this release step.
 
 Migration is intentionally not part of `vercel.json`'s build command: a build
 may run more than once or concurrently, while schema and seed changes are a
 single controlled release operation.
+
+## External PostgreSQL workbook import
+
+Run this only from a trusted operator machine at the reviewed release SHA with
+Node 22 and the locked workspace dependencies installed. It is not a Vercel
+build command, function, or browser action. It needs no Docker, Redis, QStash,
+or `POSTGRES_*` configuration; it uses the explicit external `DATABASE_URL`.
+No `.env` file is loaded automatically by this command.
+
+Load these variables securely into the operator process environment. Do not
+paste credentials into shell command arguments, Git, logs or chat:
+
+- `DATABASE_URL`: the target PostgreSQL provider's connection URL, including
+  `sslmode=require&sslaccept=strict` for encrypted, certificate-verified access.
+  Use a provider endpoint accessible to the operator with import write rights.
+- `ULTRAKIL_IMPORT_TARGET`: separately confirm `hostname:port/database` from
+  that URL, including `:5432` when the URL omits its port. A mismatch fails
+  before the importer runs. This confirmation does not grant production approval.
+- `TECHNICIAN_MATRIX_PATH` and `MASTER_SCHEDULE_PATH`: absolute paths to the
+  approved workbooks outside the checkout, readable by the nonroot operator,
+  with no permissions for other users (prefer mode `0600` in a `0700` directory).
+- Optional `MATRIX_MAPPING_PATH`: an approved private JSON file outside the
+  checkout with the same file protections. If omitted, parser defaults apply;
+  a supplied missing file fails instead of silently ignoring the override.
+- Optional `STAGING_REPORT_DIR`: an operator-owned `0700` directory outside the
+  checkout. Despite its shared import-runner name, it supports this Vercel
+  workflow too. Omit it for aggregate output only. If supplied, each run creates
+  a unique private report directory with a `0600` issue file containing PII.
+- For apply, set `SEED_ADMIN_EMAIL`, `SEED_ADMIN_NAME`, and an independently
+  generated `SEED_ADMIN_PASSWORD` of at least 24 characters. Existing accounts
+  and passwords are preserved; credentials are required to avoid default-account
+  creation if this is the first import.
+
+First parse and validate both workbooks without connecting to PostgreSQL:
+
+```bash
+pnpm vercel:import --dry-run
+```
+
+Missing/unreadable inputs, zero employees/vehicles/customers/sites, or zero
+importable agreements fail closed. Successful stdout contains numeric totals
+and stable issue codes only; child errors and source text are withheld. Review
+remaining data decisions privately. A successful dry-run proves parsing only,
+not connectivity, migration readiness, actual import, or closure of uncertain
+branches and unconfirmed opening hours.
+
+After the maintenance/backup/cutover/migration gates above, review the dry-run
+for this exact workbook pair and target, and obtain the required environment
+authorization before executing the explicit write step:
+
+```bash
+pnpm vercel:import --apply
+```
+
+Both inputs are parsed before any database write. Apply then uses the existing
+reference, matrix and schedule importers; it is not one transaction across all
+three phases. A later failure may leave earlier upserts committed. Keep the
+environment in maintenance, inspect privately, and use the recorded recovery
+point if needed. Never claim rollback or a complete import from a failed run.
+Re-import uses the existing stable keys and inactive-history preservation rules.
+Record the release SHA, approved workbook checksums, sanitized dry-run/apply
+totals and subsequent database checks. Real staging import remains pending until
+`--apply` succeeds against the authorized target and those checks are recorded.
+No workbook or detailed report belongs in the checkout or Vercel build artifacts.
 
 ## Release workflow
 
@@ -193,9 +261,11 @@ scheduler binds to loopback. Those settings must not be copied to Vercel.
 
 Do not change `SCHEDULE_DISPATCHER` back to BullMQ or promote an older API
 while QStash may still deliver a schedule run. First keep maintenance enabled,
-cancel or let every QStash schedule delivery reach a terminal state, and confirm
-the QStash dashboard has no scheduled or retrying delivery for the execute or
-failure-callback routes. Then run:
+pause or delete the recurring QStash reconcile schedule, cancel or let every
+QStash delivery reach a terminal state, and confirm the QStash dashboard has no
+scheduled or retrying delivery for reconcile, execute or failure-callback routes.
+The internal QStash routes are absent in BullMQ mode; a recurring reconcile
+schedule left enabled would receive 404 responses. Then run:
 
 ```bash
 pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=bullmq
@@ -205,6 +275,8 @@ Only a successful guard permits the provider configuration change and rollback
 deployment. If QStash cannot be shown drained, retain the QStash configuration
 while rolling back compatible code or stop the rollback; do not rely on an old
 API ignoring a later QStash delivery.
+Restore that schedule only after switching back to QStash and verifying the
+internal routes and a successful signed delivery at the accepted release SHA.
 
 ## Official references
 
@@ -216,6 +288,7 @@ API ignoring a later QStash delivery.
 - [Vercel function limits](https://vercel.com/docs/functions/limitations)
 - [Vercel Hobby plan](https://vercel.com/docs/plans/hobby)
 - [QStash signing](https://upstash.com/docs/qstash/howto/signature)
+- [Prisma 6 PostgreSQL TLS connection parameters](https://docs.prisma.io/docs/orm/v6/overview/databases/postgresql)
 - [Vercel Deployment Protection](https://vercel.com/docs/deployment-protection)
 - [Vercel Deployment Protection bypass methods](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection)
 - [Vercel Cron Jobs](https://vercel.com/docs/cron-jobs/quickstart)

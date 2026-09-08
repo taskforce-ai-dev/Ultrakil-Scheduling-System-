@@ -118,3 +118,22 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /Docker\/Compose/);
   assert.match(docs, /No PostgreSQL service has been selected yet/);
 });
+
+test('keeps staging reachable while its QStash schedule is active', () => {
+  for (const file of ['docs/VERCEL_DEPLOYMENT.md', 'docs/VERCEL_RELEASE_CHECKLIST.md']) {
+    const docs = read(file);
+    assert.match(docs, /as long as staging is operational/i);
+    assert.match(docs, /disabl(?:e|ing)\s+(?:its|the staging) QStash schedule/i);
+    assert.match(docs, /paus(?:ing|ed)|decommission(?:ing|ed)/i);
+    assert.doesNotMatch(docs, /restore Standard Protection after UAT|restore Standard Protection after;/i);
+  }
+});
+
+test('rollback pauses recurring QStash reconciliation until QStash is restored', () => {
+  for (const file of ['docs/VERCEL_DEPLOYMENT.md', 'docs/VERCEL_RELEASE_CHECKLIST.md']) {
+    const docs = read(file);
+    assert.match(docs, /pause or delete the recurring QStash reconcile schedule/i);
+    assert.match(docs, /restore (?:that|the recurring) schedule only after switching back to QStash/i);
+  }
+  assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /during her absence/i);
+});

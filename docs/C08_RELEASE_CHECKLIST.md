@@ -53,5 +53,6 @@ script. It does not transfer O08 ownership or include branding PR #36.
   handover; complete only after each task's actual Definition of Done is met.
 
 If a gate is blocked, record the exact missing host/credential/data decision or
-failed test. Do not publish invented staging URLs, claim synthetic screenshots
-as staging evidence or assign work to Chanya during her absence.
+failed test. Do not publish invented staging URLs or claim synthetic screenshots
+as staging evidence. Retain the agreed ownership split: Thivarrakesh handles
+C07/C08, and Oshadi owns O08; this checklist does not reassign team tasks.

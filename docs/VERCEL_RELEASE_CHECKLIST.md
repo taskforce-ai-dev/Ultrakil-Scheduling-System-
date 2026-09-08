@@ -25,9 +25,18 @@ Record every result against an exact commit SHA; unchecked items remain open.
   migrations to existing data.
 - [ ] `pnpm --filter @ultrakil/api db:deploy` and `db:status` pass against the
   target database at the release SHA.
-- [ ] Initial `db:seed` is run only when required, with non-default credentials.
-- [ ] The strict Technician Matrix and Master Schedule dry-run/import gates are
-  recorded without uploading either workbook or personal-data reports.
+- [ ] The trusted operator confirms the external `DATABASE_URL` and matching
+  `ULTRAKIL_IMPORT_TARGET`, verified TLS, private inputs outside the checkout,
+  and non-default initial-admin credentials for the explicit apply step.
+- [ ] `pnpm vercel:import --dry-run` succeeds for both approved workbook
+  checksums at the release SHA; only aggregate totals/issue codes are shared.
+  Parsing success is not recorded as database import success.
+- [ ] After environment authorization and maintenance/backup/migration gates,
+  `pnpm vercel:import --apply` succeeds on the authorized external database.
+  Record sanitized apply totals and subsequent database checks. The initial
+  admin is created only if there are no users; existing credentials are preserved.
+  Real import remains pending until this evidence exists. No workbook or private
+  issue report is uploaded to Git, Vercel builds, or shared handover attachments.
 - [ ] `SCHEDULE_DISPATCHER=qstash`, pure-HTTPS `API_PUBLIC_URL`, QStash token and
   both signing keys are configured on the API. Vercel does not require Redis.
 - [ ] The same random `SCHEDULER_API_TOKEN` is configured on API and scheduler;
@@ -43,9 +52,13 @@ Record every result against an exact commit SHA; unchecked items remain open.
 - [ ] Recovery-trigger smoke evidence records a successful safe delivery from
   staging QStash, production QStash and the production Vercel Cron fallback.
 - [ ] Deployment Protection is explicitly configured so stable staging API and
-  scheduler traffic is reachable: on Hobby, set Deployment Protection to None
-  on the two backend projects for UAT and restore Standard Protection after;
-  on an eligible plan, exempt only those stable domains. API JWT, QStash
+  scheduler traffic is reachable: on Hobby, retain None on the two backend
+  projects as long as staging is operational and its cross-service traffic and
+  QStash schedule are active. Restore Standard Protection only when pausing or
+  decommissioning staging, or after a paid domain-specific exception is
+  configured and verified for the stable backend domains. Before taking staging
+  offline, disable its QStash schedule and drain/cancel outstanding deliveries.
+  On an eligible plan, exempt only those stable domains. API JWT, QStash
   signatures and `SCHEDULER_API_TOKEN` remain enforced. No browser-exposed
   bypass secret, header or query parameter exists.
 - [ ] Before the QStash cutover, operator maintenance is confirmed, active runs
@@ -78,9 +91,13 @@ Record every result against an exact commit SHA; unchecked items remain open.
   `db:status`. `main` is not used as a migration staging area because it routes
   Production automatically.
 - [ ] All three Production deployments and post-deploy smoke checks pass.
-- [ ] Any QStash-to-BullMQ rollback keeps maintenance enabled, proves QStash has
-  no scheduled/retrying execute or failure-callback deliveries, and records a
+- [ ] Any QStash-to-BullMQ rollback keeps maintenance enabled: pause or delete the recurring QStash reconcile schedule,
+  prove QStash has no scheduled/retrying reconcile, execute or failure-callback
+  deliveries, and record a
   passing `pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=bullmq`
   before changing provider configuration or promoting the prior API.
+  Restore that schedule only after switching back to QStash and verifying the
+  internal routes and a successful signed delivery. BullMQ has no internal
+  QStash routes, so an enabled recurring schedule would receive 404 responses.
 - [ ] Rollback target, database recovery point, responsible operator and final
   handover are recorded.
