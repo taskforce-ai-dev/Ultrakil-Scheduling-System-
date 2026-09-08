@@ -14,29 +14,6 @@ class ProbeTimeoutError extends Error {
   }
 }
 
-/**
- * The part of a `fetch` response this file uses.
- *
- * Stated rather than inferred. The global `Response` reaches TypeScript through
- * `@types/node` -> `undici-types`, and that indirection does not resolve
- * identically everywhere: the same commit, the same TypeScript and the same
- * lockfile compile here and fail on Vercel with `Property 'ok' does not exist
- * on type 'Response'`. The workspace also pins two `@types/node` majors — 22
- * for the API, 20 for the portal — so which one wins is a property of the
- * install layout rather than of this code.
- *
- * Naming the four members used, and asserting them at the call site, makes the
- * file compile the same way in every environment. Aligning the two
- * `@types/node` majors is the real repair and belongs in its own change, since
- * it moves types under the whole workspace.
- */
-interface FetchedResponse {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  json(): Promise<unknown>;
-}
-
 @Injectable()
 export class HealthService {
   private readonly logger = new Logger(HealthService.name);
@@ -145,15 +122,10 @@ export class HealthService {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      // Asserted, not inferred. Node's fetch returns exactly this at runtime;
-      // it is the *type* environments disagree about, in both directions —
-      // locally the ambient Response has these members, on Vercel it has none
-      // of them. An assertion states what the runtime actually provides
-      // instead of letting the build depend on which @types/node won.
-      const response = (await fetch(`${baseUrl}/health/live`, {
+      const response = await fetch(`${baseUrl}/health/live`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         signal: controller.signal,
-      })) as unknown as FetchedResponse;
+      });
       if (!response.ok) {
         throw new Error(
           `Scheduler responded with HTTP ${response.status} ${response.statusText}`,
