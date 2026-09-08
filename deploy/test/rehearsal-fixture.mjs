@@ -76,7 +76,10 @@ async function seed() {
       rangeStart: new Date(`${day}T00:00:00Z`), rangeEnd: new Date(`${day}T00:00:00Z`), progressPercent: 100,
       createdAt: new Date('2025-01-01T00:00:00Z') } });
     await db.assignment.create({ data: { generatedVisitId: visit.id, branchId: branch.id, branchCode: branch.code,
-      plannedStart: new Date(`${day}T03:30:00Z`), plannedEnd: new Date(`${day}T04:30:00Z`), scheduleRunId: run.id,
+      // The API stores minute-of-day values against UTC midnight. Keep this
+      // inside the visit's 08:00-17:00 window so its seeded crew is genuinely
+      // eligible when the dispatch drawer re-checks it.
+      plannedStart: new Date(`${day}T09:00:00Z`), plannedEnd: new Date(`${day}T10:00:00Z`), scheduleRunId: run.id,
       crewMembers: { create: { employeeId: employee.id, isPmsSupervisor: true, role: 'SUPERVISOR' } } } });
     // Another untouched successful run keeps the publish accessibility dialog
     // available after the optimizer journey publishes its own newly created run.

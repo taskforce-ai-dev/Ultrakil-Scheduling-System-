@@ -43,6 +43,13 @@ test('strict acceptance only targets its explicitly isolated rehearsal', () => {
   }
 });
 
+test('synthetic assigned visit uses the API minute-of-day time contract', () => {
+  const fixture = readFileSync(join(process.cwd(), 'deploy/test/rehearsal-fixture.mjs'), 'utf8');
+  assert.match(fixture, /windowStartMinute: 480, windowEndMinute: 1020/);
+  assert.match(fixture, /plannedStart: new Date\(`\$\{day\}T09:00:00Z`\)/);
+  assert.match(fixture, /plannedEnd: new Date\(`\$\{day\}T10:00:00Z`\)/);
+});
+
 test('strict browser diagnostics expose only normalized allowlisted test evidence', () => {
   const privateText = 'secret-token https://example.invalid/private trace.zip';
   const diagnostic = buildStrictDiagnostic([{
