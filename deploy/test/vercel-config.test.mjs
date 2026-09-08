@@ -29,30 +29,39 @@ test('declares three independent Vercel project configurations', () => {
   }
 });
 
-test('uses the current Nest and FastAPI entrypoints with a Hobby-safe duration', () => {
+test('deploys the API through the supported Nest preset, not a hand-rolled function', () => {
   const api = readJson('apps/api/vercel.json');
   const scheduler = readJson('services/scheduler/vercel.json');
 
-  // The declared function must live under `api/`. Vercel recognises functions
-  // nowhere else on a project with no framework preset, and it rejected the
-  // deployment rather than guessing: "The pattern \"src/main.ts\" defined in
-  // `functions` doesn't match any Serverless Functions inside the `api`
-  // directory." Asserting the key existed was what let that reach a deploy.
-  assert.equal(api.functions['api/index.ts'].maxDuration, 60);
-  assert.ok(Object.keys(api.functions).every((pattern) => pattern.startsWith('api/')));
-  assert.equal(scheduler.functions['app/main.py'].maxDuration, 60);
+  // Vercel deploys NestJS from its own preset: it detects `src/main.ts`, runs
+  // the conventional `app.listen()` bootstrap and serves the whole app from a
+  // single function with controller paths preserved.
+  // https://vercel.com/docs/frameworks/backend/nestjs
+  assert.equal(api.framework, 'nestjs');
+  assert.equal(api.installCommand, 'pnpm install --frozen-lockfile');
   assert.equal(api.buildCommand, 'pnpm prisma:generate && pnpm build');
 
-  // A handler, not a listener: src/main.ts still calls listen() and is still
-  // how the API runs locally, so the two must stay distinguishable.
-  const handler = read('apps/api/api/index.ts');
-  assert.match(handler, /export default async function handler/);
-  assert.match(handler, /app\.init\(\)/);
-  assert.doesNotMatch(handler, /app\.listen\(/);
-  assert.match(read('apps/api/src/main.ts'), /NestFactory/);
+  // The first deployment failed on a `functions` override naming src/main.ts:
+  //   The pattern "src/main.ts" defined in `functions` doesn't match any
+  //   Serverless Functions inside the `api` directory.
+  // The preset owns that function, so no override can name it. A catch-all
+  // rewrite is equally wrong: it would rewrite every request onto one
+  // destination path and lose the pathname Nest routes on.
+  assert.equal(api.functions, undefined);
+  assert.equal(api.rewrites, undefined);
+  assert.equal(existsSync(resolve(root, 'apps/api/api')), false,
+    'apps/api/api must not exist: the preset builds src/main.ts');
 
-  // Everything reaches the one handler; Nest owns routing from there.
-  assert.deepEqual(api.rewrites, [{ source: '/(.*)', destination: '/api/index' }]);
+  // One bootstrap, used everywhere. It must bind the port the host hands it,
+  // or the function listens where nothing is connecting.
+  const main = read('apps/api/src/main.ts');
+  assert.match(main, /NestFactory/);
+  assert.match(main, /app\.listen\(/);
+  assert.match(main, /process\.env\.PORT/);
+
+  // The scheduler is a Python function and still declares its own duration,
+  // which must stay within the Hobby ceiling.
+  assert.equal(scheduler.functions['app/main.py'].maxDuration, 60);
   assert.match(read('services/scheduler/app/main.py'), /app = FastAPI\(/);
 });
 
