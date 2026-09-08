@@ -3,7 +3,7 @@
 import * as React from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, ShieldCheck, CalendarClock, Users, MapPin } from "lucide-react";
+import { Eye, EyeOff, ShieldCheck, CalendarClock, Users } from "lucide-react";
 
 import { describeLoginError, useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -31,69 +31,112 @@ function Logo({ className }: { className?: string }) {
   );
 }
 
-/**
- * Purely decorative "live dispatch" scene for the hero panel — three stops
- * on a route, a dashed line between them with a marching-ants shimmer, and
- * a dot that travels the route on a loop. Built from the brand palette
- * rather than a stock photo (none were available to source), so it reads as
- * this product specifically: scheduling and dispatch, not a generic login
- * splash. aria-hidden throughout; every animation used here is defined in
- * globals.css and collapses under prefers-reduced-motion.
- */
-function DispatchIllustration() {
+/** A rounded map pin (teardrop) silhouette, centered at (cx, cyTop) with the
+ * point resting `dropTo` px below it — used for every stop in the scene. */
+function MapPinShape({
+  cx,
+  cyTop,
+  dropTo,
+  fill,
+  className,
+}: {
+  cx: number;
+  cyTop: number;
+  dropTo: number;
+  fill: string;
+  className?: string;
+}) {
+  const r = 10;
+  const tipY = cyTop + dropTo;
   return (
-    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <svg
-        viewBox="0 0 480 480"
-        className="absolute -right-16 bottom-[-4rem] h-[34rem] w-[34rem] opacity-90"
-      >
-        <defs>
-          <radialGradient id="login-map-fade" cx="50%" cy="50%" r="60%">
-            <stop offset="0%" stopColor="white" stopOpacity="0.06" />
-            <stop offset="100%" stopColor="white" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        <circle cx="240" cy="240" r="220" fill="url(#login-map-fade)" />
+    <g className={className}>
+      <path
+        d={`M ${cx - r} ${cyTop} a ${r} ${r} 0 1 1 ${r * 2} 0 C ${cx + r} ${cyTop + r + 4}, ${cx} ${cyTop + r + 10}, ${cx} ${tipY} C ${cx} ${cyTop + r + 10}, ${cx - r} ${cyTop + r + 4}, ${cx - r} ${cyTop} Z`}
+        fill={fill}
+      />
+      <circle cx={cx} cy={cyTop} r={4} fill="white" fillOpacity="0.9" />
+    </g>
+  );
+}
 
-        {/* the route */}
+/**
+ * The hero panel's illustration — a framed "scene" (not a thin diagram):
+ * layered terrain, a real road with lane markings winding through it, a
+ * dispatch van on the road, and three pin markers, one pulsing as the
+ * active destination. Built entirely from the brand palette rather than a
+ * stock photo or generated art (neither was available to source in this
+ * sandbox) — composed to read as a proper illustrated image, not a
+ * background texture. aria-hidden throughout; the marching-ants road line,
+ * pin pulse and van bob are defined in globals.css and collapse under
+ * prefers-reduced-motion.
+ */
+function DispatchScene() {
+  return (
+    <div
+      aria-hidden="true"
+      className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] shadow-inner"
+    >
+      <svg viewBox="0 0 400 220" className="block h-48 w-full sm:h-56">
+        <defs>
+          <linearGradient id="login-sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="white" stopOpacity="0.05" />
+            <stop offset="100%" stopColor="white" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="400" height="140" fill="url(#login-sky)" />
+
+        {/* soft sun/leaf accent, upper-left */}
+        <circle cx="54" cy="54" r="30" fill="var(--brand-lime)" fillOpacity="0.1" />
+
+        {/* rolling terrain, two layers for depth */}
         <path
-          d="M 96 360 C 150 300, 150 220, 210 200 S 320 230, 360 160"
-          fill="none"
-          stroke="white"
-          strokeOpacity="0.22"
-          strokeWidth="3"
+          d="M0 176 C 60 150, 140 196, 220 164 S 360 140, 400 168 V 220 H 0 Z"
+          fill="var(--brand-mid-green)"
+          fillOpacity="0.55"
         />
         <path
-          d="M 96 360 C 150 300, 150 220, 210 200 S 320 230, 360 160"
+          d="M0 200 C 70 182, 150 214, 240 192 S 340 176, 400 198 V 220 H 0 Z"
+          fill="var(--brand-deep-green)"
+        />
+
+        {/* the road */}
+        <path
+          d="M 34 196 C 90 176, 100 140, 150 128 S 250 118, 300 78 S 330 56, 356 44"
           fill="none"
-          stroke="var(--brand-lime)"
-          strokeWidth="3"
+          stroke="white"
+          strokeOpacity="0.9"
+          strokeWidth="10"
           strokeLinecap="round"
-          strokeDasharray="2 10"
+        />
+        <path
+          d="M 34 196 C 90 176, 100 140, 150 128 S 250 118, 300 78 S 330 56, 356 44"
+          fill="none"
+          stroke="var(--brand-deep-green)"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray="6 8"
           className="login-dash"
         />
 
-        {/* stops */}
-        <circle cx="96" cy="360" r="6" fill="white" fillOpacity="0.7" />
-        <circle cx="210" cy="200" r="6" fill="white" fillOpacity="0.7" />
-        <circle cx="360" cy="160" r="9" className="login-pin-pulse" fill="var(--brand-lime)" />
-        <circle cx="360" cy="160" r="9" fill="var(--brand-lime)" />
-        <circle cx="360" cy="160" r="9" fill="none" stroke="white" strokeOpacity="0.5" strokeWidth="2" />
-      </svg>
+        {/* dispatch van, riding the road */}
+        <g className="login-float" style={{ transformOrigin: "222px 108px" }}>
+          <ellipse cx="223" cy="119" rx="16" ry="3" fill="black" fillOpacity="0.12" />
+          <rect x="204" y="98" width="30" height="18" rx="5" fill="white" />
+          <rect x="210" y="91" width="16" height="12" rx="4" fill="white" />
+          <rect x="212" y="94" width="10" height="6" rx="1.5" fill="var(--brand-deep-green)" />
+          <circle cx="211" cy="117" r="4" fill="var(--brand-deep-green)" />
+          <circle cx="228" cy="117" r="4" fill="var(--brand-deep-green)" />
+          <circle cx="219" cy="107" r="2.5" fill="var(--brand-lime)" />
+        </g>
 
-      {/* floating chips, echoing the highlight icons below without repeating them */}
-      <div
-        className="login-float absolute right-[18%] bottom-[38%] flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 backdrop-blur-sm"
-        style={{ animationDelay: "0.4s" }}
-      >
-        <MapPin className="h-5 w-5 text-brand-lime" aria-hidden="true" />
-      </div>
-      <div
-        className="login-float absolute right-[38%] bottom-[62%] flex h-10 w-10 items-center justify-center rounded-xl bg-white/10 backdrop-blur-sm"
-        style={{ animationDelay: "1.6s" }}
-      >
-        <ShieldCheck className="h-4 w-4 text-white/80" aria-hidden="true" />
-      </div>
+        {/* stops along the route */}
+        <MapPinShape cx={34} cyTop={176} dropTo={16} fill="white" />
+        <MapPinShape cx={150} cyTop={108} dropTo={16} fill="white" />
+        <g>
+          <circle cx={356} cy={24} r={10} fill="var(--brand-lime)" className="login-pin-pulse" />
+          <MapPinShape cx={356} cyTop={24} dropTo={16} fill="var(--brand-lime)" />
+        </g>
+      </svg>
     </div>
   );
 }
@@ -142,14 +185,16 @@ export default function LoginPage() {
           aria-hidden="true"
         />
 
-        <DispatchIllustration />
-
         <div className="login-animate-in relative" style={{ animationDelay: "0ms" }}>
           <Logo />
         </div>
 
-        <div className="relative space-y-8">
-          <div className="login-animate-in space-y-3" style={{ animationDelay: "80ms" }}>
+        <div className="relative space-y-6">
+          <div className="login-animate-in" style={{ animationDelay: "70ms" }}>
+            <DispatchScene />
+          </div>
+
+          <div className="login-animate-in space-y-3" style={{ animationDelay: "150ms" }}>
             <h2 className="text-3xl font-semibold tracking-tight text-white">
               Scheduling &amp; dispatch,
               <br />
