@@ -17,11 +17,20 @@ export function privatePathReason(path) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const paths = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
-  const rejected = paths.filter(path => privatePathReason(path));
-  if (rejected.length) {
-    // Paths themselves can include client names. Review them in a private shell.
-    console.error(`Private-file scan failed: ${rejected.length} prohibited tracked path(s). Inspect locally and rotate any exposed credentials.`);
+  try {
+    // Explicitly pipe stderr: execFileSync otherwise forwards child stderr on
+    // failure before the exception handler can suppress its private contents.
+    const paths = execFileSync('git', ['ls-files', '-z'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).split('\0').filter(Boolean);
+    const rejected = paths.filter(path => privatePathReason(path));
+    if (rejected.length) {
+      // Paths themselves can include client names. Review them in a private shell.
+      console.error(`Private-file scan failed: ${rejected.length} prohibited tracked path(s). Inspect locally and rotate any exposed credentials.`);
+      process.exitCode = 1;
+    } else console.log('Private-file scan passed.');
+  } catch {
+    console.error('Private-file scan failed: unable to read tracked paths. Inspect in a protected local session.');
     process.exitCode = 1;
-  } else console.log('Private-file scan passed.');
+  }
 }
