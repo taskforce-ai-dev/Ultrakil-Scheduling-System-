@@ -33,6 +33,37 @@ describe('dispatch-provider cutover guard', () => {
     });
   });
 
+  it('positively confirms a fresh empty database without reading schedule tables', async () => {
+    const client = {
+      $queryRaw: jest.fn().mockResolvedValue([{ has_user_tables: false }]),
+    };
+
+    await expect(
+      runDispatchCutoverGuard(client as never, ['--fresh', '--target=qstash']),
+    ).resolves.toBe('Fresh database guard passed for QSTASH.');
+    expect(client.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a fresh mode target that already has user tables', async () => {
+    const client = {
+      $queryRaw: jest.fn().mockResolvedValue([{ has_user_tables: true }]),
+    };
+
+    await expect(
+      runDispatchCutoverGuard(client as never, ['--fresh', '--target=qstash']),
+    ).rejects.toThrow('Fresh database guard blocked: the target contains user tables');
+  });
+
+  it('never treats a failed fresh-database query as a positive emptiness check', async () => {
+    const client = {
+      $queryRaw: jest.fn().mockRejectedValue(new Error('database unavailable')),
+    };
+
+    await expect(
+      runDispatchCutoverGuard(client as never, ['--fresh', '--target=qstash']),
+    ).rejects.toThrow('could not verify that the target database is fresh');
+  });
+
   it('rejects active runs on a pre-outbox database without attempting a backfill', async () => {
     const client = {
       scheduleRun: {

@@ -52,6 +52,10 @@ Record every result against an exact commit SHA; unchecked items remain open.
   are drained/cancelled through supported flows, a recoverable backup exists,
   and `pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=qstash`
   passes before `db:deploy`. The guard has not backfilled any `RUNNING` run.
+- [ ] A deliberately fresh database is positively confirmed before migration
+  only with `pnpm --filter @ultrakil/api dispatch:cutover:check -- --fresh --target=qstash`;
+  it reports no user tables. A database error is not treated as fresh, and the
+  fresh path is not used for an existing target.
 
 ## Staging acceptance
 
@@ -67,8 +71,12 @@ Record every result against an exact commit SHA; unchecked items remain open.
 ## Production acceptance
 
 - [ ] Reviewed staging SHA is promoted/merged without unreviewed changes.
-- [ ] Production migrations and any required one-time provisioning pass before
-  routing user traffic.
+- [ ] Before merge/promote to `main`, the exact accepted SHA completes the
+  production controlled gate: existing databases have maintenance, drain/cancel,
+  backup, existing-database guard, `db:deploy` and `db:status`; a deliberately
+  fresh database has the positive `--fresh` guard plus `db:deploy` and
+  `db:status`. `main` is not used as a migration staging area because it routes
+  Production automatically.
 - [ ] All three Production deployments and post-deploy smoke checks pass.
 - [ ] Any QStash-to-BullMQ rollback keeps maintenance enabled, proves QStash has
   no scheduled/retrying execute or failure-callback deliveries, and records a

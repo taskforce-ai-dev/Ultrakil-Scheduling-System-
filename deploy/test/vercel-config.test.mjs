@@ -96,6 +96,8 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /SCHEDULE_DISPATCHER=qstash/);
   assert.match(docs, /db:deploy/);
   assert.match(docs, /dispatch:cutover:check/);
+  assert.match(docs, /--fresh/);
+  assert.match(docs, /no user tables/i);
   assert.match(docs, /Deployment Protection/);
   assert.match(docs, /SCHEDULER_API_TOKEN/);
   assert.match(docs, /no browser-exposed bypass secret/i);
@@ -103,10 +105,14 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /not Preview\s+deployments/i);
   assert.match(docs, /signed QStash\s+schedule for staging and production/i);
   assert.match(docs, /daily Vercel Cron.*production-only/i);
+  assert.match(docs, /before merge\/promote to `main`/i);
   assert.doesNotMatch(docs, /Neon supplies/);
   assert.doesNotMatch(docs, /managed Redis/);
-  assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /Production/);
-  assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /staging/);
+  const checklist = read('docs/VERCEL_RELEASE_CHECKLIST.md');
+  assert.match(checklist, /Production/);
+  assert.match(checklist, /staging/);
+  assert.match(checklist, /--fresh --target=qstash/);
+  assert.match(checklist, /Before merge\/promote to `main`/i);
   assert.match(read('deploy/vercel-variables.example'), /SCHEDULE_DISPATCHER=qstash/);
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
   assert.match(docs, /Docker\/Compose/);

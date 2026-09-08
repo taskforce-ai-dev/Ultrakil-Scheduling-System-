@@ -3,6 +3,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 type DispatchProvider = 'BULLMQ' | 'QSTASH';
 type ActiveScheduleRun = { id: string; status: 'QUEUED' | 'RUNNING' };
 type DispatchOutbox = { scheduleRunId: string; provider: DispatchProvider };
+type DispatchCutoverOptions = { target: DispatchProvider; fresh: boolean };
 
 export interface DispatchCutoverPrisma {
   scheduleRun: {
@@ -30,16 +31,57 @@ const TARGETS: Record<string, DispatchProvider> = {
  * A provider switch must be explicitly named. Falling back to the process
  * environment could approve a BullMQ cutover when the operator meant QStash.
  */
-export function parseCutoverTarget(args: string[]): DispatchProvider {
-  if (args.length !== 1 || !args[0].startsWith('--target=')) {
-    throw new Error('Use exactly one target: --target=qstash or --target=bullmq.');
+export function parseCutoverOptions(args: string[]): DispatchCutoverOptions {
+  const fresh = args.includes('--fresh');
+  const targetArgument = args.find((arg) => arg.startsWith('--target='));
+  const expectedArgumentCount = fresh ? 2 : 1;
+  if (!targetArgument || args.length !== expectedArgumentCount) {
+    throw new Error(
+      'Use --target=qstash or --target=bullmq, with optional --fresh for a positively empty database.',
+    );
   }
 
-  const target = TARGETS[args[0].slice('--target='.length)];
+  const target = TARGETS[targetArgument.slice('--target='.length)];
   if (!target) {
-    throw new Error('Use exactly one target: --target=qstash or --target=bullmq.');
+    throw new Error(
+      'Use --target=qstash or --target=bullmq, with optional --fresh for a positively empty database.',
+    );
   }
-  return target;
+  return { target, fresh };
+}
+
+async function confirmFreshDatabase(prisma: DispatchCutoverPrisma): Promise<void> {
+  let rows: Array<{ has_user_tables: boolean }>;
+  try {
+    rows = await prisma.$queryRaw<Array<{ has_user_tables: boolean }>>(
+      Prisma.sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_catalog.pg_class AS relation
+          INNER JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+          WHERE relation.relkind IN ('r', 'p')
+            AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
+            AND namespace.nspname NOT LIKE 'pg_toast%'
+        ) AS has_user_tables
+      `,
+    );
+  } catch {
+    throw new Error(
+      'Fresh database guard could not verify that the target database is fresh. No change was made; inspect database access in a protected operator session.',
+    );
+  }
+
+  if (rows.length !== 1 || typeof rows[0]?.has_user_tables !== 'boolean') {
+    throw new Error(
+      'Fresh database guard could not verify that the target database is fresh. No change was made; inspect database access in a protected operator session.',
+    );
+  }
+  if (rows[0].has_user_tables) {
+    throw new Error(
+      'Fresh database guard blocked: the target contains user tables. Do not run migrations as fresh; use the existing-database guard after maintenance instead.',
+    );
+  }
 }
 
 async function dispatchOutboxExists(prisma: DispatchCutoverPrisma): Promise<boolean> {
@@ -65,7 +107,12 @@ export async function runDispatchCutoverGuard(
   prisma: DispatchCutoverPrisma,
   args: string[],
 ): Promise<string> {
-  const target = parseCutoverTarget(args);
+  const { target, fresh } = parseCutoverOptions(args);
+  if (fresh) {
+    await confirmFreshDatabase(prisma);
+    return `Fresh database guard passed for ${target}.`;
+  }
+
   const activeRuns = await prisma.scheduleRun.findMany({
     where: { status: { in: ['QUEUED', 'RUNNING'] } },
     select: { id: true, status: true },

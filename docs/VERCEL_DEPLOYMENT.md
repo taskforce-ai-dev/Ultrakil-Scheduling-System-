@@ -117,18 +117,19 @@ runner secret store. There is no browser-exposed bypass secret.
 Before routing a candidate API with a changed dispatcher or migration to an
 environment database:
 
-1. Put schedule creation, cancellation and imports into operator-maintained
-   maintenance mode, and wait for in-flight HTTP writes to finish.
-2. Drain or cancel every queued/running schedule run using the supported
-   workflow; do not kill a solve and do not manufacture an outbox row for a
-   legacy `RUNNING` run.
-3. Provision an isolated PostgreSQL database for the target environment and
+1. Provision an isolated PostgreSQL database for the target environment and
    record its provider/version without committing credentials.
-4. Take or confirm a recoverable provider backup before migrating an existing
-   database.
-5. From the reviewed candidate checkout and a trusted operator environment with
-   the target `DATABASE_URL`, run the read-only, explicit-provider guard. For
-   the Vercel path, the target is QStash:
+2. Classify the target before migration. Do not call a database fresh merely
+   because an application-table lookup failed: errors are blockers, not a fresh
+   result.
+3. For an **existing** database, put schedule creation, cancellation and imports
+   into operator-maintained maintenance mode, wait for in-flight HTTP writes,
+   drain or cancel every queued/running run through the supported workflow, and
+   take or confirm a recoverable backup. Do not kill a solve and do not
+   manufacture an outbox row for a legacy `RUNNING` run.
+4. From the reviewed candidate checkout and a trusted operator environment with
+   the target `DATABASE_URL`, select exactly one read-only guard path. For an
+   existing Vercel database switching to QStash:
 
    ```bash
    pnpm --filter @ultrakil/api dispatch:cutover:check -- --target=qstash
@@ -136,18 +137,29 @@ environment database:
 
    The guard defaults safe by requiring the explicit target. It rejects any
    `QUEUED`/`RUNNING` run, a missing active-run outbox, or an active outbox with
-   the wrong provider. It is also safe against a pre-outbox schema and never
-   writes or backfills a `RUNNING` run.
-6. Only after the guard succeeds, run
+   the wrong provider. It is safe against a pre-outbox schema and never writes
+   or backfills a `RUNNING` run.
+
+   For a deliberately **fresh** database, use the separate positive emptiness
+   check instead:
+
+   ```bash
+   pnpm --filter @ultrakil/api dispatch:cutover:check -- --fresh --target=qstash
+   ```
+
+   `--fresh` succeeds only when PostgreSQL confirms there are no user tables;
+   it does not query `schedule_runs`, it never treats a query error as fresh,
+   and it does not replace the existing-database guard.
+5. Only after the applicable guard succeeds, run
    `pnpm --filter @ultrakil/api db:deploy` and record the command result and
    release SHA.
+6. Confirm `pnpm --filter @ultrakil/api db:status` before routing the manager
+   portal to the API.
 7. Run `pnpm --filter @ultrakil/api db:seed` to create the initial administrator
    only when the target has not already been provisioned.
 8. Run the strict workbook dry-run and import workflow from the preserved C08
    runbook. Real workbook files and import reports containing personal data
    stay outside Git and Vercel build artifacts.
-9. Confirm `pnpm --filter @ultrakil/api db:status` before routing the manager
-   portal to the API.
 
 Migration is intentionally not part of `vercel.json`'s build command: a build
 may run more than once or concurrently, while schema and seed changes are a
@@ -165,8 +177,13 @@ single controlled release operation.
    scheduler request, a QStash-backed schedule run, cancellation and
    terminal-failure recovery.
 4. Complete real-data UAT against the exact staging SHA.
-5. Merge the accepted release to `main`, apply the production migration gate,
-   and verify the three Production deployments before sign-off.
+5. Before merge/promote to `main`, repeat the controlled gate against the
+   production database using the exact accepted SHA: for an existing database,
+   maintenance, drain/cancel, backup, existing-database guard, `db:deploy` and
+   `db:status`; for a positively confirmed fresh database, `--fresh`,
+   `db:deploy` and `db:status`. Only then merge/promote that exact SHA to
+   `main`, which routes Production automatically, and verify the three
+   Production deployments before sign-off.
 
 The Docker path continues to use private PostgreSQL, Redis and BullMQ services.
 Its scheduler opt-out is explicit and network-private; the local developer
