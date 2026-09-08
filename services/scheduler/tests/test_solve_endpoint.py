@@ -8,9 +8,11 @@ which is the promise the API depends on when a manager reruns a schedule.
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _require_scheduler_token, app
 from app.settings import Settings, settings
 
 client = TestClient(app)
@@ -103,6 +105,18 @@ def test_requires_the_configured_service_token(monkeypatch):
 
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
+
+
+def test_rejects_non_ascii_bearer_credentials_without_crashing(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "scheduler-token")
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer", credentials="malformed-tøken"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        _require_scheduler_token(credentials)
+
+    assert caught.value.status_code == 401
 
 
 def test_allows_local_solves_when_no_service_token_is_configured(monkeypatch):

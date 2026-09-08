@@ -101,7 +101,9 @@ def _require_scheduler_token(
         return
 
     supplied = credentials.credentials if credentials else None
-    if supplied is None or not compare_digest(supplied, expected):
+    if supplied is None or not compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Scheduler authentication required",
