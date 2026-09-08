@@ -63,7 +63,7 @@ export default function DashboardPage() {
   return (
     <div className="-m-6 space-y-8 pb-6">
       {/* Hero band */}
-      <div className="relative overflow-hidden bg-[radial-gradient(ellipse_120%_100%_at_0%_0%,#123a26_0%,#081a11_55%,#04100a_100%)] px-6 pt-10 pb-14 text-white">
+      <div className="relative overflow-hidden bg-[radial-gradient(ellipse_120%_100%_at_0%_0%,#294e37_0%,#193022_55%,#111f16_100%)] px-6 pt-10 pb-14 text-white">
         {/* Faint oversized watermark letter — the "mesmerizing" flourish,
             purely decorative (aria-hidden) so it never competes with real
             content for a screen reader or for contrast. */}
@@ -114,7 +114,7 @@ export default function DashboardPage() {
                 style={{ transitionDelay: `${index * 30}ms` }}
               >
                 <dt className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-lime/15 text-[#2a6b17] dark:text-brand-lime">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-lime/15 text-[#356320] dark:text-brand-lime">
                     <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                   </span>
                   {label}
