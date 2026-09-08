@@ -3,8 +3,9 @@
  *
  * Proves that applying the committed migrations to a database with nothing in
  * it produces every table the Prisma schema declares, and that each one is
- * queryable and empty. A migration that only works against *your* laptop's
- * database is the classic way to break a teammate's first clone.
+ * queryable. Other integration suites may already have seeded rows. A migration
+ * that only works against *your* laptop's database is the classic way to break
+ * a teammate's first clone.
  *
  * Requires PostgreSQL and DATABASE_URL. CI provides both; locally run
  * `pnpm dev:infra && pnpm db:deploy` first.
@@ -15,11 +16,13 @@ import { PrismaClient } from '@prisma/client';
 const EXPECTED_TABLES = [
   'assignment_crew_members',
   'assignment_locks',
+  'assignment_notification_outbox',
   'assignment_vehicles',
   'assignments',
   'audit_events',
   'branches',
   'customers',
+  'employee_availability',
   'employee_skills',
   'employees',
   'generated_visits',
@@ -27,9 +30,12 @@ const EXPECTED_TABLES = [
   'permanent_assignments',
   'schedule_runs',
   'service_agreement_day_rules',
+  'service_agreement_required_skills',
+  'service_agreement_versions',
   'service_agreements',
   'service_sites',
   'site_operating_hours',
+  'users',
   'vehicle_authorizations',
   'vehicles',
   'visit_unassigned_reasons',
@@ -53,10 +59,8 @@ describe('migrations against an empty database', () => {
       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
     `;
 
-    const actual = rows.map((row) => row.table_name);
-    const missing = EXPECTED_TABLES.filter((table) => !actual.includes(table));
-
-    expect(missing).toEqual([]);
+    const actual = rows.map((row) => row.table_name).filter((name) => name !== '_prisma_migrations');
+    expect(actual.sort()).toEqual([...EXPECTED_TABLES].sort());
   });
 
   it('records the migration as applied', async () => {
@@ -79,6 +83,7 @@ describe('migrations against an empty database', () => {
       prisma.branch.count(),
       prisma.employee.count(),
       prisma.employeeSkill.count(),
+      prisma.employeeAvailability.count(),
       prisma.permanentAssignment.count(),
       prisma.vehicle.count(),
       prisma.vehicleAuthorization.count(),
@@ -88,14 +93,18 @@ describe('migrations against an empty database', () => {
       prisma.jobType.count(),
       prisma.serviceAgreement.count(),
       prisma.serviceAgreementDayRule.count(),
+      prisma.serviceAgreementRequiredSkill.count(),
+      prisma.serviceAgreementVersion.count(),
       prisma.generatedVisit.count(),
       prisma.visitUnassignedReason.count(),
       prisma.assignment.count(),
       prisma.assignmentCrewMember.count(),
       prisma.assignmentVehicle.count(),
       prisma.assignmentLock.count(),
+      prisma.assignmentNotificationOutbox.count(),
       prisma.scheduleRun.count(),
       prisma.auditEvent.count(),
+      prisma.user.count(),
     ]);
 
     expect(counts).toHaveLength(EXPECTED_TABLES.length);

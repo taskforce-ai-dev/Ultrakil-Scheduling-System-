@@ -18,8 +18,12 @@ import {
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
+import { AuditService } from '../../src/audit/audit.service';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
+import { PrismaService } from '../../src/prisma/prisma.service';
+import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
+import { VisitGenerationService } from '../../src/scheduling/visit-generation/visit-generation.service';
 
 const prisma = new PrismaClient();
 
@@ -75,6 +79,12 @@ const confirm = (body: Record<string, unknown> = {}) =>
     .post('/api/visit-generation/confirm')
     .set(auth(adminToken))
     .send({ ...HORIZON, ...body });
+
+function barrier() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  return { promise, release };
+}
 
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -376,9 +386,179 @@ describe('agreement rules are respected', () => {
 });
 
 describe('regeneration never loses manager-controlled work', () => {
-  it('updates an untouched visit when the agreement changes', async () => {
+  it.each(
+    ['update', 'removal'].flatMap((operation) =>
+      ['publication', 'draft', 'revision'].map((change) => ({
+        operation,
+        change,
+      })),
+    ),
+  )(
+    'aborts a stale generation $operation after $change without applying any of its plan',
+    async ({ operation, change }) => {
+      const agreement = await createAgreement();
+      const dto = { ...HORIZON, serviceAgreementIds: [agreement.id] };
+      await confirm({ serviceAgreementIds: [agreement.id] });
+      const [visit] = await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreement.id },
+        orderBy: { id: 'desc' },
+      });
+      await request(http)
+        .patch(`/api/service-agreements/${agreement.id}`)
+        .set(auth(adminToken))
+        .send(
+          operation === 'update'
+            ? { durationMinutes: 120 }
+            : { allowedDays: [Weekday.FRIDAY], preferredDays: [] },
+        )
+        .expect(200);
+      const impact = await app.get(VisitGenerationService).preview(dto);
+      expect(
+        operation === 'update' ? impact.updates : impact.removals,
+      ).toHaveLength(4);
+      for (const entry of [...impact.updates, ...impact.removals]) {
+        expect(entry).not.toHaveProperty('expectedUpdatedAt');
+        expect(entry).not.toHaveProperty('updatedAt');
+      }
+      const planned = barrier();
+      const resume = barrier();
+      const client = new Proxy(prisma, {
+        get(target, key) {
+          if (key === '$transaction')
+            return async (
+              work: Parameters<PrismaService['$transaction']>[0],
+            ) => {
+              planned.release();
+              await resume.promise;
+              return target.$transaction(work);
+            };
+          return Reflect.get(target, key);
+        },
+      }) as unknown as PrismaService;
+      const generation = new VisitGenerationService(
+        client,
+        app.get(AuditService),
+      );
+      const actor = await prisma.user.findUniqueOrThrow({
+        where: { email: ADMIN.email },
+      });
+      const pending = generation.confirm(dto, actor).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      let employeeId: string | undefined;
+      try {
+        await planned.promise;
+        if (change === 'revision') {
+          // Still unprotected and unassigned: only its exact revision changed.
+          await prisma.generatedVisit.update({
+            where: { id: visit.id },
+            data: { requiredCrewSize: 3 },
+          });
+        } else {
+          const employee = await prisma.employee.create({
+            data: {
+              employeeCode: `c04-race-${operation}-${suffix}`,
+              sourceKey: `c04-race-${operation}-${suffix}`,
+              gradeLabel: 'PMS',
+              fullName: 'Generation race crew',
+              branchId: visit.branchId,
+              branchCode: visit.branchCode,
+              isPmsGrade: true,
+            },
+          });
+          employeeId = employee.id;
+          const run = await prisma.scheduleRun.create({
+            data: {
+              status: 'SUCCEEDED',
+              rangeStart: new Date(HORIZON.from),
+              rangeEnd: new Date(HORIZON.to),
+            },
+          });
+          await prisma.assignment.create({
+            data: {
+              generatedVisitId: visit.id,
+              branchId: visit.branchId,
+              branchCode: visit.branchCode,
+              status: 'DRAFT',
+              scheduleRunId: run.id,
+              plannedStart: new Date(visit.visitDate.getTime() + 540 * 60_000),
+              plannedEnd: new Date(visit.visitDate.getTime() + 630 * 60_000),
+              crewMembers: {
+                create: {
+                  employeeId: employee.id,
+                  role: 'SUPERVISOR',
+                  isPmsSupervisor: true,
+                },
+              },
+            },
+          });
+          // Leave the visit timestamp/status unchanged: the assignment/history
+          // recheck must protect it even independently of the revision fence.
+          if (change === 'publication')
+            await app.get(PublishingService).publish(run.id, null, actor);
+        }
+        const visitsBefore = await prisma.generatedVisit.findMany({
+          where: { serviceAgreementId: agreement.id },
+          orderBy: { id: 'asc' },
+        });
+        const assignmentBefore = await prisma.assignment.findMany({
+          where: { generatedVisitId: visit.id },
+          include: { crewMembers: true },
+          orderBy: { id: 'asc' },
+        });
+        const outboxBefore = await prisma.assignmentNotificationOutbox.findMany(
+          {
+            where: { assignment: { generatedVisitId: visit.id } },
+            orderBy: { id: 'asc' },
+          },
+        );
+        expect(outboxBefore).toHaveLength(change === 'publication' ? 1 : 0);
+        const runsBefore = await prisma.scheduleRun.count();
+        const auditsBefore = await prisma.auditEvent.count({
+          where: { action: 'visit_generation.confirmed' },
+        });
+        resume.release();
+        expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+        expect(
+          await prisma.generatedVisit.findMany({
+            where: { serviceAgreementId: agreement.id },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(visitsBefore);
+        expect(
+          await prisma.assignment.findMany({
+            where: { generatedVisitId: visit.id },
+            include: { crewMembers: true },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(assignmentBefore);
+        expect(
+          await prisma.assignmentNotificationOutbox.findMany({
+            where: { assignment: { generatedVisitId: visit.id } },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(outboxBefore);
+        expect(await prisma.scheduleRun.count()).toBe(runsBefore);
+        expect(
+          await prisma.auditEvent.count({
+            where: { action: 'visit_generation.confirmed' },
+          }),
+        ).toBe(auditsBefore);
+      } finally {
+        resume.release();
+        await pending;
+        await prisma.serviceAgreement.delete({ where: { id: agreement.id } });
+        if (employeeId)
+          await prisma.employee.delete({ where: { id: employeeId } });
+      }
+    },
+  );
+
+  it.each([VisitStatus.PENDING, VisitStatus.UNASSIGNED])('updates an untouched %s visit when the agreement changes', async (status) => {
     const agreement = await createAgreement();
     await confirm({ serviceAgreementIds: [agreement.id] });
+    await prisma.generatedVisit.updateMany({ where: { serviceAgreementId: agreement.id }, data: { status } });
 
     await request(http)
       .patch(`/api/service-agreements/${agreement.id}`)
@@ -490,9 +670,10 @@ describe('regeneration never loses manager-controlled work', () => {
     expect(survivor).not.toBeNull();
   });
 
-  it('removes an untouched visit the agreement no longer wants, having said so', async () => {
+  it.each([VisitStatus.PENDING, VisitStatus.UNASSIGNED])('removes an untouched %s visit the agreement no longer wants, having said so', async (status) => {
     const agreement = await createAgreement();
     await confirm({ serviceAgreementIds: [agreement.id] });
+    await prisma.generatedVisit.updateMany({ where: { serviceAgreementId: agreement.id }, data: { status } });
 
     const before = await prisma.generatedVisit.count({
       where: { serviceAgreementId: agreement.id },

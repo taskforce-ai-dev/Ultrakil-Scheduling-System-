@@ -303,6 +303,13 @@ Run `pnpm --filter @ultrakil/api prisma:generate`.
 
 ## Everyday commands
 
+API integration tests require a separate disposable PostgreSQL database whose
+name ends in `_test` (CI uses `ultrakil_test`). Create and migrate that database
+separately, then set `DATABASE_URL` for the test process before running
+`pnpm --filter @ultrakil/api test:integration`. The integration harness rejects
+missing, malformed and non-test database URLs before loading any test suite.
+Never run integration fixtures against a database holding real workforce data.
+
 | Command | What it does |
 | --- | --- |
 | `pnpm dev:infra` / `pnpm dev:infra:down` | Start / stop PostgreSQL and Redis |

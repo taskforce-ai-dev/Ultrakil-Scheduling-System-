@@ -31,10 +31,10 @@ ultrakil-scheduling-system/
 
 ### Who owns what
 
-| Path | Owner | Scope |
-| --- | --- | --- |
-| `apps/api`, `services/scheduler`, `packages/api-contracts`, migrations | **Chanya** (@cha-she) | Backend rules, scheduling, audit history, deployment, Phase 2-compatible APIs |
-| `apps/manager-web`, `docs/manager` | **Oshadi** (@Oshadi2005) | Manager portal, customer/service agreement workflow, calendar, dispatch board, overrides |
+| Path                                                                   | Owner                    | Scope                                                                                    |
+| ---------------------------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------- |
+| `apps/api`, `services/scheduler`, `packages/api-contracts`, migrations | **Chanya** (@cha-she)    | Backend rules, scheduling, audit history, deployment, Phase 2-compatible APIs            |
+| `apps/manager-web`, `docs/manager`                                     | **Oshadi** (@Oshadi2005) | Manager portal, customer/service agreement workflow, calendar, dispatch board, overrides |
 
 Do not modify another developer's owned paths without the Project Lead recording
 the reason in the ClickUp task and approving the change. See
@@ -64,13 +64,13 @@ pnpm dev:scheduler            # http://localhost:8000
 
 Each in its own terminal.
 
-| What | Where |
-| --- | --- |
-| API base URL | http://localhost:3001/api |
-| Interactive API docs | http://localhost:3001/api/docs |
-| API readiness check | http://localhost:3001/api/health/ready |
-| Scheduling service | http://localhost:8000/docs |
-| Manager portal | http://localhost:3000 |
+| What                 | Where                                  |
+| -------------------- | -------------------------------------- |
+| API base URL         | http://localhost:3001/api              |
+| Interactive API docs | http://localhost:3001/api/docs         |
+| API readiness check  | http://localhost:3001/api/health/ready |
+| Scheduling service   | http://localhost:8000/docs             |
+| Manager portal       | http://localhost:3000                  |
 
 Full walkthrough, including Windows notes and common errors:
 **[`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)**.
@@ -94,7 +94,7 @@ sides cannot drift.
 ## Hard rules the system must never break
 
 These are enforced in code and covered by tests. A schedule is never made to
-*look* complete by relaxing one of them — work that cannot satisfy them all goes
+_look_ complete by relaxing one of them — work that cannot satisfy them all goes
 to the **Unassigned queue with a clear reason**.
 
 1. Colombo staff serve Colombo work only; Kandy staff serve Kandy work only.
@@ -108,7 +108,7 @@ to the **Unassigned queue with a clear reason**.
 6. Visits must fall inside the customer's opening hours for that weekday.
 7. No employee and no vehicle is double-booked.
 8. Crew size is variable per service agreement.
-9. A manager override or lock can change *who* and *when* — it can never bypass
+9. A manager override or lock can change _who_ and _when_ — it can never bypass
    rules 1–7.
 
 ---
@@ -128,24 +128,25 @@ to the **Unassigned queue with a clear reason**.
 
 ## Documentation
 
-| Doc | What it covers |
-| --- | --- |
-| [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md) | Getting the whole stack running on your machine |
-| [`docs/BRANCHING.md`](docs/BRANCHING.md) | Branch naming, PR flow, review and merge rules |
-| [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md) | Who owns which folders, and how to request a change |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How the three services fit together |
-| [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Every table and why it exists |
-| [`data/README.md`](data/README.md) | The technician matrix and how it is imported |
+| Doc                                                  | What it covers                                       |
+| ---------------------------------------------------- | ---------------------------------------------------- |
+| [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md)         | Getting the whole stack running on your machine      |
+| [`docs/BRANCHING.md`](docs/BRANCHING.md)             | Branch naming, PR flow, review and merge rules       |
+| [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md)             | Who owns which folders, and how to request a change  |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)       | How the three services fit together                  |
+| [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md)           | Every table and why it exists                        |
+| [`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md) | Which endpoints the manager portal consumes, and why |
+| [`data/README.md`](data/README.md)                   | The technician matrix and how it is imported         |
 
 ---
 
 ## Team
 
-| Person | Role |
-| --- | --- |
-| **Chanya Shehani** (@cha-she) | Project Lead — repository owner, reviewer and merger |
-| **Oshadi Kumaravel** (@Oshadi2005) | Manager portal developer |
-| **Thivarrakesh Parthipan** (@thiva2k) | Project Supervisor |
+| Person                                | Role                                                 |
+| ------------------------------------- | ---------------------------------------------------- |
+| **Chanya Shehani** (@cha-she)         | Project Lead — repository owner, reviewer and merger |
+| **Oshadi Kumaravel** (@Oshadi2005)    | Manager portal developer                             |
+| **Thivarrakesh Parthipan** (@thiva2k) | Project Supervisor                                   |
 
 Chanya reviews and merges Oshadi's pull requests. As Project Lead and
 repository owner, Chanya merges her own pull requests without a second

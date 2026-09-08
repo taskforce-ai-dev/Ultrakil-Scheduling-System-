@@ -13,16 +13,25 @@
  * create and solves them concurrently, which is how "cancels a queued run"
  * ends up seeing RUNNING.
  */
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { BranchCode, LockScope, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { Job } from 'bullmq';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
+import { AuditService } from '../../src/audit/audit.service';
 import { AuthService } from '../../src/auth/auth.service';
+import { AppException } from '../../src/common/errors/app.exception';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
+import { PrismaService } from '../../src/prisma/prisma.service';
+import { EligibilityService } from '../../src/scheduling/eligibility/eligibility.service';
+import { AssignmentsService } from '../../src/scheduling/eligibility/assignments.service';
+import { VisitsService } from '../../src/scheduling/visits/visits.service';
+import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
+import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
+import { SchedulerClient, SolveResponse } from '../../src/scheduling/optimizer/scheduler.client';
 
 const prisma = new PrismaClient();
 
@@ -39,6 +48,7 @@ let jobTypeId: string;
 let siteId: string;
 const supervisorIds: string[] = [];
 const technicianIds: string[] = [];
+const batchVehicleIds: string[] = [];
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 /**
@@ -48,6 +58,61 @@ const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
  * a crowded fixture. 2027-03-03 is a Wednesday.
  */
 const RANGE = { from: '2027-03-01', to: '2027-03-07' };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+/** Exposes the real connection/lock boundary without replacing any SQL. */
+function transactionProbe(holdLock: boolean, beforeTransaction?: () => Promise<void>) {
+  const pid = deferred<number>();
+  const locked = deferred<void>();
+  const release = deferred<void>();
+  const client = new Proxy(prisma, {
+    get(target, property) {
+      if (property === '$transaction') {
+        return async (work: (tx: Prisma.TransactionClient) => Promise<unknown>) => {
+          await beforeTransaction?.();
+          return target.$transaction(async (tx) => {
+            const [backend] = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+            pid.resolve(backend.pid);
+            return work(new Proxy(tx, {
+              get(transaction, key) {
+                if (key === '$queryRaw') {
+                  return async (query: Prisma.Sql) => {
+                    const result = await transaction.$queryRaw(query);
+                    if (query.sql.includes('generated_visits') && query.sql.includes('FOR UPDATE')) {
+                      locked.resolve();
+                      if (holdLock) await release.promise;
+                    }
+                    return result;
+                  };
+                }
+                return Reflect.get(transaction, key);
+              },
+            }));
+          }, { timeout: 15_000 });
+        };
+      }
+      return Reflect.get(target, property);
+    },
+  }) as unknown as PrismaService;
+  return { client, pid, locked, release };
+}
+
+/** A database-state barrier, not a guess about how long a query takes. */
+async function waitForBlocked(waitingPid: number, holdingPid: number) {
+  const deadline = Date.now() + 5_000;
+  do {
+    const [state] = await prisma.$queryRaw<{ blockers: number[] }[]>`
+      SELECT pg_blocking_pids(${waitingPid}::integer) AS blockers
+    `;
+    if (state.blockers.includes(holdingPid)) return;
+  } while (Date.now() < deadline);
+  throw new Error(`Backend ${waitingPid} never waited for backend ${holdingPid}`);
+}
 
 /** Only this suite's own visits, so a shared database cannot skew a count. */
 let agreementIds: string[] = [];
@@ -244,6 +309,7 @@ afterAll(async () => {
     },
   });
   await clearFixtures();
+  await prisma.vehicle.deleteMany({ where: { id: { in: batchVehicleIds } } });
   await prisma.employee.deleteMany({ where: { id: { in: ids } } });
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
   await prisma.$disconnect();
@@ -409,13 +475,26 @@ describe('locks survive a rerun', () => {
       .send({ scope: LockScope.CREW, reason: 'Customer asked for this crew' });
     expect(locked.status).toBe(200);
 
-    await solve();
+    for (let rerun = 0; rerun < 3; rerun++) {
+      await solve();
 
-    const after = await prisma.assignment.findFirstOrThrow({
-      where: { generatedVisitId: visitId },
-      include: { crewMembers: true },
-    });
-    expect(after.crewMembers.map((member) => member.employeeId).sort()).toEqual(lockedCrew);
+      const after = await prisma.assignment.findFirstOrThrow({
+        where: { generatedVisitId: visitId, status: 'DRAFT' },
+        include: { crewMembers: true, locks: true },
+      });
+      expect(after.crewMembers.map((member) => member.employeeId).sort()).toEqual(lockedCrew);
+      expect(after.locks).toEqual([
+        expect.objectContaining({
+          id: locked.body.id,
+          assignmentId: after.id,
+          scope: LockScope.CREW,
+          reason: 'Customer asked for this crew',
+          lockedByUserId: locked.body.lockedByUserId,
+          releasedAt: null,
+        }),
+      ]);
+      expect(after.locks[0].createdAt.toISOString()).toBe(locked.body.createdAt);
+    }
   });
 
   it('releases a lock when asked', async () => {
@@ -443,7 +522,1152 @@ describe('locks survive a rerun', () => {
   });
 });
 
+describe('assignment lock concurrency', () => {
+  it.each(['lock', 'solver'].flatMap((first) =>
+    ['assignment', 'rejected', 'unassigned'].map((outcome) => ({ first, outcome })),
+  ))('serializes $outcome when $first acquires the visit lock first', async ({ first, outcome }) => {
+    const f = await manualPublicationFixture();
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const solver = transactionProbe(first === 'solver');
+    const locker = transactionProbe(first === 'lock');
+    const started = deferred<void>();
+    const answer = deferred<SolveResponse>();
+    const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
+    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService));
+    const publishing = new PublishingService(locker.client, app.get(AuditService));
+    const solved = service.execute(run.id).then((value) => ({ value }), (error: unknown) => ({ error }));
+    let locked: Promise<{ value: unknown } | { error: unknown }> | undefined;
+    const solution: SolveResponse = {
+      run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 1,
+      assignments: outcome === 'unassigned' ? [] : [{
+        visit_id: f.visitId, employee_ids: outcome === 'rejected' ? [] : [supervisorIds[0], technicianIds[1]],
+        vehicles: [], start_minute: 600, scheduled_date: '2027-03-03',
+      }],
+      unassigned: outcome === 'unassigned' ? [{ visit_id: f.visitId, reason_codes: ['NO_CREW'], message: 'No crew available' }] : [],
+    };
+    try {
+      await started.promise;
+      if (first === 'solver') {
+        answer.resolve(solution);
+        await solver.locked.promise;
+      }
+      locked = publishing.lock(f.draft!.id, LockScope.CREW, 'Keep this crew', f.actor)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      // A missing transaction must fail the test rather than wait forever.
+      expect(await Promise.race([
+        (first === 'lock' ? locker.locked.promise : locker.pid.promise).then(() => 'transaction'),
+        locked.then(() => 'finished without the shared lock'),
+      ])).toBe('transaction');
+      if (first === 'lock') answer.resolve(solution);
+      const [solverPid, lockerPid] = await Promise.all([solver.pid.promise, locker.pid.promise]);
+      await waitForBlocked(first === 'lock' ? solverPid : lockerPid, first === 'lock' ? lockerPid : solverPid);
+      (first === 'lock' ? locker : solver).release.resolve();
+      const [solveResult, lockResult] = await Promise.all([solved, locked]);
+      const locks = await prisma.assignmentLock.findMany({ where: { assignment: { generatedVisitId: f.visitId } } });
+      if (first === 'lock') {
+        expect(lockResult).toHaveProperty('value');
+        expect(solveResult).toMatchObject({ error: { code: 'RESOURCE_CONFLICT' } });
+        expect(locks).toHaveLength(1);
+        expect(locks[0]).toMatchObject({ assignmentId: f.draft!.id, scope: LockScope.CREW, releasedAt: null });
+        expect(await prisma.assignment.findUnique({ where: { id: f.draft!.id } })).toEqual(f.draft);
+        expect(await prisma.assignment.count({ where: { scheduleRunId: run.id } })).toBe(0);
+        expect(await prisma.visitUnassignedReason.count({ where: { generatedVisitId: f.visitId } })).toBe(0);
+      } else {
+        expect(solveResult).toHaveProperty('value');
+        expect(lockResult).toMatchObject({ error: { code: 'RESOURCE_CONFLICT' } });
+        expect(locks).toHaveLength(0);
+      }
+    } finally {
+      answer.resolve(solution);
+      solver.release.resolve();
+      locker.release.resolve();
+      await Promise.all([solved, locked]);
+    }
+  });
+});
+
+async function manualPublicationFixture(withDraft = true) {
+  const visitId = await makeVisit();
+  const visit = await prisma.generatedVisit.findUniqueOrThrow({
+    where: { id: visitId },
+  });
+  const run = await prisma.scheduleRun.create({
+    data: {
+      status: 'SUCCEEDED',
+      rangeStart: new Date(RANGE.from),
+      rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    },
+  });
+  const createDraft = async () => {
+    const draft = await prisma.assignment.create({
+      data: {
+        generatedVisitId: visitId,
+        branchId: visit.branchId,
+        branchCode: BranchCode.COLOMBO,
+        scheduleRunId: run.id,
+        status: 'DRAFT',
+        plannedStart: new Date('2027-03-03T09:00:00Z'),
+        plannedEnd: new Date('2027-03-03T10:30:00Z'),
+        crewMembers: {
+          create: [
+            {
+              employeeId: supervisorIds[0],
+              role: 'SUPERVISOR',
+              isPmsSupervisor: true,
+            },
+            { employeeId: technicianIds[0], role: 'TECHNICIAN' },
+          ],
+        },
+      },
+    });
+    await prisma.generatedVisit.update({
+      where: { id: visitId },
+      data: { status: 'SCHEDULED' },
+    });
+    return draft;
+  };
+  const draft = withDraft ? await createDraft() : undefined;
+  const actor = await prisma.user.findUniqueOrThrow({
+    where: { email: ADMIN.email },
+  });
+  const proposal = {
+    plannedStartMinute: 540,
+    plannedEndMinute: 630,
+    crew: [
+      { employeeId: supervisorIds[0], role: CrewRole.SUPERVISOR },
+      { employeeId: technicianIds[0], role: CrewRole.TECHNICIAN },
+    ],
+  };
+  return { visitId, run, draft, createDraft, actor, proposal };
+}
+
+describe('standard writer publication protocol', () => {
+  async function batchFixture(withVehicle = false) {
+    const visits = [await manualPublicationFixture(), await manualPublicationFixture()];
+    const vehicle = withVehicle ? await prisma.vehicle.create({ data: {
+      code: `C06-BATCH-${suffix}-${batchVehicleIds.length}`, label: 'C06 shared vehicle', seatCapacity: 2,
+      authorizations: { create: { employeeId: supervisorIds[0] } },
+    } }) : undefined;
+    if (vehicle) batchVehicleIds.push(vehicle.id);
+    for (const [index, fixture] of visits.entries()) {
+      await prisma.generatedVisit.update({ where: { id: fixture.visitId }, data: { durationMinutes: 60 } });
+      await prisma.assignment.update({ where: { id: fixture.draft!.id }, data: {
+        plannedStart: new Date(`2027-03-03T${index === 0 ? '09' : '11'}:00:00Z`),
+        plannedEnd: new Date(`2027-03-03T${index === 0 ? '10' : '12'}:00:00Z`),
+      } });
+      if (vehicle) await prisma.assignmentVehicle.create({ data: {
+        assignmentId: fixture.draft!.id, vehicleId: vehicle.id, driverEmployeeId: supervisorIds[0],
+      } });
+    }
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const solve = (plans: { index: number; start: number }[], eligibility = app.get(EligibilityService)) => {
+      const service = new ScheduleRunService(prisma as unknown as PrismaService, {
+        solve: async (): Promise<SolveResponse> => ({
+          run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 2,
+          assignments: plans.map(({ index, start }) => ({
+            visit_id: visits[index].visitId, employee_ids: [supervisorIds[0], technicianIds[0]],
+            vehicles: vehicle ? [{ vehicle_id: vehicle.id, driver_employee_id: supervisorIds[0] }] : [],
+            start_minute: start, scheduled_date: '2027-03-03',
+          })),
+          unassigned: [],
+        }),
+      } as unknown as SchedulerClient, eligibility, app.get(AuditService));
+      return service.execute(run.id);
+    };
+    return { visits, run, solve };
+  }
+
+  it.each(['crew', 'crew and vehicle'])('reuses a %s slot freed by an earlier accepted result in the same transaction', async (resource) => {
+    const f = await batchFixture(resource === 'crew and vehicle');
+    expect(await f.solve([{ index: 0, start: 720 }, { index: 1, start: 540 }]))
+      .toEqual({ scheduled: 2, unassigned: 0, cancelled: false });
+    expect(await prisma.assignment.findMany({
+      where: { scheduleRunId: f.run.id }, select: { generatedVisitId: true, plannedStart: true },
+      orderBy: { plannedStart: 'asc' },
+    })).toEqual([
+      { generatedVisitId: f.visits[1].visitId, plannedStart: new Date('2027-03-03T09:00:00Z') },
+      { generatedVisitId: f.visits[0].visitId, plannedStart: new Date('2027-03-03T12:00:00Z') },
+    ]);
+  });
+
+  it.each([[0, 1], [1, 0]])('counts the earlier proposed crew occupancy in order %s then %s', async (first, later) => {
+    const f = await batchFixture();
+    expect(await f.solve([{ index: first, start: 720 }, { index: later, start: 720 }]))
+      .toEqual({ scheduled: 1, unassigned: 1, cancelled: false });
+    expect(await prisma.assignment.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual([expect.objectContaining({ generatedVisitId: f.visits[first].visitId, status: 'DRAFT' })]);
+    expect(await prisma.assignment.findUnique({ where: { id: f.visits[later].draft!.id } }))
+      .toMatchObject({ status: 'CANCELLED' });
+    expect(await prisma.visitUnassignedReason.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual(Array(2).fill(expect.objectContaining({ generatedVisitId: f.visits[later].visitId, code: 'EMPLOYEE_DOUBLE_BOOKED' })));
+  });
+
+  it('still counts an external retained draft when evaluating the atomic batch', async () => {
+    const f = await batchFixture();
+    const retained = await prisma.assignment.findUnique({ where: { id: f.visits[1].draft!.id } });
+    expect(await f.solve([{ index: 0, start: 660 }]))
+      .toEqual({ scheduled: 0, unassigned: 1, cancelled: false });
+    expect(await prisma.assignment.findUnique({ where: { id: f.visits[1].draft!.id } })).toEqual(retained);
+    expect(await prisma.visitUnassignedReason.findMany({ where: { scheduleRunId: f.run.id } }))
+      .toEqual(Array(2).fill(expect.objectContaining({ code: 'EMPLOYEE_DOUBLE_BOOKED' })));
+  });
+
+  it('rolls back an earlier accepted result when a later transactional eligibility check throws a conflict', async () => {
+    const f = await batchFixture();
+    await app.get(PublishingService).lock(f.visits[0].draft!.id, LockScope.CREW, 'Retain this crew', f.visits[0].actor);
+    const state = () => prisma.generatedVisit.findMany({
+      where: { id: { in: f.visits.map(({ visitId }) => visitId) } }, orderBy: { id: 'asc' },
+      include: { assignments: { include: { crewMembers: true, vehicles: true, locks: true } }, unassignedReasons: true },
+    });
+    const before = await state();
+    const eligibility = app.get(EligibilityService);
+    const transactionalEligibility = { evaluate: async (...args: Parameters<EligibilityService['evaluate']>) => {
+      if (args[0] === f.visits[1].visitId) {
+        // The next result must observe the first draft inside the transaction,
+        // while the independent connection still sees no committed changes.
+        const client = args[3] ?? prisma;
+        expect(await client.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(1);
+        expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+        throw new AppException('RESOURCE_CONFLICT', 'A later eligibility fact changed', HttpStatus.CONFLICT);
+      }
+      return eligibility.evaluate(...args);
+    } } as EligibilityService;
+    await expect(f.solve([{ index: 0, start: 720 }, { index: 1, start: 540 }], transactionalEligibility))
+      .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(await state()).toEqual(before);
+    expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+  });
+
+  it.each(['assignment', 'rejected', 'unassigned'].flatMap((firstOutcome) =>
+    ['assignment', 'rejected', 'unassigned'].map((laterOutcome) => ({ firstOutcome, laterOutcome })),
+  ))('rolls back the complete solver result: $firstOutcome before stale $laterOutcome', async ({ firstOutcome, laterOutcome }) => {
+    const first = await manualPublicationFixture();
+    const later = await manualPublicationFixture();
+    await prisma.assignment.update({ where: { id: later.draft!.id }, data: {
+      plannedStart: new Date('2027-03-03T13:00:00Z'), plannedEnd: new Date('2027-03-03T14:30:00Z'),
+    } });
+    await app.get(PublishingService).lock(first.draft!.id, LockScope.CREW, 'Keep the assigned crew', first.actor);
+    await prisma.visitUnassignedReason.create({ data: {
+      generatedVisitId: first.visitId, scheduleRunId: first.run.id,
+      code: 'PREVIOUS_REASON', message: 'Existing scheduling explanation',
+    } });
+    const run = await prisma.scheduleRun.create({ data: {
+      status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+    } });
+    const started = deferred<void>();
+    const answer = deferred<SolveResponse>();
+    const service = new ScheduleRunService(
+      prisma as unknown as PrismaService,
+      { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient,
+      // The solver and eligibility boundary are controlled; persistence, the
+      // manager adjustment and the queue's FAILED classification use real SQL.
+      { evaluate: async (visitId: string) => {
+        const outcome = visitId === first.visitId ? firstOutcome : laterOutcome;
+        return outcome === 'rejected'
+          ? { isEligible: false, conflicts: [{ code: 'NO_CREW', message: 'No eligible crew' }] }
+          : { isEligible: true, conflicts: [] };
+      } } as unknown as EligibilityService,
+      app.get(AuditService),
+    );
+    const pending = new ScheduleRunProcessor(service).process({
+      data: { runId: run.id, timeLimitSeconds: 1 }, updateProgress: async () => undefined,
+    } as unknown as Job<ScheduleRunJobData>).then(() => undefined, (error: unknown) => error);
+    const solution: SolveResponse = {
+      run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 2,
+      assignments: [{ fixture: first, outcome: firstOutcome }, { fixture: later, outcome: laterOutcome }].flatMap(({ fixture, outcome }) => {
+        const visitId = fixture.visitId;
+        return outcome === 'unassigned' ? [] : [{
+          visit_id: visitId, employee_ids: [supervisorIds[0], technicianIds[0]],
+          vehicles: [], start_minute: 600, scheduled_date: '2027-03-04',
+        }];
+      }),
+      unassigned: [{ fixture: first, outcome: firstOutcome }, { fixture: later, outcome: laterOutcome }].flatMap(({ fixture, outcome }) =>
+        outcome !== 'unassigned' ? [] : [{
+          visit_id: fixture.visitId, reason_codes: ['NO_CREW'], message: 'No crew available',
+        }],
+      ),
+    };
+    const state = (id: string) => prisma.generatedVisit.findUniqueOrThrow({
+      where: { id },
+      include: {
+        assignments: { orderBy: { id: 'asc' }, include: {
+          crewMembers: true, vehicles: true, locks: true, notificationOutboxEntries: true,
+        } },
+        unassignedReasons: { orderBy: { id: 'asc' } },
+      },
+    });
+    try {
+      await started.promise;
+      await app.get(VisitsService).adjust(later.visitId, { durationMinutes: 120 }, later.actor);
+      const before = await Promise.all([state(first.visitId), state(later.visitId)]);
+      answer.resolve(solution);
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(await prisma.scheduleRun.findUnique({ where: { id: run.id } })).toMatchObject({
+        status: 'FAILED', errorCode: 'RESOURCE_CONFLICT',
+      });
+      expect(await Promise.all([state(first.visitId), state(later.visitId)])).toEqual(before);
+      expect(await prisma.assignment.count({ where: { scheduleRunId: run.id } })).toBe(0);
+      expect(await prisma.visitUnassignedReason.count({ where: { scheduleRunId: run.id } })).toBe(0);
+    } finally {
+      answer.resolve(solution);
+      await pending;
+    }
+  });
+
+  it.each(
+    ['present', 'absent'].flatMap((snapshot) =>
+      ['same-date', 'moved-date', 'rejected', 'unassigned'].map((outcome) => ({
+        snapshot,
+        outcome,
+      })),
+    ),
+  )(
+    'rejects a stale $outcome solve before eligibility after adjustment with $snapshot assignment snapshot',
+    async ({ snapshot, outcome }) => {
+      const f = await manualPublicationFixture(snapshot === 'present');
+      const staleRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'QUEUED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      const ready = deferred<void>();
+      const resume = deferred<void>();
+      let evaluated = false;
+      const probe = transactionProbe(false, async () => {
+        expect(evaluated).toBe(false);
+        ready.resolve();
+        await resume.promise;
+      });
+      const eligibility = app.get(EligibilityService);
+      const service = new ScheduleRunService(
+        probe.client,
+        {
+          solve: async () => ({
+            run_id: staleRun.id,
+            status: 'OPTIMAL',
+            solve_seconds: 0,
+            objective_value: 0,
+            visits_considered: 1,
+            assignments:
+              outcome === 'unassigned'
+                ? []
+                : [
+                    {
+                      visit_id: f.visitId,
+                      employee_ids:
+                        outcome === 'rejected'
+                          ? []
+                          : [supervisorIds[0], technicianIds[0]],
+                      vehicles: [],
+                      start_minute: 540,
+                      scheduled_date:
+                        outcome === 'same-date' ? '2027-03-03' : '2027-03-04',
+                    },
+                  ],
+            unassigned:
+              outcome === 'unassigned'
+                ? [
+                    {
+                      visit_id: f.visitId,
+                      reason_codes: ['NO_CREW'],
+                      message: 'No crew',
+                    },
+                  ]
+                : [],
+          }),
+        } as unknown as SchedulerClient,
+        {
+          evaluate: async (
+            ...args: Parameters<EligibilityService['evaluate']>
+          ) => {
+            const result = await eligibility.evaluate(...args);
+            expect(result.isEligible).toBe(outcome !== 'rejected');
+            evaluated = true;
+            return result;
+          },
+        } as EligibilityService,
+        app.get(AuditService),
+      );
+      const pending = service.execute(staleRun.id).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await ready.promise;
+        await app.get(VisitsService).adjust(
+          f.visitId,
+          {
+            durationMinutes: 120,
+            windowEndMinute: 900,
+          },
+          f.actor,
+        );
+        const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: f.visitId },
+        });
+        const assignmentsBefore = await prisma.assignment.findMany({
+          where: { generatedVisitId: f.visitId },
+          include: { crewMembers: true },
+          orderBy: { id: 'asc' },
+        });
+        const reasonsBefore = await prisma.visitUnassignedReason.findMany({
+          where: { generatedVisitId: f.visitId },
+          orderBy: { id: 'asc' },
+        });
+        const outboxBefore = await prisma.assignmentNotificationOutbox.findMany(
+          {
+            where: { assignment: { generatedVisitId: f.visitId } },
+            orderBy: { id: 'asc' },
+          },
+        );
+        resume.resolve();
+        expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+        expect(
+          await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+        ).toEqual(visitBefore);
+        expect(
+          await prisma.assignment.findMany({
+            where: { generatedVisitId: f.visitId },
+            include: { crewMembers: true },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(assignmentsBefore);
+        expect(
+          await prisma.visitUnassignedReason.findMany({
+            where: { generatedVisitId: f.visitId },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(reasonsBefore);
+        expect(
+          await prisma.assignmentNotificationOutbox.findMany({
+            where: { assignment: { generatedVisitId: f.visitId } },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(outboxBefore);
+      } finally {
+        resume.resolve();
+        await pending;
+      }
+    },
+  );
+
+  it('preserves a draft and visit when an adjustment violates crew eligibility', async () => {
+    const f = await manualPublicationFixture();
+    const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+      where: { id: f.visitId },
+    });
+    const draftBefore = await prisma.assignment.findUniqueOrThrow({
+      where: { id: f.draft!.id },
+    });
+    const failure = await app
+      .get(VisitsService)
+      .adjust(
+        f.visitId,
+        { visitDate: '2027-03-04', requiredCrewSize: 3 },
+        f.actor,
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(
+      await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+    ).toEqual(visitBefore);
+    expect(
+      await prisma.assignment.findUnique({ where: { id: f.draft!.id } }),
+    ).toEqual(draftBefore);
+    expect(
+      await prisma.auditEvent.count({
+        where: { entityId: f.visitId, action: 'visit.adjusted' },
+      }),
+    ).toBe(0);
+  });
+
+  it.each(
+    ['assign', 'unassign', 'adjust'].flatMap((operation) =>
+      ['publisher', 'manual'].map((first) => ({ operation, first })),
+    ),
+  )(
+    'serializes manual $operation when $first locks first',
+    async ({ operation, first }) => {
+      const f = await manualPublicationFixture();
+      const manual = transactionProbe(first === 'manual');
+      const publisher = transactionProbe(first === 'publisher');
+      const assignments = new AssignmentsService(
+        manual.client,
+        app.get(EligibilityService),
+        app.get(AuditService),
+      );
+      const visits = new VisitsService(
+        manual.client,
+        app.get(AuditService),
+        app.get(EligibilityService),
+      );
+      const publishing = new PublishingService(
+        publisher.client,
+        app.get(AuditService),
+      );
+      const mutate = () =>
+        operation === 'assign'
+          ? assignments.assign(f.visitId, f.proposal, f.actor)
+          : operation === 'unassign'
+            ? assignments.unassign(f.visitId, f.actor)
+            : visits.adjust(
+                f.visitId,
+                {
+                  visitDate: '2027-03-04',
+                  windowStartMinute: 510,
+                  windowEndMinute: 900,
+                  durationMinutes: 120,
+                  requiredCrewSize: 2,
+                },
+                f.actor,
+              );
+      const originalVisit = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      let mutation: Promise<unknown> | undefined;
+      let publication: Promise<unknown> | undefined;
+      try {
+        if (first === 'manual') {
+          mutation = mutate().then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+          await manual.locked.promise;
+        }
+        publication = publishing.publish(f.run.id, null, f.actor).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        if (first === 'publisher') {
+          await publisher.locked.promise;
+          mutation = mutate().then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          );
+        }
+        const [manualPid, publisherPid] = await Promise.all([
+          manual.pid.promise,
+          publisher.pid.promise,
+        ]);
+        await waitForBlocked(
+          first === 'manual' ? publisherPid : manualPid,
+          first === 'manual' ? manualPid : publisherPid,
+        );
+        (first === 'manual' ? manual : publisher).release.resolve();
+        const [mutated, published] = await Promise.all([mutation, publication]);
+        const visit = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: f.visitId },
+        });
+        const notices = await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: f.draft!.id },
+        });
+        const draft = await prisma.assignment.findUnique({
+          where: { id: f.draft!.id },
+        });
+        if (first === 'publisher') {
+          expect(published).toHaveProperty('value');
+          expect(mutated).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(draft?.status).toBe('PUBLISHED');
+          expect(visit).toEqual(originalVisit);
+          expect(notices).toHaveLength(2);
+        } else if (operation === 'adjust') {
+          expect(mutated).toHaveProperty('value');
+          expect(published).toHaveProperty('value');
+          expect(visit.visitDate.toISOString()).toBe(
+            '2027-03-04T00:00:00.000Z',
+          );
+          expect(draft?.plannedStart.toISOString()).toBe(
+            '2027-03-04T09:00:00.000Z',
+          );
+          expect(draft?.plannedEnd.toISOString()).toBe(
+            '2027-03-04T11:00:00.000Z',
+          );
+          expect(notices).toHaveLength(2);
+          for (const notice of notices)
+            expect(notice.payload).toMatchObject({
+              visitDate: '2027-03-04',
+              plannedStart: draft!.plannedStart.toISOString(),
+              plannedEnd: draft!.plannedEnd.toISOString(),
+            });
+          const audit = await prisma.auditEvent.findFirstOrThrow({
+            where: { entityId: f.run.id, action: 'schedule_run.published' },
+          });
+          expect(audit.after).toMatchObject({
+            snapshot: [
+              expect.objectContaining({
+                visitDate: '2027-03-04',
+                plannedStart: draft!.plannedStart.toISOString(),
+                plannedEnd: draft!.plannedEnd.toISOString(),
+              }),
+            ],
+          });
+        } else {
+          expect(mutated).toHaveProperty('value');
+          expect(published).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(draft).toBeNull();
+          expect(notices).toHaveLength(0);
+          expect(visit.status).toBe(
+            operation === 'assign' ? 'SCHEDULED' : 'UNASSIGNED',
+          );
+          expect(
+            (
+              await prisma.scheduleRun.findUniqueOrThrow({
+                where: { id: f.run.id },
+              })
+            ).publishedAt,
+          ).toBeNull();
+        }
+      } finally {
+        manual.release.resolve();
+        publisher.release.resolve();
+        await Promise.all([mutation, publication]);
+      }
+    },
+  );
+
+  it('preserves a new publication after a rejected manual proposal took an empty snapshot', async () => {
+    const f = await manualPublicationFixture(false);
+    const snapshotRead = deferred<void>();
+    const resume = deferred<void>();
+    const probe = transactionProbe(false, async () => {
+      snapshotRead.resolve();
+      await resume.promise;
+    });
+    const manual = new AssignmentsService(
+      probe.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const pending = manual
+      .assign(f.visitId, { ...f.proposal, crew: [] }, f.actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    try {
+      await snapshotRead.promise;
+      const draft = await f.createDraft();
+      await app.get(PublishingService).publish(f.run.id, null, f.actor);
+      const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      const notices = await prisma.assignmentNotificationOutbox.findMany({
+        where: { assignmentId: draft.id },
+        orderBy: { id: 'asc' },
+      });
+      resume.resolve();
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(
+        await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+      ).toEqual(visitBefore);
+      expect(
+        await prisma.visitUnassignedReason.count({
+          where: { generatedVisitId: f.visitId },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: draft.id },
+          orderBy: { id: 'asc' },
+        }),
+      ).toEqual(notices);
+    } finally {
+      resume.resolve();
+      await pending;
+    }
+  });
+
+  it.each([
+    AssignmentStatus.PUBLISHED,
+    AssignmentStatus.ACKNOWLEDGED,
+    AssignmentStatus.IN_PROGRESS,
+    AssignmentStatus.COMPLETED,
+    AssignmentStatus.SUPERSEDED,
+    AssignmentStatus.CANCELLED,
+  ])(
+    'protects %s published history from every manual writer',
+    async (status) => {
+      const f = await manualPublicationFixture();
+      await app.get(PublishingService).publish(f.run.id, null, f.actor);
+      await prisma.assignment.update({
+        where: { id: f.draft!.id },
+        data: { status },
+      });
+      const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: f.visitId },
+      });
+      const assignmentBefore = await prisma.assignment.findUniqueOrThrow({
+        where: { id: f.draft!.id },
+        include: { crewMembers: true },
+      });
+      const notices = await prisma.assignmentNotificationOutbox.findMany({
+        where: { assignmentId: f.draft!.id },
+        orderBy: { id: 'asc' },
+      });
+      const mutations = [
+        () =>
+          app.get(AssignmentsService).assign(f.visitId, f.proposal, f.actor),
+        () => app.get(AssignmentsService).unassign(f.visitId, f.actor),
+        () =>
+          app
+            .get(VisitsService)
+            .adjust(
+              f.visitId,
+              {
+                visitDate: '2027-03-04',
+                windowStartMinute: 510,
+                windowEndMinute: 900,
+                durationMinutes: 120,
+                requiredCrewSize: 3,
+              },
+              f.actor,
+            ),
+      ];
+      for (const mutate of mutations)
+        expect(
+          await mutate().then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+        ).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(
+        await prisma.generatedVisit.findUnique({ where: { id: f.visitId } }),
+      ).toEqual(visitBefore);
+      expect(
+        await prisma.assignment.findUnique({
+          where: { id: f.draft!.id },
+          include: { crewMembers: true },
+        }),
+      ).toEqual(assignmentBefore);
+      expect(
+        await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: f.draft!.id },
+          orderBy: { id: 'asc' },
+        }),
+      ).toEqual(notices);
+    },
+  );
+});
+
 describe('publishing', () => {
+  it.each(
+    [
+      { scheduledDate: '2027-03-03', outcome: 'assignment' },
+      { scheduledDate: '2027-03-04', outcome: 'assignment' },
+      { scheduledDate: '2027-03-04', outcome: 'rejected' },
+      { scheduledDate: '2027-03-04', outcome: 'unassigned' },
+    ].flatMap((scenario) =>
+      ['present', 'absent'].map((snapshot) => ({ ...scenario, snapshot })),
+    ),
+  )(
+    'preserves a publication while a stale solve proposes $outcome on $scheduledDate with $snapshot snapshot',
+    async ({ scheduledDate, outcome, snapshot }) => {
+      const visitId = await makeVisit();
+      const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: visitId },
+      });
+      const previousRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'SUCCEEDED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      const createDraft = () =>
+        prisma.assignment.create({
+          data: {
+            generatedVisitId: visitId,
+            branchId: visitBefore.branchId,
+            branchCode: BranchCode.COLOMBO,
+            status: 'DRAFT',
+            scheduleRunId: previousRun.id,
+            plannedStart: new Date('2027-03-03T09:00:00Z'),
+            plannedEnd: new Date('2027-03-03T10:30:00Z'),
+            crewMembers: {
+              create: [
+                {
+                  employeeId: supervisorIds[0],
+                  role: 'SUPERVISOR',
+                  isPmsSupervisor: true,
+                },
+                { employeeId: technicianIds[0], role: 'TECHNICIAN' },
+              ],
+            },
+          },
+        });
+      let assignment = snapshot === 'present' ? await createDraft() : undefined;
+      const staleRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'QUEUED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      let start!: () => void;
+      const started = new Promise<void>((resolve) => {
+        start = resolve;
+      });
+      let release!: (value: SolveResponse) => void;
+      const answer = new Promise<SolveResponse>((resolve) => {
+        release = resolve;
+      });
+      const solveSpy = jest
+        .spyOn(app.get(SchedulerClient), 'solve')
+        .mockImplementationOnce(() => {
+          start();
+          return answer;
+        });
+      const pending = runs.execute(staleRun.id).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await started;
+        assignment ??= await createDraft();
+        const published = await request(http)
+          .post(`/api/schedule-runs/${previousRun.id}/publish`)
+          .set(auth(adminToken))
+          .send({});
+        expect(published.status).toBe(200);
+        const publishedAssignment = await prisma.assignment.findUniqueOrThrow({
+          where: { id: assignment.id },
+        });
+        const outbox = await prisma.assignmentNotificationOutbox.findMany({
+          where: { assignmentId: assignment.id },
+          orderBy: { id: 'asc' },
+        });
+        const reasons = await prisma.visitUnassignedReason.findMany({
+          where: { generatedVisitId: visitId },
+          orderBy: { id: 'asc' },
+        });
+        expect(outbox).toHaveLength(2);
+        release({
+          run_id: staleRun.id,
+          status: 'OPTIMAL',
+          assignments:
+            outcome === 'unassigned'
+              ? []
+              : [
+                  {
+                    visit_id: visitId,
+                    employee_ids:
+                      outcome === 'rejected'
+                        ? []
+                        : [supervisorIds[0], technicianIds[0]],
+                    vehicles: [],
+                    start_minute: 600,
+                    scheduled_date: scheduledDate,
+                  },
+                ],
+          unassigned:
+            outcome === 'unassigned'
+              ? [
+                  {
+                    visit_id: visitId,
+                    reason_codes: ['NO_CREW'],
+                    message: 'No crew available',
+                  },
+                ]
+              : [],
+          solve_seconds: 0,
+          objective_value: 0,
+          visits_considered: 1,
+        });
+        const failure = await pending;
+
+        expect(
+          await prisma.assignment.findUnique({ where: { id: assignment.id } }),
+        ).toEqual(publishedAssignment);
+        expect(
+          await prisma.assignmentNotificationOutbox.findMany({
+            where: { assignmentId: assignment.id },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(outbox);
+        expect(
+          await prisma.generatedVisit.findUnique({ where: { id: visitId } }),
+        ).toEqual(visitBefore);
+        expect(
+          await prisma.visitUnassignedReason.findMany({
+            where: { generatedVisitId: visitId },
+            orderBy: { id: 'asc' },
+          }),
+        ).toEqual(reasons);
+        expect(
+          await prisma.assignment.count({
+            where: { scheduleRunId: staleRun.id },
+          }),
+        ).toBe(0);
+        expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      } finally {
+        release({
+          run_id: staleRun.id,
+          status: 'UNKNOWN',
+          assignments: [],
+          unassigned: [],
+          solve_seconds: 0,
+          objective_value: 0,
+          visits_considered: 1,
+        });
+        await pending;
+        solveSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ...['present', 'absent'].flatMap((snapshot) =>
+      ['assignment', 'rejected', 'unassigned'].map((outcome) => ({
+        snapshot,
+        outcome,
+        first: 'publisher',
+      })),
+    ),
+    ...['rejected', 'unassigned'].map((outcome) => ({
+      snapshot: 'present',
+      outcome,
+      first: 'solver',
+    })),
+  ])(
+    'serializes overlapping $outcome with $snapshot snapshot when $first locks first',
+    async ({ snapshot, outcome, first }) => {
+      const visitId = await makeVisit();
+      const visit = await prisma.generatedVisit.findUniqueOrThrow({
+        where: { id: visitId },
+      });
+      const previousRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'SUCCEEDED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      const staleRun = await prisma.scheduleRun.create({
+        data: {
+          status: 'QUEUED',
+          rangeStart: new Date(RANGE.from),
+          rangeEnd: new Date(RANGE.to),
+          branchCode: BranchCode.COLOMBO,
+        },
+      });
+      const createDraft = async () => {
+        const assignment = await prisma.assignment.create({
+          data: {
+            generatedVisitId: visitId,
+            branchId: visit.branchId,
+            branchCode: BranchCode.COLOMBO,
+            status: 'DRAFT',
+            scheduleRunId: previousRun.id,
+            plannedStart: new Date('2027-03-03T09:00:00Z'),
+            plannedEnd: new Date('2027-03-03T10:30:00Z'),
+            crewMembers: {
+              create: [
+                {
+                  employeeId: supervisorIds[0],
+                  role: 'SUPERVISOR',
+                  isPmsSupervisor: true,
+                },
+                { employeeId: technicianIds[0], role: 'TECHNICIAN' },
+              ],
+            },
+          },
+        });
+        await prisma.generatedVisit.update({
+          where: { id: visitId },
+          data: { status: 'SCHEDULED' },
+        });
+        return assignment;
+      };
+      let assignment = snapshot === 'present' ? await createDraft() : undefined;
+      const solver = transactionProbe(first === 'solver');
+      const publisher = transactionProbe(first === 'publisher');
+      const started = deferred<void>();
+      const answer = deferred<SolveResponse>();
+      const scheduler = {
+        solve: async () => {
+          started.resolve();
+          return answer.promise;
+        },
+      } as unknown as SchedulerClient;
+      const runService = new ScheduleRunService(
+        solver.client,
+        scheduler,
+        app.get(EligibilityService),
+        app.get(AuditService),
+      );
+      const publishing = new PublishingService(
+        publisher.client,
+        app.get(AuditService),
+      );
+      const actor = await prisma.user.findUniqueOrThrow({
+        where: { email: ADMIN.email },
+      });
+      const solved = runService.execute(staleRun.id).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let published:
+        Promise<{ value: unknown } | { error: unknown }> | undefined;
+      const solution: SolveResponse = {
+        run_id: staleRun.id,
+        status: 'OPTIMAL',
+        assignments:
+          outcome === 'unassigned'
+            ? []
+            : [
+                {
+                  visit_id: visitId,
+                  employee_ids:
+                    outcome === 'rejected'
+                      ? []
+                      : [supervisorIds[0], technicianIds[0]],
+                  vehicles: [],
+                  start_minute: 600,
+                  scheduled_date: '2027-03-04',
+                },
+              ],
+        unassigned:
+          outcome === 'unassigned'
+            ? [
+                {
+                  visit_id: visitId,
+                  reason_codes: ['NO_CREW'],
+                  message: 'No crew available',
+                },
+              ]
+            : [],
+        solve_seconds: 0,
+        objective_value: 0,
+        visits_considered: 1,
+      };
+      try {
+        await started.promise;
+        assignment ??= await createDraft();
+        const visitBefore = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: visitId },
+        });
+        if (first === 'solver') {
+          answer.resolve(solution);
+          await solver.locked.promise;
+        }
+        published = publishing.publish(previousRun.id, null, actor).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        if (first === 'publisher') {
+          await publisher.locked.promise;
+          answer.resolve(solution);
+        }
+        const [solverPid, publisherPid] = await Promise.all([
+          solver.pid.promise,
+          publisher.pid.promise,
+        ]);
+        await waitForBlocked(
+          first === 'publisher' ? solverPid : publisherPid,
+          first === 'publisher' ? publisherPid : solverPid,
+        );
+        (first === 'publisher' ? publisher : solver).release.resolve();
+        const [runResult, publishResult] = await Promise.all([
+          solved,
+          published,
+        ]);
+        const storedAssignment = await prisma.assignment.findUniqueOrThrow({
+          where: { id: assignment.id },
+        });
+        const storedVisit = await prisma.generatedVisit.findUniqueOrThrow({
+          where: { id: visitId },
+        });
+        const notifications =
+          await prisma.assignmentNotificationOutbox.findMany({
+            where: { assignmentId: assignment.id },
+          });
+        const storedRun = await prisma.scheduleRun.findUniqueOrThrow({
+          where: { id: previousRun.id },
+        });
+
+        if (first === 'publisher') {
+          expect(publishResult).toHaveProperty('value');
+          expect(runResult).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(storedAssignment.status).toBe('PUBLISHED');
+          expect(storedAssignment.plannedStart).toEqual(
+            assignment.plannedStart,
+          );
+          expect(storedAssignment.plannedEnd).toEqual(assignment.plannedEnd);
+          expect(storedVisit).toEqual(visitBefore);
+          expect(notifications).toHaveLength(2);
+          expect(
+            notifications.every(
+              (entry) =>
+                (entry.payload as { visitDate: string }).visitDate ===
+                '2027-03-03',
+            ),
+          ).toBe(true);
+          expect(
+            await prisma.visitUnassignedReason.count({
+              where: { generatedVisitId: visitId },
+            }),
+          ).toBe(0);
+        } else {
+          expect(runResult).toHaveProperty('value');
+          expect(publishResult).toMatchObject({
+            error: { code: 'RESOURCE_CONFLICT' },
+          });
+          expect(storedAssignment.status).toBe('CANCELLED');
+          expect(storedVisit.status).toBe('UNASSIGNED');
+          expect(storedVisit.visitDate).toEqual(visitBefore.visitDate);
+          expect(notifications).toHaveLength(0);
+          expect(storedRun.publishedAt).toBeNull();
+          expect(
+            await prisma.visitUnassignedReason.count({
+              where: { generatedVisitId: visitId },
+            }),
+          ).toBeGreaterThan(0);
+          expect(
+            await prisma.auditEvent.count({
+              where: {
+                entityId: previousRun.id,
+                action: 'schedule_run.published',
+              },
+            }),
+          ).toBe(0);
+        }
+        expect(
+          await prisma.assignment.count({
+            where: { generatedVisitId: visitId },
+          }),
+        ).toBe(1);
+      } finally {
+        answer.resolve(solution);
+        solver.release.resolve();
+        publisher.release.resolve();
+        await Promise.all([solved, published]);
+      }
+    },
+  );
+
   it('freezes the schedule and records an immutable snapshot', async () => {
     const visitId = await makeVisit();
     const runId = await solve();
