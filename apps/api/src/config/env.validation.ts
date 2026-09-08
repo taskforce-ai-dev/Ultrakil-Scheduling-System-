@@ -29,6 +29,18 @@ export const envSchema = z.object({
   REDIS_PASSWORD: z.string().optional(),
   BULLMQ_PREFIX: z.string().default('ultrakil'),
 
+  /** BullMQ remains the self-hosted default; QStash is the serverless path. */
+  SCHEDULE_DISPATCHER: z.enum(['bullmq', 'qstash']).default('bullmq'),
+  /**
+   * A schedule execution always stops before Vercel Hobby's 300 second
+   * maximum, leaving time for persistence and a deterministic response.
+   */
+  SCHEDULE_EXECUTION_BUDGET_SECONDS: z.coerce.number().int().min(1).max(299).default(240),
+  API_PUBLIC_URL: z.string().url().optional(),
+  QSTASH_TOKEN: z.string().min(1).optional(),
+  QSTASH_CURRENT_SIGNING_KEY: z.string().min(1).optional(),
+  QSTASH_NEXT_SIGNING_KEY: z.string().min(1).optional(),
+
   API_PORT: port(3001),
   API_GLOBAL_PREFIX: z.string().default('api'),
   API_CORS_ORIGINS: z.string().default('http://localhost:3000'),
@@ -97,6 +109,27 @@ export function validateEnv(raw: Record<string, unknown>): Env {
           'Invalid environment configuration:\n  - API_CORS_ORIGINS: Vercel origins must be explicit HTTPS URLs',
         );
       }
+    }
+  }
+
+  if (parsed.success && parsed.data.SCHEDULE_DISPATCHER === 'qstash') {
+    const missing = [
+      'QSTASH_TOKEN',
+      'QSTASH_CURRENT_SIGNING_KEY',
+      'QSTASH_NEXT_SIGNING_KEY',
+      'API_PUBLIC_URL',
+    ].filter((key) => !parsed.data[key as keyof Env]);
+    if (missing.length > 0) {
+      throw new Error(
+        `Invalid environment configuration:\n${missing
+          .map((key) => `  - ${key}: required when SCHEDULE_DISPATCHER=qstash`)
+          .join('\n')}`,
+      );
+    }
+    if (!parsed.data.API_PUBLIC_URL?.startsWith('https://')) {
+      throw new Error(
+        'Invalid environment configuration:\n  - API_PUBLIC_URL: must use https when SCHEDULE_DISPATCHER=qstash',
+      );
     }
   }
 

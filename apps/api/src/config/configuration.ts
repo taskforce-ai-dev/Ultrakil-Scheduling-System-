@@ -25,6 +25,20 @@ export const redisConfig = registerAs('redis', () => {
   };
 });
 
+export const scheduleDispatchConfig = registerAs('scheduleDispatch', () => {
+  const env = process.env as unknown as Env;
+  return {
+    provider: env.SCHEDULE_DISPATCHER,
+    executionBudgetSeconds: Number(env.SCHEDULE_EXECUTION_BUDGET_SECONDS),
+    publicUrl: env.API_PUBLIC_URL,
+    qstash: {
+      token: env.QSTASH_TOKEN,
+      currentSigningKey: env.QSTASH_CURRENT_SIGNING_KEY,
+      nextSigningKey: env.QSTASH_NEXT_SIGNING_KEY,
+    },
+  };
+});
+
 export const schedulerConfig = registerAs('scheduler', () => {
   const env = process.env as unknown as Env;
   return {

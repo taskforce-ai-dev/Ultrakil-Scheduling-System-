@@ -66,3 +66,40 @@ describe('Vercel-specific production environment validation', () => {
     },
   );
 });
+
+const baseEnv = {
+  DATABASE_URL: 'postgresql://user:password@localhost:5432/ultrakil',
+};
+
+describe('schedule dispatcher environment validation', () => {
+  it('requires the complete QStash credential set when qstash dispatching is selected', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        SCHEDULE_DISPATCHER: 'qstash',
+      }),
+    ).toThrow('QSTASH_TOKEN');
+  });
+
+  it('does not require Redis settings when qstash dispatching is selected', () => {
+    expect(
+      validateEnv({
+        ...baseEnv,
+        SCHEDULE_DISPATCHER: 'qstash',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL: 'https://ultrakil.example.com',
+      }),
+    ).toMatchObject({ SCHEDULE_DISPATCHER: 'qstash' });
+  });
+
+  it('rejects an execution budget that could reach Vercel Hobby’s 300 second ceiling', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        SCHEDULE_EXECUTION_BUDGET_SECONDS: '300',
+      }),
+    ).toThrow('SCHEDULE_EXECUTION_BUDGET_SECONDS');
+  });
+});
