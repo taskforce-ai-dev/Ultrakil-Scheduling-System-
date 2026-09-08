@@ -794,6 +794,10 @@ describe('standard writer publication protocol', () => {
       status: 'QUEUED', rangeStart: new Date(RANGE.from), rangeEnd: new Date(RANGE.to),
       branchCode: BranchCode.COLOMBO,
     } });
+    const currentDispatch = await prisma.scheduleRunDispatchOutbox.create({ data: {
+      scheduleRunId: run.id,
+      provider: 'BULLMQ',
+    } });
     const started = deferred<void>();
     const answer = deferred<SolveResponse>();
     const service = new ScheduleRunService(
@@ -816,10 +820,6 @@ describe('standard writer publication protocol', () => {
       } } as unknown as EligibilityService,
       app.get(AuditService),
     );
-    const currentDispatch =
-      await prisma.scheduleRunDispatchOutbox.findUniqueOrThrow({
-        where: { scheduleRunId: run.id },
-      });
     const pending = new ScheduleRunProcessor(service, {
       isCurrentDispatch: async () => true,
     } as never)

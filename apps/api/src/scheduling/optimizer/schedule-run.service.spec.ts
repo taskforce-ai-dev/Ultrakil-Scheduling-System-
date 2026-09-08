@@ -911,6 +911,19 @@ describe('at-least-once schedule-run delivery leases', () => {
     renewExecutionLease: true,
   };
 
+  it('returns only the public execution result fields', async () => {
+    const f = fixture();
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).resolves.toEqual({
+      scheduled: 1,
+      unassigned: 0,
+      cancelled: false,
+    });
+  });
+
   it('renews a self-hosted lease while the solver is still running', async () => {
     jest.useFakeTimers({ now: new Date('2027-03-01T00:00:00.000Z') });
     try {
@@ -996,13 +1009,23 @@ describe('at-least-once schedule-run delivery leases', () => {
   it.each([
     ScheduleRunStatus.SUCCEEDED,
     ScheduleRunStatus.FAILED,
-    ScheduleRunStatus.CANCELLED,
+    ScheduleRunStatus.SUPERSEDED,
   ])('acknowledges a settled %s delivery without invoking the solver', async (status) => {
     const f = fixture();
     f.run.status = status;
 
     await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
       { kind: 'settled' },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges an already-cancelled delivery as cancelled', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.CANCELLED;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'cancelled' },
     );
     expect(f.scheduler.solve).not.toHaveBeenCalled();
   });

@@ -299,7 +299,11 @@ export class ScheduleRunService {
       onProgress: options.onProgress,
     });
     if (outcome.kind === 'completed') {
-      return { ...outcome, cancelled: false };
+      return {
+        scheduled: outcome.scheduled,
+        unassigned: outcome.unassigned,
+        cancelled: false,
+      };
     }
     if (outcome.kind === 'cancelled') {
       return { scheduled: 0, unassigned: 0, cancelled: true };
@@ -974,6 +978,9 @@ export class ScheduleRunService {
       where: { id: runId },
     });
     if (!before) return { kind: 'not_found' };
+    if (before.status === ScheduleRunStatus.CANCELLED) {
+      return { kind: 'cancelled' };
+    }
     if (this.isSettled(before.status)) return { kind: 'settled' };
     if (before.cancelRequestedAt) {
       if (before.status === ScheduleRunStatus.QUEUED) {
@@ -987,6 +994,9 @@ export class ScheduleRunService {
           where: { id: runId },
         });
         if (!afterCancellation) return { kind: 'not_found' };
+        if (afterCancellation.status === ScheduleRunStatus.CANCELLED) {
+          return { kind: 'cancelled' };
+        }
         if (this.isSettled(afterCancellation.status)) return { kind: 'settled' };
         // The lease owner will observe the cancellation flag at its next safe
         // point. Acknowledging this QStash delivery would strand a crashed
@@ -1048,6 +1058,9 @@ export class ScheduleRunService {
       where: { id: runId },
     });
     if (!after) return { kind: 'not_found' };
+    if (after.status === ScheduleRunStatus.CANCELLED) {
+      return { kind: 'cancelled' };
+    }
     if (this.isSettled(after.status)) return { kind: 'settled' };
     if (after.cancelRequestedAt) return { kind: 'cancelled' };
     return { kind: 'busy' };
