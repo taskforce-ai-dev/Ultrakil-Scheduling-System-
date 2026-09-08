@@ -70,10 +70,13 @@ elif name == "sftp":
 '''
 
 GOOD_COUNTS = {
-    "tables": 26, "migrations": 9, "failedMigrations": 0,
+    "tables": 27, "migrations": 11, "failedMigrations": 0,
     "employees": 2, "vehicleAuthorizations": 2, "assignments": 1,
     "outbox": 1, "inactiveCustomers": 1, "inactiveSites": 1,
     "history": 1, "reactivatedImports": 0, "duplicateOutbox": 0,
+    "dispatchOutbox": 1, "duplicateDispatchOutbox": 0,
+    "invalidDispatchOutbox": 0, "missingActiveDispatchOutbox": 0,
+    "invalidExecutionLeases": 0,
 }
 
 
@@ -309,6 +312,15 @@ class RecoveryTest(unittest.TestCase):
         command = next(args for name, args in self.call_log() if name == "pg_restore" and "--list" not in args)
         for flag in ("--single-transaction", "--exit-on-error", "--no-owner", "--no-acl"):
             self.assertIn(flag, command)
+        counts_query = next(
+            args[args.index("--command") + 1]
+            for name, args in self.call_log()
+            if name == "psql" and "json_build_object" in args[args.index("--command") + 1]
+        )
+        self.assertIn("num_nonnulls", counts_query)
+        self.assertIn('(status = \'PENDING\' AND "messageId" IS NOT NULL)', counts_query)
+        self.assertIn('"terminalFailureMessageId" IS DISTINCT FROM "messageId"', counts_query)
+        self.assertIn("missingActiveDispatchOutbox", counts_query)
         self.run_tool("cleanup", target)
         self.assertFalse(Path(self.env["DB_STATE"]).exists())
 
@@ -327,11 +339,21 @@ class RecoveryTest(unittest.TestCase):
         result = self.run_tool("restore", str(archive), "ultrakil_restore_reactivated_test", GOOD_COUNTS=json.dumps(counts))
         self.assertEqual(json.loads(result.stdout)["counts"]["reactivatedImports"], 2)
 
-    def test_failed_migrations_and_duplicate_outbox_still_fail_count_checks(self):
+    def test_schema_and_outbox_invariants_fail_count_checks(self):
         archive = self.create_pair()
-        for metric in ("failedMigrations", "duplicateOutbox"):
-            with self.subTest(metric=metric):
-                counts = {**GOOD_COUNTS, metric: 1}
+        invalid_counts = (
+            {"tables": 26},
+            {"migrations": 10},
+            {"failedMigrations": 1},
+            {"duplicateOutbox": 1},
+            {"duplicateDispatchOutbox": 1},
+            {"invalidDispatchOutbox": 1},
+            {"missingActiveDispatchOutbox": 1},
+            {"invalidExecutionLeases": 1},
+        )
+        for changes in invalid_counts:
+            with self.subTest(changes=changes):
+                counts = {**GOOD_COUNTS, **changes}
                 self.run_tool("restore", str(archive), "ultrakil_restore_invariant_test", success=False, GOOD_COUNTS=json.dumps(counts))
                 self.assertTrue(Path(self.env["DB_STATE"]).exists())
                 Path(self.env["DB_STATE"]).unlink()

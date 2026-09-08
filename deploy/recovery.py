@@ -33,6 +33,7 @@ TABLES = (
     "service_agreement_day_rules", "service_agreement_required_skills", "service_agreement_versions",
     "generated_visits", "visit_unassigned_reasons", "assignments", "assignment_crew_members",
     "assignment_vehicles", "assignment_locks", "schedule_runs", "assignment_notification_outbox", "audit_events",
+    "schedule_run_dispatch_outbox",
 )
 
 
@@ -262,13 +263,31 @@ SELECT json_build_object(
  'vehicleAuthorizations', (SELECT count(*) FROM public.vehicle_authorizations),
  'assignments', (SELECT count(*) FROM public.assignments),
  'outbox', (SELECT count(*) FROM public.assignment_notification_outbox),
+ 'dispatchOutbox', (SELECT count(*) FROM public.schedule_run_dispatch_outbox),
  'inactiveCustomers', (SELECT count(*) FROM public.customers WHERE NOT "isActive"),
  'inactiveSites', (SELECT count(*) FROM public.service_sites WHERE NOT "isActive"),
  'history', (SELECT count(*) FROM public.assignments WHERE status IN ('COMPLETED', 'SUPERSEDED')),
  'reactivatedImports', (SELECT count(*) FROM public.customers WHERE "isActive" AND "importedInactiveAt" IS NOT NULL)
     + (SELECT count(*) FROM public.service_sites WHERE "isActive" AND "importedInactiveAt" IS NOT NULL),
  'duplicateOutbox', (SELECT count(*) FROM (SELECT 1 FROM public.assignment_notification_outbox
-    GROUP BY "assignmentId", "employeeId", "eventType" HAVING count(*) > 1) duplicates)
+    GROUP BY "assignmentId", "employeeId", "eventType" HAVING count(*) > 1) duplicates),
+ 'duplicateDispatchOutbox', (SELECT count(*) FROM (SELECT 1 FROM public.schedule_run_dispatch_outbox
+    GROUP BY "scheduleRunId" HAVING count(*) > 1) duplicates),
+ 'missingActiveDispatchOutbox', (SELECT count(*) FROM public.schedule_runs runs
+    LEFT JOIN public.schedule_run_dispatch_outbox dispatch ON dispatch."scheduleRunId" = runs.id
+    WHERE runs.status IN ('QUEUED', 'RUNNING') AND dispatch.id IS NULL),
+ 'invalidDispatchOutbox', (SELECT count(*) FROM public.schedule_run_dispatch_outbox WHERE
+    attempts < 0
+    OR (status = 'PENDING' AND "messageId" IS NOT NULL)
+    OR (status = 'PUBLISHED' AND ("messageId" IS NULL OR attempts < 1 OR "lastAttemptAt" IS NULL))
+    OR num_nonnulls("terminalFailureMessageId", "terminalFailureCode", "terminalFailureMessage", "terminalFailureAt") BETWEEN 1 AND 3
+    OR ("terminalFailureAt" IS NOT NULL AND provider <> 'QSTASH')
+    OR ("terminalFailureMessageId" IS NOT NULL AND "messageId" IS NOT NULL
+        AND "terminalFailureMessageId" IS DISTINCT FROM "messageId")
+    OR (status = 'CANCELLED' AND "terminalFailureAt" IS NOT NULL)),
+ 'invalidExecutionLeases', (SELECT count(*) FROM public.schedule_runs WHERE
+    ("executionLeaseId" IS NULL) <> ("executionLeaseExpiresAt" IS NULL)
+    OR "executionAttempt" < 0)
 ); COMMIT;'''
     result = sql(target, statement)
     # psql emits transaction command tags; only our one JSON row is accepted.
@@ -280,12 +299,16 @@ SELECT json_build_object(
     except ValueError:
         raise RecoveryError("Restore count evidence is malformed") from None
     expected = {"tables", "migrations", "failedMigrations", "employees", "vehicleAuthorizations", "assignments",
-                "outbox", "inactiveCustomers", "inactiveSites", "history", "reactivatedImports", "duplicateOutbox"}
+                "outbox", "dispatchOutbox", "inactiveCustomers", "inactiveSites", "history", "reactivatedImports",
+                "duplicateOutbox", "duplicateDispatchOutbox", "missingActiveDispatchOutbox",
+                "invalidDispatchOutbox", "invalidExecutionLeases"}
     if not isinstance(values, dict) or set(values) != expected or any(type(value) is not int or value < 0 for value in values.values()):
         raise RecoveryError("Restore count evidence is incomplete")
     # Imported-inactive provenance can remain after an authorized manual
     # activation. Preserve/report that count; it is not corruption by itself.
-    if values["tables"] != len(TABLES) or values["migrations"] < 9 or any(values[key] for key in ("failedMigrations", "duplicateOutbox")):
+    invalid_metrics = ("failedMigrations", "duplicateOutbox", "duplicateDispatchOutbox",
+                       "missingActiveDispatchOutbox", "invalidDispatchOutbox", "invalidExecutionLeases")
+    if values["tables"] != len(TABLES) or values["migrations"] < 11 or any(values[key] for key in invalid_metrics):
         raise RecoveryError("Restored UltraKIL schema or count invariants failed; disposable database preserved")
     return values
 
