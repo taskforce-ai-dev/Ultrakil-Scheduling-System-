@@ -65,9 +65,15 @@ test("an inactive customer is labelled in text and excluded from the agreement p
   await page.goto("/customers");
   await expect(page.getByRole("heading", { name: "Customers" })).toBeVisible();
 
+  const inactiveResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname.endsWith("/customers")
+      && url.searchParams.get("active") === "false";
+  });
   await page.getByLabel("Status").click();
   await page.getByRole("option", { name: "Inactive" }).click();
-  await page.waitForLoadState('networkidle');
+  expect((await inactiveResponse).ok()).toBe(true);
 
   const inactiveRows = page.locator("tbody tr");
   if ((await inactiveRows.count()) === 0) {

@@ -50,15 +50,29 @@ test('strict browser diagnostics expose only normalized allowlisted test evidenc
     expectedStatus: 'passed',
     location: { file: `${process.cwd()}/apps/manager-web/e2e/02-generation.spec.ts`, line: 73 },
     annotations: [{ type: privateText }],
-    results: [{ status: 'failed', error: { message: privateText }, attachments: [{ path: privateText }] }],
+    results: [{ status: 'failed', error: {
+      message: privateText,
+      location: { file: `${process.cwd()}/apps/manager-web/e2e/02-generation.spec.ts`, line: 47 },
+    }, attachments: [{ path: privateText }] }],
   }], 'failed');
 
   assert.deepEqual(diagnostic, {
     status: 'failed',
     counts: { total: 1, passed: 0, failed: 1, skipped: 0, timedOut: 0, interrupted: 0, notRun: 0, unexpected: 0 },
-    failures: [{ file: '02-generation.spec.ts', line: 73, status: 'failed' }],
+    failures: [{ file: '02-generation.spec.ts', line: 47, status: 'failed' }],
   });
   assert.doesNotMatch(JSON.stringify(diagnostic), /secret-token|example\.invalid|trace\.zip/);
+});
+
+test('strict browser diagnostics ignore non-source-controlled error locations', () => {
+  const diagnostic = buildStrictDiagnostic([{
+    expectedStatus: 'passed',
+    location: { file: `${process.cwd()}/apps/manager-web/e2e/03-dispatch-and-lock.spec.ts`, line: 10 },
+    results: [{ status: 'failed', error: { location: { file: '/tmp/private.spec.ts', line: 99 } } }],
+  }], 'failed');
+  assert.deepEqual(diagnostic.failures, [
+    { file: '03-dispatch-and-lock.spec.ts', line: 10, status: 'failed' },
+  ]);
 });
 
 test('strict browser diagnostics fail closed for non-source-controlled locations', () => {

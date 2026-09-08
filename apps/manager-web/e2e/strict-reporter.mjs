@@ -24,6 +24,11 @@ function normalizedResultStatus(test) {
   return RESULT_STATUSES.has(result.status) ? result.status : 'failed';
 }
 
+function failureLocation(test) {
+  const result = test.results.at(-1);
+  return safeLocation(result?.error?.location) ?? safeLocation(test.location);
+}
+
 function safeLocation(location) {
   if (!location || typeof location.file !== 'string' || !Number.isSafeInteger(location.line) || location.line < 1) return null;
   const file = resolve(location.file);
@@ -44,7 +49,7 @@ export function buildStrictDiagnostic(tests, runStatus) {
     const status = normalizedResultStatus(test);
     counts[status] += 1;
     if (status !== 'passed') {
-      const location = safeLocation(test.location);
+      const location = failureLocation(test);
       if (location) failures.push({ ...location, status });
     }
   }

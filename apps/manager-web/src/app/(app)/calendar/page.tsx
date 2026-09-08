@@ -493,6 +493,7 @@ export default function CalendarPage() {
           className="overflow-x-auto rounded-lg border border-border"
           role="grid"
           aria-label={view === "month" ? "Month calendar" : "Week calendar"}
+          tabIndex={0}
         >
           <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
             {WEEKDAY_INITIALS.map((day) => (
@@ -528,9 +529,8 @@ export default function CalendarPage() {
                   >
                     <span
                       className={cn(
-                        "block text-xs tabular-nums",
-                        outsideMonth ? "text-muted-foreground/60" : "text-muted-foreground",
-                        day === today && "font-semibold text-primary",
+                        "block text-xs tabular-nums text-muted-foreground",
+                        day === today && "font-semibold text-success",
                       )}
                     >
                       {Number(day.slice(8, 10))}
@@ -549,7 +549,7 @@ export default function CalendarPage() {
                           setAnchor(day);
                           setView("week");
                         }}
-                        className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         + {hiddenCount} more
                       </button>

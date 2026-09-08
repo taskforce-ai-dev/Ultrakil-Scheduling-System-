@@ -83,6 +83,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+  const requestGeneration = React.useRef(0);
   // The API has no combined mode — omitting `active` (or passing `true`)
   // returns active customers only, `false` returns inactive-only (see
   // apps/api/src/catalog/customers.service.ts). This filter is what
@@ -108,18 +109,24 @@ export default function CustomersPage() {
   const { fields, append, remove } = useFieldArray({ control, name: "sites" });
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     fetchCustomers({ pageSize: 200, active: status === "ACTIVE" })
-      .then((response) => setCustomers(response.items))
+      .then((response) => {
+        if (generation === requestGeneration.current) setCustomers(response.items);
+      })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [status]);
 
   React.useEffect(() => {
@@ -127,6 +134,9 @@ export default function CustomersPage() {
     // effects are for.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    return () => {
+      requestGeneration.current += 1;
+    };
   }, [load]);
 
   async function onSubmit(values: CustomerFormValues) {

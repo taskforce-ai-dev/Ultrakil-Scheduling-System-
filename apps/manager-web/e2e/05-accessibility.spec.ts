@@ -81,6 +81,9 @@ test("visit generation dialog has no serious accessibility violations", async ({
   await page.goto("/visits");
   await page.getByRole("button", { name: "Generate visits" }).click();
   await expect(page.getByRole("heading", { name: "Generate visits" })).toBeVisible();
+  await expect(
+    page.getByText(/Nothing has been written yet\.|Could not work out what generation would change\./)
+  ).toBeVisible({ timeout: 15_000 });
   await expectNoSeriousViolations(page, "Visit generation dialog");
 });
 

@@ -38,7 +38,10 @@ export default defineConfig({
   // Real writes against one real database — a second worker would be
   // fighting the first over the same customers, agreements and runs.
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  // Strict rehearsal is a disposable, deterministic database. Retrying a
+  // stateful journey after it has written part of its workflow can only hide
+  // the first failure or turn it into a misleading no-op failure.
+  retries: process.env.E2E_STRICT === '1' ? 0 : process.env.CI ? 1 : 0,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: join(artifactsDirectory, "playwright-report") }],

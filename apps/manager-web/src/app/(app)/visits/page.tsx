@@ -576,6 +576,7 @@ export default function VisitsPage() {
               className="overflow-x-auto rounded-lg border border-border"
               role="grid"
               aria-label={view === "month" ? "Month calendar" : "Week calendar"}
+              tabIndex={0}
             >
               <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
                 {WEEKDAY_INITIALS.map((day) => (
