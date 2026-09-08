@@ -42,6 +42,9 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       SCHEDULER_BASE_URL: http://localhost:8000
+      # This scheduler is bound to loopback inside an ephemeral CI runner.
+      # Public deployments must instead configure the shared API token.
+      SCHEDULER_ALLOW_UNAUTHENTICATED: 'true'
 
     steps:
       - uses: actions/checkout@v4

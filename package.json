@@ -24,6 +24,7 @@
     "db:seed": "pnpm --filter @ultrakil/api db:seed",
     "db:seed:demo": "pnpm --filter @ultrakil/api db:seed:demo",
     "schedule:import": "pnpm --filter @ultrakil/api schedule:import",
+    "vercel:import": "node deploy/vercel-import.mjs",
     "contracts:generate": "pnpm --filter @ultrakil/api openapi:generate && pnpm --filter @ultrakil/api-contracts generate"
   },
   "devDependencies": {

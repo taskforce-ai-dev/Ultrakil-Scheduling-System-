@@ -1,5 +1,10 @@
 # UltraKIL staging runbook
 
+> Historical Docker-host procedure. The current project has no dedicated
+> staging server; use [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) for
+> Preview/Production deployments. Keep this runbook only for the preserved
+> Docker/Compose and recovery path.
+
 This is the repeatable C08 deployment path for the Phase 1 pilot. It deploys
 PostgreSQL, Redis, the scheduling service, API, manager portal, health checks,
 rotated container logs and a daily PostgreSQL backup. The real workbooks and

@@ -149,6 +149,20 @@ enum ScheduleRunTrigger {
   MANAGER_OVERRIDE
 }
 
+/// Delivery systems supported for scheduling runs. The outbox keeps the
+/// provider-neutral intent durable even when publishing succeeds but the API
+/// process dies before it records the remote message id.
+enum ScheduleRunDispatchProvider {
+  BULLMQ
+  QSTASH
+}
+
+enum ScheduleRunDispatchStatus {
+  PENDING
+  PUBLISHED
+  CANCELLED
+}
+
 // ---------------------------------------------------------------------------
 // Organisation
 // ---------------------------------------------------------------------------
@@ -872,8 +886,18 @@ model ScheduleRun {
   /// watching a spinner with no number assumes it has hung.
   progressPercent Int @default(0)
 
-  /// BullMQ job id, so a queued run can be found and cancelled.
+  /// BullMQ or QStash delivery id, so a queued run can be found and cancelled.
   jobId String?
+
+  /// The requested per-day solver limit is persisted because QStash messages
+  /// intentionally carry only this row's opaque ID.
+  timeLimitSeconds Int @default(20)
+
+  /// At-least-once queue deliveries can overlap. Only the holder of this lease
+  /// may advance, finish or fail the run; an expired lease can be recovered.
+  executionLeaseId        String?   @db.Uuid
+  executionLeaseExpiresAt DateTime?
+  executionAttempt        Int       @default(0)
 
   /// Set when a manager asks to stop. The worker checks it at each safe point
   /// and abandons the run without writing, rather than being killed mid-write.
@@ -896,9 +920,43 @@ model ScheduleRun {
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
   auditEvents       AuditEvent[]
+  dispatchOutbox    ScheduleRunDispatchOutbox?
 
   @@index([status, createdAt])
+  @@index([executionLeaseExpiresAt])
   @@map("schedule_runs")
+}
+
+/// A durable, provider-neutral request to deliver one schedule run. `id` is
+/// also QStash's opaque deduplication id, so a publish acknowledgement lost
+/// before `messageId` is persisted can be safely published again.
+model ScheduleRunDispatchOutbox {
+  id String @id @default(uuid()) @db.Uuid
+
+  scheduleRunId String      @unique @db.Uuid
+  scheduleRun   ScheduleRun @relation(fields: [scheduleRunId], references: [id], onDelete: Cascade)
+
+  provider ScheduleRunDispatchProvider
+  status   ScheduleRunDispatchStatus @default(PENDING)
+
+  messageId String?
+  attempts  Int @default(0)
+  lastAttemptAt DateTime?
+  lastError String?
+
+  /// A signed QStash failure callback is recorded before the active lease is
+  /// touched. If that lease is still live, the callback can retry without
+  /// losing the terminal-delivery fact.
+  terminalFailureMessageId String?
+  terminalFailureCode      String?
+  terminalFailureMessage   String?
+  terminalFailureAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("schedule_run_dispatch_outbox")
 }
 
 /// A record of a future assignment notification — written when a schedule is

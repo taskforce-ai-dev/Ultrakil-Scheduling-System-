@@ -1,10 +1,12 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
   LockScope,
   Prisma,
+  ScheduleRunDispatchStatus,
   ScheduleRunStatus,
   VisitStatus,
 } from '@prisma/client';
@@ -16,7 +18,25 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
-import { assertScheduleSnapshot, assertVisitRevision, lockScheduleVisits } from './schedule-visit-lock';
+import {
+  assertScheduleSnapshot,
+  assertVisitRevision,
+  lockScheduleVisits,
+} from './schedule-visit-lock';
+import type { ScheduleRunDispatcherProvider } from './schedule-run.dispatcher';
+import {
+  BULLMQ_EXECUTION_LEASE_SECONDS,
+  BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
+  SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS,
+  SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS,
+  SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS,
+  SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS,
+  SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+} from './schedule-run-execution-budget';
+import {
+  failScheduleRunForQStash,
+  settleExpiredScheduleRunCancellation,
+} from './schedule-run-recovery';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
@@ -34,6 +54,36 @@ const REPLACEABLE_STATUSES: AssignmentStatus[] = [
 
 const MAX_RANGE_DAYS = 62;
 
+interface ExecutionLease {
+  id: string;
+  expiresAt: Date;
+}
+
+interface ExecutionLeaseHeartbeat {
+  stop(): Promise<void>;
+  assertActive(): void;
+}
+
+type DeliveryOutcome =
+  | { kind: 'completed'; scheduled: number; unassigned: number }
+  | { kind: 'cancelled' }
+  | { kind: 'not_found' }
+  | { kind: 'settled' }
+  | { kind: 'busy' };
+
+interface DeliveryOptions {
+  executionBudgetSeconds: number;
+  /** Current durable delivery generation, atomically fenced at lease claim. */
+  dispatchId?: string;
+  /** Optional shorter durable lease for a long-running self-hosted delivery. */
+  executionLeaseSeconds?: number;
+  /** A QStash lease ends with its function; BullMQ renews while its worker lives. */
+  renewExecutionLease?: boolean;
+  retryOnFailure: boolean;
+  timeLimitSeconds?: number;
+  onProgress?: (percent: number) => Promise<void>;
+}
+
 const VISIT_FOR_SOLVE = {
   serviceAgreement: {
     include: {
@@ -43,7 +93,13 @@ const VISIT_FOR_SOLVE = {
       dayRules: { select: { weekday: true, kind: true } },
       serviceSite: {
         select: {
-          operatingHours: { select: { weekday: true, opensAtMinute: true, closesAtMinute: true } },
+          operatingHours: {
+            select: {
+              weekday: true,
+              opensAtMinute: true,
+              closesAtMinute: true,
+            },
+          },
         },
       },
     },
@@ -58,7 +114,9 @@ const VISIT_FOR_SOLVE = {
   },
 } satisfies Prisma.GeneratedVisitInclude;
 
-type VisitForSolve = Prisma.GeneratedVisitGetPayload<{ include: typeof VISIT_FOR_SOLVE }>;
+type VisitForSolve = Prisma.GeneratedVisitGetPayload<{
+  include: typeof VISIT_FOR_SOLVE;
+}>;
 
 const EMPLOYEE_FOR_SOLVE = {
   skills: { select: { skillCode: true } },
@@ -67,13 +125,17 @@ const EMPLOYEE_FOR_SOLVE = {
   availability: { select: { startDate: true, endDate: true } },
 } satisfies Prisma.EmployeeInclude;
 
-type EmployeeForSolve = Prisma.EmployeeGetPayload<{ include: typeof EMPLOYEE_FOR_SOLVE }>;
+type EmployeeForSolve = Prisma.EmployeeGetPayload<{
+  include: typeof EMPLOYEE_FOR_SOLVE;
+}>;
 
 const VEHICLE_FOR_SOLVE = {
   branch: { select: { code: true } },
 } satisfies Prisma.VehicleInclude;
 
-type VehicleForSolve = Prisma.VehicleGetPayload<{ include: typeof VEHICLE_FOR_SOLVE }>;
+type VehicleForSolve = Prisma.VehicleGetPayload<{
+  include: typeof VEHICLE_FOR_SOLVE;
+}>;
 
 interface SolveSnapshot {
   visitId: string;
@@ -88,7 +150,11 @@ interface ProposedAssignment extends SolveSnapshot {
     crew: { employeeId: string; role: CrewRole }[];
     vehicles: { vehicleId: string; driverEmployeeId: string }[];
   };
-  proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number };
+  proposedVisit?: {
+    visitDate: Date;
+    windowStartMinute: number;
+    windowEndMinute: number;
+  };
 }
 
 /**
@@ -145,8 +211,14 @@ export class ScheduleRunService {
 
   /** Records the run. The work itself happens in the queue worker. */
   async create(
-    input: { from: string; to: string; branchCode?: BranchCode; timeLimitSeconds?: number },
+    input: {
+      from: string;
+      to: string;
+      branchCode?: BranchCode;
+      timeLimitSeconds?: number;
+    },
     actor: AuthenticatedUser,
+    dispatcherProvider: ScheduleRunDispatcherProvider = 'bullmq',
   ) {
     const from = parseDate(input.from);
     const to = parseDate(input.to);
@@ -170,26 +242,36 @@ export class ScheduleRunService {
       );
     }
 
-    const run = await this.prisma.scheduleRun.create({
-      data: {
-        status: ScheduleRunStatus.QUEUED,
-        rangeStart: from,
-        rangeEnd: to,
-        branchCode: input.branchCode ?? null,
-        requestedByUserId: actor.id,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const run = await tx.scheduleRun.create({
+        data: {
+          status: ScheduleRunStatus.QUEUED,
+          rangeStart: from,
+          rangeEnd: to,
+          branchCode: input.branchCode ?? null,
+          requestedByUserId: actor.id,
+          timeLimitSeconds: input.timeLimitSeconds ?? 20,
+        } as unknown as Prisma.ScheduleRunCreateInput,
+      });
+      await this.dispatchOutboxModel(tx).create({
+        data: {
+          scheduleRunId: run.id,
+          provider: dispatcherProvider === 'qstash' ? 'QSTASH' : 'BULLMQ',
+        },
+      });
+      await this.audit.record(
+        {
+          entityType: 'ScheduleRun',
+          entityId: run.id,
+          action: 'schedule_run.queued',
+          actor,
+          before: null,
+          after: run,
+        },
+        tx,
+      );
+      return run;
     });
-
-    await this.audit.record({
-      entityType: 'ScheduleRun',
-      entityId: run.id,
-      action: 'schedule_run.queued',
-      actor,
-      before: null,
-      after: run,
-    });
-
-    return run;
   }
 
   /**
@@ -201,11 +283,117 @@ export class ScheduleRunService {
    */
   async execute(
     runId: string,
-    options: { timeLimitSeconds?: number; onProgress?: (percent: number) => Promise<void> } = {},
+    options: {
+      timeLimitSeconds?: number;
+      executionBudgetSeconds?: number;
+      onProgress?: (percent: number) => Promise<void>;
+    } = {},
   ): Promise<{ scheduled: number; unassigned: number; cancelled: boolean }> {
-    const progress = options.onProgress ?? (async () => undefined);
+    const outcome = await this.deliver(runId, {
+      executionBudgetSeconds:
+        options.executionBudgetSeconds ?? SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+      executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
+      renewExecutionLease: true,
+      retryOnFailure: false,
+      timeLimitSeconds: options.timeLimitSeconds,
+      onProgress: options.onProgress,
+    });
+    if (outcome.kind === 'completed') {
+      return {
+        scheduled: outcome.scheduled,
+        unassigned: outcome.unassigned,
+        cancelled: false,
+      };
+    }
+    if (outcome.kind === 'cancelled') {
+      return { scheduled: 0, unassigned: 0, cancelled: true };
+    }
+    if (outcome.kind === 'not_found') {
+      throw new AppException(
+        'RESOURCE_NOT_FOUND',
+        `Schedule run "${runId}" was not found.`,
+        HttpStatus.NOT_FOUND,
+        { runId },
+      );
+    }
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'This schedule run is already being processed or has finished.',
+      HttpStatus.CONFLICT,
+      { runId, state: outcome.kind },
+    );
+  }
 
-    const run = await this.prisma.scheduleRun.findUnique({ where: { id: runId } });
+  /** Handles one queue delivery; callers decide whether a failure is retried. */
+  async deliver(
+    runId: string,
+    options: DeliveryOptions,
+  ): Promise<DeliveryOutcome> {
+    const executionLeaseSeconds =
+      options.executionLeaseSeconds ?? options.executionBudgetSeconds;
+    const claim = await this.claimExecutionLease(
+      runId,
+      executionLeaseSeconds,
+      options.dispatchId,
+    );
+    if (claim.kind !== 'acquired') return claim;
+
+    const heartbeat = options.renewExecutionLease
+      ? this.startExecutionLeaseHeartbeat(
+          runId,
+          claim.lease,
+          executionLeaseSeconds,
+        )
+      : undefined;
+
+    try {
+      const result = await this.executeLeased(runId, claim.lease, options);
+      await heartbeat?.stop();
+      heartbeat?.assertActive();
+      return result.cancelled
+        ? { kind: 'cancelled' }
+        : {
+            kind: 'completed',
+            scheduled: result.scheduled,
+            unassigned: result.unassigned,
+          };
+    } catch (caught) {
+      await heartbeat?.stop();
+      let failure = caught;
+      try {
+        heartbeat?.assertActive();
+      } catch (heartbeatFailure) {
+        failure = heartbeatFailure;
+      }
+      const code =
+        typeof (failure as { code?: unknown }).code === 'string'
+          ? (failure as { code: string }).code
+          : 'INTERNAL_ERROR';
+      const message =
+        failure instanceof Error ? failure.message : String(failure);
+      if (options.retryOnFailure) {
+        await this.releaseLeaseForRetry(runId, claim.lease);
+      } else {
+        await this.fail(runId, claim.lease, code, message);
+      }
+      throw failure;
+    }
+  }
+
+  private async executeLeased(
+    runId: string,
+    lease: ExecutionLease,
+    options: DeliveryOptions,
+  ): Promise<{ scheduled: number; unassigned: number; cancelled: boolean }> {
+    const notifyProgress = options.onProgress ?? (async () => undefined);
+    const progress = async (percent: number) => {
+      await this.setProgress(runId, lease, percent);
+      await notifyProgress(percent);
+    };
+
+    const run = await this.prisma.scheduleRun.findUnique({
+      where: { id: runId },
+    });
     if (!run) {
       throw new AppException(
         'RESOURCE_NOT_FOUND',
@@ -215,14 +403,7 @@ export class ScheduleRunService {
       );
     }
 
-    await this.prisma.scheduleRun.update({
-      where: { id: runId },
-      data: {
-        status: ScheduleRunStatus.RUNNING,
-        startedAt: new Date(),
-        progressPercent: 5,
-      },
-    });
+    await progress(5);
 
     const branchFilter = run.branchCode ? { branchCode: run.branchCode } : {};
 
@@ -238,7 +419,9 @@ export class ScheduleRunService {
         // otherwise keep competing for crews and, worse, keep being staffed.
         // The rows stay in the database: this excludes them from the solve,
         // it does not erase the history.
-        serviceAgreement: { serviceSite: { isActive: true, customer: { isActive: true } } },
+        serviceAgreement: {
+          serviceSite: { isActive: true, customer: { isActive: true } },
+        },
         ...branchFilter,
       },
       include: VISIT_FOR_SOLVE,
@@ -246,7 +429,7 @@ export class ScheduleRunService {
     });
 
     await progress(20);
-    if (await this.isCancelled(runId)) return this.markCancelled(runId);
+    if (await this.isCancelled(runId)) return this.markCancelled(runId, lease);
 
     const [employees, vehicles] = await Promise.all([
       this.prisma.employee.findMany({
@@ -261,39 +444,76 @@ export class ScheduleRunService {
       }),
     ]);
 
-    const request = this.buildSolveRequest(run.id, visits, employees, vehicles, {
-      timeLimitSeconds: options.timeLimitSeconds ?? 20,
-      from: run.rangeStart,
-      to: run.rangeEnd,
-    });
+    const request = this.buildSolveRequest(
+      run.id,
+      visits,
+      employees,
+      vehicles,
+      {
+        timeLimitSeconds:
+          options.timeLimitSeconds ??
+          (run as typeof run & { timeLimitSeconds?: number })
+            .timeLimitSeconds ??
+          20,
+        from: run.rangeStart,
+        to: run.rangeEnd,
+      },
+    );
 
-    await this.prisma.scheduleRun.update({
-      where: { id: runId },
-      data: { visitsConsidered: request.visits.length, progressPercent: 35 },
+    await this.updateLeasedRun(runId, lease, {
+      visitsConsidered: request.visits.length,
+      progressPercent: 35,
     });
+    await notifyProgress(35);
 
     if (request.visits.length === 0) {
-      return this.finish(runId, 0, 0);
+      return this.finish(runId, 0, 0, lease);
     }
 
     // The solver works a day at a time and spends up to the time limit on each,
     // so a week can legitimately take seven times as long as one day. Timing out
     // at a single day's budget aborted solves that were running perfectly well
     // and reported SCHEDULER_UNAVAILABLE — a service that was in fact answering.
-    const solveDays = new Set(request.visits.flatMap((visit) =>
-      visit.candidate_slots.length > 0
-        ? visit.candidate_slots.map((slot) => slot.date)
-        : [visit.visit_date],
-    )).size;
+    const solveDays = new Set(
+      request.visits.flatMap((visit) =>
+        visit.candidate_slots.length > 0
+          ? visit.candidate_slots.map((slot) => slot.date)
+          : [visit.visit_date],
+      ),
+    ).size;
+    const availableSolverSeconds =
+      options.executionBudgetSeconds -
+      SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS -
+      SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS -
+      SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS -
+      SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS;
+    if (availableSolverSeconds < solveDays) {
+      throw new AppException(
+        'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+        'This schedule run exceeds the execution budget available to its delivery provider.',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        { runId, solveDays, executionBudgetSeconds: options.executionBudgetSeconds },
+      );
+    }
+    const perDayLimitSeconds = Math.min(
+      request.time_limit_seconds,
+      Math.max(1, Math.floor(availableSolverSeconds / solveDays)),
+    );
+    const boundedRequest = {
+      ...request,
+      time_limit_seconds: perDayLimitSeconds,
+    };
     const solution = await this.scheduler.solve(
-      request,
-      Math.round((options.timeLimitSeconds ?? 20) * 1000) * Math.max(1, solveDays) + 15_000,
+      boundedRequest,
+      (perDayLimitSeconds * Math.max(1, solveDays) +
+        SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS) *
+        1000,
     );
 
     await progress(70);
     // Checked after the solve and again before writing: a manager who cancels
     // during a twenty-second solve should not find a schedule appearing anyway.
-    if (await this.isCancelled(runId)) return this.markCancelled(runId);
+    if (await this.isCancelled(runId)) return this.markCancelled(runId, lease);
 
     const byId = new Map(visits.map((visit) => [visit.id, visit]));
     const proposals: ProposedAssignment[] = [];
@@ -363,7 +583,12 @@ export class ScheduleRunService {
       unassigned.map((entry) => {
         const visit = byId.get(entry.visitId);
         if (!visit) {
-          throw new AppException('RESOURCE_CONFLICT', 'The solver returned a visit outside its snapshot.', HttpStatus.CONFLICT, { visitId: entry.visitId });
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'The solver returned a visit outside its snapshot.',
+            HttpStatus.CONFLICT,
+            { visitId: entry.visitId },
+          );
         }
         return {
           ...entry,
@@ -373,6 +598,7 @@ export class ScheduleRunService {
           )?.id,
         };
       }),
+      lease,
     );
   }
 
@@ -389,7 +615,9 @@ export class ScheduleRunService {
     const pinned = new Set<string>();
 
     const solvable = visits.filter((visit) => {
-      const live = visit.assignments.find((a) => LIVE_STATUSES.includes(a.status));
+      const live = visit.assignments.find((a) =>
+        LIVE_STATUSES.includes(a.status),
+      );
       if (!live) return true;
 
       // Published work is settled — the solver is not offered it at all.
@@ -407,7 +635,9 @@ export class ScheduleRunService {
           scope: lock.scope === LockScope.SUPERVISOR ? 'CREW' : lock.scope,
           employee_ids:
             lock.scope === LockScope.SUPERVISOR
-              ? live.crewMembers.filter((m) => m.isPmsSupervisor).map((m) => m.employeeId)
+              ? live.crewMembers
+                  .filter((m) => m.isPmsSupervisor)
+                  .map((m) => m.employeeId)
               : live.crewMembers.map((m) => m.employeeId),
           vehicle_ids: live.vehicles.map((v) => v.vehicleId),
           start_minute: null,
@@ -432,18 +662,24 @@ export class ScheduleRunService {
         //
         // A visit a manager pinned in time keeps its date: an empty list means
         // "stay exactly where you are", so their decision survives the rerun.
-        const { allowedDays, preferredDays } = splitDayRules(visit.serviceAgreement.dayRules);
+        const { allowedDays, preferredDays } = splitDayRules(
+          visit.serviceAgreement.dayRules,
+        );
         const candidates = pinned.has(visit.id)
           ? []
           : buildCandidateSlots({
               allowedDays,
               preferredDays,
-              siteWindows: visit.serviceAgreement.serviceSite.operatingHours.map((hours) => ({
-                weekday: hours.weekday,
-                startMinute: hours.opensAtMinute,
-                endMinute: hours.closesAtMinute,
-              })),
-              agreementStartMinute: visit.serviceAgreement.serviceWindowStartMinute,
+              siteWindows:
+                visit.serviceAgreement.serviceSite.operatingHours.map(
+                  (hours) => ({
+                    weekday: hours.weekday,
+                    startMinute: hours.opensAtMinute,
+                    endMinute: hours.closesAtMinute,
+                  }),
+                ),
+              agreementStartMinute:
+                visit.serviceAgreement.serviceWindowStartMinute,
               agreementEndMinute: visit.serviceAgreement.serviceWindowEndMinute,
               durationMinutes: visit.durationMinutes,
               from: options.from,
@@ -476,10 +712,15 @@ export class ScheduleRunService {
         id: employee.id,
         branch_code: employee.branchCode,
         is_pms_grade: employee.isPmsGrade,
-        is_permanently_stationed: employee.deploymentType === 'PERMANENTLY_STATIONED',
-        permanent_site_ids: employee.permanentAssignments.map((a) => a.serviceSiteId).sort(),
+        is_permanently_stationed:
+          employee.deploymentType === 'PERMANENTLY_STATIONED',
+        permanent_site_ids: employee.permanentAssignments
+          .map((a) => a.serviceSiteId)
+          .sort(),
         skill_codes: employee.skills.map((s) => s.skillCode).sort(),
-        authorized_vehicle_ids: employee.vehicleAuthorizations.map((a) => a.vehicleId).sort(),
+        authorized_vehicle_ids: employee.vehicleAuthorizations
+          .map((a) => a.vehicleId)
+          .sort(),
         unavailable_dates: expandDates(employee.availability),
       })),
       vehicles: vehicles.map((vehicle) => ({
@@ -497,9 +738,12 @@ export class ScheduleRunService {
     runId: string,
     proposals: ProposedAssignment[],
     unassigned: UnassignedResult[],
+    lease: ExecutionLease,
   ) {
     const entries = [...proposals, ...unassigned];
-    if (new Set(entries.map((entry) => entry.visitId)).size !== entries.length) {
+    if (
+      new Set(entries.map((entry) => entry.visitId)).size !== entries.length
+    ) {
       throw new AppException(
         'RESOURCE_CONFLICT',
         'The solver returned multiple outcomes for one visit. Run the scheduler again.',
@@ -507,66 +751,97 @@ export class ScheduleRunService {
         { runId },
       );
     }
-    const employeeIds = [...new Set(proposals.flatMap((entry) =>
-      entry.dto.crew.map((member) => member.employeeId),
-    ))];
+    const employeeIds = [
+      ...new Set(
+        proposals.flatMap((entry) =>
+          entry.dto.crew.map((member) => member.employeeId),
+        ),
+      ),
+    ];
     const pms = await this.prisma.employee.findMany({
       where: { id: { in: employeeIds } },
       select: { id: true, isPmsGrade: true },
     });
     const pmsById = new Map(pms.map((row) => [row.id, row.isPmsGrade]));
 
-    return this.prisma.$transaction(async (tx) => {
-      // One solver response is one atomic change. Lock the entire affected set
-      // in the shared deterministic order, then validate every revision before
-      // creating drafts, transferring locks, moving dates or changing reasons.
-      await lockScheduleVisits(tx, entries.map((entry) => entry.visitId));
-      for (const entry of entries) {
-        await assertScheduleSnapshot(tx, entry.visitId, entry.replaceAssignmentId);
-        const visit = await tx.generatedVisit.findUniqueOrThrow({
-          where: { id: entry.visitId },
-          select: { updatedAt: true },
-        });
-        // Lock/unlock decisions also advance this revision under the same
-        // visit lock, so a stale lock snapshot rejects the complete response.
-        assertVisitRevision(entry.visitId, entry.expectedUpdatedAt, visit.updatedAt);
-      }
-      let scheduled = 0;
-      let rejected = 0;
-      for (const entry of proposals) {
-        // Evaluate and apply in order inside this transaction. Later checks
-        // must see the slots freed or occupied by earlier accepted results.
-        // The engine still wins whenever it disagrees with the solver.
-        const verdict = await this.eligibility.evaluate(entry.visitId, entry.dto, {
-          excludeAssignmentId: entry.replaceAssignmentId,
-          proposedVisit: entry.proposedVisit,
-        }, tx);
-        if (!verdict.isEligible) {
-          this.logger.warn(
-            `Solver proposed an assignment the engine refused for visit ${entry.visitId}: ${verdict.conflicts
-              .map((conflict) => conflict.code)
-              .join(', ')}`,
+    return this.prisma.$transaction(
+      async (tx) => {
+        // One solver response is one atomic change. Lock the entire affected set
+        // in the shared deterministic order, then validate every revision before
+        // creating drafts, transferring locks, moving dates or changing reasons.
+        await lockScheduleVisits(
+          tx,
+          entries.map((entry) => entry.visitId),
+        );
+        for (const entry of entries) {
+          await assertScheduleSnapshot(
+            tx,
+            entry.visitId,
+            entry.replaceAssignmentId,
           );
-          await this.recordUnassigned(tx, runId, [{
-            ...entry,
-            // Carried through intact. The engine already wrote a sentence and a
-            // remedy for each conflict; flattening them was the whole bug.
-            reasons: verdict.conflicts.map((conflict) => ({
-              code: conflict.code,
-              message: conflict.message,
-              remediation: conflict.remediation,
-              resources: conflict.resources,
-            })),
-          }]);
-          rejected += 1;
-          continue;
+          const visit = await tx.generatedVisit.findUniqueOrThrow({
+            where: { id: entry.visitId },
+            select: { updatedAt: true },
+          });
+          // Lock/unlock decisions also advance this revision under the same
+          // visit lock, so a stale lock snapshot rejects the complete response.
+          assertVisitRevision(
+            entry.visitId,
+            entry.expectedUpdatedAt,
+            visit.updatedAt,
+          );
         }
-        await this.persist(tx, runId, entry, pmsById);
-        scheduled += 1;
-      }
-      await this.recordUnassigned(tx, runId, unassigned);
-      return this.finish(runId, scheduled, unassigned.length + rejected, tx);
-    }, { timeout: 30_000 });
+        let scheduled = 0;
+        let rejected = 0;
+        for (const entry of proposals) {
+          // Evaluate and apply in order inside this transaction. Later checks
+          // must see the slots freed or occupied by earlier accepted results.
+          // The engine still wins whenever it disagrees with the solver.
+          const verdict = await this.eligibility.evaluate(
+            entry.visitId,
+            entry.dto,
+            {
+              excludeAssignmentId: entry.replaceAssignmentId,
+              proposedVisit: entry.proposedVisit,
+            },
+            tx,
+          );
+          if (!verdict.isEligible) {
+            this.logger.warn(
+              `Solver proposed an assignment the engine refused for visit ${entry.visitId}: ${verdict.conflicts
+                .map((conflict) => conflict.code)
+                .join(', ')}`,
+            );
+            await this.recordUnassigned(tx, runId, [
+              {
+                ...entry,
+                // Keep one explanation/remedy per conflict. The queue and visit
+                // detail read the same structured reasons as manual checks.
+                reasons: verdict.conflicts.map((conflict) => ({
+                  code: conflict.code,
+                  message: conflict.message,
+                  remediation: conflict.remediation,
+                  resources: conflict.resources,
+                })),
+              },
+            ]);
+            rejected += 1;
+            continue;
+          }
+          await this.persist(tx, runId, entry, pmsById);
+          scheduled += 1;
+        }
+        await this.recordUnassigned(tx, runId, unassigned);
+        return this.finish(
+          runId,
+          scheduled,
+          unassigned.length + rejected,
+          lease,
+          tx,
+        );
+      },
+      { timeout: 30_000 },
+    );
   }
 
   private async persist(
@@ -580,7 +855,10 @@ export class ScheduleRunService {
       select: { visitDate: true, branchId: true, branchCode: true },
     });
     const at = (minute: number) =>
-      new Date((proposedVisit?.visitDate ?? visit.visitDate).getTime() + minute * 60_000);
+      new Date(
+        (proposedVisit?.visitDate ?? visit.visitDate).getTime() +
+          minute * 60_000,
+      );
 
     const replacement = await tx.assignment.create({
       data: {
@@ -615,7 +893,10 @@ export class ScheduleRunService {
         data: { assignmentId: replacement.id },
       });
       const replaced = await tx.assignment.deleteMany({
-        where: { id: replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+        where: {
+          id: replaceAssignmentId,
+          status: { in: REPLACEABLE_STATUSES },
+        },
       });
       if (replaced.count !== 1) {
         throw new AppException(
@@ -626,7 +907,9 @@ export class ScheduleRunService {
         );
       }
     }
-    await tx.visitUnassignedReason.deleteMany({ where: { generatedVisitId: visitId } });
+    await tx.visitUnassignedReason.deleteMany({
+      where: { generatedVisitId: visitId },
+    });
     await tx.generatedVisit.update({
       where: { id: visitId },
       data: { status: VisitStatus.SCHEDULED, ...proposedVisit },
@@ -643,7 +926,10 @@ export class ScheduleRunService {
         // Keep the rejected draft as history, but make it unpublishable in
         // the same transaction that puts its visit in the unassigned queue.
         const invalidated = await tx.assignment.updateMany({
-          where: { id: entry.replaceAssignmentId, status: { in: REPLACEABLE_STATUSES } },
+          where: {
+            id: entry.replaceAssignmentId,
+            status: { in: REPLACEABLE_STATUSES },
+          },
           data: { status: AssignmentStatus.CANCELLED },
         });
         if (invalidated.count !== 1) {
@@ -651,7 +937,11 @@ export class ScheduleRunService {
             'RESOURCE_CONFLICT',
             'An assignment changed while the scheduler was solving. Refresh and run the scheduler again.',
             HttpStatus.CONFLICT,
-            { runId, visitId: entry.visitId, assignmentId: entry.replaceAssignmentId },
+            {
+              runId,
+              visitId: entry.visitId,
+              assignmentId: entry.replaceAssignmentId,
+            },
           );
         }
       }
@@ -679,23 +969,286 @@ export class ScheduleRunService {
     }
   }
 
+  private async claimExecutionLease(
+    runId: string,
+    executionBudgetSeconds: number,
+    dispatchId?: string,
+  ): Promise<DeliveryOutcome | { kind: 'acquired'; lease: ExecutionLease }> {
+    const before = await this.prisma.scheduleRun.findUnique({
+      where: { id: runId },
+    });
+    if (!before) return { kind: 'not_found' };
+    if (before.status === ScheduleRunStatus.CANCELLED) {
+      return { kind: 'cancelled' };
+    }
+    if (this.isSettled(before.status)) return { kind: 'settled' };
+    if (before.cancelRequestedAt) {
+      if (before.status === ScheduleRunStatus.QUEUED) {
+        return { kind: 'cancelled' };
+      }
+      if (before.status === ScheduleRunStatus.RUNNING) {
+        if (await this.settleExpiredCancellation(runId)) {
+          return { kind: 'cancelled' };
+        }
+        const afterCancellation = await this.prisma.scheduleRun.findUnique({
+          where: { id: runId },
+        });
+        if (!afterCancellation) return { kind: 'not_found' };
+        if (afterCancellation.status === ScheduleRunStatus.CANCELLED) {
+          return { kind: 'cancelled' };
+        }
+        if (this.isSettled(afterCancellation.status)) return { kind: 'settled' };
+        // The lease owner will observe the cancellation flag at its next safe
+        // point. Acknowledging this QStash delivery would strand a crashed
+        // owner, so keep it retriable while that lease is still live.
+        return { kind: 'busy' };
+      }
+      return { kind: 'cancelled' };
+    }
+
+    const now = new Date();
+    const lease: ExecutionLease = {
+      id: randomUUID(),
+      expiresAt: new Date(now.getTime() + executionBudgetSeconds * 1_000),
+    };
+    const claimWhere = {
+      id: runId,
+      cancelRequestedAt: null,
+      ...(dispatchId
+        ? {
+            dispatchOutbox: {
+              is: {
+                id: dispatchId,
+                status: {
+                  in: [
+                    ScheduleRunDispatchStatus.PENDING,
+                    ScheduleRunDispatchStatus.PUBLISHED,
+                  ],
+                },
+                terminalFailureAt: null,
+              },
+            },
+          }
+        : {}),
+      OR: [
+        { status: ScheduleRunStatus.QUEUED },
+        {
+          status: ScheduleRunStatus.RUNNING,
+          OR: [
+            { executionLeaseExpiresAt: { lte: now } },
+            { executionLeaseExpiresAt: null },
+          ],
+        },
+      ],
+    } satisfies Prisma.ScheduleRunWhereInput;
+    const changed = await this.leaseModel(this.prisma).updateMany({
+      where: claimWhere,
+      data: {
+        status: ScheduleRunStatus.RUNNING,
+        startedAt: before.startedAt ?? now,
+        progressPercent: 5,
+        executionLeaseId: lease.id,
+        executionLeaseExpiresAt: lease.expiresAt,
+        executionAttempt: { increment: 1 },
+      },
+    });
+    if (changed.count === 1) return { kind: 'acquired', lease };
+
+    const after = await this.prisma.scheduleRun.findUnique({
+      where: { id: runId },
+    });
+    if (!after) return { kind: 'not_found' };
+    if (after.status === ScheduleRunStatus.CANCELLED) {
+      return { kind: 'cancelled' };
+    }
+    if (this.isSettled(after.status)) return { kind: 'settled' };
+    if (after.cancelRequestedAt) return { kind: 'cancelled' };
+    return { kind: 'busy' };
+  }
+
+  private isSettled(status: ScheduleRunStatus): boolean {
+    const settled: ScheduleRunStatus[] = [
+      ScheduleRunStatus.SUCCEEDED,
+      ScheduleRunStatus.FAILED,
+      ScheduleRunStatus.CANCELLED,
+      ScheduleRunStatus.SUPERSEDED,
+    ];
+    return settled.includes(status);
+  }
+
+  private leaseModel(
+    client:
+      | Pick<PrismaService, 'scheduleRun'>
+      | Pick<Prisma.TransactionClient, 'scheduleRun'>,
+  ) {
+    return client.scheduleRun as unknown as {
+      updateMany(args: Record<string, unknown>): Promise<{ count: number }>;
+    };
+  }
+
+  private dispatchOutboxModel(
+    client: PrismaService | Prisma.TransactionClient,
+  ) {
+    return (
+      client as unknown as {
+        scheduleRunDispatchOutbox: {
+          create(args: Record<string, unknown>): Promise<unknown>;
+          findUnique(args: Record<string, unknown>): Promise<{
+            id: string;
+            terminalFailureAt: Date | null;
+          } | null>;
+          updateMany(args: Record<string, unknown>): Promise<{ count: number }>;
+        };
+      }
+    ).scheduleRunDispatchOutbox;
+  }
+
+  private leaseWhere(
+    runId: string,
+    lease: ExecutionLease,
+    allowCancellation = false,
+  ) {
+    return {
+      id: runId,
+      status: ScheduleRunStatus.RUNNING,
+      executionLeaseId: lease.id,
+      executionLeaseExpiresAt: { gt: new Date() },
+      ...(allowCancellation ? {} : { cancelRequestedAt: null }),
+    };
+  }
+
+  private async updateLeasedRun(
+    runId: string,
+    lease: ExecutionLease,
+    data: Record<string, unknown>,
+    client:
+      | Pick<PrismaService, 'scheduleRun'>
+      | Pick<Prisma.TransactionClient, 'scheduleRun'> = this.prisma,
+  ): Promise<void> {
+    const changed = await this.leaseModel(client).updateMany({
+      where: this.leaseWhere(runId, lease),
+      data,
+    });
+    if (changed.count !== 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This schedule run lease is no longer active.',
+        HttpStatus.CONFLICT,
+        { runId },
+      );
+    }
+  }
+
+  private async settleExpiredCancellation(runId: string): Promise<boolean> {
+    return settleExpiredScheduleRunCancellation(this.prisma, runId);
+  }
+
+  /**
+   * BullMQ may run a self-hosted solve for hours, but a crashed process must
+   * surrender quickly. Renewal is fenced by the same lease id as every write,
+   * so a reclaimed owner cannot prolong or overwrite the new owner's work.
+   */
+  private startExecutionLeaseHeartbeat(
+    runId: string,
+    lease: ExecutionLease,
+    executionLeaseSeconds: number,
+  ): ExecutionLeaseHeartbeat {
+    let stopped = false;
+    let failure: unknown;
+    let inFlight: Promise<void> | undefined;
+    let renewing = false;
+    const tick = () => {
+      if (stopped || failure || renewing) return;
+      renewing = true;
+      inFlight = this.renewExecutionLease(
+        runId,
+        lease,
+        executionLeaseSeconds,
+      )
+        .catch((error: unknown) => {
+          failure = error;
+        })
+        .finally(() => {
+          renewing = false;
+        });
+    };
+    const timer = setInterval(tick, BULLMQ_LEASE_HEARTBEAT_MILLISECONDS);
+
+    return {
+      stop: async () => {
+        stopped = true;
+        clearInterval(timer);
+        await inFlight;
+      },
+      assertActive: () => {
+        if (failure) throw failure;
+      },
+    };
+  }
+
+  private async renewExecutionLease(
+    runId: string,
+    lease: ExecutionLease,
+    executionLeaseSeconds: number,
+  ): Promise<void> {
+    const expiresAt = new Date(
+      Date.now() + executionLeaseSeconds * 1_000,
+    );
+    const renewed = await this.leaseModel(this.prisma).updateMany({
+      // Cancellation is cooperative: its current owner must keep its fence
+      // until it reaches a safe cancellation check, rather than looking stale.
+      where: this.leaseWhere(runId, lease, true),
+      data: { executionLeaseExpiresAt: expiresAt },
+    });
+    if (renewed.count !== 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This schedule run lease is no longer active.',
+        HttpStatus.CONFLICT,
+        { runId },
+      );
+    }
+    lease.expiresAt = expiresAt;
+  }
+
+  private async releaseLeaseForRetry(
+    runId: string,
+    lease: ExecutionLease,
+  ): Promise<void> {
+    await this.updateLeasedRun(runId, lease, {
+      status: ScheduleRunStatus.QUEUED,
+      executionLeaseId: null,
+      executionLeaseExpiresAt: null,
+    });
+  }
+
   private async isCancelled(runId: string): Promise<boolean> {
     const run = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
       select: { cancelRequestedAt: true },
     });
-    return run?.cancelRequestedAt !== null && run?.cancelRequestedAt !== undefined;
+    return (
+      run?.cancelRequestedAt !== null && run?.cancelRequestedAt !== undefined
+    );
   }
 
-  private async markCancelled(runId: string) {
-    await this.prisma.scheduleRun.update({
-      where: { id: runId },
+  private async markCancelled(runId: string, lease: ExecutionLease) {
+    const changed = await this.leaseModel(this.prisma).updateMany({
+      where: this.leaseWhere(runId, lease, true),
       data: {
         status: ScheduleRunStatus.CANCELLED,
         finishedAt: new Date(),
         progressPercent: 100,
       },
     });
+    if (changed.count !== 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This schedule run lease is no longer active.',
+        HttpStatus.CONFLICT,
+        { runId },
+      );
+    }
     return { scheduled: 0, unassigned: 0, cancelled: true };
   }
 
@@ -703,18 +1256,21 @@ export class ScheduleRunService {
     runId: string,
     scheduled: number,
     unassigned: number,
+    lease: ExecutionLease,
     client: Pick<Prisma.TransactionClient, 'scheduleRun'> = this.prisma,
   ) {
-    await client.scheduleRun.update({
-      where: { id: runId },
-      data: {
+    await this.updateLeasedRun(
+      runId,
+      lease,
+      {
         status: ScheduleRunStatus.SUCCEEDED,
         finishedAt: new Date(),
         progressPercent: 100,
         visitsScheduled: scheduled,
         visitsUnassigned: unassigned,
       },
-    });
+      client,
+    );
     return { scheduled, unassigned, cancelled: false };
   }
 
@@ -726,7 +1282,9 @@ export class ScheduleRunService {
    * behind. A run that has already finished is left exactly as it is.
    */
   async requestCancel(runId: string, actor: AuthenticatedUser) {
-    const run = await this.prisma.scheduleRun.findUnique({ where: { id: runId } });
+    const run = await this.prisma.scheduleRun.findUnique({
+      where: { id: runId },
+    });
     if (!run) {
       throw new AppException(
         'RESOURCE_NOT_FOUND',
@@ -774,24 +1332,43 @@ export class ScheduleRunService {
     return updated;
   }
 
-  /** Moves the run's percentage. Called by the worker as the solve proceeds. */
-  async setProgress(runId: string, percent: number) {
-    await this.prisma.scheduleRun.update({
-      where: { id: runId },
-      data: { progressPercent: Math.max(0, Math.min(100, Math.round(percent))) },
+  /** Moves the run's percentage. Called by the lease-holding worker only. */
+  async setProgress(runId: string, lease: ExecutionLease, percent: number) {
+    await this.updateLeasedRun(runId, lease, {
+      progressPercent: Math.max(0, Math.min(100, Math.round(percent))),
     });
   }
 
-  async fail(runId: string, code: string, message: string) {
-    await this.prisma.scheduleRun.update({
-      where: { id: runId },
-      data: {
-        status: ScheduleRunStatus.FAILED,
-        finishedAt: new Date(),
-        errorCode: code,
-        errorMessage: message,
-      },
+  async fail(
+    runId: string,
+    lease: ExecutionLease,
+    code: string,
+    message: string,
+  ) {
+    await this.updateLeasedRun(runId, lease, {
+      status: ScheduleRunStatus.FAILED,
+      finishedAt: new Date(),
+      errorCode: code,
+      errorMessage: message,
     });
+  }
+
+  /** QStash owns the retry policy, so it is the final failure authority. */
+  async failForQStash(
+    runId: string,
+    dispatchId: string,
+    messageId: string,
+    code: string,
+    message: string,
+  ): Promise<'failed' | 'deferred' | 'ignored'> {
+    return failScheduleRunForQStash(
+      this.prisma,
+      runId,
+      dispatchId,
+      messageId,
+      code,
+      message,
+    );
   }
 }
 

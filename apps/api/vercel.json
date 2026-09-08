@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm prisma:generate && pnpm build",
+  "functions": {
+    "src/main.ts": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/schedule-runs/reconcile",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

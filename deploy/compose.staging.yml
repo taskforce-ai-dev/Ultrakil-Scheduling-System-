@@ -86,6 +86,10 @@ services:
     mem_limit: ${SCHEDULER_MEMORY_LIMIT:-1280m}
     cpus: 1.5
     stop_grace_period: 180s
+    environment:
+      # This scheduler is private on the internal backend network. Public
+      # deployments must leave the opt-out unset and provide a shared token.
+      SCHEDULER_ALLOW_UNAUTHENTICATED: "true"
     networks: [backend]
     healthcheck:
       test:

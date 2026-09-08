@@ -3,8 +3,15 @@ import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { QUEUE_SCHEDULE_RUN } from './queue.constants';
 
+export abstract class QueueHealthService {
+  abstract ping(): Promise<{
+    queue: string;
+    jobCounts: Record<string, number>;
+  }>;
+}
+
 @Injectable()
-export class QueueHealthService {
+export class BullQueueHealthService implements QueueHealthService {
   constructor(
     @InjectQueue(QUEUE_SCHEDULE_RUN) private readonly scheduleRunQueue: Queue,
   ) {}
@@ -19,5 +26,13 @@ export class QueueHealthService {
     await this.scheduleRunQueue.waitUntilReady();
     const jobCounts = await this.scheduleRunQueue.getJobCounts();
     return { queue: this.scheduleRunQueue.name, jobCounts };
+  }
+}
+
+/** QStash has no persistent local connection to probe from a Vercel function. */
+@Injectable()
+export class QStashQueueHealthService implements QueueHealthService {
+  async ping(): Promise<{ queue: string; jobCounts: Record<string, number> }> {
+    return { queue: 'qstash', jobCounts: {} };
   }
 }

@@ -44,7 +44,7 @@ import {
   type Visit,
 } from "@/lib/api-client";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
-import { CalendarBoard } from "../calendar/page";
+import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 

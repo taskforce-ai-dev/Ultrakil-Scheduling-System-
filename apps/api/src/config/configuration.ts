@@ -25,11 +25,41 @@ export const redisConfig = registerAs('redis', () => {
   };
 });
 
+export const scheduleDispatchConfig = registerAs('scheduleDispatch', () => {
+  const env = process.env as unknown as Env;
+  const publicUrl = env.API_PUBLIC_URL;
+  const globalPrefix = env.API_GLOBAL_PREFIX || 'api';
+  const endpoint = (suffix: string) =>
+    publicUrl
+      ? new URL(
+          `/${globalPrefix}/internal/schedule-runs/${suffix}`,
+          publicUrl,
+        ).toString()
+      : undefined;
+  return {
+    provider: env.SCHEDULE_DISPATCHER || 'bullmq',
+    executionBudgetSeconds: Number(
+      env.SCHEDULE_EXECUTION_BUDGET_SECONDS || 55,
+    ),
+    publicUrl,
+    executeUrl: endpoint('execute'),
+    failureUrl: endpoint('failure'),
+    reconcileUrl: endpoint('reconcile'),
+    reconciliationCronSecret: env.CRON_SECRET || undefined,
+    qstash: {
+      token: env.QSTASH_TOKEN,
+      currentSigningKey: env.QSTASH_CURRENT_SIGNING_KEY,
+      nextSigningKey: env.QSTASH_NEXT_SIGNING_KEY,
+    },
+  };
+});
+
 export const schedulerConfig = registerAs('scheduler', () => {
   const env = process.env as unknown as Env;
   return {
     baseUrl: env.SCHEDULER_BASE_URL,
     healthTimeoutMs: Number(env.SCHEDULER_HEALTH_TIMEOUT_MS),
+    apiToken: env.SCHEDULER_API_TOKEN,
   };
 });
 

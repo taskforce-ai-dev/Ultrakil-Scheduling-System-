@@ -57,7 +57,16 @@ const port = process.env.SCHEDULER_PORT || '8000';
 const child = spawn(
   venvPython,
   ['-m', 'uvicorn', 'app.main:app', '--reload', '--port', port],
-  { cwd: serviceDir, stdio: 'inherit' },
+  {
+    cwd: serviceDir,
+    stdio: 'inherit',
+    // This launcher is for the documented loopback-only development service.
+    // Production/public runtimes must provide SCHEDULER_API_TOKEN instead.
+    env: {
+      ...process.env,
+      SCHEDULER_ALLOW_UNAUTHENTICATED: process.env.SCHEDULER_ALLOW_UNAUTHENTICATED ?? 'true',
+    },
+  },
 );
 
 child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 0)));

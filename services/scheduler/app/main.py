@@ -14,8 +14,11 @@ manager clicking around the dispatch board.
 from __future__ import annotations
 
 import time
+from secrets import compare_digest
+from typing import Annotated
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from app.settings import settings
@@ -23,6 +26,7 @@ from app.solver.model import solve as run_solver
 from app.solver.schemas import SolveRequest, SolveResponse
 
 STARTED_AT = time.monotonic()
+bearer = HTTPBearer(auto_error=False)
 
 app = FastAPI(
     title="UltraKIL Scheduling Service",
@@ -78,7 +82,41 @@ def ready() -> ReadinessResponse:
     )
 
 
-@app.post("/solve", response_model=SolveResponse, tags=["scheduling"])
+def _require_scheduler_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> None:
+    """Require the shared API/scheduler token unless explicitly opted out.
+
+    Authentication is required unless a private/local runtime explicitly sets
+    SCHEDULER_ALLOW_UNAUTHENTICATED=true. Public deployments must never use
+    that opt-out.
+    """
+    expected = settings.api_token
+    if expected is None:
+        if not settings.allow_unauthenticated:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Scheduler authentication is not configured",
+            )
+        return
+
+    supplied = credentials.credentials if credentials else None
+    if supplied is None or not compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Scheduler authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+@app.post(
+    "/solve",
+    response_model=SolveResponse,
+    tags=["scheduling"],
+    dependencies=[Depends(_require_scheduler_token)],
+)
 def solve(request: SolveRequest) -> SolveResponse:
     """Assign crews and vehicles to visits.
 

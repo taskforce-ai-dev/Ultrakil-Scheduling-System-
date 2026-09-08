@@ -7,6 +7,7 @@ import {
   authConfig,
   importConfig,
   redisConfig,
+  scheduleDispatchConfig,
   schedulerConfig,
 } from './config/configuration';
 import { validateEnv } from './config/env.validation';
@@ -24,18 +25,25 @@ import { WorkforceModule } from './workforce/workforce.module';
       isGlobal: true,
       cache: true,
       validate: validateEnv,
-      load: [appConfig, redisConfig, schedulerConfig, importConfig, authConfig],
+      load: [
+        appConfig,
+        redisConfig,
+        scheduleDispatchConfig,
+        schedulerConfig,
+        importConfig,
+        authConfig,
+      ],
       envFilePath: ['.env', '../../.env'],
     }),
     PrismaModule,
-    QueueModule,
+    QueueModule.register(),
     AuditModule,
     AuthModule,
     HealthModule,
     MetaModule,
     WorkforceModule,
     CatalogModule,
-    SchedulingModule,
+    SchedulingModule.register(),
   ],
 })
 export class AppModule {}

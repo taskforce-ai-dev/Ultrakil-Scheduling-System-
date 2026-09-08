@@ -155,7 +155,7 @@ Open a terminal per service.
 
 ```bash
 pnpm dev:api            # NestJS API   -> http://localhost:3001/api
-pnpm dev:scheduler      # Python       -> http://localhost:8000
+pnpm dev:scheduler      # Python       -> http://localhost:8000 (loopback-only auth opt-out)
 ```
 
 And a third for the manager portal:
@@ -200,6 +200,10 @@ it runs natively with `pnpm dev:scheduler`.
 
 Both containers are tuned down in `docker-compose.yml` rather than left on
 their defaults, which assume a server:
+
+If you choose the optional containerised scheduler, its unauthenticated local
+port is bound to `127.0.0.1` only; do not change that binding when using the
+private development opt-out.
 
 | Container | Memory cap | Notes |
 | --- | --- | --- |

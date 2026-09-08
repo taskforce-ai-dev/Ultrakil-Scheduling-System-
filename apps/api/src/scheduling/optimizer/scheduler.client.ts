@@ -95,13 +95,17 @@ export class SchedulerClient {
 
   async solve(request: SolveRequest, timeoutMs: number): Promise<SolveResponse> {
     const baseUrl = this.config.getOrThrow<string>('scheduler.baseUrl');
+    const token = this.config.get<string>('scheduler.apiToken');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(`${baseUrl}/solve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(request),
         signal: controller.signal,
       });

@@ -8,7 +8,12 @@ import { buildOpenApiDocument } from './openapi';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, { bufferLogs: false });
+  // QStash signs the original bytes. Nest keeps them on the request while
+  // retaining normal JSON parsing for every existing API endpoint.
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: false,
+    rawBody: true,
+  });
 
   const config = app.get(ConfigService);
   const port = config.getOrThrow<number>('app.port');

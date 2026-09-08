@@ -1,4 +1,10 @@
-# C08 release evidence and O08 handoff
+# C08 historical Docker release evidence and O08 handoff
+
+> Historical Docker-host checklist only. The current deployment has no
+> dedicated staging server and uses Vercel; use
+> [`VERCEL_RELEASE_CHECKLIST.md`](VERCEL_RELEASE_CHECKLIST.md) for current
+> evidence. The Docker/Compose path remains preserved and is documented in
+> [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md).
 
 Record links/results against the exact release SHA; unchecked items remain open.
 This C08 checklist complements Oshadi's separate O08 guide, screenshots and demo
@@ -47,5 +53,6 @@ script. It does not transfer O08 ownership or include branding PR #36.
   handover; complete only after each task's actual Definition of Done is met.
 
 If a gate is blocked, record the exact missing host/credential/data decision or
-failed test. Do not publish invented staging URLs, claim synthetic screenshots
-as staging evidence or assign work to Chanya during her absence.
+failed test. Do not publish invented staging URLs or claim synthetic screenshots
+as staging evidence. Retain the agreed ownership split: Thivarrakesh handles
+C07/C08, and Oshadi owns O08; this checklist does not reassign team tasks.
