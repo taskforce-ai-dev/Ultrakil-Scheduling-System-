@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 import urllib.error
 
@@ -85,6 +86,11 @@ class CleanupTests(unittest.TestCase):
             with self.subTest(outcomes=outcomes), self.assertRaises(RuntimeError):
                 self.invoke(outcomes)
 
+    def test_cleanup_does_not_publish_private_evidence_path(self):
+        output = self.invoke([0, 0])
+        self.assertNotIn('/tmp/synthetic', output)
+        self.assertIn('"privateEvidencePreserved": 1', output)
+
     def test_cleanup_failure_preserves_original_exception(self):
         original = ValueError('original failure')
         try:
@@ -95,6 +101,59 @@ class CleanupTests(unittest.TestCase):
         except ValueError as caught:
             self.assertIs(caught, original)
             self.assertTrue(any('teardown' in note for note in caught.__notes__))
+
+
+class StrictBrowserDiagnosticsTests(unittest.TestCase):
+    def test_missing_or_invalid_report_falls_back_without_private_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'strict-browser.json'
+            for body in [None, '{PRIVATE_TOKEN', 'x' * (rehearse.STRICT_BROWSER_DIAGNOSTIC_MAX_BYTES + 1)]:
+                if body is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(body)
+                diagnostic = rehearse.load_strict_browser_diagnostic(path)
+                self.assertEqual(diagnostic, rehearse.unavailable_strict_browser_diagnostic())
+                self.assertNotIn('PRIVATE_TOKEN', json.dumps(diagnostic))
+
+    def test_loader_reconstructs_only_allowlisted_diagnostic_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'strict-browser.json'
+            path.write_text(json.dumps({
+                'status': 'failed',
+                'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
+                           'interrupted': 0, 'notRun': 0, 'unexpected': 0},
+                'failures': [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed',
+                              'error': 'PRIVATE_TOKEN https://example.invalid'}],
+            }))
+            self.assertEqual(rehearse.load_strict_browser_diagnostic(path), rehearse.unavailable_strict_browser_diagnostic())
+
+            path.write_text(json.dumps({
+                'status': 'failed',
+                'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
+                           'interrupted': 0, 'notRun': 0, 'unexpected': 0},
+                'failures': [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed'}],
+            }))
+            diagnostic = rehearse.load_strict_browser_diagnostic(path)
+            self.assertEqual(diagnostic['failures'], [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed'}])
+            self.assertNotIn('PRIVATE_TOKEN', json.dumps(diagnostic))
+
+    def test_runner_publishes_only_reconstructed_diagnostic_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'strict-browser.json'
+            path.write_text(json.dumps({
+                'status': 'failed',
+                'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
+                           'interrupted': 0, 'notRun': 0, 'unexpected': 0},
+                'failures': [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed'}],
+            }))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), self.assertRaisesRegex(RuntimeError, 'raw diagnostics withheld'):
+                rehearse.run_strict_browser(['private-command'], {}, path,
+                                            execute=lambda *args, **kwargs: subprocess.CompletedProcess(
+                                                args[0], 1, stdout=b'PRIVATE_TOKEN', stderr=b'PRIVATE_TOKEN'))
+            self.assertNotIn('PRIVATE_TOKEN', output.getvalue())
+            self.assertIn('02-generation.spec.ts', output.getvalue())
 
 
 def healthy_state(restart_count=0):

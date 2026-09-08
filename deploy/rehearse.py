@@ -15,6 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 HOST_READINESS_TIMEOUT_SECONDS = 10
 HOST_READINESS_RETRY_SECONDS = 0.25
 HOST_READINESS_REQUEST_TIMEOUT_SECONDS = 1
+STRICT_BROWSER_DIAGNOSTIC_MAX_BYTES = 16 * 1024
+STRICT_BROWSER_STATUSES = {'passed', 'failed', 'timedOut', 'interrupted'}
+STRICT_BROWSER_RESULT_STATUSES = {'passed', 'failed', 'skipped', 'timedOut', 'interrupted', 'notRun', 'unexpected'}
+STRICT_BROWSER_COUNT_KEYS = ('passed', 'failed', 'skipped', 'timedOut', 'interrupted', 'notRun', 'unexpected')
+STRICT_BROWSER_SOURCE_FILES = {
+    '01-customer-and-agreement.spec.ts', '02-generation.spec.ts', '03-dispatch-and-lock.spec.ts',
+    '04-publish.spec.ts', '05-accessibility.spec.ts', '06-responsive.spec.ts',
+    '07-vehicle-drivers-and-inactive-clients.spec.ts', 'auth.setup.ts',
+}
 
 
 class HostReadinessResponseError(Exception):
@@ -113,6 +122,57 @@ def run(label, command, env=None, expected=0, stdin=None):
     return result.stdout.strip()
 
 
+def unavailable_strict_browser_diagnostic():
+    return {'status': 'unavailable', 'counts': {'total': 0, **{key: 0 for key in STRICT_BROWSER_COUNT_KEYS}}, 'failures': []}
+
+
+def write_unavailable_strict_browser_diagnostic(path):
+    path.write_text(json.dumps(unavailable_strict_browser_diagnostic()), encoding='utf-8')
+
+
+def load_strict_browser_diagnostic(path):
+    fallback = unavailable_strict_browser_diagnostic()
+    try:
+        if path.stat().st_size > STRICT_BROWSER_DIAGNOSTIC_MAX_BYTES:
+            return fallback
+        payload = json.loads(path.read_bytes().decode('utf-8'))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return fallback
+    if not isinstance(payload, dict) or set(payload) != {'status', 'counts', 'failures'}:
+        return fallback
+    status, counts, failures = payload['status'], payload['counts'], payload['failures']
+    if status not in STRICT_BROWSER_STATUSES or not isinstance(counts, dict) or set(counts) != {'total', *STRICT_BROWSER_COUNT_KEYS}:
+        return fallback
+    if any(type(counts[key]) is not int or not 0 <= counts[key] <= 10_000 for key in counts):
+        return fallback
+    if counts['total'] != sum(counts[key] for key in STRICT_BROWSER_COUNT_KEYS) or not isinstance(failures, list) or len(failures) > counts['total']:
+        return fallback
+    safe_failures = []
+    for failure in failures:
+        if (not isinstance(failure, dict) or set(failure) != {'file', 'line', 'status'}
+                or failure['file'] not in STRICT_BROWSER_SOURCE_FILES or type(failure['line']) is not int
+                or not 0 < failure['line'] <= 100_000 or failure['status'] not in STRICT_BROWSER_RESULT_STATUSES
+                or failure['status'] == 'passed'):
+            return fallback
+        safe_failures.append({'file': failure['file'], 'line': failure['line'], 'status': failure['status']})
+    if status == 'passed' and (counts['total'] < 48 or counts['passed'] != counts['total']):
+        return fallback
+    return {'status': status, 'counts': {'total': counts['total'], **{key: counts[key] for key in STRICT_BROWSER_COUNT_KEYS}},
+            'failures': safe_failures}
+
+
+def run_strict_browser(command, env, diagnostic_path, execute=subprocess.run):
+    try:
+        result = execute(command, cwd=ROOT, env=env, capture_output=True)
+    except OSError:
+        result = None
+    diagnostic = load_strict_browser_diagnostic(diagnostic_path)
+    passed = result is not None and result.returncode == 0 and diagnostic['status'] == 'passed'
+    print(json.dumps({'step': 'strict browser acceptance', 'passed': int(passed), 'strictBrowser': diagnostic}), flush=True)
+    if not passed:
+        raise RuntimeError('strict browser acceptance failed; raw diagnostics withheld')
+
+
 def assert_dependencies_healthy(dependencies):
     if set(dependencies) != {'postgres', 'redis', 'scheduler'} or any(
             state.get('Status') != 'running' or state.get('Running') is not True
@@ -148,7 +208,7 @@ def cleanup_projects(compose, env, project, directory, original_error=None, exec
             failed = True
         failures += int(failed)
         print(json.dumps({'teardownProject': name, 'failed': int(failed)}), flush=True)
-    print(json.dumps({'privateEvidenceDirectory': str(directory), 'volumesPreserved': 1,
+    print(json.dumps({'privateEvidencePreserved': 1, 'volumesPreserved': 1,
                       'teardownFailures': failures}), flush=True)
     if failures:
         message = f'Rehearsal teardown failed for {failures} project(s); raw diagnostics withheld; inspect private state.'
@@ -171,6 +231,10 @@ def main():
     paths = {name: directory / name for name in ['import', 'config', 'reports', 'backup']}
     for path in paths.values():
         path.mkdir(mode=0o700)
+    playwright_artifacts = paths['reports'] / 'playwright'
+    playwright_artifacts.mkdir(mode=0o700)
+    strict_browser_diagnostic = paths['reports'] / 'strict-browser.json'
+    write_unavailable_strict_browser_diagnostic(strict_browser_diagnostic)
     run('private recovery ownership', ['sudo', 'chown', '10001:10001', str(paths['backup'])])
     api_port, web_port = free_port(), free_port()
     while api_port == web_port:
@@ -309,11 +373,13 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
                                 inspect=lambda: inspect_host_probe_container('api'))
         wait_for_host_readiness('web', web_url + '/login', require_web_ready,
                                 inspect=lambda: inspect_host_probe_container('web'))
-        run('strict browser acceptance', ['corepack', 'pnpm', '--filter', '@ultrakil/manager-web', 'test:e2e'], {
+        run_strict_browser(['corepack', 'pnpm', '--filter', '@ultrakil/manager-web', 'test:e2e'], {
             **child_env, 'E2E_STRICT': '1', 'E2E_REHEARSAL_ID': token, 'E2E_DATABASE_NAME': env['POSTGRES_DB'],
             'E2E_BULLMQ_PREFIX': project, 'E2E_BASE_URL': web_url, 'E2E_API_URL': api_url, 'E2E_DATE': '2026-09-07',
             'E2E_EMAIL': env['SEED_ADMIN_EMAIL'], 'E2E_PASSWORD': env['SEED_ADMIN_PASSWORD'],
-        })
+            'E2E_PRIVATE_ARTIFACTS_DIR': str(playwright_artifacts),
+            'E2E_STRICT_DIAGNOSTIC_FILE': str(strict_browser_diagnostic),
+        }, strict_browser_diagnostic)
         dc('verify inactive generation and preserved history', 'run', '--rm', '--no-deps', '-T', '-v',
            f'{ROOT / "deploy/test/rehearsal-fixture.mjs"}:/workspace/deploy/test/rehearsal-fixture.mjs:ro',
            'migrate', 'node', 'deploy/test/rehearsal-fixture.mjs', 'verify')
