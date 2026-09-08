@@ -1,0 +1,55 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+ RUN  v2.1.9 /home/user/Ultrakil-Scheduling-System-/apps/manager-web
+
+ ✓ src/app/(app)/calendar/__tests__/calendar.test.tsx (17 tests) 1847ms
+ ✓ src/app/(app)/visits/__tests__/assignment-editor-drawer.test.tsx (9 tests) 5604ms
+   ✓ AssignmentEditorDrawer > is an accessible replacement workflow: every control has a real label 630ms
+   ✓ AssignmentEditorDrawer > saves a valid replacement once the crew checks out and a reason is given 1133ms
+   ✓ AssignmentEditorDrawer > will not save without a reason 651ms
+   ✓ AssignmentEditorDrawer > shows every rejection reason for an invalid move, and blocks Save 716ms
+   ✓ AssignmentEditorDrawer > surfaces a backend refusal without losing the drawer 834ms
+   ✓ AssignmentEditorDrawer > collapses a rapid double-click on Save into a single request 1068ms
+ ✓ src/app/(app)/visits/__tests__/visits.test.tsx (25 tests) 6060ms
+   ✓ calendar rendering > switches to a week view and back 339ms
+   ✓ calendar rendering > moves a month at a time and refetches 345ms
+   ✓ filters > sends the branch to the API so Colombo and Kandy stay separable 408ms
+   ✓ filters > narrows by customer 356ms
+   ✓ filters > narrows by treatment 342ms
+   ✓ filters > narrows by visit state 539ms
+   ✓ filters > keeps the filters and the date when a visit is opened and closed 615ms
+   ✓ an empty month > says so when the filters are what emptied the grid 663ms
+ ✓ src/app/(app)/service-agreements/__tests__/service-agreements.test.tsx (11 tests) 3449ms
+   ✓ ServiceAgreementsPage > is reachable by keyboard and exposes accessible labels for every field 479ms
+   ✓ ServiceAgreementsPage > excludes an inactive site from the picker, even for an active customer (ULK-O09) 379ms
+   ✓ ServiceAgreementsPage > requires a start date before saving 346ms
+   ✓ ServiceAgreementsPage > un-checking an allowed day also drops it from preferred 350ms
+   ✓ ServiceAgreementsPage > saves the agreement, then shows a loading state and the real preview, including shortfalls 588ms
+   ✓ ServiceAgreementsPage > shows an error if the preview fails to load, without losing the created agreement 335ms
+   ✓ ServiceAgreementsPage > surfaces a backend rejection (e.g. an unsatisfiable agreement) without closing the form 400ms
+ ✓ src/app/(app)/unassigned-visits/__tests__/unassigned-visits.test.tsx (10 tests) 1018ms
+   ✓ unassigned visits queue > filters by branch 310ms
+ ✓ src/app/(app)/schedule-history/__tests__/schedule-history.test.tsx (7 tests) 974ms
+ ✓ src/app/(app)/customers/__tests__/customers.test.tsx (10 tests) 2078ms
+   ✓ CustomersPage > is reachable by keyboard and exposes accessible labels 346ms
+   ✓ CustomersPage > creates the customer, then each site, and refreshes the list on success 323ms
+   ✓ CustomersPage > collapses a rapid double-click on Save into a single request 322ms
+ ✓ src/app/(app)/vehicles/[vehicleId]/__tests__/vehicle-detail.test.tsx (4 tests) 142ms
+ ✓ src/app/(app)/workforce/[employeeId]/__tests__/employee-detail.test.tsx (5 tests) 756ms
+   ✓ EmployeeDetailView > shows an actionable backend validation error without changing its meaning 321ms
+ ✓ src/app/(app)/workforce/__tests__/workforce.test.tsx (6 tests) 1308ms
+   ✓ WorkforcePage > filters to PMS-grade Colombo employees (acceptance scenario) 528ms
+ ✓ src/app/(app)/dispatch-board/__tests__/dispatch-board.test.tsx (6 tests) 921ms
+   ✓ dispatch board > filters by branch 361ms
+ ✓ src/components/shared/__tests__/conflict-list.test.tsx (13 tests) 167ms
+ ✓ src/lib/__tests__/api-client.test.ts (5 tests) 6ms
+ ✓ src/lib/__tests__/conflict-groups.test.ts (22 tests) 5ms
+ ✓ src/app/(app)/vehicles/__tests__/vehicles.test.tsx (4 tests) 550ms
+ ✓ src/app/(app)/__tests__/routes.smoke.test.tsx (10 tests) 366ms
+ ✓ src/components/shared/__tests__/app-shell.test.tsx (2 tests) 158ms
+
+ Test Files  17 passed (17)
+      Tests  166 passed (166)
+   Start at  11:23:03
+   Duration  15.60s (transform 1.18s, setup 1.92s, collect 7.14s, tests 25.41s, environment 6.74s, prepare 1.11s)
+

@@ -7,8 +7,11 @@ publishing a schedule. It assumes you can already sign in — if not, ask
 your administrator for an account.
 
 Screenshots in this guide are from a local test environment with sample
-data, not the live UltraKIL fleet — the screens themselves are the same
-ones you'll see in the pilot; only the names differ.
+data, not the live UltraKIL fleet and not the deployed staging build —
+they are representative local examples of each screen, not a guarantee
+of pixel-for-pixel parity with staging. Deployed-staging screenshots and
+a pass against real customer/technician data are still pending (see
+`known-limitations.md`) and will replace these once available.
 
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS
@@ -44,6 +47,15 @@ Go to **Service Agreements → Add agreement**. This is where you say what
 recurring work a site needs.
 
 ![Add service agreement form](uat/screenshots/add-agreement-form-full.png)
+
+> **Known display defect in this screenshot:** the Customer and Site
+> fields above are showing raw internal IDs (`d3f5aeae-…`, `22ba7124-…`)
+> instead of the customer/site name. The dropdown's own option list is
+> unaffected — it correctly lists names — so this is specifically the
+> closed selector failing to resolve the chosen id back to its label.
+> Triaged in `known-limitations.md`; not a data-exposure issue (these are
+> internal identifiers, not customer PII), but the screenshot needs
+> retaking once fixed.
 
 Key fields:
 
@@ -109,7 +121,39 @@ the visit"* and Save becomes available.
 
 ---
 
-## 5. Understanding validation errors
+## 5. Vehicles with more than one driver
+
+A company vehicle is not owned by one person. Open **Vehicles** and click
+any vehicle to see its full list of authorized drivers — every one is
+shown as an equal row reading only "Authorized to drive," with no
+"primary driver" or ownership concept anywhere on the page.
+
+![Authorized drivers for one vehicle](uat/screenshots/o09-all-checked-drivers-lm3067.png)
+
+This carries through to assignment:
+
+- In the **Edit crew** drawer, the **Driver** dropdown for a vehicle only
+  offers people who are *both* on that visit's crew *and* individually
+  checked as authorized for that specific vehicle. Someone not checked for
+  it never appears in the list at all — there's nothing to reject after
+  the fact, because the list is filtered before you open it.
+
+  ![Unauthorized driver excluded from the dropdown](uat/screenshots/o09-unauthorized-driver-excluded.png)
+
+- The same vehicle can be assigned to two different visits with two
+  different authorized drivers — nothing about assigning it once reserves
+  it to one person.
+- If you remove the assigned driver from the crew (not the vehicle), the
+  vehicle's **Driver** field clears back to its placeholder and the
+  Validation panel immediately re-checks, naming any other crew member who
+  is still authorized for that vehicle:
+
+  ![Driver field before removal](uat/screenshots/before-driver-removed-from-crew.png)
+  ![Re-validated after the driver is removed from the crew](uat/screenshots/after-driver-removed-revalidated.png)
+
+---
+
+## 6. Understanding validation errors
 
 Every rule the system enforces shows up the same way: a labelled card, a
 stable error code (useful if you ever need to report an issue), a
@@ -124,14 +168,14 @@ You never have to guess.
 | **Missing skill** `SKILL_NOT_HELD` | The job needs a specific skill nobody in the crew holds. | Add someone qualified, or fix the required skills on the agreement. |
 | **No authorized driver** `NO_AUTHORIZED_DRIVER` | A vehicle is assigned but nobody in the crew is checked to drive it. | Name one of the checked drivers already in the crew, or add one who is checked. |
 | **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Use a larger vehicle. **Note:** adding a second, smaller vehicle does not currently split the crew across both — each assigned vehicle is checked against the *full* crew, not a share of it. |
-| **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. **Known issue:** re-opening a visit you *just* saved can show this error against itself — see "Known limitations." If that happens, close and reopen the drawer, or check the Dispatch Board directly; the saved assignment is usually correct. |
+| **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. **Known issue:** re-opening a visit you *just* saved can show this error against itself — see "Known limitations." Closing and reopening the drawer again does **not** clear it — reopening is what reproduces it. Instead, check the Dispatch Board's read-only view to confirm the saved assignment is correct (it will be), and if you need to make a further change, remove and rebuild the crew rather than editing in place until this is fixed. |
 
 None of these are colour-only — every one carries text, so they read
 correctly even in black-and-white or for a colour-blind reader.
 
 ---
 
-## 6. Overrides and locks
+## 7. Overrides and locks
 
 Any manual edit through **Edit crew** is an override — it's how you swap
 a sick technician, change a vehicle, or fix a visit the scheduler couldn't
@@ -150,7 +194,7 @@ overwriting it.
 
 ---
 
-## 7. Publishing a schedule
+## 8. Publishing a schedule
 
 Go to **Schedule History**. This is where the automated optimizer runs —
 give it a date range and a branch, click **Start run**, and it proposes a
@@ -166,22 +210,32 @@ period, rather than assigning visit-by-visit from the Dispatch Board.
 
 ---
 
-## 8. Customers and sites that are no longer active
+## 9. Customers and sites that are no longer active
 
 An inactive customer or site is labelled in **text** (not colour alone) —
 e.g. "1 active, 1 inactive" on the Customers list, or an "Inactive" badge
 when filtering to inactive customers.
 
+![An active customer with one inactive site, labelled in text](uat/screenshots/o09-active-customer-with-inactive-site-label.png)
+![A fully inactive customer, labelled with a badge](uat/screenshots/o09-inactive-customer-labeled.png)
+
 Deactivating a customer or site:
 
 - Removes it from every picker used to create new work — the "Add
   agreement" customer/site dropdowns, for example — so nobody can
-  accidentally schedule new work there.
+  accidentally schedule new work there. A still-active customer with one
+  inactive site keeps offering its other active sites; only the inactive
+  one drops out of the site picker.
+
+  ![The inactive site no longer offered on Add agreement](uat/screenshots/o09-inactive-site-excluded-from-picker.png)
+
 - Stops it from generating any new visits.
 - **Does not** hide anything that already happened — a visit that was
   generated before the site went inactive stays visible and editable on the
   Dispatch Board and in history. Going inactive only affects future
   scheduling.
+
+  ![A visit generated before deactivation, still visible and editable](uat/screenshots/o09-historical-info-still-accessible.png)
 
 **Note:** in this phase, deactivating a customer/site is not something you
 do from this portal directly — it's set by the underlying data import. If
@@ -189,13 +243,16 @@ you need one deactivated, contact the person who manages the data import.
 
 ---
 
-## 9. Common problems and how to recover
+## 10. Common problems and how to recover
 
 **"I can't find an employee/vehicle in the picker."**
 Check the branch on the visit and on the employee/vehicle — the portal only
-offers matches within the same branch. Permanently stationed staff are the
-one exception: they're selectable everywhere but rejected by validation if
-you pick the wrong site for them.
+offers matches within the same branch; this filtering is not lifted for
+anyone. Permanently stationed staff are a narrower exception *within* that
+same-branch rule: they still only appear on visits for their own branch,
+but within that branch they're selectable for any of that branch's sites,
+not filtered down to their permanent one first — and get rejected by
+validation if you pick a site other than the one they're stationed at.
 
 **"Save stays greyed out and I don't see an error."**
 Check the **Reason for this change** field — it's required, and an empty

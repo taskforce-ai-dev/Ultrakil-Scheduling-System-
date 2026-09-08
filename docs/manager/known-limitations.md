@@ -89,6 +89,37 @@ there is no UI for any of them today.
    improvement — surfacing it as a visible requirement, the same way every
    other blocking condition is shown, rather than a silent disabled state.
 
+9. **Three "clean save" screenshots in the original draft were actually
+   evidence of defect #1.** `valid-assignment-saved-toast.png`,
+   `o09-scenarioA-driver-chaminda-saved.png`, and
+   `o09-scenarioB-driver-kamala-saved.png` were cited as clean-save
+   evidence in `uat/ULK-O08-uat-results.md`, `manager-guide.md`, and
+   `demonstration-script.md`. On review, all three show the Validation
+   panel already flagging `EMPLOYEE_DOUBLE_BOOKED` / a self-comparison
+   error against the assignment just saved — the same pattern as defect
+   #1, not a clean state. Reclassified as defect evidence throughout this
+   branch. Genuine clean-save screenshots (no errors visible under the
+   toast) still need to be captured once #1 is fixed — do not reuse the
+   three above for that purpose.
+
+10. **Add Agreement form displays a raw internal UUID instead of the
+    customer/site name once selected**
+    (`add-agreement-form-full.png`, used in the manager guide). The
+    dropdown's own option list correctly shows names
+    (`apps/manager-web/src/app/(app)/service-agreements/page.tsx:538-540`,
+    `:560-562`); only the closed trigger fails to resolve the id back to
+    its label. Not a data-exposure issue — these are internal identifiers
+    in fabricated demo data, not customer PII — but confusing for a
+    manager and the screenshot needs retaking once fixed. Low severity,
+    triaged for the manager-web owner (front-end files out of scope for
+    this docs-only pass).
+
+11. **The previously-cited "148/148" test count was stale.** Re-running
+    `pnpm exec vitest run` from `apps/manager-web` on this branch for this
+    correction pass reports **166 passed (166)**, 17 test files, 0 failed.
+    Full console output is saved as auditable evidence at
+    `uat/test-run-evidence-manager-web.txt`.
+
 ## Not a defect, but worth calling out to managers
 
 - Permanently stationed employees are **not** filtered out of the crew

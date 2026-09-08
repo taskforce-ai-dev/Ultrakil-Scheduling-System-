@@ -4,9 +4,12 @@ A short, self-contained walkthrough a manager can run without a developer
 present: one visit scheduled cleanly, and one that the system correctly
 refuses to schedule and explains why. Total time: under 5 minutes.
 
-Run this against the pilot's real data once staging is available; the
-steps and screens are identical to what's shown here against local test
-data.
+Run this against the pilot's real data once staging is available. The
+steps below are a representative local example — the same flow and
+screens, run against fabricated demo data on a local stack, not the
+deployed staging build. Deployed-staging parity and evidence against
+real customer/technician data are still pending (see
+`known-limitations.md`).
 
 ---
 
@@ -36,8 +39,15 @@ red "No PMS supervisor" warning.
 
 *(Evidence from this exact flow, run during UAT:
 `uat/screenshots/vehicle-authorized-driver-picker.png`,
-`uat/screenshots/valid-assignment-saved-toast.png`,
-`uat/screenshots/dispatch-board-valid-assignment-persisted.png`.)*
+`uat/screenshots/dispatch-board-valid-assignment-persisted.png`.
+**Correction:** an earlier version of this list also cited
+`valid-assignment-saved-toast.png` as clean-save evidence. On review, that
+screenshot's Validation panel visibly shows `EMPLOYEE_DOUBLE_BOOKED`
+errors comparing the assignment against itself — the same defect
+documented in "Known limitations" — so it is defect evidence, not a clean
+save, and has been removed from this list. A clean "Assignment saved"
+screenshot with no errors underneath will be recaptured once staging
+confirms the fix.)*
 
 ---
 
@@ -79,6 +89,69 @@ requirement to make the screen look clean.
 
 ---
 
+## Part 3 — A vehicle with more than one authorized driver
+
+**Goal:** show that a company vehicle can be shared by more than one
+checked driver, with no "ownership" concept, and that only checked
+drivers ever appear as options.
+
+1. Open **Vehicles**, click a vehicle with more than one authorized driver
+   (e.g. the Bolero Truck).
+2. Point out its driver list: every authorized driver is shown as an equal
+   row reading only "Authorized to drive" — no "primary" or "owner."
+3. Go to **Dispatch Board**, open **Edit crew** on a visit, add that
+   vehicle, and open the **Driver** dropdown.
+
+**Expected result:** only crew members who are both on this crew *and*
+individually checked for that vehicle appear — nobody else, no matter who
+else is on the crew.
+
+4. Remove the currently-selected driver from the crew (not the vehicle)
+   using **Remove crew member**.
+
+**Expected result:** the vehicle's Driver field clears back to the
+placeholder, and the Validation panel immediately shows
+`NO_AUTHORIZED_DRIVER`, naming any other crew member who is still checked
+for that vehicle.
+
+*(Evidence: `uat/screenshots/o09-all-checked-drivers-lm3067.png`,
+`uat/screenshots/o09-unauthorized-driver-excluded.png`,
+`uat/screenshots/before-driver-removed-from-crew.png`,
+`uat/screenshots/after-driver-removed-revalidated.png`.)*
+
+---
+
+## Part 4 — An inactive customer/site, and preserved history
+
+**Goal:** show that deactivating a customer or site stops new scheduling
+without erasing what already happened.
+
+1. Open **Customers**, filter Status to **Inactive**, and open an inactive
+   customer.
+2. Point out the **text label** (not colour alone) — e.g. an "Inactive"
+   badge, or "1 active, 1 inactive" on a customer whose other site is
+   still active.
+3. Go to **Service Agreements → Add agreement** and open the customer
+   dropdown, then the site dropdown.
+
+**Expected result:** the inactive customer doesn't appear at all; for a
+still-active customer with one inactive site, that customer's site
+dropdown offers only the active site.
+
+4. Go to **Dispatch Board** and find a visit that was generated for that
+   customer/site *before* it went inactive.
+
+**Expected result:** the visit is still listed, and **Edit crew** is
+still available on it — deactivation only stops future scheduling, it
+does not hide history.
+
+*(Evidence: `uat/screenshots/o09-active-customer-with-inactive-site-label.png`,
+`uat/screenshots/o09-inactive-customer-labeled.png`,
+`uat/screenshots/o09-inactive-site-excluded-from-picker.png`,
+`uat/screenshots/o09-historical-info-still-accessible.png`.)*
+
+---
+
 ## What this demonstrates
 
 - The system enforces every hard rule (crew size, PMS supervisor,
@@ -89,3 +162,8 @@ requirement to make the screen look clean.
 - A manager can complete the entire successful path — and correctly
   identify and stop at a genuine conflict — using only what's on screen,
   with no developer involved.
+- Vehicles are shared resources with multiple checked drivers, not
+  single-owner assets, and the picker only ever offers someone who is
+  actually authorized.
+- Deactivating a customer or site stops future scheduling immediately
+  without erasing anything that already happened.

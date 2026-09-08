@@ -254,8 +254,16 @@ it's allowed; unchecking an allowed day also drops it from preferred).
 `pnpm exec vitest run apps/manager-web/src/app/(app)/service-agreements/__tests__/service-agreements.test.tsx`
 — specifically "prevents marking a day preferred before it is allowed
 (subset enforcement)" and "un-checking an allowed day also drops it from
-preferred," both passing (part of the 148/148 suite run this session).
-Matches expected.
+preferred," both passing. Matches expected.
+
+**Auditable evidence for the full-suite claim:** the "148/148" figure
+originally cited here was stale. Re-run for this correction pass,
+`pnpm exec vitest run` from `apps/manager-web` on this branch reports
+**166 passed (166), 17 test files, 0 failed** (`Start at 11:23:03`,
+`Duration 15.60s`); full console output saved as evidence at
+`uat/test-run-evidence-manager-web.txt`. The subset-enforcement assertions
+above are inside `service-agreements.test.tsx`, which the same run reports
+as 11/11 passing.
 
 Screenshot: `screenshots/service-agreements-allowed-vs-preferred-days.png`
 
@@ -323,8 +331,16 @@ Kamala Wijesinghe, Vehicle: Van CAB-2288 (Chaminda Peiris)). This is also
 the "one valid schedule" example used in the demonstration script.
 
 Screenshots: `screenshots/vehicle-authorized-driver-picker.png`,
-`screenshots/valid-assignment-saved-toast.png`,
-`screenshots/dispatch-board-valid-assignment-persisted.png`
+`screenshots/dispatch-board-valid-assignment-persisted.png`.
+**Correction:** `screenshots/valid-assignment-saved-toast.png` was
+originally listed here as third clean-save evidence. On review its
+Validation panel visibly shows `EMPLOYEE_DOUBLE_BOOKED` for both Chaminda
+Peiris and Kamala Wijesinghe, comparing this same visit's assignment
+against itself — it is evidence for Defect 1 below, not a clean save, and
+has been moved there. The underlying save and the Dispatch Board's
+read-only view (`dispatch-board-valid-assignment-persisted.png`) remain
+correct, so "Matches expected" above still holds; only the screenshot
+list was wrong.
 
 ---
 
@@ -362,7 +378,8 @@ Screenshot: `screenshots/o09-all-checked-drivers-lm3067.png`
 
 ### 2. Same multi-driver vehicle, two different checked drivers, two valid scenarios
 
-**Result: PASS.**
+**Result: PASS on backend acceptance; independent-persistence confirmation
+still pending** — see correction below.
 
 **Dataset:** Vehicle — Van CAB-2288 (2 checked drivers: Chaminda Peiris,
 Kamala Wijesinghe). Visit A — Harbour View — Main Building, 2026-09-08.
@@ -386,10 +403,25 @@ Visit B: assign crew [Kamala Wijesinghe (PMS), Dilrukshi Amarasena],
 different driver for the same vehicle.
 
 **Actual result:** Visit A saved with driver Chaminda Peiris ("Assignment
-saved"). Visit B saved with driver Kamala Wijesinghe ("Assignment saved").
-Both confirmed independently persisted. Matches expected.
+saved" toast observed). Visit B saved with driver Kamala Wijesinghe
+("Assignment saved" toast observed). Each save was accepted by the
+backend with the intended driver — that part matches expected.
 
-Screenshots: `screenshots/o09-scenarioA-driver-chaminda-saved.png`,
+**Correction — evidence and the "confirmed independently persisted"
+claim:** the two screenshots below, and the "confirmed independently
+persisted" wording above, were carried over from an earlier draft. Both
+screenshots actually show the toast layered over a Validation panel
+already flagging `EMPLOYEE_DOUBLE_BOOKED` for the crew against this same
+visit's own just-saved assignment — the same defect as Defect 1 below, not
+independent confirmation via the Dispatch Board's read-only view (unlike
+the vehicle-authorization scenario above, no such reload screenshot was
+taken for either visit here). Reclassified as defect evidence. **Re-run
+required:** confirm both saves independently via a Dispatch Board reload
+(not a drawer reopen) once staging is available, and capture that as the
+clean evidence for this scenario.
+
+Screenshots (defect evidence, not clean-save evidence — see correction
+above): `screenshots/o09-scenarioA-driver-chaminda-saved.png`,
 `screenshots/o09-scenarioB-driver-kamala-saved.png`
 
 ### 3. An unchecked employee cannot be selected or saved as driver
@@ -622,6 +654,43 @@ Screenshot: `screenshots/permanent-station-validation-and-reopen-bug.png`
 `EMPLOYEE_PERMANENTLY_STATIONED` error in the same validation list, proving
 the permanent-station check itself is unaffected — only the overlap check is
 wrong).
+
+**Additional evidence of the same defect, found on review of this
+correction pass:** `screenshots/valid-assignment-saved-toast.png`,
+`screenshots/o09-scenarioA-driver-chaminda-saved.png`, and
+`screenshots/o09-scenarioB-driver-kamala-saved.png` were originally
+captured and filed as clean-save evidence elsewhere in this document and
+in the manager guide / demonstration script. All three actually show the
+same self-comparison `EMPLOYEE_DOUBLE_BOOKED` pattern described above.
+They have been reclassified as defect evidence for this item throughout
+this document, the manager guide, and the demonstration script; the
+clean-save evidence they were standing in for still needs to be recaptured
+once this is fixed.
+
+### 2. Add Agreement form shows the raw customer/site UUID instead of the name
+
+**Dataset:** The Add Agreement form (`docs/manager/uat/screenshots/add-agreement-form-full.png`,
+also used in the manager guide, section 2).
+
+**Actual result:** Once a customer and site are selected, the closed
+Customer and Site fields display the raw internal id (`d3f5aeae-100f-450…`,
+`22ba7124-5168-476…`) instead of the customer/site name. The dropdown's
+own option list is unaffected — opening either selector shows the correct
+names (`apps/manager-web/src/app/(app)/service-agreements/page.tsx:538-540`,
+`:560-562`, both rendering `{customer.name}` / `{site.name}` as the option
+label) — so this is specifically the closed trigger failing to resolve the
+selected id back to its label, not a data problem.
+
+**Impact:** cosmetic/UX, not a data leak — these are internal identifiers,
+not customer PII, and no real customer data is involved in this demo
+dataset. Still confusing for a manager and makes this screenshot
+unsuitable as final documentation.
+
+**Suggested severity:** low. Triaged here rather than fixed in this
+docs-only branch — front-end files are out of scope for this pass.
+Recommend the manager-web owner confirms whether this is a `SelectValue`
+label-resolution bug or a controlled-value/loading-state timing issue,
+then this screenshot is retaken.
 
 ---
 
