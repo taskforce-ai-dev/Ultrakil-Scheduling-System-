@@ -67,6 +67,7 @@ test('documents stable environment URLs and non-secret Vercel setup', () => {
   assert.match(env, /^API_CORS_ORIGINS=https:\/\/YOUR_MANAGER_ENVIRONMENT_DOMAIN\.vercel\.app$/m);
   assert.match(env, /^SCHEDULER_BASE_URL=https:\/\/YOUR_SCHEDULER_ENVIRONMENT_DOMAIN\.vercel\.app$/m);
   assert.match(env, /^SCHEDULER_API_TOKEN=$/m);
+  assert.match(env, /^CRON_SECRET=$/m);
   assert.doesNotMatch(env, /^SCHEDULER_ALLOW_UNAUTHENTICATED=/m);
   assert.doesNotMatch(env, /postgres(?:ql)?:\/\/[^\s]+:[^\s@]+@/i);
 });
@@ -100,6 +101,8 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /no browser-exposed bypass secret/i);
   assert.match(docs, /CRON_SECRET/);
   assert.match(docs, /not Preview\s+deployments/i);
+  assert.match(docs, /signed QStash\s+schedule for staging and production/i);
+  assert.match(docs, /daily Vercel Cron.*production-only/i);
   assert.doesNotMatch(docs, /Neon supplies/);
   assert.doesNotMatch(docs, /managed Redis/);
   assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /Production/);

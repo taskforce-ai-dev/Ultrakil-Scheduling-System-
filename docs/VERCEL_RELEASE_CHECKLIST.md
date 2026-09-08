@@ -34,10 +34,14 @@ Record every result against an exact commit SHA; unchecked items remain open.
   `SCHEDULER_ALLOW_UNAUTHENTICATED` is absent.
 - [ ] Manager/API/scheduler URLs and CORS use the stable URLs for the same
   environment. Secrets and database URLs are absent from Git and chat.
-- [ ] Staging does not rely on the daily `CRON_SECRET` safety net: Vercel cron
-  runs only on Production, so an explicit staging-only signed QStash schedule
-  is configured for the released safety-net/reconciliation endpoint and its ID
-  plus latest successful delivery are retained as private evidence.
+- [ ] A recurring signed QStash schedule is configured for staging and
+  production with separate environment credentials; both schedule IDs are
+  private release evidence. Staging does not rely on Vercel Cron.
+- [ ] A daily Vercel Cron production-only fallback is configured with a
+  server-only `CRON_SECRET`; Vercel cron runs only on Production, never Preview.
+  `CRON_SECRET` is absent from browser-exposed variables and staging Preview.
+- [ ] Recovery-trigger smoke evidence records a successful safe delivery from
+  staging QStash, production QStash and the production Vercel Cron fallback.
 - [ ] Deployment Protection is explicitly configured so stable staging API and
   scheduler traffic is reachable: on Hobby, set Deployment Protection to None
   on the two backend projects for UAT and restore Standard Protection after;

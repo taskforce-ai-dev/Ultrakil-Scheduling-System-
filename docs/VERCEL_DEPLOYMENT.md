@@ -73,14 +73,18 @@ leading or trailing slashes.
 
 ## Staging schedule safety-net gate
 
+Recovery has two independent triggers. Configure a recurring signed QStash
+schedule for staging and production; use distinct environment credentials and
+record both schedule IDs privately. QStash is the only recurring recovery
+trigger available to the long-lived staging Preview branch.
+
 Vercel invokes cron jobs only on Production deployments, not Preview
-deployments. The daily `CRON_SECRET` safety net is therefore production-only;
-it is not staging evidence and cannot recover a missed staging schedule. Before
-staging UAT, create and verify an explicit staging-only QStash schedule that
-uses QStash signing to invoke the released safety-net/reconciliation endpoint.
-Record its schedule ID and latest successful delivery in private release
-evidence. Do not use a browser request or expose `CRON_SECRET`, QStash tokens
-or signing keys to make staging scheduling work.
+deployments. Configure the daily Vercel Cron production-only fallback with the
+server-only `CRON_SECRET`; it is not staging evidence and cannot recover a
+missed staging schedule. Before UAT/sign-off, record a successful safe delivery
+from the staging QStash schedule, production QStash schedule, and production
+Vercel Cron fallback. Do not use a browser request or expose `CRON_SECRET`,
+QStash tokens or signing keys to make either trigger work.
 
 ## Stable staging Deployment Protection gate
 
