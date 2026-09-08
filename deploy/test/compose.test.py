@@ -24,8 +24,10 @@ class StagingComposeTest(unittest.TestCase):
 
     def test_private_services_have_no_host_ports_and_default_ports_are_loopback(self):
         backend_only = ("postgres", "redis", "scheduler", "migrate", "import", "backup")
+        for name, service in self.services.items():
+            if name not in ("api", "web"):
+                self.assertNotIn("ports", service, name)
         for name in backend_only:
-            self.assertNotIn("ports", self.services[name])
             self.assertEqual(self.services[name]["networks"], ["backend"])
         for name in ("api", "web"):
             self.assertIn(":-127.0.0.1}", self.services[name]["ports"][0])
