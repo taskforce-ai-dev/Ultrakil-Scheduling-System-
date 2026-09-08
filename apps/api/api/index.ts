@@ -9,43 +9,42 @@
  *
  * Vercel only treats files under `api/` as functions for a project with no
  * framework preset, so this file is both the right shape and the right place.
- * `src/main.ts` stays exactly as it is: it remains how the API runs locally and
- * in the Docker staging stack, and the two must not drift, so everything the
- * request path depends on is applied here in the same order.
+ * `src/main.ts` is untouched: it remains how the API runs locally and in the
+ * Docker staging stack, and the two must not drift, so everything the request
+ * path depends on is applied here in the same order.
  *
- * The Nest application is built once per warm instance and reused. Building it
- * per request would open a fresh database pool every time and exhaust the
- * connection limit long before traffic did.
+ * Nest builds and owns its own Express instance, which is taken from the
+ * adapter rather than created here. Importing express directly worked locally
+ * and broke the Vercel build — pulling its types into the Nest compilation
+ * shadowed the global `Response` that `health.service.ts` gets from `fetch`,
+ * and the build failed in a file this change never touched.
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { ExpressAdapter } from '@nestjs/platform-express';
 import { SwaggerModule } from '@nestjs/swagger';
-import express, { type Express } from 'express';
 
 import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { buildOpenApiDocument } from '../src/openapi';
 
-const server: Express = express();
+type RequestListener = (request: IncomingMessage, response: ServerResponse) => void;
 
 /**
- * Kept as the promise rather than a boolean.
+ * Kept as the promise rather than the instance.
  *
- * Two requests can arrive at a cold instance before the first has finished
+ * Two requests can reach a cold instance before the first has finished
  * booting; awaiting the same promise makes the second wait for that boot
- * instead of starting a competing one.
+ * instead of starting a competing one and a second database pool.
  */
-let ready: Promise<void> | null = null;
+let ready: Promise<RequestListener> | null = null;
 
-async function bootstrap(): Promise<void> {
-  // Mirrors src/main.ts, minus listen(). rawBody is what lets QStash verify its
-  // signature over the original bytes.
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(server), {
-    bufferLogs: false,
-    rawBody: true,
-  });
+async function bootstrap(): Promise<RequestListener> {
+  // Mirrors src/main.ts, minus listen(). rawBody is what lets QStash verify
+  // its signature over the original bytes.
+  const app = await NestFactory.create(AppModule, { bufferLogs: false, rawBody: true });
 
   const config = app.get(ConfigService);
   const globalPrefix = config.getOrThrow<string>('app.globalPrefix');
@@ -71,13 +70,14 @@ async function bootstrap(): Promise<void> {
   // rather than signalling it, so the hooks would never fire and Nest would
   // hold process listeners that leak across invocations.
   await app.init();
+
+  return app.getHttpAdapter().getInstance() as RequestListener;
 }
 
 export default async function handler(
-  request: express.Request,
-  response: express.Response,
+  request: IncomingMessage,
+  response: ServerResponse,
 ): Promise<void> {
   ready ??= bootstrap();
-  await ready;
-  server(request, response);
+  (await ready)(request, response);
 }
