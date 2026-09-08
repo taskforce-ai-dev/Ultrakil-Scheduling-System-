@@ -22,6 +22,10 @@ mode = os.environ.get("FAIL_MODE", "")
 state = pathlib.Path(os.environ["DB_STATE"])
 if name == "pg_dump":
     target = pathlib.Path(args[args.index("--file") + 1])
+    entries = os.environ.get("DUMP_ENTRIES")
+    if entries:
+        with open(entries, "a") as stream:
+            stream.write("entered\n")
     target.write_bytes(b"PGDMPsynthetic")
     if mode == "dump":
         print("PRIVATE CLIENT DATA", file=sys.stderr); sys.exit(1)
@@ -92,6 +96,7 @@ class RecoveryTest(unittest.TestCase):
             "PGDATABASE": "ultrakil_staging", "PGHOST": "postgres", "PGUSER": "ultrakil",
             "BACKUP_DIR": str(self.backups), "CLIENT_CALLS": str(self.calls),
             "DB_STATE": str(self.root / "database"), "DUMP_STARTED": str(self.root / "started"),
+            "DUMP_ENTRIES": str(self.root / "dump-entries"),
             "GOOD_COUNTS": json.dumps(GOOD_COUNTS),
         }
 
@@ -206,6 +211,76 @@ class RecoveryTest(unittest.TestCase):
         archive = next(path for path in self.backups.glob("*.dump") if "20000101" not in path.name)
         archive.write_bytes(b"PGDMPcorrupt")
         self.run_tool("health", success=False)
+
+    def test_health_does_not_wait_for_in_progress_backup_with_valid_pair(self):
+        current = time.strftime("ultrakil-%Y%m%dT%H%M%SZ-aabbccddeeff.dump", time.gmtime())
+        self.create_pair(current)
+        process = subprocess.Popen(
+            [sys.executable, str(TOOL), "backup"],
+            env={**self.env, "FAIL_MODE": "interrupt"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        try:
+            for _ in range(100):
+                if Path(self.env["DUMP_STARTED"]).exists():
+                    break
+                if process.poll() is not None:
+                    self.fail(process.communicate()[1].decode())
+                time.sleep(0.01)
+            self.assertTrue(Path(self.env["DUMP_STARTED"]).exists())
+            started = time.monotonic()
+            health = subprocess.run(
+                [sys.executable, str(TOOL), "health"],
+                env=self.env,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            elapsed = time.monotonic() - started
+            self.assertEqual(health.returncode, 0, health.stderr)
+            self.assertLess(elapsed, 1.0, health.stderr)
+            self.assertEqual(json.loads(health.stdout)["backupHealthy"], True)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+            process.communicate(timeout=5)
+
+    def test_backup_operations_do_not_overlap_pg_dump(self):
+        first = subprocess.Popen(
+            [sys.executable, str(TOOL), "backup"],
+            env={**self.env, "FAIL_MODE": "interrupt"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        second = None
+        try:
+            for _ in range(100):
+                if Path(self.env["DUMP_STARTED"]).exists():
+                    break
+                if first.poll() is not None:
+                    self.fail(first.communicate()[1].decode())
+                time.sleep(0.01)
+            self.assertTrue(Path(self.env["DUMP_STARTED"]).exists())
+            second = subprocess.Popen(
+                [sys.executable, str(TOOL), "backup"],
+                env={**self.env, "FAIL_MODE": "interrupt"},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            time.sleep(0.2)
+            entries = Path(self.env["DUMP_ENTRIES"]).read_text().splitlines()
+            self.assertEqual(entries, ["entered"])
+        finally:
+            for process in (second, first):
+                if process is not None and process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
+            for process in (second, first):
+                if process is not None:
+                    process.communicate(timeout=5)
 
     def test_world_accessible_directory_or_files_and_bad_settings_are_rejected(self):
         self.backups.chmod(0o755)

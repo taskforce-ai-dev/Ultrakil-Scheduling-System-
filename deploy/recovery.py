@@ -66,13 +66,13 @@ def backup_directory():
 
 
 @contextmanager
-def lock(directory, exclusive=True):
+def lock(directory, exclusive=True, lock_name=".recovery.lock"):
     # The lock file is persistent; kernel locks release even on SIGKILL.
-    lock_path = directory / ".recovery.lock"
+    lock_path = directory / lock_name
     flags = os.O_RDONLY if not exclusive and lock_path.exists() else os.O_CREAT | os.O_RDWR
     descriptor = os.open(lock_path, flags | os.O_NOFOLLOW, 0o600)
     try:
-        private_path(directory / ".recovery.lock")
+        private_path(lock_path)
         fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
         yield
     finally:
@@ -173,42 +173,50 @@ def retain(directory, days):
 
 
 def backup(directory):
-    days = integer_setting("BACKUP_RETENTION_DAYS", 7, 36500)
-    source_database()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    name = f"ultrakil-{stamp}-{secrets.token_hex(6)}.dump"
-    # TemporaryDirectory removes only this invocation's private directory.
-    with tempfile.TemporaryDirectory(prefix=".pending-", dir=directory) as pending:
-        archive = Path(pending) / name
-        run_client(["pg_dump", "--no-password", "--format=custom", "--no-owner", "--no-acl", "--file", str(archive)])
-        archive.chmod(0o600)
-        inspect_archive(archive)
-        checksum = digest(archive)
-        manifest = Path(pending) / (name + ".sha256")
-        manifest.write_text(f"{checksum}  {name}\n", encoding="ascii")
-        manifest.chmod(0o600)
-        sync_path(archive)
-        sync_path(manifest)
-        # link() atomically publishes without overwriting any existing name.
-        # Both paths are on the destination filesystem. The manifest is last.
-        published = []
-        try:
-            os.link(archive, directory / name, follow_symlinks=False)
-            published.append(directory / name)
-            sync_path(directory)
-            os.link(manifest, directory / manifest.name, follow_symlinks=False)
-            published.append(directory / manifest.name)
-            sync_path(directory)
-        except BaseException:
-            # Remove only links this invocation successfully created, marker first.
-            # A pre-existing collision is never added to this list or overwritten.
-            for path in reversed(published):
-                path.unlink()
-            sync_path(directory)
-            raise
-    removed = retain(directory, days)
-    return {"archive": str(directory / name), "bytes": (directory / name).stat().st_size,
-            "sha256": checksum, "retainedPairsRemoved": removed}
+    # Serialize all backup operations while leaving the publication lock
+    # available for responsive health checks during a long dump.
+    # Backups acquire .backup.lock before .recovery.lock; other operations only
+    # acquire .recovery.lock, so lock acquisition cannot cycle.
+    with lock(directory, lock_name=".backup.lock"):
+        days = integer_setting("BACKUP_RETENTION_DAYS", 7, 36500)
+        source_database()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        name = f"ultrakil-{stamp}-{secrets.token_hex(6)}.dump"
+        # TemporaryDirectory removes only this invocation's private directory.
+        with tempfile.TemporaryDirectory(prefix=".pending-", dir=directory) as pending:
+            archive = Path(pending) / name
+            run_client(["pg_dump", "--no-password", "--format=custom", "--no-owner", "--no-acl", "--file", str(archive)])
+            archive.chmod(0o600)
+            inspect_archive(archive)
+            checksum = digest(archive)
+            manifest = Path(pending) / (name + ".sha256")
+            manifest.write_text(f"{checksum}  {name}\n", encoding="ascii")
+            manifest.chmod(0o600)
+            sync_path(archive)
+            sync_path(manifest)
+            # link() atomically publishes without overwriting any existing name.
+            # Both paths are on the destination filesystem. The manifest is last.
+            # Keep the expensive dump and validation outside this lock so health checks
+            # can inspect the last completed pair while a new backup is in progress.
+            with lock(directory):
+                published = []
+                try:
+                    os.link(archive, directory / name, follow_symlinks=False)
+                    published.append(directory / name)
+                    sync_path(directory)
+                    os.link(manifest, directory / manifest.name, follow_symlinks=False)
+                    published.append(directory / manifest.name)
+                    sync_path(directory)
+                except BaseException:
+                    # Remove only links this invocation successfully created, marker first.
+                    # A pre-existing collision is never added to this list or overwritten.
+                    for path in reversed(published):
+                        path.unlink()
+                    sync_path(directory)
+                    raise
+                removed = retain(directory, days)
+        return {"archive": str(directory / name), "bytes": (directory / name).stat().st_size,
+                "sha256": checksum, "retainedPairsRemoved": removed}
 
 
 def health(directory):
@@ -382,19 +390,21 @@ def main():
         if args.action == "schedule":
             interval = integer_setting("BACKUP_INTERVAL_SECONDS", 86400)
             while True:
-                with lock(directory):
-                    print(json.dumps(backup(directory)), flush=True)
+                print(json.dumps(backup(directory)), flush=True)
                 time.sleep(interval)
-        with lock(directory, exclusive=args.action in ("backup", "cleanup")):
-            if args.action == "backup": result = backup(directory)
-            elif args.action == "health": result = health(directory)
-            elif args.action == "counts": result = {"counts": counts(source_database())}
-            elif args.action == "verify":
-                result = {"verifiedArchive": str(verify(directory, args.archive))}
-            elif args.action == "restore": result = restore(directory, args.archive, args.target)
-            elif args.action == "cleanup": result = cleanup(args.target)
-            elif args.action == "export": result = export(directory, args.archive)
+        if args.action == "backup":
+            result = backup(directory)
             print(json.dumps(result), flush=True)
+        else:
+            with lock(directory, exclusive=args.action == "cleanup"):
+                if args.action == "health": result = health(directory)
+                elif args.action == "counts": result = {"counts": counts(source_database())}
+                elif args.action == "verify":
+                    result = {"verifiedArchive": str(verify(directory, args.archive))}
+                elif args.action == "restore": result = restore(directory, args.archive, args.target)
+                elif args.action == "cleanup": result = cleanup(args.target)
+                elif args.action == "export": result = export(directory, args.archive)
+                print(json.dumps(result), flush=True)
         return 0
     except RecoveryError as error:
         print(str(error), file=sys.stderr)
