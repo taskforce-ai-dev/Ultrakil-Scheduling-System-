@@ -60,12 +60,12 @@ test('keeps the manager build explicit for the monorepo package', () => {
   assert.equal(manager.installCommand, 'pnpm install --frozen-lockfile');
 });
 
-test('documents stable Vercel project URLs and non-secret environment setup', () => {
+test('documents stable environment URLs and non-secret Vercel setup', () => {
   const env = read('deploy/vercel.env.example');
 
-  assert.match(env, /^NEXT_PUBLIC_API_BASE_URL=https:\/\/YOUR_API_PROJECT\.vercel\.app\/api$/m);
-  assert.match(env, /^API_CORS_ORIGINS=https:\/\/YOUR_MANAGER_PROJECT\.vercel\.app$/m);
-  assert.match(env, /^SCHEDULER_BASE_URL=https:\/\/YOUR_SCHEDULER_PROJECT\.vercel\.app$/m);
+  assert.match(env, /^NEXT_PUBLIC_API_BASE_URL=https:\/\/YOUR_API_ENVIRONMENT_DOMAIN\.vercel\.app\/api$/m);
+  assert.match(env, /^API_CORS_ORIGINS=https:\/\/YOUR_MANAGER_ENVIRONMENT_DOMAIN\.vercel\.app$/m);
+  assert.match(env, /^SCHEDULER_BASE_URL=https:\/\/YOUR_SCHEDULER_ENVIRONMENT_DOMAIN\.vercel\.app$/m);
   assert.match(env, /^SCHEDULER_API_TOKEN=$/m);
   assert.doesNotMatch(env, /^SCHEDULER_ALLOW_UNAUTHENTICATED=/m);
   assert.doesNotMatch(env, /postgres(?:ql)?:\/\/[^\s]+:[^\s@]+@/i);
@@ -82,7 +82,7 @@ test('protects a publicly deployed scheduler solve route', () => {
   assert.match(client, /scheduler\.apiToken/);
 });
 
-test('explains Vercel preview/production deployment and preserves Docker locally', () => {
+test('explains branch-based staging, production, QStash and preserved Docker', () => {
   const docs = read('docs/VERCEL_DEPLOYMENT.md');
 
   assert.match(docs, /apps\/manager-web/);
@@ -90,11 +90,16 @@ test('explains Vercel preview/production deployment and preserves Docker locally
   assert.match(docs, /services\/scheduler/);
   assert.match(docs, /Preview/);
   assert.match(docs, /Production/);
-  assert.match(docs, /stable production/);
-  assert.match(docs, /not automatically[\s\S]*cross-wired/);
-  assert.doesNotMatch(docs, /set matching Preview URLs/);
+  assert.match(docs, /long-lived `staging` Git branch/);
+  assert.match(docs, /branch-specific Preview variables/);
+  assert.match(docs, /SCHEDULE_DISPATCHER=qstash/);
+  assert.match(docs, /db:deploy/);
+  assert.doesNotMatch(docs, /Neon supplies/);
+  assert.doesNotMatch(docs, /managed Redis/);
   assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /Production/);
+  assert.match(read('docs/VERCEL_RELEASE_CHECKLIST.md'), /staging/);
+  assert.match(read('deploy/vercel.env.example'), /SCHEDULE_DISPATCHER=qstash/);
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
-  assert.match(docs, /docker compose/);
-  assert.match(docs, /No dedicated[\s\S]*staging server/);
+  assert.match(docs, /Docker\/Compose/);
+  assert.match(docs, /No PostgreSQL service has been selected yet/);
 });
