@@ -75,7 +75,8 @@ GOOD_COUNTS = {
     "outbox": 1, "inactiveCustomers": 1, "inactiveSites": 1,
     "history": 1, "reactivatedImports": 0, "duplicateOutbox": 0,
     "dispatchOutbox": 1, "duplicateDispatchOutbox": 0,
-    "invalidDispatchOutbox": 0, "invalidExecutionLeases": 0,
+    "invalidDispatchOutbox": 0, "missingActiveDispatchOutbox": 0,
+    "invalidExecutionLeases": 0,
 }
 
 
@@ -319,6 +320,7 @@ class RecoveryTest(unittest.TestCase):
         self.assertIn("num_nonnulls", counts_query)
         self.assertIn('(status = \'PENDING\' AND "messageId" IS NOT NULL)', counts_query)
         self.assertIn('"terminalFailureMessageId" IS DISTINCT FROM "messageId"', counts_query)
+        self.assertIn("missingActiveDispatchOutbox", counts_query)
         self.run_tool("cleanup", target)
         self.assertFalse(Path(self.env["DB_STATE"]).exists())
 
@@ -346,6 +348,7 @@ class RecoveryTest(unittest.TestCase):
             {"duplicateOutbox": 1},
             {"duplicateDispatchOutbox": 1},
             {"invalidDispatchOutbox": 1},
+            {"missingActiveDispatchOutbox": 1},
             {"invalidExecutionLeases": 1},
         )
         for changes in invalid_counts:

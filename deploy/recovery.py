@@ -273,6 +273,9 @@ SELECT json_build_object(
     GROUP BY "assignmentId", "employeeId", "eventType" HAVING count(*) > 1) duplicates),
  'duplicateDispatchOutbox', (SELECT count(*) FROM (SELECT 1 FROM public.schedule_run_dispatch_outbox
     GROUP BY "scheduleRunId" HAVING count(*) > 1) duplicates),
+ 'missingActiveDispatchOutbox', (SELECT count(*) FROM public.schedule_runs runs
+    LEFT JOIN public.schedule_run_dispatch_outbox dispatch ON dispatch."scheduleRunId" = runs.id
+    WHERE runs.status IN ('QUEUED', 'RUNNING') AND dispatch.id IS NULL),
  'invalidDispatchOutbox', (SELECT count(*) FROM public.schedule_run_dispatch_outbox WHERE
     attempts < 0
     OR (status = 'PENDING' AND "messageId" IS NOT NULL)
@@ -297,13 +300,14 @@ SELECT json_build_object(
         raise RecoveryError("Restore count evidence is malformed") from None
     expected = {"tables", "migrations", "failedMigrations", "employees", "vehicleAuthorizations", "assignments",
                 "outbox", "dispatchOutbox", "inactiveCustomers", "inactiveSites", "history", "reactivatedImports",
-                "duplicateOutbox", "duplicateDispatchOutbox", "invalidDispatchOutbox", "invalidExecutionLeases"}
+                "duplicateOutbox", "duplicateDispatchOutbox", "missingActiveDispatchOutbox",
+                "invalidDispatchOutbox", "invalidExecutionLeases"}
     if not isinstance(values, dict) or set(values) != expected or any(type(value) is not int or value < 0 for value in values.values()):
         raise RecoveryError("Restore count evidence is incomplete")
     # Imported-inactive provenance can remain after an authorized manual
     # activation. Preserve/report that count; it is not corruption by itself.
     invalid_metrics = ("failedMigrations", "duplicateOutbox", "duplicateDispatchOutbox",
-                       "invalidDispatchOutbox", "invalidExecutionLeases")
+                       "missingActiveDispatchOutbox", "invalidDispatchOutbox", "invalidExecutionLeases")
     if values["tables"] != len(TABLES) or values["migrations"] < 11 or any(values[key] for key in invalid_metrics):
         raise RecoveryError("Restored UltraKIL schema or count invariants failed; disposable database preserved")
     return values

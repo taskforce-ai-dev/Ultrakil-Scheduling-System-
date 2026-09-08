@@ -64,6 +64,7 @@ def main():
             assert before["dispatchOutbox"] == 1
             assert before["duplicateDispatchOutbox"] == 0
             assert before["invalidDispatchOutbox"] == 0
+            assert before["missingActiveDispatchOutbox"] == 0
             assert before["invalidExecutionLeases"] == 0
             assert before["inactiveCustomers"] == 1 and before["inactiveSites"] == 1
             assert before["reactivatedImports"] == 1  # Authorized manual activation is valid history.
@@ -76,7 +77,7 @@ def main():
                 JOIN public.schedule_runs r ON r.id = d."scheduleRunId"
                 WHERE d.provider = 'QSTASH' AND d.status = 'PUBLISHED'
                   AND d."messageId" = 'msg_recovery_synthetic' AND d.attempts = 1
-                  AND d."lastAttemptAt" IS NOT NULL AND r.status = 'COMPLETED' ''')
+                  AND d."lastAttemptAt" IS NOT NULL AND r.status = 'SUCCEEDED' ''')
             assert dispatch_evidence == "1"
             run(tool + ["restore", str(archive), target], env, success=False)
             assert recovery.counts(target) == before  # Existing target refusal preserves data.
@@ -137,6 +138,21 @@ def main():
                 finally:
                     recovery.sql(target, repair)
                 assert recovery.counts(target) == before
+            missing_run_id = "00000000-0000-4000-8000-000000000002"
+            recovery.sql(target, f'''INSERT INTO public.schedule_runs
+                (id, status, trigger, "rangeStart", "rangeEnd", "createdAt", "updatedAt") VALUES
+                ('{missing_run_id}', 'QUEUED', 'MANUAL', '2024-06-01', '2024-06-01', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''')
+            try:
+                try:
+                    recovery.counts(target)
+                except recovery.RecoveryError:
+                    pass
+                else:
+                    raise AssertionError("Active schedule runs without a dispatch outbox must fail restore evidence")
+                assert recovery.sql("postgres", f"SELECT count(*) FROM pg_database WHERE datname = '{target}'") == "1"
+            finally:
+                recovery.sql(target, f"DELETE FROM public.schedule_runs WHERE id = '{missing_run_id}'")
+            assert recovery.counts(target) == before
             run(tool + ["health"], env)
             run(tool + ["cleanup", target], env)
             assert recovery.sql("postgres", f"SELECT count(*) FROM pg_database WHERE datname = '{target}'") == "0"

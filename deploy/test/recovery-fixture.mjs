@@ -12,7 +12,7 @@ try {
   if (await db.branch.count() !== 0) throw new Error('Recovery fixture refuses populated databases');
   await db.$transaction(async (tx) => {
     const completedRun = await tx.scheduleRun.create({ data: {
-      status: 'COMPLETED', trigger: 'MANUAL',
+      status: 'SUCCEEDED', trigger: 'MANUAL',
       rangeStart: new Date('2024-06-01T00:00:00Z'), rangeEnd: new Date('2024-06-01T00:00:00Z'),
       visitsConsidered: 1, visitsScheduled: 1, progressPercent: 100,
       startedAt: new Date('2024-06-01T03:29:00Z'), finishedAt: new Date('2024-06-01T04:30:00Z'),

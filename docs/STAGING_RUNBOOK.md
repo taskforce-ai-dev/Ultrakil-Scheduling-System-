@@ -303,11 +303,11 @@ It revokes public connection access, marks the target as disposable, and uses
 checks 27 required tables, including `schedule_run_dispatch_outbox`, at least 11
 successful migrations, no unfinished migration, and no duplicate notification-
 or schedule-dispatch outbox keys. Count-only dispatch evidence also rejects
-pending rows with a message ID, incomplete published-delivery metadata, partial
-terminal-failure markers, terminal failures recorded for non-QStash providers,
-cancelled rows that retain terminal-failure markers, negative dispatch attempts,
-partial execution-lease pairs, and negative execution attempts. PostgreSQL
-constraints separately prove
+active schedule runs without a dispatch row, pending rows with a message ID,
+incomplete published-delivery metadata, partial terminal-failure markers,
+terminal failures recorded for non-QStash providers, cancelled rows that retain
+terminal-failure markers, negative dispatch attempts, partial execution-lease
+pairs, and negative execution attempts. PostgreSQL constraints separately prove
 the one-to-one dispatch-row relationship and its foreign-key integrity. The tool
 emits only numeric workforce/authorization/assignment/outbox/inactive/history
 counts. `reactivatedImports` counts active records that still have imported-
