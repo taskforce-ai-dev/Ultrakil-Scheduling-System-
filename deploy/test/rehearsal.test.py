@@ -132,11 +132,45 @@ class StrictBrowserDiagnosticsTests(unittest.TestCase):
                 'status': 'failed',
                 'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
                            'interrupted': 0, 'notRun': 0, 'unexpected': 0},
-                'failures': [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed'}],
+                'failures': [{'file': '05-accessibility.spec.ts', 'line': 51, 'status': 'failed',
+                              'case': '/calendar',
+                              'axeRules': ['color-contrast', 'scrollable-region-focusable']}],
             }))
             diagnostic = rehearse.load_strict_browser_diagnostic(path)
-            self.assertEqual(diagnostic['failures'], [{'file': '02-generation.spec.ts', 'line': 73, 'status': 'failed'}])
+            self.assertEqual(diagnostic['failures'], [{
+                'file': '05-accessibility.spec.ts', 'line': 51, 'status': 'failed',
+                'case': '/calendar', 'axeRules': ['color-contrast', 'scrollable-region-focusable'],
+            }])
             self.assertNotIn('PRIVATE_TOKEN', json.dumps(diagnostic))
+
+            for field, value in [('case', 'PRIVATE_TOKEN'), ('axeRules', ['PRIVATE_TOKEN'])]:
+                unsafe = {
+                    'status': 'failed',
+                    'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
+                               'interrupted': 0, 'notRun': 0, 'unexpected': 0},
+                    'failures': [{'file': '05-accessibility.spec.ts', 'line': 51, 'status': 'failed',
+                                  field: value}],
+                }
+                path.write_text(json.dumps(unsafe))
+                self.assertEqual(rehearse.load_strict_browser_diagnostic(path),
+                                 rehearse.unavailable_strict_browser_diagnostic())
+
+            for field, value in [
+                ('case', None),
+                ('case', {}),
+                ('axeRules', [{}]),
+                ('axeRules', ['color-contrast', 1]),
+            ]:
+                malformed = {
+                    'status': 'failed',
+                    'counts': {'total': 1, 'passed': 0, 'failed': 1, 'skipped': 0, 'timedOut': 0,
+                               'interrupted': 0, 'notRun': 0, 'unexpected': 0},
+                    'failures': [{'file': '05-accessibility.spec.ts', 'line': 51, 'status': 'failed',
+                                  field: value}],
+                }
+                path.write_text(json.dumps(malformed))
+                self.assertEqual(rehearse.load_strict_browser_diagnostic(path),
+                                 rehearse.unavailable_strict_browser_diagnostic())
 
     def test_runner_publishes_only_reconstructed_diagnostic_and_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

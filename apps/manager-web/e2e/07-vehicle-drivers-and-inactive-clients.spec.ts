@@ -76,13 +76,16 @@ test("an inactive customer is labelled in text and excluded from the agreement p
   expect((await inactiveResponse).ok()).toBe(true);
 
   const inactiveRows = page.locator("tbody tr");
+  const inactiveRow = inactiveRows.filter({
+    has: page.getByText("Inactive", { exact: true }),
+  }).first();
   if ((await inactiveRows.count()) === 0) {
     test.skip(true, "No fully-inactive customer in this environment's imported data yet.");
   }
 
   // Text, not colour alone.
-  await expect(inactiveRows.first().getByText("Inactive")).toBeVisible();
-  const customerName = (await inactiveRows.first().locator("td").first().textContent())?.trim();
+  await expect(inactiveRow).toBeVisible();
+  const customerName = (await inactiveRow.locator("td").first().textContent())?.trim();
   expect(customerName).toBeTruthy();
 
   // The same customer must never be offered when creating a new agreement —

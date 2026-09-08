@@ -16,6 +16,21 @@ const STRICT_SOURCE_FILES = new Set([
 ]);
 const RESULT_STATUSES = new Set(['passed', 'failed', 'skipped', 'timedOut', 'interrupted']);
 const COUNT_KEYS = ['passed', 'failed', 'skipped', 'timedOut', 'interrupted', 'notRun', 'unexpected'];
+const STRICT_CASES = new Set([
+  '/dashboard', '/customers', '/service-agreements', '/visits', '/calendar', '/workforce',
+  '/vehicles', '/dispatch-board', '/unassigned-visits', '/schedule-history',
+  'Customer creation form', 'Service agreement creation form', 'Visit generation dialog',
+  'Manual override drawer', 'Publish confirmation dialog',
+]);
+const STRICT_AXE_RULES = new Set([
+  'aria-allowed-attr', 'aria-conditional-attr', 'aria-hidden-focus', 'aria-prohibited-attr',
+  'aria-required-attr', 'aria-required-children', 'aria-required-parent', 'aria-roles',
+  'aria-valid-attr-value', 'aria-valid-attr', 'button-name', 'color-contrast',
+  'duplicate-id-aria', 'form-field-multiple-labels', 'frame-title', 'html-has-lang',
+  'html-lang-valid', 'image-alt', 'input-button-name', 'label', 'link-name', 'list',
+  'listitem', 'nested-interactive', 'scrollable-region-focusable', 'select-name',
+  'svg-img-alt', 'tabindex', 'table-duplicate-name', 'td-headers-attr', 'th-has-data-cells',
+]);
 
 function normalizedResultStatus(test) {
   if (test.expectedStatus !== 'passed') return 'unexpected';
@@ -27,6 +42,15 @@ function normalizedResultStatus(test) {
 function failureLocation(test) {
   const result = test.results.at(-1);
   return safeLocation(result?.error?.location) ?? safeLocation(test.location);
+}
+
+function safeAnnotations(test) {
+  const annotations = Array.isArray(test.annotations) ? test.annotations : [];
+  const caseName = annotations.find(entry => entry?.type === 'strict-case'
+    && STRICT_CASES.has(entry.description))?.description;
+  const axeRules = [...new Set(annotations.filter(entry => entry?.type === 'strict-axe-rule'
+    && STRICT_AXE_RULES.has(entry.description)).map(entry => entry.description))].sort();
+  return { ...(caseName ? { case: caseName } : {}), ...(axeRules.length ? { axeRules } : {}) };
 }
 
 function safeLocation(location) {
@@ -50,7 +74,7 @@ export function buildStrictDiagnostic(tests, runStatus) {
     counts[status] += 1;
     if (status !== 'passed') {
       const location = failureLocation(test);
-      if (location) failures.push({ ...location, status });
+      if (location) failures.push({ ...location, status, ...safeAnnotations(test) });
     }
   }
   let strictPassed = false;

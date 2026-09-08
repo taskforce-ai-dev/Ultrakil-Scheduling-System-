@@ -25,6 +25,9 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
   if ((await editCrewButton.count()) === 0) {
     test.skip(true, "No scheduled visit for today in this environment — nothing to override.");
   }
+  const initialChecked = strict ? page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/assignment/check')
+    && response.request().postDataJSON().crew?.length === 1) : undefined;
   await editCrewButton.click();
 
   // The drawer's own data (visit + employees + vehicles) is a real fetch,
@@ -33,6 +36,9 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
   const drawer = page.getByRole('dialog', { name: /^Edit crew — / });
   if (strict) {
     await expect(drawer.getByRole('heading', { name: 'Edit crew — Synthetic Active', exact: true })).toBeVisible();
+    const initialResult = await initialChecked!;
+    expect(initialResult.ok()).toBe(true);
+    expect((await initialResult.json()).isEligible).toBe(true);
     await expect(drawer.getByText('This crew is eligible to take the visit.')).toBeVisible({ timeout: 10_000 });
   }
   const employeeControls = drawer.getByLabel('Employee', { exact: true });

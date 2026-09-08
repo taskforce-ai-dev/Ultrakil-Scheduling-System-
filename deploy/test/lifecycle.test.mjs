@@ -75,6 +75,26 @@ test('strict browser diagnostics ignore non-source-controlled error locations', 
   ]);
 });
 
+test('strict browser diagnostics publish only allowlisted accessibility identifiers', () => {
+  const diagnostic = buildStrictDiagnostic([{
+    expectedStatus: 'passed',
+    location: { file: `${process.cwd()}/apps/manager-web/e2e/05-accessibility.spec.ts`, line: 55 },
+    annotations: [
+      { type: 'strict-case', description: '/calendar' },
+      { type: 'strict-axe-rule', description: 'color-contrast' },
+      { type: 'strict-axe-rule', description: 'scrollable-region-focusable' },
+      { type: 'strict-axe-rule', description: 'PRIVATE_TOKEN' },
+      { type: 'private', description: 'https://example.invalid' },
+    ],
+    results: [{ status: 'failed' }],
+  }], 'failed');
+  assert.deepEqual(diagnostic.failures, [{
+    file: '05-accessibility.spec.ts', line: 55, status: 'failed', case: '/calendar',
+    axeRules: ['color-contrast', 'scrollable-region-focusable'],
+  }]);
+  assert.doesNotMatch(JSON.stringify(diagnostic), /PRIVATE_TOKEN|example\.invalid/);
+});
+
 test('strict browser diagnostics fail closed for non-source-controlled locations', () => {
   const diagnostic = buildStrictDiagnostic([
     { expectedStatus: 'passed', location: { file: '/tmp/private.spec.ts', line: 1 }, results: [{ status: 'timedOut' }] },

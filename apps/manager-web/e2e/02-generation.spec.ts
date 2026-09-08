@@ -9,7 +9,7 @@ async function readSuccessful<T>(pending: Promise<Response>): Promise<T> {
   return response.json();
 }
 const isVisitList = (response: Response) => response.request().method() === 'GET'
-  && new URL(response.url()).pathname.endsWith('/visits');
+  && new URL(response.url()).pathname.endsWith('/api/visits');
 const isGeneration = (action: 'preview' | 'confirm') => (response: Response) => response.request().method() === 'POST'
   && new URL(response.url()).pathname.endsWith(`/visit-generation/${action}`);
 

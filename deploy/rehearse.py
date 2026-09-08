@@ -24,6 +24,21 @@ STRICT_BROWSER_SOURCE_FILES = {
     '04-publish.spec.ts', '05-accessibility.spec.ts', '06-responsive.spec.ts',
     '07-vehicle-drivers-and-inactive-clients.spec.ts', 'auth.setup.ts',
 }
+STRICT_BROWSER_CASES = {
+    '/dashboard', '/customers', '/service-agreements', '/visits', '/calendar', '/workforce',
+    '/vehicles', '/dispatch-board', '/unassigned-visits', '/schedule-history',
+    'Customer creation form', 'Service agreement creation form', 'Visit generation dialog',
+    'Manual override drawer', 'Publish confirmation dialog',
+}
+STRICT_BROWSER_AXE_RULES = {
+    'aria-allowed-attr', 'aria-conditional-attr', 'aria-hidden-focus', 'aria-prohibited-attr',
+    'aria-required-attr', 'aria-required-children', 'aria-required-parent', 'aria-roles',
+    'aria-valid-attr-value', 'aria-valid-attr', 'button-name', 'color-contrast',
+    'duplicate-id-aria', 'form-field-multiple-labels', 'frame-title', 'html-has-lang',
+    'html-lang-valid', 'image-alt', 'input-button-name', 'label', 'link-name', 'list',
+    'listitem', 'nested-interactive', 'scrollable-region-focusable', 'select-name',
+    'svg-img-alt', 'tabindex', 'table-duplicate-name', 'td-headers-attr', 'th-has-data-cells',
+}
 
 
 class HostReadinessResponseError(Exception):
@@ -149,12 +164,24 @@ def load_strict_browser_diagnostic(path):
         return fallback
     safe_failures = []
     for failure in failures:
-        if (not isinstance(failure, dict) or set(failure) != {'file', 'line', 'status'}
+        if (not isinstance(failure, dict) or not {'file', 'line', 'status'} <= set(failure)
+                or not set(failure) <= {'file', 'line', 'status', 'case', 'axeRules'}
                 or failure['file'] not in STRICT_BROWSER_SOURCE_FILES or type(failure['line']) is not int
                 or not 0 < failure['line'] <= 100_000 or failure['status'] not in STRICT_BROWSER_RESULT_STATUSES
                 or failure['status'] == 'passed'):
             return fallback
-        safe_failures.append({'file': failure['file'], 'line': failure['line'], 'status': failure['status']})
+        case_present = 'case' in failure
+        case_name = failure.get('case')
+        axe_rules = failure.get('axeRules', [])
+        if ((case_present and (type(case_name) is not str or case_name not in STRICT_BROWSER_CASES))
+                or not isinstance(axe_rules, list) or len(axe_rules) > len(STRICT_BROWSER_AXE_RULES)
+                or any(type(rule) is not str for rule in axe_rules)
+                or axe_rules != sorted(set(axe_rules))
+                or any(rule not in STRICT_BROWSER_AXE_RULES for rule in axe_rules)):
+            return fallback
+        safe_failures.append({'file': failure['file'], 'line': failure['line'], 'status': failure['status'],
+                              **({'case': case_name} if case_present else {}),
+                              **({'axeRules': axe_rules} if axe_rules else {})})
     if status == 'passed' and (counts['total'] < 48 or counts['passed'] != counts['total']):
         return fallback
     return {'status': status, 'counts': {'total': counts['total'], **{key: counts[key] for key in STRICT_BROWSER_COUNT_KEYS}},

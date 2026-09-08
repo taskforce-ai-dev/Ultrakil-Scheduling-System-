@@ -38,6 +38,10 @@ async function expectNoSeriousViolations(page: import("@playwright/test").Page, 
     .analyze();
 
   const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  test.info().annotations.push({ type: "strict-case", description: label });
+  for (const violation of serious) {
+    test.info().annotations.push({ type: "strict-axe-rule", description: violation.id });
+  }
   const details = serious
     .map(
       (v) =>
