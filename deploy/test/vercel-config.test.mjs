@@ -154,5 +154,7 @@ test('recovery schedule operator docs specify the signed JSON request and smoke 
   assert.match(recovery, /rawBody/);
   assert.match(recovery, /401/);
   assert.match(recovery.replace(/\s+/g, ' '),
-    /must set `Upstash-Forward-Content-Type: application\/json`/);
+    /creation request must include `Content-Type: application\/json`/);
+  assert.match(recovery.replace(/\s+/g, ' '), /verify.*header received by UltraKIL/i);
+  assert.doesNotMatch(recovery, /Upstash-Forward-Content-Type/);
 });

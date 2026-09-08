@@ -29,12 +29,11 @@ the five-minute cadence before enabling it; if it cannot, record the unresolved
 cadence decision rather than silently changing the recovery interval.
 
 When using the QStash schedule REST API, specify `Upstash-Method: POST`,
-`Upstash-Cron: */5 * * * *`, and `Content-Type: application/json` on schedule
-creation. You must set `Upstash-Forward-Content-Type: application/json` as well
-to explicitly configure the destination header; do not rely on the creation
-request's content type alone. For the console path, explicitly set the
-destination header to `Content-Type: application/json`. In both paths, verify
-the saved destination headers and the header received by UltraKIL.
+and `Upstash-Cron: */5 * * * *`. The creation request must include
+`Content-Type: application/json`; QStash preserves this MIME type on the
+message delivered to the destination. For the console path, explicitly set
+the destination header to `Content-Type: application/json`. In both paths,
+verify the saved destination headers and the header received by UltraKIL.
 These method/content-type/header controls follow the
 [QStash create-schedule API](https://upstash.com/docs/qstash/api-reference/schedules/create-a-schedule).
 
