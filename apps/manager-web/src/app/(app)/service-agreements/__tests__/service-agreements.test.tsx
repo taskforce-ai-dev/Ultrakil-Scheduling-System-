@@ -157,36 +157,14 @@ describe("ServiceAgreementsPage", () => {
   it("saves the agreement, then shows a loading state and the real preview, including shortfalls", async () => {
     const created = buildServiceAgreement({ id: "agreement-2" });
     vi.mocked(createServiceAgreement).mockResolvedValue(created);
-    // A deliberate delay, so the loading state is actually observable here
-    // instead of resolving in the same tick as the assertion below. 250ms
-    // rather than the original 30ms: on a contended CI runner the two prior
-    // `await`s (opening the form, saving) can themselves eat past 30ms of
-    // wall-clock time, which resolves this mock before the assertion below
-    // ever gets to see the loading state — 250ms leaves real headroom
-    // without meaningfully slowing the suite.
-    vi.mocked(fetchSchedulePreview).mockImplementation(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () =>
-              resolve(
-                buildSchedulePreview({
-                  shortfalls: [
-                    {
-                      periodStart: "2026-09-07",
-                      periodEnd: "2026-09-13",
-                      requested: 2,
-                      scheduled: 1,
-                      reason: "NOT_ENOUGH_ALLOWED_DAYS",
-                      message: "Only 1 of the 2 requested visits could be placed this week.",
-                    },
-                  ],
-                })
-              ),
-            250
-          )
-        )
-    );
+    // Hold the preview response until after the loading state has been
+    // asserted. A wall-clock timeout races with the user interactions above
+    // on slower CI runners and can resolve before this assertion runs.
+    let resolvePreview!: (preview: ReturnType<typeof buildSchedulePreview>) => void;
+    const previewPromise = new Promise<ReturnType<typeof buildSchedulePreview>>((resolve) => {
+      resolvePreview = resolve;
+    });
+    vi.mocked(fetchSchedulePreview).mockReturnValue(previewPromise);
 
     const user = await openForm();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
@@ -195,6 +173,21 @@ describe("ServiceAgreementsPage", () => {
 
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Calculating preview…");
+
+    resolvePreview(
+      buildSchedulePreview({
+        shortfalls: [
+          {
+            periodStart: "2026-09-07",
+            periodEnd: "2026-09-13",
+            requested: 2,
+            scheduled: 1,
+            reason: "NOT_ENOUGH_ALLOWED_DAYS",
+            message: "Only 1 of the 2 requested visits could be placed this week.",
+          },
+        ],
+      })
+    );
 
     expect(
       await screen.findByText("Only 1 of the 2 requested visits could be placed this week.")
