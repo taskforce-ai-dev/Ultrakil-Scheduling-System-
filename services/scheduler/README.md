@@ -1,6 +1,7 @@
 # `services/scheduler` — UltraKIL scheduling service
 
-**Owner: Chanya (@cha-she).**
+**Temporary C07/C08 takeover coordination: Thivarrakesh.** This records the
+current handoff, not a permanent ownership change.
 
 Python / FastAPI service that will solve the crew-and-vehicle assignment problem.
 Phase 1 ships the service, its health endpoints and its deployment; the

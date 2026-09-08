@@ -1,0 +1,43 @@
+# This directory is a separate build context; root .dockerignore does not apply.
+.git
+.github
+**/node_modules
+.pnpm-store
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.venv
+.venv
+venv
+tests
+coverage
+*.log
+# Keep this policy aligned with scripts/check-private-files.mjs.
+# Docker patterns are case-sensitive: explicit classes match the scanner's /i rules.
+**/*.[eE][nN][vV]
+**/*.[eE][nN][vV].*
+**/*.[xX][lL][sS]
+**/*.[xX][lL][sS][xX]
+**/*.[xX][lL][sS][mM]
+**/*.[cC][sS][vV]
+**/[mM][aA][tT][rR][iI][xX]-[mM][aA][pP][pP][iI][nN][gG].[jJ][sS][oO][nN]
+**/[jJ][oO][bB]-[tT][yY][pP][eE][sS].[jJ][sS][oO][nN]
+**/*[iI][mM][pP][oO][rR][tT]-[rR][eE][pP][oO][rR][tT]*.[jJ][sS][oO][nN]
+**/[iI][nN][cC][oO][mM][iI][nN][gG]
+**/[pP][rR][iI][vV][aA][tT][eE]
+**/[rR][eE][pP][oO][rR][tT][sS]
+**/[bB][aA][cC][kK][uU][pP][sS]
+**/[iI][mM][pP][oO][rR][tT]-[rR][eE][pP][oO][rR][tT][sS]
+**/[eE][xX][pP][oO][rR][tT]-[wW][oO][rR][kK]
+**/[eE][xX][pP][oO][rR][tT]-[sS][eE][cC][rR][eE][tT][sS]
+**/*.[aA][gG][eE]
+**/*.[sS][qQ][lL].[gG][zZ]
+**/*.[sS][qQ][lL].[xX][zZ]
+**/*.[sS][qQ][lL].[zZ][iI][pP]
+**/*.[dD][uU][mM][pP]
+**/*.[bB][aA][cC][kK][uU][pP]
+**/*.[bB][aA][kK]
+**/*.[pP][gG][dD][uU][mM][pP]
+**/*.[pP][eE][mM]
+**/*.[kK][eE][yY]
+**/..*

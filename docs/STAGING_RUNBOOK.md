@@ -1,0 +1,552 @@
+# UltraKIL staging runbook
+
+This is the repeatable C08 deployment path for the Phase 1 pilot. It deploys
+PostgreSQL, Redis, the scheduling service, API, manager portal, health checks,
+rotated container logs and a daily PostgreSQL backup. The real workbooks and
+all secrets stay on the staging host and are never committed.
+
+C08 is based on accepted C07 `8c1ba7738108ca8f47a444b4be8113b36a3670d5`.
+The sibling handoff was replayed separately; it is not evidence of a deployment.
+Thivarrakesh handles C07/C08 during the takeover. Oshadi retains O08 evidence
+and the separate UI work. No staging host is implied by this runbook.
+
+## 1. Host prerequisites
+
+- An authorized UltraKIL Linux host with Docker Engine 28+ and Docker Compose
+  v2.24+. An older Engine requires recorded same-L2 peer proof that the host
+  firewall blocks 3000/3001 before pilot access; confirm host access, DNS, TLS
+  and pilot access with Thivarrakesh.
+- At least 2 CPU cores, 4 GB RAM and 20 GB free disk for the pilot.
+- The supplied bindings are loopback-only. Use an HTTPS reverse proxy on the
+  authorized host; expose only 443 to the approved pilot range (and 80 only if
+  needed for certificate issuance). PostgreSQL, Redis and scheduler have no
+  host ports. Do not publish 3000/3001 directly to the internet. On an older
+  Engine, loopback binding alone is not the required peer-exposure control.
+- A DNS name and valid TLS certificate before external/customer UAT.
+
+Create the deployment and import directories:
+
+```bash
+test "$(id -u)" -ne 0
+sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" \
+  /opt/ultrakil/app /opt/ultrakil/import /opt/ultrakil/import-config \
+  /opt/ultrakil/import-reports
+sudo install -d -m 0700 -o 10001 -g 10001 /opt/ultrakil/backups
+```
+
+Also create `/opt/ultrakil/releases` as a 0700 operator-owned directory for
+private release manifests and set `umask 077` in the deployment shell.
+Clone the repository into `/opt/ultrakil/app`, check out the exact reviewed
+commit, and record its SHA in the C08 handover.
+
+## 2. Configure secrets and URLs
+
+```bash
+cd /opt/ultrakil/app
+cp deploy/staging.env.example deploy/staging.env
+chmod 0600 deploy/staging.env
+```
+
+Replace every `replace-with-...` value. Generate unrelated random values for
+PostgreSQL, Redis, JWT signing and the first admin password. If a password has
+URL-reserved characters, URL-encode it in `DATABASE_URL`.
+
+Passwords must have at least 24 characters; JWT must have at least 32. The
+preflight rejects missing, placeholder, reused and short secrets without
+printing values. `DATABASE_URL` must name the configured user/password/database
+on `postgres:5432`, with only the optional `schema=public` query parameter.
+Use a private credential manager for the first admin handover. Re-import leaves
+existing accounts and passwords untouched.
+
+Set `IMPORT_UID` and `IMPORT_GID` to the deployment operator's numeric
+`id -u` and `id -g`, never zero. The nonroot import runner uses these IDs, so
+operator-owned 0600 workbooks remain readable without granting public access.
+Do not grant the API process access to the private inputs or report directory.
+Set `BACKUP_DIR` to the 0700 backup directory owned by UID/GID `10001:10001`.
+The recovery image defines that fixed nonroot `recovery` account in `/etc/passwd`
+so OpenSSH can resolve its executing user. Both backup and export inherit that
+account; do not override their container user. The tool refuses mismatched
+ownership, group/world access and symlinks. Its bind mount never creates a
+missing host path. The deployment operator uses an authorized protected sudo
+session when inspecting these recovery-owned host files.
+
+Give every validation stack a unique `COMPOSE_PROJECT_NAME`, for example
+`ultrakil-validation-20260907-01`, and a new database ending in `_test`.
+Use the same project name for every command; volumes and the BullMQ prefix are
+scoped to it. Never run the destructive integration suites against staging.
+Give each stack its own `BACKUP_DIR`, import/report directories and export work
+directory as well: bind-mounted host paths are not scoped by the Compose project
+name. Never point a disposable validation stack at the staging backup directory.
+
+Set `NEXT_PUBLIC_API_BASE_URL` and `API_CORS_ORIGINS` to the browser-visible
+staging URLs. The API URL is baked into the portal image, so rebuild `web` after
+changing it. Do not paste `deploy/staging.env` into ClickUp, GitHub or chat.
+
+For example, configure the host reverse proxy to send
+`https://pilot.example.test/` to `http://127.0.0.1:3000`, and
+`https://api.pilot.example.test/api/` to `http://127.0.0.1:3001/api/`, preserving
+the `/api` prefix and forwarding Host/X-Forwarded-Proto. Set
+`NEXT_PUBLIC_API_BASE_URL=https://api.pilot.example.test/api` and
+`API_CORS_ORIGINS=https://pilot.example.test`; use the actual authorized names.
+Terminate TLS with valid certificates, configure a 60-second proxy read timeout,
+and verify login, CORS and API readiness through HTTPS before inviting users.
+The examples' localhost URLs are only for an operator tunnel/local validation.
+Never publish expanded `docker compose config` output: it contains secrets.
+
+The release Compose topology has a private `backend` network and a non-internal
+bridge `ingress` network. API is attached to both because it needs PostgreSQL,
+Redis and scheduler on `backend` while its loopback-published port needs host
+ingress. The portal is `ingress`-only; PostgreSQL, Redis, scheduler, migration,
+import and backup remain `backend`-only, while `backup-export` stays on its
+separate egress network. A non-internal bridge permits normal container egress,
+so attaching API to `ingress` changes its egress posture even though database
+and queue traffic remain private. Do not add external API calls without a
+separate egress/firewall review, and never attach data or recovery services to
+`ingress`.
+
+## 3. Place the approved source workbooks
+
+Copy the user-supplied files to these exact, space-free host paths:
+
+```text
+/opt/ultrakil/import/technician-matrix.xlsx
+/opt/ultrakil/import/master-schedule-2026.xlsx
+```
+
+Copy them as the deployment operator and restrict both explicit files:
+
+```bash
+chmod 0600 /opt/ultrakil/import/technician-matrix.xlsx \
+  /opt/ultrakil/import/master-schedule-2026.xlsx
+```
+
+Only these two individual files are mounted read-only into the import runner;
+missing source files are never replaced with auto-created host directories.
+Place an approved optional `matrix-mapping.json` in `/opt/ultrakil/import-config`
+with mode 0600. An absent mapping uses the existing parser defaults. Keep that
+directory 0700 even when empty. The images and Git build context exclude
+workbooks, private mappings, runtime env files, reports and backups at any depth.
+
+## 4. Build, migrate and import
+
+Use one Compose invocation consistently in the same operator shell:
+
+```bash
+compose() { docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml "$@"; }
+compose --profile tools config --quiet
+compose --profile tools build
+compose run --rm --no-deps migrate node deploy/staging-tool.mjs preflight
+compose run --rm --no-deps import node deploy/staging-tool.mjs check-inputs
+compose up -d --wait postgres redis scheduler
+compose run --rm migrate
+```
+
+The one-shot `migrate` service runs only `prisma migrate deploy`. Both API and
+the queue worker it hosts depend on that service completing successfully; a
+failed migration prevents startup. A separate import command is always required.
+Never use migrate reset/dev or demo fixtures on staging.
+
+Inspect both inputs before any database writes. The wrapper fails nonzero for a
+missing, unreadable, world-accessible or empty workbook, zero employees/vehicles,
+zero customers/sites, or zero importable agreements. It parses both workbooks
+before any real import. Keep its numeric summary as shared evidence:
+
+```bash
+compose run --rm import
+```
+
+Then load the clean staging database:
+
+```bash
+compose run --rm import node deploy/staging-tool.mjs import
+compose up -d --wait api web
+compose up -d --wait backup
+```
+
+The dedicated tooling image invokes packaged Prisma/tsx with Node directly;
+it never downloads pnpm on the private runtime network. API carries production
+dependencies and compiled code; web uses Next standalone output. All three
+application images run nonroot, with an init process, read-only root, bounded
+temporary storage, PID/memory/CPU limits and rotated logs. The API worker and
+scheduler have a 180-second shutdown grace; validate draining before rollback.
+The pilot limits leave host headroom, but must be load-tested on the actual host.
+
+Re-running imports updates stable keys and preserves inactive history. It does
+not close data decisions: the summary explicitly counts uncertain site branches,
+and imported opening hours remain assumed/unconfirmed. A failed master import
+can leave previously committed customer batches; investigate privately, correct
+the input and rerun. It is not an all-or-nothing transaction across both files.
+
+Dry run makes no database writes, but writes a detailed issue report to a new
+0700 subdirectory under `/opt/ultrakil/import-reports`, with a 0600 JSON file.
+The wrapper shares only counts and issue codes; child stdout/stderr and raw
+exception messages are withheld. Detailed reports include private names and
+source values: access them only in the protected operator session, retain only
+for the approved import review period, and never attach them or raw import logs
+to GitHub/ClickUp. The regular local seed/import commands retain their existing
+optional-file behavior and verbose diagnostics; do not use them for shared
+staging evidence. Use the wrapper above.
+
+## 5. Verify health and logs
+
+```bash
+docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml ps
+curl -fsS "https://api.pilot.example.test/api/health/live"
+curl -fsS "https://api.pilot.example.test/api/health/ready"
+curl -fsS "https://api.pilot.example.test/api/docs" >/dev/null
+curl -fsS "https://pilot.example.test/login" >/dev/null
+docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml logs --since=10m api scheduler web
+```
+
+Before reverse-proxy access, verify the host mappings locally:
+
+```bash
+curl -fsS http://127.0.0.1:3001/api/health/ready
+curl -fsS http://127.0.0.1:3000/login >/dev/null
+```
+
+From an approved peer on the same L2 segment, test the staging host's actual
+LAN address. Both direct loopback-published application ports must fail; record
+the command/result as firewall evidence, especially for any pre-28 Engine:
+
+```bash
+if curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3001/api/health/live >/dev/null \
+  || curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3000/login >/dev/null; then
+  echo 'unexpected direct application exposure' >&2
+  exit 1
+fi
+```
+
+Every service must be healthy. API readiness must report database, queue and
+scheduler as `up`. Container logs rotate at 10 MB with five files per service.
+Treat any unhandled exception, restart loop, migration warning or failed health
+probe as a release blocker.
+
+Base images are pinned to reviewed patch/distribution tags (Node 22.23.2
+bookworm, Python 3.11.16 bookworm, PostgreSQL 16.15 Alpine 3.23 and Redis 7.4.11
+Alpine 3.21). These tags were checked against the
+[official-image manifests](https://github.com/docker-library/official-images/tree/master/library).
+Tags can still be rebuilt for OS fixes: record the resolved image digests in
+each release and use those exact digests for recovery. Rebuild and rerun image
+checks when updating any pin; no immutable digest is invented here.
+
+## 6. Prove the C09/O09 change on real data
+
+Before O08 is signed off, record screenshots and API/DB evidence for:
+
+1. `DAG-3284`, `ABE-7244`, `PJ-6796`, `DAI-0191` and normalized `DAC-2485` show
+   every checked driver with no ranking or primary-driver label.
+2. Any checked driver on a multi-driver vehicle can be selected when that
+   person is part of the crew.
+3. An unchecked driver is rejected through both manual assignment and the
+   optimizer path.
+4. A vehicle with one checked driver is unavailable when that person cannot
+   join the crew. If no compliant crew/transport choice exists, the visit stays
+   Unassigned with a structured reason; optional-vehicle work can still use a
+   compliant crew without a vehicle.
+5. Clearly red client/site records are inactive and produce no future visits.
+6. Red headers, date cells and schedule marks do not deactivate valid records.
+7. Historical visits for inactive records remain queryable.
+
+Also verify that Kandy visits lacking a PMS-grade supervisor stay Unassigned.
+That is an operational data blocker, not permission to weaken the PMS rule.
+
+## 7. Backup and restore proof
+
+The `backup` service waits for successful migrations, writes an immediate backup
+on startup, then one per day. Start it after the explicit import for the first
+workforce snapshot, as shown above.
+It uses PostgreSQL 16's compressed custom format (`pg_dump --format=custom
+--file`), checks the process exit status, archive header and `pg_restore --list`,
+and calculates SHA-256. This avoids a compression pipeline masking dump errors.
+The archive and manifest are built in one private temporary directory on the
+backup filesystem, fsynced, then published using atomic hard links that cannot
+overwrite existing names. The `.dump.sha256` manifest is the completion marker;
+an archive without its valid manifest is never a usable backup. Files are 0600.
+
+Seven-day retention runs only after successful publication and deletes only
+exact UltraKIL archive/manifest pairs owned by the recovery account with matching
+checksums. Unrelated, corrupt, symlinked and incomplete files are preserved for
+inspection. Graceful interruption removes only that invocation's temporary
+files and any incomplete publication it created. SIGKILL, host loss or filesystem
+failure can leave a private `.pending-*` directory or an unmarked archive;
+inspect it and remove only its explicit validated path. Never bulk-delete the
+backup directory. These incomplete files cannot pass verification or restore.
+
+Create a one-shot backup before a release or rollback and keep its JSON evidence:
+
+```bash
+compose run --rm --no-deps backup backup
+compose exec backup python3 /opt/ultrakil/recovery.py health
+```
+
+Set `archive` to the exact `/backups/...dump` path returned by that command,
+not an arbitrary newest filename. Use a new unique restore target each time:
+
+```bash
+archive='/backups/ultrakil-YYYYMMDDTHHMMSSZ-12hex.dump' # replace with recorded path
+restore_target='ultrakil_restore_20260907_01_test'     # replace with a new ID
+compose run --rm --no-deps backup verify "$archive"
+compose run --rm --no-deps backup restore "$archive" "$restore_target"
+```
+
+Restore accepts only a new `ultrakil_restore_<id>_test` database, distinct from
+the configured source. It refuses unsafe names, an existing target, missing or
+malformed manifests, corrupt archives and symlinks before creating anything.
+It revokes public connection access, marks the target as disposable, and uses
+`pg_restore --single-transaction --exit-on-error --no-owner --no-acl`. The tool
+checks 26 required tables, at least nine successful migrations, no unfinished
+migration and no duplicate outbox keys. It emits only numeric workforce/
+authorization/assignment/outbox/inactive/history counts. `reactivatedImports`
+counts active records that still have imported-inactive provenance; an authorized
+manual activation retains that provenance and is valid. This metric is evidence,
+not an automatic restore failure. Silent reactivation during re-import remains
+forbidden. Compare counts with the pre-change evidence in a quiescent
+release window. A format check or a checksum alone is not restore proof.
+
+Failed restores preserve the disposable database for authorized inspection;
+client messages that could contain private rows are withheld from shared logs.
+After reviewing the evidence, remove only the exact database created above:
+
+```bash
+compose run --rm --no-deps backup cleanup "$restore_target"
+```
+
+Cleanup refuses the source database, unsafe names and databases without the
+tool's disposable marker. It does not force-disconnect active sessions. It can
+remove a marked failed restore after its evidence is reviewed. If creating the
+marker itself failed, cleanup refuses; inspect that exact new target before a
+separately approved manual removal. This tool never replaces the staging DB.
+
+The health probe fails when no completed backup exists, its timestamp is more
+than `BACKUP_MAX_AGE_SECONDS` old (26 hours by default), or the newest completed
+archive fails its checksum/format check. Keep the limit above the configured
+daily interval and alert the operator on an unhealthy container; Docker health
+alone does not send an alert. Host clock synchronization is required.
+
+Record filename, bytes, checksum, restore counts and exact cleanup result in
+C08. Never attach archives, private reports, decrypted bundles or SQL logs.
+
+### Optional encrypted off-host copy
+
+The `offhost` profile is disabled until Thivarrakesh supplies an authorized SSH
+destination/user/path, upload credential, independently verified SSH host key,
+an age public recipient, and a separately held recovery identity with a named
+custodian and tested access procedure. Agree remote retention, capacity and
+server-side immutability before enabling it. The decryption identity must never
+be stored on the staging host or in this repository. Local backups alone do not
+survive loss of the host.
+
+Create recovery-owned private directories, then place the approved upload key
+and pinned `known-hosts` file at the configured exact paths:
+
+```bash
+sudo install -d -m 0700 -o 10001 -g 10001 \
+  /opt/ultrakil/export-work /opt/ultrakil/export-secrets
+# After placing the two approved files, apply their exact ownership and mode.
+sudo chown 10001:10001 /opt/ultrakil/export-secrets/ssh-key \
+  /opt/ultrakil/export-secrets/known-hosts
+sudo chmod 0600 /opt/ultrakil/export-secrets/ssh-key \
+  /opt/ultrakil/export-secrets/known-hosts
+```
+
+The host backup directory, export work directory and both credential files must
+match the image's fixed UID/GID `10001:10001`. Reserve at least twice the largest
+archive size in the work directory for the temporary plaintext bundle and
+encrypted output. Fill the `EXPORT_*` settings in the private staging env file.
+The remote directory must already exist and be dedicated to UltraKIL. The
+upload account should have no application/database privileges.
+
+```bash
+compose --profile offhost build backup-export
+compose --profile offhost run --rm --no-deps backup-export export "$archive"
+```
+
+The exporter verifies the local pair, packages that archive and its original
+manifest, encrypts it with age, then uploads only ciphertext with an outer
+SHA-256 manifest. Temporary remote names are renamed after successful transfer,
+and the remote manifest is published last. SSH uses batch mode and strict host
+key checking. The service has read-only backup/key mounts, no DB password and
+its own egress network; the application network stays private. Output reports
+transfer success separately from remote restore proof. A failed transfer can
+leave encrypted `.part` files remotely; retain them for operator inspection,
+then remove only exact names. No remote deletion/retention is automated here.
+
+For an independent recovery drill, retrieve one exact completed encrypted pair
+on the authorized recovery host; verify its outer checksum, decrypt the bundle
+using the vault-held age identity, list its two expected archive/manifest names
+before extracting into a new 0700 directory, and run `verify` then `restore`
+against an isolated PostgreSQL 16 instance. Record count-only results. Do not
+declare off-host recovery operational until this drill actually succeeds.
+
+Local reproducible tests (synthetic data only):
+
+```bash
+python3 deploy/test/recovery.test.py
+python3 deploy/test/compose.test.py
+# PostgreSQL 16 client tools must be on PATH. The test requires explicit local
+# PGHOST/PGPORT/PGUSER and installed API dependencies; it creates its own DBs.
+PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/recovery.postgres.test.py
+PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/rehearsal.postgres.test.py
+```
+
+## 8. Rollback
+
+Application rollback restores the previously verified Compose definition and
+image IDs. It must not build, pull a mutable tag, run a down migration, reset
+PostgreSQL, delete volumes or flush Redis. Review compatibility of the prior API
+with the current schema before entering the release window. First release has no
+prior accepted Compose/image pair: its rehearsal proves exact-artifact restart,
+not cross-version rollback, and an operator must not attempt this procedure.
+
+Before each release, retain the exact accepted source checkout (including its
+`deploy/compose.staging.yml`), source SHA and resolved image IDs in a private
+release record. The prior Compose file must remain beside its recorded commit so
+relative Compose paths are preserved. Keep prior images locally; exclude them
+from automated image pruning while they remain rollback candidates:
+
+```bash
+git rev-parse HEAD
+for service in api web scheduler migrate backup; do
+  container_id=$(compose ps -a -q "$service")
+  test -n "$container_id"
+  docker inspect --format '{{.Image}}' "$container_id"
+done
+```
+
+Copy the exact previously accepted IDs into the prior release record's private
+`previous-images.json` file (0700 parent, 0600 file), and record its exact
+commit and Compose file there as well:
+
+```json
+{"services":{"api":{"image":"sha256:REPLACE_API_ID","pull_policy":"never"},"web":{"image":"sha256:REPLACE_WEB_ID","pull_policy":"never"},"scheduler":{"image":"sha256:REPLACE_SCHEDULER_ID","pull_policy":"never"}}}
+```
+
+Close both portal and API reverse-proxy ingress with the authorized host's
+maintenance response, block any additional writers/import jobs, and wait for
+in-flight HTTP writes to finish. Verify an external write request cannot reach
+the API. The environment acknowledgment below records this operator check; it
+does not itself configure a proxy or firewall. Keep PostgreSQL and Redis running.
+
+```bash
+compose stop web
+maintenance() {
+  compose run --rm --no-deps -T \
+    -e MAINTENANCE_GATE_CONFIRMED=yes -e REDIS_HOST=redis \
+    -e BULLMQ_PREFIX=ultrakil-staging \
+    migrate node deploy/lifecycle.mjs "$@"
+}
+# Use the EXACT configured COMPOSE_PROJECT_NAME for BULLMQ_PREFIX above.
+maintenance pause
+```
+
+`pause` globally pauses both registered BullMQ queues, then fails if any queued
+or running schedule run, active job, waiting/paused job, delayed retry,
+prioritized job or waiting child remains. Completed/failed retained job history
+is preserved. If it fails, leave ingress closed, inspect the numeric queue/run
+state in a protected session, `maintenance resume`, allow legitimate pending
+work to finish (or explicitly cancel it through the application's supported
+workflow), and retry `maintenance pause`. Do not kill a live solve or delete its
+Redis keys. A stuck run/failed retry requiring data repair needs a separate
+review; this tool does not silently mark it successful.
+
+After a successful pause, stop the API (which also hosts the BullMQ worker) and
+scheduler using their 180-second shutdown grace. Confirm they stopped before
+recording a consistent publication snapshot and one-shot backup:
+
+```bash
+compose stop api scheduler
+maintenance check
+maintenance snapshot > /opt/ultrakil/releases/before-rollback.json
+compose run --rm --no-deps backup counts
+compose run --rm --no-deps backup backup
+```
+
+Protect the snapshot with `umask 077` in the operator shell. It contains only
+counts and a SHA-256 digest over assignment/crew/vehicle, outbox and run state.
+Verify and restore the exact returned archive to a new disposable database as
+in section 7; match counts before proceeding and clean that exact target.
+The snapshot catches publication mutations even if row counts remain the same.
+
+Use the stored prior Compose definition and image IDs with no build, pull or
+dependency recreation. An image-only override does not restore a changed
+network graph. Set `prior_release` to the retained checkout of the previously
+accepted release, not the current checkout:
+
+```bash
+prior_release=/opt/ultrakil/releases/REPLACE_PRIOR_ACCEPTED_SHA
+test -r "$prior_release/deploy/compose.staging.yml"
+test -r "$prior_release/previous-images.json"
+rollback_compose() {
+  docker compose --project-directory "$prior_release" \
+    --env-file /opt/ultrakil/app/deploy/staging.env \
+    -f "$prior_release/deploy/compose.staging.yml" \
+    -f "$prior_release/previous-images.json" "$@"
+}
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait scheduler
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait api
+maintenance snapshot > /opt/ultrakil/releases/after-rollback.json
+cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-rollback.json
+maintenance resume
+# Ingress is still closed; check there is no replay before reopening it.
+maintenance pause
+maintenance snapshot > /opt/ultrakil/releases/after-resume.json
+cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-resume.json
+maintenance resume
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait web
+```
+
+Stop immediately on any nonzero command (`set -e` in a scripted operator
+session). Compare each running container's `.Image` with the recorded ID; check
+readiness, login, paused state cleared, no duplicate outbox entries and no new
+publication before reopening ingress. Save count-only evidence and observe the
+stack for ten minutes. Preserve DB/Redis volumes and job history throughout.
+Data replacement after corruption is a distinct, explicitly approved restore
+procedure; disposable restore proof never authorizes replacing staging data.
+
+## 8a. Automated release rehearsal
+
+`Staging lifecycle rehearsal` runs for every PR base (including stacked C08)
+and manual workflow dispatch, with no deployment or registry push. On a
+Docker-authorized nonroot Linux operator account with passwordless permission
+to chown the newly created test backup directory to UID 10001:
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm --filter @ultrakil/api prisma:generate
+corepack pnpm --filter @ultrakil/manager-web exec playwright install --with-deps chromium
+python3 deploy/rehearse.py
+```
+
+The runner creates unique project/database/queue namespaces and private
+temporary directories outside the checkout, fabricates the two workbook
+layouts, builds all release images, checks nonroot passwd identities and
+offline Prisma/OpenSSL/import/recovery/SSH tooling, migrates twice, dry-runs and
+imports twice, starts every service, and runs all 48 browser journeys with a
+fixed synthetic date. Required skips, missing journeys, expected failures and
+failed results block strict acceptance. It then proves checksum/restore/count
+parity, exact-artifact restart without publication replay and migration-failure
+startup gating in a second disposable project. Raw logs, credentials, auth
+storage state, workbooks and backups are never uploaded as public artifacts.
+It stops containers but preserves volumes and private evidence for inspection;
+the disposable CI runner owns eventual cleanup. Never run it on the staging
+database or point its generated paths at real inputs.
+
+This is synthetic regression evidence. It cannot substitute for Oshadi's
+real-data UAT, staging screenshots or the authorized remote backup restore drill.
+
+## 9. Handover evidence
+
+C08 is complete only when its ClickUp comment includes:
+
+- Deployed commit SHA and staging URLs.
+- Migration status and clean real-import summaries.
+- Health output for all services and ten minutes of clean logs.
+- The seven C09/O09 checks above, including the normalized `DAC-2485` case.
+- Backup checksum and disposable restore proof.
+- Known non-code blockers: real opening hours, unmatched branch/town records
+  and Kandy PMS-grade staffing.
+
+O08 is complete only after Oshadi reruns the manager UAT on this exact deployed
+SHA and attaches the guide, screenshots, demo script and pilot result with zero
+critical or high-severity defects.

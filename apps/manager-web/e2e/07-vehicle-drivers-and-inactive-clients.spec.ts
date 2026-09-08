@@ -1,17 +1,15 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
- * ULK-O09's required test scenarios, run against a real API and whatever
- * MASTER SCHEDULE 2026 import currently exists in this environment.
+ * ULK-O09 regression mechanics, against a real API. The C08 strict rehearsal
+ * imports explicitly synthetic workbooks and fails if any case skips. An
+ * operator's real-data UAT remains separate evidence owned by Oshadi.
  *
  * These scenarios name real vehicle codes and driver names from the actual
- * workforce matrix — data this suite can't fabricate (that would defeat the
- * point: proving the real import produced the right authorization rows) and
- * shouldn't hardcode as a business rule either way. Every test here looks
+ * workforce matrix, not hardcoded application business rules. Every test looks
  * the record up first and skips itself, rather than failing, if this
  * environment hasn't imported it yet — same pattern as the dialog checks in
- * 05-accessibility.spec.ts. Once Chanya's ULK-C09 import has run somewhere,
- * these stop skipping and start actually verifying the real data.
+ * 05-accessibility.spec.ts. Missing records always fail strict acceptance.
  */
 const MULTI_DRIVER_VEHICLES: Array<{ code: string; driverCount: number }> = [
   { code: "DAG-3284", driverCount: 3 },
@@ -23,6 +21,7 @@ const MULTI_DRIVER_VEHICLES: Array<{ code: string; driverCount: number }> = [
 async function openVehicleByCode(page: import("@playwright/test").Page, code: string) {
   await page.goto("/vehicles");
   await page.getByPlaceholder("Search by code or label").fill(code);
+  await page.waitForLoadState('networkidle');
   const row = page.locator("tbody tr", { hasText: code });
   if ((await row.count()) === 0) {
     test.skip(true, `${code} is not in this environment's imported master schedule yet.`);
@@ -66,17 +65,27 @@ test("an inactive customer is labelled in text and excluded from the agreement p
   await page.goto("/customers");
   await expect(page.getByRole("heading", { name: "Customers" })).toBeVisible();
 
+  const inactiveResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "GET"
+      && url.pathname.endsWith("/customers")
+      && url.searchParams.get("active") === "false";
+  });
   await page.getByLabel("Status").click();
   await page.getByRole("option", { name: "Inactive" }).click();
+  expect((await inactiveResponse).ok()).toBe(true);
 
   const inactiveRows = page.locator("tbody tr");
+  const inactiveRow = inactiveRows.filter({
+    has: page.getByText("Inactive", { exact: true }),
+  }).first();
   if ((await inactiveRows.count()) === 0) {
     test.skip(true, "No fully-inactive customer in this environment's imported data yet.");
   }
 
   // Text, not colour alone.
-  await expect(inactiveRows.first().getByText("Inactive")).toBeVisible();
-  const customerName = (await inactiveRows.first().locator("td").first().textContent())?.trim();
+  await expect(inactiveRow).toBeVisible();
+  const customerName = (await inactiveRow.locator("td").first().textContent())?.trim();
   expect(customerName).toBeTruthy();
 
   // The same customer must never be offered when creating a new agreement —
@@ -98,6 +107,7 @@ test("an active customer's inactive site is labelled in text and excluded from t
   await expect(page.getByRole("heading", { name: "Customers" })).toBeVisible();
 
   const siteCountCells = page.locator("tbody tr td", { hasText: /inactive/ });
+  await page.waitForLoadState('networkidle');
   if ((await siteCountCells.count()) === 0) {
     test.skip(true, "No active customer with an inactive site in this environment's data yet.");
   }

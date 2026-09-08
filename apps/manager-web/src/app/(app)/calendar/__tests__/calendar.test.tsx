@@ -89,6 +89,7 @@ describe("CalendarPage", () => {
     if (view === "week") await user.click(screen.getByRole("button", { name: "Week" }));
 
     const grid = await screen.findByRole("grid", { name: view === "month" ? "Month calendar" : "Week calendar" });
+    expect(grid).toHaveAttribute("tabindex", "0");
     const rows = within(grid).getAllByRole("row");
     const days = daysInView(todayIso(), view);
     expect(rows).toHaveLength(1 + days.length / 7);

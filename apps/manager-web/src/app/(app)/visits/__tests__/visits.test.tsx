@@ -146,6 +146,18 @@ describe("calendar rendering", () => {
     expect(screen.getByText("3 visits")).toBeInTheDocument();
   });
 
+  it("keeps scheduled visit times readable on the green status tint", async () => {
+    await renderCalendar();
+
+    const scheduledChip = chip("Cinnamon Grand Colombo", "09:00", "2026-09-23");
+    expect(within(scheduledChip).getByText("09:00")).toHaveClass("text-foreground");
+    expect(
+      within(scheduledChip.parentElement!).getByRole("button", {
+        name: "Move Cinnamon Grand Colombo's visit to a different date",
+      })
+    ).toHaveClass("text-foreground");
+  });
+
   it("asks the API for the whole grid, not just the month", async () => {
     await renderCalendar();
 

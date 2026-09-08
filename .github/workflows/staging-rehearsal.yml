@@ -1,0 +1,37 @@
+name: Staging lifecycle rehearsal
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: staging-rehearsal-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rehearsal:
+    name: Docker lifecycle and strict browser acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ultrakil/api prisma:generate
+      - name: Lifecycle and recovery unit checks
+        run: |
+          node --test deploy/test/*.test.mjs
+          python3 deploy/test/recovery.test.py
+          python3 deploy/test/rehearsal.test.py
+      - name: Install browser
+        run: pnpm --filter @ultrakil/manager-web exec playwright install --with-deps chromium
+      - name: Rehearse built release with fabricated workbooks
+        run: python3 deploy/rehearse.py
+      # No upload-artifact: auth state, reports, dumps and even fabricated
+      # workbook files remain private on this disposable GitHub runner.

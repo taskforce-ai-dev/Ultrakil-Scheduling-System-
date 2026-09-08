@@ -12,22 +12,18 @@
  * missing the seed still succeeds — it loads the branches and skips the
  * workforce import with a warning — so nobody is blocked waiting for the file.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { BranchCode, PrismaClient, UserRole } from '@prisma/client';
-import { AuthService } from '../src/auth/auth.service';
-import { DEFAULT_MAPPING, MatrixMapping } from '../src/workforce/matrix-import/mapping';
+import { PrismaClient } from '@prisma/client';
+import { MatrixMapping } from '../src/workforce/matrix-import/mapping';
+import { loadMatrixMapping } from '../src/workforce/matrix-import/load-mapping';
+import { seedAdminUser, seedBranches } from './reference-data';
 import { importMatrix } from '../src/workforce/matrix-import/importer';
 import { parseMatrix } from '../src/workforce/matrix-import/parser';
 import { readMatrixFile } from '../src/workforce/matrix-import/reader';
 
 const REPO_ROOT = resolve(__dirname, '../../..');
 const MAPPING_PATH = resolve(REPO_ROOT, 'data/matrix-mapping.json');
-
-const BRANCH_NAMES: Record<BranchCode, string> = {
-  [BranchCode.COLOMBO]: 'Colombo Branch',
-  [BranchCode.KANDY]: 'Kandy Branch',
-};
 
 const prisma = new PrismaClient();
 
@@ -36,66 +32,8 @@ function log(line = ''): void {
 }
 
 function loadMapping(): MatrixMapping {
-  if (!existsSync(MAPPING_PATH)) return DEFAULT_MAPPING;
-
-  const overrides = JSON.parse(readFileSync(MAPPING_PATH, 'utf8'));
-  log(`Using column mapping overrides from ${MAPPING_PATH}`);
-
-  return {
-    ...DEFAULT_MAPPING,
-    ...overrides,
-    columns: { ...DEFAULT_MAPPING.columns, ...(overrides.columns ?? {}) },
-    sections: { ...DEFAULT_MAPPING.sections, ...(overrides.sections ?? {}) },
-    permanentSiteBranches: {
-      ...DEFAULT_MAPPING.permanentSiteBranches,
-      ...(overrides.permanentSiteBranches ?? {}),
-    },
-  };
-}
-
-/**
- * Creates the first administrator, once.
- *
- * Only runs when the users table is empty: re-seeding must never resurrect a
- * deleted account or silently reset a password that someone has changed.
- */
-async function seedAdminUser(): Promise<void> {
-  const existing = await prisma.user.count();
-  if (existing > 0) {
-    log(`Users already exist (${existing}) — leaving accounts untouched.`);
-    return;
-  }
-
-  const email = (process.env.SEED_ADMIN_EMAIL ?? 'admin@taskforceai.tech')
-    .trim()
-    .toLowerCase();
-  const password = process.env.SEED_ADMIN_PASSWORD ?? 'ultrakil-change-me';
-  const fullName = process.env.SEED_ADMIN_NAME ?? 'UltraKIL Administrator';
-
-  await prisma.user.create({
-    data: {
-      email,
-      fullName,
-      role: UserRole.ADMIN,
-      passwordHash: await AuthService.hashPassword(password),
-    },
-  });
-
-  log(`Created the first admin account: ${email}`);
-  if (password === 'ultrakil-change-me') {
-    log('  WARNING: this is the default password. Change SEED_ADMIN_PASSWORD.');
-  }
-}
-
-async function seedBranches(): Promise<void> {
-  for (const code of Object.values(BranchCode)) {
-    await prisma.branch.upsert({
-      where: { code },
-      create: { code, name: BRANCH_NAMES[code] },
-      update: { name: BRANCH_NAMES[code] },
-    });
-  }
-  log(`Branches ready: ${Object.values(BranchCode).join(', ')}`);
+  if (existsSync(MAPPING_PATH)) log(`Using column mapping overrides from ${MAPPING_PATH}`);
+  return loadMatrixMapping(MAPPING_PATH);
 }
 
 async function inspect(path: string, mapping: MatrixMapping): Promise<void> {
@@ -186,8 +124,8 @@ async function main(): Promise<void> {
     log(`No workforce matrix at ${matrixPath} — skipping the workforce import.`);
     log('See data/README.md for how to supply it. Seeding reference data only.');
     if (!dryRun && !inspectOnly) {
-      await seedBranches();
-      await seedAdminUser();
+      await seedBranches(prisma, log);
+      await seedAdminUser(prisma, log);
     }
     return;
   }
@@ -215,8 +153,8 @@ async function main(): Promise<void> {
     );
   }
 
-  await seedBranches();
-  await seedAdminUser();
+  await seedBranches(prisma, log);
+  await seedAdminUser(prisma, log);
   const summary = await importMatrix(prisma, parsed);
 
   log();

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * Starts a real optimizer run against the real scheduler service, waits for
@@ -18,8 +18,16 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   await page.goto("/schedule-history");
   await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
 
+  const from = await page.locator('#run-from').inputValue();
+  const to = await page.locator('#run-to').inputValue();
+  const started = page.waitForResponse(response => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/schedule-runs'));
   await page.getByRole("button", { name: /^Start run$/ }).click();
-  await expect(page.getByText(/Running — \d+%|Draft — ready to publish/).first()).toBeVisible({
+  expect((await started).ok()).toBe(true);
+  // The newest run in this exact range is the one just started. An older
+  // unrelated draft must never satisfy the completion/publish assertions.
+  const row = page.locator('li', { hasText: `${from} – ${to}` }).first();
+  await expect(row.getByText(/Queued|Running — \d+%|Draft — ready to publish/)).toBeVisible({
     timeout: 15_000,
   });
 
@@ -31,20 +39,17 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   // client would show nothing, an error, or a run stuck at its pre-reload
   // percentage.
   await page.reload();
-  await expect(page.getByText(/Running — \d+%|Draft — ready to publish/).first()).toBeVisible({
+  await expect(row.getByText(/Queued|Running — \d+%|Draft — ready to publish/)).toBeVisible({
     timeout: 15_000,
   });
 
   // Poll for the run to settle. A real CP-SAT search can run for the
   // configured time limit (20s default here) plus write-back time.
-  await expect(page.getByText("Draft — ready to publish").first()).toBeVisible({
+  await expect(row.getByText("Draft — ready to publish")).toBeVisible({
     timeout: 120_000,
   });
 
   // The runs list is a card list (<ul><li>), not a table.
-  const row = page
-    .locator("li", { has: page.getByText("Draft — ready to publish") })
-    .first();
   await row.getByRole("button", { name: "Publish" }).click();
 
   // The trigger row is hidden behind the dialog's own modal boundary while
@@ -52,5 +57,5 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   // same pattern the page's own Vitest suite relies on.
   await page.getByRole("button", { name: "Publish" }).click();
 
-  await expect(page.getByText("Published").first()).toBeVisible({ timeout: 15_000 });
+  await expect(row.getByText("Published", { exact: true })).toBeVisible({ timeout: 15_000 });
 });

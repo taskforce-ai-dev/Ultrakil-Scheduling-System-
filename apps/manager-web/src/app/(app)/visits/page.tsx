@@ -124,6 +124,11 @@ function VisitChip({
         : visit.status === "SCHEDULED"
           ? "border-primary/40 bg-primary/10"
           : "border-border bg-background";
+  // The scheduled tint can itself sit inside today's light green cell. Muted
+  // foreground on those nested tints falls below WCAG AA, so supporting text
+  // uses the normal foreground for scheduled chips.
+  const supportingTextTone =
+    visit.status === "SCHEDULED" ? "text-foreground" : "text-muted-foreground";
 
   return (
     <div
@@ -153,7 +158,7 @@ function VisitChip({
           {!visit.isLocked && visit.isManuallyAdjusted && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
           )}
-          <span className="shrink-0 tabular-nums text-muted-foreground">
+          <span className={cn("shrink-0 tabular-nums", supportingTextTone)}>
             {formatMinuteOfDay(visit.windowStartMinute)}
           </span>
           <span className="truncate">{visit.customerName}</span>
@@ -168,7 +173,10 @@ function VisitChip({
         type="button"
         onClick={onMoveRequested}
         aria-label={`Move ${visit.customerName}'s visit to a different date`}
-        className="shrink-0 px-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "shrink-0 px-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          supportingTextTone
+        )}
       >
         <Move className="h-3 w-3" aria-hidden="true" />
       </button>
@@ -576,6 +584,7 @@ export default function VisitsPage() {
               className="overflow-x-auto rounded-lg border border-border"
               role="grid"
               aria-label={view === "month" ? "Month calendar" : "Week calendar"}
+              tabIndex={0}
             >
               <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
                 {WEEKDAY_INITIALS.map((day) => (
