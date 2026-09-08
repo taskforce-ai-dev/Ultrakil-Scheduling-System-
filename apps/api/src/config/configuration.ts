@@ -39,7 +39,7 @@ export const scheduleDispatchConfig = registerAs('scheduleDispatch', () => {
   return {
     provider: env.SCHEDULE_DISPATCHER || 'bullmq',
     executionBudgetSeconds: Number(
-      env.SCHEDULE_EXECUTION_BUDGET_SECONDS || 240,
+      env.SCHEDULE_EXECUTION_BUDGET_SECONDS || 55,
     ),
     publicUrl,
     executeUrl: endpoint('execute'),

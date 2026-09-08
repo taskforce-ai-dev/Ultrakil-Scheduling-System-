@@ -5,6 +5,7 @@ import { ScheduleRunQStashController } from './schedule-run.qstash.controller';
 import { ScheduleRunService } from './schedule-run.service';
 
 const runId = 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000';
+const dispatchId = 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4';
 
 function fixture() {
   const config = {
@@ -14,7 +15,7 @@ function fixture() {
           'https://ultrakil.example.com/api/internal/schedule-runs/execute',
         'scheduleDispatch.failureUrl':
           'https://ultrakil.example.com/api/internal/schedule-runs/failure',
-        'scheduleDispatch.executionBudgetSeconds': 240,
+        'scheduleDispatch.executionBudgetSeconds': 55,
       };
       return values[key];
     }),
@@ -25,7 +26,7 @@ function fixture() {
       scheduled: 1,
       unassigned: 0,
     })),
-    failForQStash: jest.fn(async () => undefined),
+    failForQStash: jest.fn(async () => 'failed'),
   };
   const receiver = { verify: jest.fn(async () => true) };
   const controller = new ScheduleRunQStashController(
@@ -61,7 +62,7 @@ describe('ScheduleRunQStashController', () => {
 
   it('verifies the exact raw execute body before dispatching the stored run', async () => {
     const f = fixture();
-    const raw = JSON.stringify({ runId });
+    const raw = JSON.stringify({ runId, dispatchId });
 
     await expect(
       f.controller.execute(f.request(raw) as never),
@@ -73,14 +74,14 @@ describe('ScheduleRunQStashController', () => {
       url: 'https://ultrakil.example.com/api/internal/schedule-runs/execute',
     });
     expect(f.runs.deliver).toHaveBeenCalledWith(runId, {
-      executionBudgetSeconds: 240,
+      executionBudgetSeconds: 55,
       retryOnFailure: true,
     });
   });
 
   it('settles only the run identified by the signed QStash failure callback', async () => {
     const f = fixture();
-    const sourceBody = Buffer.from(JSON.stringify({ runId })).toString(
+    const sourceBody = Buffer.from(JSON.stringify({ runId, dispatchId })).toString(
       'base64',
     );
     const raw = JSON.stringify({
@@ -95,6 +96,7 @@ describe('ScheduleRunQStashController', () => {
 
     expect(f.runs.failForQStash).toHaveBeenCalledWith(
       runId,
+      dispatchId,
       'msg_opaque',
       'QSTASH_DELIVERY_FAILED',
       'QStash exhausted delivery retries with HTTP 503.',
@@ -106,9 +108,31 @@ describe('ScheduleRunQStashController', () => {
     f.receiver.verify.mockResolvedValueOnce(false);
 
     await expect(
-      f.controller.execute(f.request(JSON.stringify({ runId })) as never),
+      f.controller.execute(
+        f.request(JSON.stringify({ runId, dispatchId })) as never,
+      ),
     ).rejects.toMatchObject({ status: 401 });
     expect(f.runs.deliver).not.toHaveBeenCalled();
+  });
+
+  it('keeps an active-lease failure callback retriable after recording it', async () => {
+    const f = fixture();
+    f.runs.failForQStash.mockResolvedValueOnce('deferred');
+    const sourceBody = Buffer.from(JSON.stringify({ runId, dispatchId })).toString(
+      'base64',
+    );
+
+    await expect(
+      f.controller.failure(
+        f.request(
+          JSON.stringify({
+            sourceMessageId: 'msg_opaque',
+            sourceBody,
+            status: 503,
+          }),
+        ) as never,
+      ),
+    ).rejects.toMatchObject({ status: 503 });
   });
 
   it('treats a QStash receiver verification error as an invalid signature', async () => {
@@ -116,7 +140,9 @@ describe('ScheduleRunQStashController', () => {
     f.receiver.verify.mockRejectedValueOnce(new Error('malformed JWT'));
 
     await expect(
-      f.controller.execute(f.request(JSON.stringify({ runId })) as never),
+      f.controller.execute(
+        f.request(JSON.stringify({ runId, dispatchId })) as never,
+      ),
     ).rejects.toMatchObject({ status: 401 });
     expect(f.runs.deliver).not.toHaveBeenCalled();
   });

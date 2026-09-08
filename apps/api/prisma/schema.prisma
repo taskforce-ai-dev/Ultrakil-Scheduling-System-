@@ -149,6 +149,20 @@ enum ScheduleRunTrigger {
   MANAGER_OVERRIDE
 }
 
+/// Delivery systems supported for scheduling runs. The outbox keeps the
+/// provider-neutral intent durable even when publishing succeeds but the API
+/// process dies before it records the remote message id.
+enum ScheduleRunDispatchProvider {
+  BULLMQ
+  QSTASH
+}
+
+enum ScheduleRunDispatchStatus {
+  PENDING
+  PUBLISHED
+  CANCELLED
+}
+
 // ---------------------------------------------------------------------------
 // Organisation
 // ---------------------------------------------------------------------------
@@ -906,10 +920,43 @@ model ScheduleRun {
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
   auditEvents       AuditEvent[]
+  dispatchOutbox    ScheduleRunDispatchOutbox?
 
   @@index([status, createdAt])
   @@index([executionLeaseExpiresAt])
   @@map("schedule_runs")
+}
+
+/// A durable, provider-neutral request to deliver one schedule run. `id` is
+/// also QStash's opaque deduplication id, so a publish acknowledgement lost
+/// before `messageId` is persisted can be safely published again.
+model ScheduleRunDispatchOutbox {
+  id String @id @default(uuid()) @db.Uuid
+
+  scheduleRunId String      @unique @db.Uuid
+  scheduleRun   ScheduleRun @relation(fields: [scheduleRunId], references: [id], onDelete: Cascade)
+
+  provider ScheduleRunDispatchProvider
+  status   ScheduleRunDispatchStatus @default(PENDING)
+
+  messageId String?
+  attempts  Int @default(0)
+  lastAttemptAt DateTime?
+  lastError String?
+
+  /// A signed QStash failure callback is recorded before the active lease is
+  /// touched. If that lease is still live, the callback can retry without
+  /// losing the terminal-delivery fact.
+  terminalFailureMessageId String?
+  terminalFailureCode      String?
+  terminalFailureMessage   String?
+  terminalFailureAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("schedule_run_dispatch_outbox")
 }
 
 /// A record of a future assignment notification — written when a schedule is

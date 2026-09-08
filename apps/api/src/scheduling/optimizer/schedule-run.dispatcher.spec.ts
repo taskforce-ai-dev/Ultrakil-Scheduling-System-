@@ -1,6 +1,9 @@
 import { ConfigService } from '@nestjs/config';
 
-import { QStashScheduleRunDispatcher } from './schedule-run.dispatcher';
+import {
+  qstashMaximumRangeDays,
+  QStashScheduleRunDispatcher,
+} from './schedule-run.dispatcher';
 
 function fixture() {
   const client = {
@@ -13,7 +16,7 @@ function fixture() {
       'https://ultrakil.example.com/api/internal/schedule-runs/execute',
     'scheduleDispatch.failureUrl':
       'https://ultrakil.example.com/api/internal/schedule-runs/failure',
-    'scheduleDispatch.executionBudgetSeconds': 240,
+    'scheduleDispatch.executionBudgetSeconds': 55,
   };
   const config = {
     getOrThrow: jest.fn((key: string) => values[key]),
@@ -37,13 +40,23 @@ describe('QStashScheduleRunDispatcher', () => {
 
     expect(client.publishJSON).toHaveBeenCalledWith({
       url: 'https://ultrakil.example.com/api/internal/schedule-runs/execute',
-      body: { runId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000' },
+      body: {
+        runId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
+        dispatchId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
+      },
       failureCallback:
         'https://ultrakil.example.com/api/internal/schedule-runs/failure',
       retries: 3,
-      timeout: '240s',
+      timeout: '55s',
       deduplicationId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
     });
+  });
+
+  it('keeps at least five seconds below Vercel Hobby for the response while supporting a week', () => {
+    const { dispatcher } = fixture();
+
+    expect(dispatcher.maxRangeDays).toBe(9);
+    expect(qstashMaximumRangeDays(47)).toBe(1);
   });
 
   it('treats remote cancellation as best effort', async () => {

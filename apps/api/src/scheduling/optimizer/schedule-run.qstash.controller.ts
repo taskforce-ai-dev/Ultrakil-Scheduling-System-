@@ -3,6 +3,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Inject,
   Post,
   RawBodyRequest,
   Req,
@@ -16,7 +17,9 @@ import { z } from 'zod';
 import { Public } from '../../auth/decorators/public.decorator';
 import { ScheduleRunService } from './schedule-run.service';
 
-interface QStashReceiver {
+export const QSTASH_RECEIVER = Symbol('QSTASH_RECEIVER');
+
+export interface QStashReceiver {
   verify(input: {
     signature: string;
     body: string;
@@ -29,7 +32,7 @@ type QStashReceiverConstructor = new (options: {
   nextSigningKey: string;
 }) => QStashReceiver;
 
-function createReceiver(config: ConfigService): QStashReceiver {
+export function createQStashReceiver(config: ConfigService): QStashReceiver {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Receiver } = require('@upstash/qstash') as {
     Receiver: QStashReceiverConstructor;
@@ -44,7 +47,9 @@ function createReceiver(config: ConfigService): QStashReceiver {
   });
 }
 
-const executePayload = z.object({ runId: z.string().uuid() }).strict();
+const executePayload = z
+  .object({ runId: z.string().uuid(), dispatchId: z.string().uuid() })
+  .strict();
 const failurePayload = z
   .object({
     sourceMessageId: z.string().min(1),
@@ -56,15 +61,11 @@ const failurePayload = z
 /** QStash-only routes. The public controller stays provider-neutral. */
 @Controller('internal/schedule-runs')
 export class ScheduleRunQStashController {
-  private readonly receiver: QStashReceiver;
-
   constructor(
     private readonly runs: ScheduleRunService,
     private readonly config: ConfigService,
-    receiver?: QStashReceiver,
-  ) {
-    this.receiver = receiver ?? createReceiver(config);
-  }
+    @Inject(QSTASH_RECEIVER) private readonly receiver: QStashReceiver,
+  ) {}
 
   @Post('execute')
   @Public()
@@ -96,12 +97,21 @@ export class ScheduleRunQStashController {
     const source = this.parseExecutePayload(
       Buffer.from(callback.sourceBody, 'base64').toString('utf8'),
     );
-    await this.runs.failForQStash(
+    const outcome = await this.runs.failForQStash(
       source.runId,
+      source.dispatchId,
       callback.sourceMessageId,
       'QSTASH_DELIVERY_FAILED',
       `QStash exhausted delivery retries with HTTP ${callback.status}.`,
     );
+    if (outcome === 'deferred') {
+      // The terminal callback is durably recorded, but an active lease may yet
+      // complete. Tell QStash to retry the callback rather than acknowledging
+      // a state transition that cannot safely be made yet.
+      throw new ServiceUnavailableException(
+        'Schedule run lease is still active.',
+      );
+    }
   }
 
   private async verify(

@@ -1,4 +1,5 @@
 import { DynamicModule, Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
@@ -8,12 +9,19 @@ import {
   ScheduleRunQueue,
 } from './optimizer/schedule-run.processor';
 import {
+  createQStashClient,
+  QSTASH_CLIENT,
   QStashScheduleRunDispatcher,
   SCHEDULE_RUN_DISPATCHER,
 } from './optimizer/schedule-run.dispatcher';
 import { ScheduleRunService } from './optimizer/schedule-run.service';
+import { ScheduleRunDispatchService } from './optimizer/schedule-run-dispatch.service';
 import { ScheduleRunsController } from './optimizer/schedule-runs.controller';
-import { ScheduleRunQStashController } from './optimizer/schedule-run.qstash.controller';
+import {
+  createQStashReceiver,
+  QSTASH_RECEIVER,
+  ScheduleRunQStashController,
+} from './optimizer/schedule-run.qstash.controller';
 import { SchedulerClient } from './optimizer/scheduler.client';
 import { AssignmentsController } from './eligibility/assignments.controller';
 import { AssignmentsService } from './eligibility/assignments.service';
@@ -52,11 +60,28 @@ export class SchedulingModule {
         AssignmentsService,
         SchedulerClient,
         ScheduleRunService,
+        ScheduleRunDispatchService,
         PublishingService,
         CalendarService,
         ...(qstash
           ? [
+              {
+                provide: QSTASH_CLIENT,
+                inject: [ConfigService],
+                useFactory: (config: ConfigService) =>
+                  createQStashClient(
+                    config.getOrThrow<string>(
+                      'scheduleDispatch.qstash.token',
+                    ),
+                  ),
+              },
               QStashScheduleRunDispatcher,
+              {
+                provide: QSTASH_RECEIVER,
+                inject: [ConfigService],
+                useFactory: (config: ConfigService) =>
+                  createQStashReceiver(config),
+              },
               {
                 provide: SCHEDULE_RUN_DISPATCHER,
                 useExisting: QStashScheduleRunDispatcher,

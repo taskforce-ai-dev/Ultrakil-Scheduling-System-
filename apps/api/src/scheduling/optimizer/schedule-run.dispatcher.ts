@@ -1,22 +1,33 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { qstashMaximumRangeDays } from './schedule-run-execution-budget';
+
+export { qstashMaximumRangeDays } from './schedule-run-execution-budget';
 
 export interface ScheduleRunDispatch {
   runId: string;
+  /** Durable outbox UUID; QStash uses it as its deduplication key. */
+  dispatchId?: string;
 }
+
+export type ScheduleRunDispatcherProvider = 'bullmq' | 'qstash';
 
 /** The controller dispatches runs without knowing which delivery system is active. */
 export interface ScheduleRunDispatcher {
+  readonly provider: ScheduleRunDispatcherProvider;
+  /** Undefined for self-hosted BullMQ, which has no Vercel function ceiling. */
+  readonly maxRangeDays?: number;
   enqueue(dispatch: ScheduleRunDispatch): Promise<string>;
   cancel(jobId: string | null): Promise<void>;
 }
 
 export const SCHEDULE_RUN_DISPATCHER = Symbol('SCHEDULE_RUN_DISPATCHER');
+export const QSTASH_CLIENT = Symbol('QSTASH_CLIENT');
 
-interface QStashClient {
+export interface QStashClient {
   publishJSON(input: {
     url: string;
-    body: { runId: string };
+    body: { runId: string; dispatchId: string };
     failureCallback: string;
     retries: number;
     timeout: string;
@@ -32,7 +43,7 @@ type QStashClientConstructor = new (options: {
   enableTelemetry: boolean;
 }) => QStashClient;
 
-function createQStashClient(token: string): QStashClient {
+export function createQStashClient(token: string): QStashClient {
   // Keep the runtime dependency conditional: BullMQ-only deployments never
   // instantiate or configure QStash, while Vercel resolves the official SDK.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -45,35 +56,36 @@ function createQStashClient(token: string): QStashClient {
 /** Publishes an opaque run ID to QStash; run details remain in PostgreSQL. */
 @Injectable()
 export class QStashScheduleRunDispatcher implements ScheduleRunDispatcher {
+  readonly provider = 'qstash' as const;
   private readonly logger = new Logger(QStashScheduleRunDispatcher.name);
-  private readonly client: QStashClient;
 
-  constructor(config: ConfigService, client?: QStashClient) {
-    this.client =
-      client ??
-      createQStashClient(
-        config.getOrThrow<string>('scheduleDispatch.qstash.token'),
-      );
+  constructor(
+    config: ConfigService,
+    @Inject(QSTASH_CLIENT) private readonly client: QStashClient,
+  ) {
     this.executeUrl = config.getOrThrow<string>('scheduleDispatch.executeUrl');
     this.failureUrl = config.getOrThrow<string>('scheduleDispatch.failureUrl');
     this.executionBudgetSeconds = config.getOrThrow<number>(
       'scheduleDispatch.executionBudgetSeconds',
     );
+    this.maxRangeDays = qstashMaximumRangeDays(this.executionBudgetSeconds);
   }
 
   private readonly executeUrl: string;
   private readonly failureUrl: string;
   private readonly executionBudgetSeconds: number;
+  readonly maxRangeDays: number;
 
-  async enqueue({ runId }: ScheduleRunDispatch): Promise<string> {
+  async enqueue({ runId, dispatchId = runId }: ScheduleRunDispatch): Promise<string> {
     const result = await this.client.publishJSON({
       url: this.executeUrl,
-      // A UUID is opaque and lets the execute endpoint load authoritative data.
-      body: { runId },
+      // Both values are opaque UUIDs. The API loads all scheduling detail from
+      // PostgreSQL, never from a QStash message body.
+      body: { runId, dispatchId },
       failureCallback: this.failureUrl,
       retries: 3,
       timeout: `${this.executionBudgetSeconds}s`,
-      deduplicationId: runId,
+      deduplicationId: dispatchId,
     });
     return result.messageId;
   }

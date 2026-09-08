@@ -7,7 +7,10 @@ import {
   ScheduleRunDispatch,
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
-import { ScheduleRunService } from './schedule-run.service';
+import {
+  ScheduleRunService,
+} from './schedule-run.service';
+import { SELF_HOSTED_EXECUTION_BUDGET_SECONDS } from './schedule-run-execution-budget';
 
 export interface ScheduleRunJobData extends ScheduleRunDispatch {
   timeLimitSeconds?: number;
@@ -36,16 +39,29 @@ export class ScheduleRunProcessor extends WorkerHost {
     const { runId, timeLimitSeconds } = job.data;
     this.logger.log(`Solving schedule run ${runId}`);
 
-    const result = await this.runs.execute(runId, {
+    // BullMQ increments attemptsMade only after an attempt has failed. Its
+    // retry decision is `attemptsMade + 1 < attempts`; use the exact same
+    // boundary so the service releases the lease for every retryable failure
+    // and writes FAILED only on BullMQ's final delivery.
+    const retryOnFailure =
+      job.attemptsMade + 1 < Math.max(1, job.opts.attempts ?? 1);
+    const outcome = await this.runs.deliver(runId, {
       timeLimitSeconds,
+      executionBudgetSeconds: SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+      retryOnFailure,
       onProgress: async (percent) => {
         await job.updateProgress(percent);
       },
     });
+
+    if (outcome.kind === 'settled' || outcome.kind === 'not_found') return;
+    if (outcome.kind === 'busy') {
+      throw new Error(`Schedule run ${runId} already has an active lease.`);
+    }
     this.logger.log(
-      result.cancelled
+      outcome.kind === 'cancelled'
         ? `Schedule run ${runId} cancelled before writing`
-        : `Schedule run ${runId}: ${result.scheduled} staffed, ${result.unassigned} unassigned`,
+        : `Schedule run ${runId}: ${outcome.scheduled} staffed, ${outcome.unassigned} unassigned`,
     );
   }
 }
@@ -53,6 +69,7 @@ export class ScheduleRunProcessor extends WorkerHost {
 /** Puts a run on the queue. Separated so the controller never touches BullMQ. */
 @Injectable()
 export class ScheduleRunQueue implements ScheduleRunDispatcher {
+  readonly provider = 'bullmq' as const;
   constructor(@InjectQueue(QUEUE_SCHEDULE_RUN) private readonly queue: Queue) {}
 
   async enqueue(data: ScheduleRunDispatch): Promise<string> {

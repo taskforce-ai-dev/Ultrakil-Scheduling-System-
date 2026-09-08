@@ -22,6 +22,14 @@ import {
   assertVisitRevision,
   lockScheduleVisits,
 } from './schedule-visit-lock';
+import type { ScheduleRunDispatcherProvider } from './schedule-run.dispatcher';
+import {
+  SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS,
+  SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS,
+  SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS,
+  SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS,
+  SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+} from './schedule-run-execution-budget';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
@@ -38,7 +46,6 @@ const REPLACEABLE_STATUSES: AssignmentStatus[] = [
 ];
 
 const MAX_RANGE_DAYS = 62;
-const EXECUTION_OVERHEAD_SECONDS = 30;
 
 interface ExecutionLease {
   id: string;
@@ -193,6 +200,7 @@ export class ScheduleRunService {
       timeLimitSeconds?: number;
     },
     actor: AuthenticatedUser,
+    dispatcherProvider: ScheduleRunDispatcherProvider = 'bullmq',
   ) {
     const from = parseDate(input.from);
     const to = parseDate(input.to);
@@ -216,27 +224,36 @@ export class ScheduleRunService {
       );
     }
 
-    const run = await this.prisma.scheduleRun.create({
-      data: {
-        status: ScheduleRunStatus.QUEUED,
-        rangeStart: from,
-        rangeEnd: to,
-        branchCode: input.branchCode ?? null,
-        requestedByUserId: actor.id,
-        timeLimitSeconds: input.timeLimitSeconds ?? 20,
-      } as unknown as Prisma.ScheduleRunCreateInput,
+    return this.prisma.$transaction(async (tx) => {
+      const run = await tx.scheduleRun.create({
+        data: {
+          status: ScheduleRunStatus.QUEUED,
+          rangeStart: from,
+          rangeEnd: to,
+          branchCode: input.branchCode ?? null,
+          requestedByUserId: actor.id,
+          timeLimitSeconds: input.timeLimitSeconds ?? 20,
+        } as unknown as Prisma.ScheduleRunCreateInput,
+      });
+      await this.dispatchOutboxModel(tx).create({
+        data: {
+          scheduleRunId: run.id,
+          provider: dispatcherProvider === 'qstash' ? 'QSTASH' : 'BULLMQ',
+        },
+      });
+      await this.audit.record(
+        {
+          entityType: 'ScheduleRun',
+          entityId: run.id,
+          action: 'schedule_run.queued',
+          actor,
+          before: null,
+          after: run,
+        },
+        tx,
+      );
+      return run;
     });
-
-    await this.audit.record({
-      entityType: 'ScheduleRun',
-      entityId: run.id,
-      action: 'schedule_run.queued',
-      actor,
-      before: null,
-      after: run,
-    });
-
-    return run;
   }
 
   /**
@@ -255,7 +272,8 @@ export class ScheduleRunService {
     } = {},
   ): Promise<{ scheduled: number; unassigned: number; cancelled: boolean }> {
     const outcome = await this.deliver(runId, {
-      executionBudgetSeconds: options.executionBudgetSeconds ?? 270,
+      executionBudgetSeconds:
+        options.executionBudgetSeconds ?? SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
       retryOnFailure: false,
       timeLimitSeconds: options.timeLimitSeconds,
       onProgress: options.onProgress,
@@ -418,13 +436,23 @@ export class ScheduleRunService {
           : [visit.visit_date],
       ),
     ).size;
-    const availableSolverSeconds = Math.max(
-      1,
-      options.executionBudgetSeconds - EXECUTION_OVERHEAD_SECONDS,
-    );
+    const availableSolverSeconds =
+      options.executionBudgetSeconds -
+      SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS -
+      SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS -
+      SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS -
+      SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS;
+    if (availableSolverSeconds < solveDays) {
+      throw new AppException(
+        'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+        'This schedule run exceeds the execution budget available to its delivery provider.',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        { runId, solveDays, executionBudgetSeconds: options.executionBudgetSeconds },
+      );
+    }
     const perDayLimitSeconds = Math.min(
       request.time_limit_seconds,
-      Math.max(1, Math.floor(availableSolverSeconds / Math.max(1, solveDays))),
+      Math.max(1, Math.floor(availableSolverSeconds / solveDays)),
     );
     const boundedRequest = {
       ...request,
@@ -432,7 +460,9 @@ export class ScheduleRunService {
     };
     const solution = await this.scheduler.solve(
       boundedRequest,
-      perDayLimitSeconds * Math.max(1, solveDays) * 1000 + 10_000,
+      (perDayLimitSeconds * Math.max(1, solveDays) +
+        SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS) *
+        1000,
     );
 
     await progress(70);
@@ -904,7 +934,23 @@ export class ScheduleRunService {
     if (!before) return { kind: 'not_found' };
     if (this.isSettled(before.status)) return { kind: 'settled' };
     if (before.cancelRequestedAt) {
-      await this.settleExpiredCancellation(runId);
+      if (before.status === ScheduleRunStatus.QUEUED) {
+        return { kind: 'cancelled' };
+      }
+      if (before.status === ScheduleRunStatus.RUNNING) {
+        if (await this.settleExpiredCancellation(runId)) {
+          return { kind: 'cancelled' };
+        }
+        const afterCancellation = await this.prisma.scheduleRun.findUnique({
+          where: { id: runId },
+        });
+        if (!afterCancellation) return { kind: 'not_found' };
+        if (this.isSettled(afterCancellation.status)) return { kind: 'settled' };
+        // The lease owner will observe the cancellation flag at its next safe
+        // point. Acknowledging this QStash delivery would strand a crashed
+        // owner, so keep it retriable while that lease is still live.
+        return { kind: 'busy' };
+      }
       return { kind: 'cancelled' };
     }
 
@@ -968,6 +1014,23 @@ export class ScheduleRunService {
     };
   }
 
+  private dispatchOutboxModel(
+    client: PrismaService | Prisma.TransactionClient,
+  ) {
+    return (
+      client as unknown as {
+        scheduleRunDispatchOutbox: {
+          create(args: Record<string, unknown>): Promise<unknown>;
+          findUnique(args: Record<string, unknown>): Promise<{
+            id: string;
+            terminalFailureAt: Date | null;
+          } | null>;
+          updateMany(args: Record<string, unknown>): Promise<{ count: number }>;
+        };
+      }
+    ).scheduleRunDispatchOutbox;
+  }
+
   private leaseWhere(
     runId: string,
     lease: ExecutionLease,
@@ -1004,9 +1067,9 @@ export class ScheduleRunService {
     }
   }
 
-  private async settleExpiredCancellation(runId: string): Promise<void> {
+  private async settleExpiredCancellation(runId: string): Promise<boolean> {
     const now = new Date();
-    await this.leaseModel(this.prisma).updateMany({
+    const settled = await this.leaseModel(this.prisma).updateMany({
       where: {
         id: runId,
         status: ScheduleRunStatus.RUNNING,
@@ -1022,6 +1085,7 @@ export class ScheduleRunService {
         progressPercent: 100,
       },
     });
+    return settled.count === 1;
   }
 
   private async releaseLeaseForRetry(
@@ -1169,20 +1233,42 @@ export class ScheduleRunService {
   /** QStash owns the retry policy, so it is the final failure authority. */
   async failForQStash(
     runId: string,
+    dispatchId: string,
     messageId: string,
     code: string,
     message: string,
-  ) {
+  ): Promise<'failed' | 'deferred' | 'ignored'> {
     const now = new Date();
-    await this.leaseModel(this.prisma).updateMany({
+    const recorded = await this.dispatchOutboxModel(this.prisma).updateMany({
+      where: {
+        id: dispatchId,
+        scheduleRunId: runId,
+        provider: 'QSTASH',
+        status: { in: ['PENDING', 'PUBLISHED'] },
+        OR: [{ messageId: null }, { messageId }],
+      },
+      data: {
+        terminalFailureMessageId: messageId,
+        terminalFailureCode: code,
+        terminalFailureMessage: message,
+        terminalFailureAt: now,
+      },
+    });
+    if (recorded.count !== 1) return 'ignored';
+
+    const failed = await this.leaseModel(this.prisma).updateMany({
       where: {
         id: runId,
-        jobId: messageId,
         cancelRequestedAt: null,
         status: { in: [ScheduleRunStatus.QUEUED, ScheduleRunStatus.RUNNING] },
-        OR: [
-          { executionLeaseId: null },
-          { executionLeaseExpiresAt: { lt: now } },
+        AND: [
+          { OR: [{ jobId: null }, { jobId: messageId }] },
+          {
+            OR: [
+              { executionLeaseId: null },
+              { executionLeaseExpiresAt: { lt: now } },
+            ],
+          },
         ],
       },
       data: {
@@ -1190,8 +1276,22 @@ export class ScheduleRunService {
         finishedAt: now,
         errorCode: code,
         errorMessage: message,
+        jobId: messageId,
       },
     });
+    if (failed.count === 1) return 'failed';
+
+    const run = await this.prisma.scheduleRun.findUnique({
+      where: { id: runId },
+    });
+    if (
+      run?.status === ScheduleRunStatus.RUNNING &&
+      run.executionLeaseExpiresAt &&
+      run.executionLeaseExpiresAt > now
+    ) {
+      return 'deferred';
+    }
+    return 'ignored';
   }
 }
 

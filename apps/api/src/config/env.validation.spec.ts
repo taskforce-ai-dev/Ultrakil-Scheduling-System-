@@ -92,7 +92,27 @@ describe('schedule dispatcher environment validation', () => {
         QSTASH_NEXT_SIGNING_KEY: 'next',
         API_PUBLIC_URL: 'https://ultrakil.example.com',
       }),
-    ).toMatchObject({ SCHEDULE_DISPATCHER: 'qstash' });
+    ).toMatchObject({
+      SCHEDULE_DISPATCHER: 'qstash',
+      SCHEDULE_EXECUTION_BUDGET_SECONDS: 55,
+    });
+  });
+
+  it.each([
+    'https://ultrakil.example.com/api',
+    'https://ultrakil.example.com/?preview=1',
+    'https://user@ultrakil.example.com',
+  ])('requires API_PUBLIC_URL to be a pure HTTPS origin: %s', (API_PUBLIC_URL) => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        SCHEDULE_DISPATCHER: 'qstash',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL,
+      }),
+    ).toThrow('API_PUBLIC_URL');
   });
 
   it('allows blank QStash placeholders when the default BullMQ provider is selected', () => {
@@ -103,24 +123,52 @@ describe('schedule dispatcher environment validation', () => {
         QSTASH_CURRENT_SIGNING_KEY: '',
         QSTASH_NEXT_SIGNING_KEY: '',
         API_PUBLIC_URL: '',
+        SCHEDULE_EXECUTION_BUDGET_SECONDS: '21600',
       }),
-    ).toMatchObject({ SCHEDULE_DISPATCHER: 'bullmq' });
+    ).toMatchObject({
+      SCHEDULE_DISPATCHER: 'bullmq',
+      SCHEDULE_EXECUTION_BUDGET_SECONDS: 21600,
+    });
   });
 
-  it('rejects an execution budget that could reach Vercel Hobby’s 300 second ceiling', () => {
+  it('allows a QStash budget that leaves five seconds below Vercel Hobby’s 60 second ceiling', () => {
     expect(() =>
       validateEnv({
         ...baseEnv,
-        SCHEDULE_EXECUTION_BUDGET_SECONDS: '300',
+        SCHEDULE_DISPATCHER: 'qstash',
+        SCHEDULE_EXECUTION_BUDGET_SECONDS: '51',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL: 'https://ultrakil.example.com',
       }),
-    ).toThrow('SCHEDULE_EXECUTION_BUDGET_SECONDS');
+    ).not.toThrow();
   });
 
   it('reserves enough execution budget to persist a solver result safely', () => {
     expect(() =>
       validateEnv({
         ...baseEnv,
-        SCHEDULE_EXECUTION_BUDGET_SECONDS: '30',
+        SCHEDULE_DISPATCHER: 'qstash',
+        SCHEDULE_EXECUTION_BUDGET_SECONDS: '46',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL: 'https://ultrakil.example.com',
+      }),
+    ).toThrow('SCHEDULE_EXECUTION_BUDGET_SECONDS');
+  });
+
+  it('rejects a QStash budget that exceeds the five-second Vercel response reserve', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        SCHEDULE_DISPATCHER: 'qstash',
+        SCHEDULE_EXECUTION_BUDGET_SECONDS: '56',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL: 'https://ultrakil.example.com',
       }),
     ).toThrow('SCHEDULE_EXECUTION_BUDGET_SECONDS');
   });
@@ -140,4 +188,13 @@ describe('schedule dispatcher environment validation', () => {
       process.env = original;
     }
   });
+
+  it.each(['', '/api', 'api/', 'api//internal'])(
+    'rejects an unsafe API_GLOBAL_PREFIX of %p',
+    (API_GLOBAL_PREFIX) => {
+      expect(() =>
+        validateEnv({ ...baseEnv, API_GLOBAL_PREFIX }),
+      ).toThrow('API_GLOBAL_PREFIX');
+    },
+  );
 });

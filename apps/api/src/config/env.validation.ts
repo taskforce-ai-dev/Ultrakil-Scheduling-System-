@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  QSTASH_MAX_EXECUTION_SECONDS,
+  QSTASH_MINIMUM_EXECUTION_SECONDS,
+} from '../scheduling/optimizer/schedule-run-execution-budget';
 
 const port = (fallback: number) =>
   z.coerce.number().int().min(1).max(65535).default(fallback);
@@ -7,6 +11,15 @@ const optionalSecret = z.preprocess(
   (value) => (value === '' ? undefined : value),
   z.string().min(32).optional(),
 );
+
+const apiGlobalPrefix = z
+  .string()
+  .trim()
+  .regex(
+    /^[A-Za-z0-9][A-Za-z0-9_-]*(?:\/[A-Za-z0-9][A-Za-z0-9_-]*)*$/,
+    'must be non-empty path segments without leading or trailing slashes',
+  )
+  .default('api');
 
 /**
  * Environment contract for the API. Validated once at boot so a misconfigured
@@ -32,15 +45,14 @@ export const envSchema = z.object({
   /** BullMQ remains the self-hosted default; QStash is the serverless path. */
   SCHEDULE_DISPATCHER: z.enum(['bullmq', 'qstash']).default('bullmq'),
   /**
-   * A schedule execution always stops before Vercel Hobby's 300 second
+   * A QStash execution always stops below Vercel Hobby's current 60-second
    * maximum, leaving time for persistence and a deterministic response.
    */
   SCHEDULE_EXECUTION_BUDGET_SECONDS: z.coerce
     .number()
     .int()
-    .min(45)
-    .max(299)
-    .default(240),
+    .positive()
+    .default(55),
   // These placeholders are deliberately valid when BullMQ is selected: a
   // copied .env.example commonly leaves them blank. QStash mode checks the
   // complete, non-blank set below.
@@ -50,7 +62,7 @@ export const envSchema = z.object({
   QSTASH_NEXT_SIGNING_KEY: z.string().optional(),
 
   API_PORT: port(3001),
-  API_GLOBAL_PREFIX: z.string().default('api'),
+  API_GLOBAL_PREFIX: apiGlobalPrefix,
   API_CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
   SCHEDULER_BASE_URL: z.string().url().default('http://localhost:8000'),
@@ -137,16 +149,32 @@ export function validateEnv(raw: Record<string, unknown>): Env {
           .join('\n')}`,
       );
     }
-    let hasHttpsPublicUrl = false;
-    try {
-      hasHttpsPublicUrl =
-        new URL(parsed.data.API_PUBLIC_URL ?? '').protocol === 'https:';
-    } catch {
-      hasHttpsPublicUrl = false;
-    }
-    if (!hasHttpsPublicUrl) {
+    if (
+      parsed.data.SCHEDULE_EXECUTION_BUDGET_SECONDS <
+        QSTASH_MINIMUM_EXECUTION_SECONDS ||
+      parsed.data.SCHEDULE_EXECUTION_BUDGET_SECONDS >
+        QSTASH_MAX_EXECUTION_SECONDS
+    ) {
       throw new Error(
-        'Invalid environment configuration:\n  - API_PUBLIC_URL: must use https when SCHEDULE_DISPATCHER=qstash',
+        `Invalid environment configuration:\n  - SCHEDULE_EXECUTION_BUDGET_SECONDS: must be between ${QSTASH_MINIMUM_EXECUTION_SECONDS} and ${QSTASH_MAX_EXECUTION_SECONDS} when SCHEDULE_DISPATCHER=qstash`,
+      );
+    }
+    let hasPureHttpsOrigin = false;
+    try {
+      const publicUrl = new URL(parsed.data.API_PUBLIC_URL ?? '');
+      hasPureHttpsOrigin =
+        publicUrl.protocol === 'https:' &&
+        (publicUrl.pathname === '/' || publicUrl.pathname === '') &&
+        publicUrl.search === '' &&
+        publicUrl.hash === '' &&
+        publicUrl.username === '' &&
+        publicUrl.password === '';
+    } catch {
+      hasPureHttpsOrigin = false;
+    }
+    if (!hasPureHttpsOrigin) {
+      throw new Error(
+        'Invalid environment configuration:\n  - API_PUBLIC_URL: must be a pure https origin when SCHEDULE_DISPATCHER=qstash',
       );
     }
   }
