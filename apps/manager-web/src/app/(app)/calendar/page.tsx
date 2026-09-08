@@ -279,7 +279,14 @@ function DetailDialog({
  * anything — reading `GET /schedule/calendar`, which already joins visit,
  * crew and vehicle server-side for exactly this purpose.
  */
-export default function CalendarPage() {
+/**
+ * The schedule board itself, separated from the route that shows it.
+ *
+ * The Dispatch Board renders this same component under its Calendar view, so
+ * the two screens cannot drift into disagreeing about the same week. A copy
+ * would have been quicker and would have been wrong within a fortnight.
+ */
+export function CalendarBoard() {
   const [view, setView] = React.useState<CalendarView>("month");
   const [anchor, setAnchor] = React.useState<string>(todayIso);
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
@@ -565,4 +572,8 @@ export default function CalendarPage() {
       <DetailDialog entry={openEntry} onOpenChange={(open) => !open && setOpenEntry(null)} />
     </div>
   );
+}
+
+export default function CalendarPage() {
+  return <CalendarBoard />;
 }

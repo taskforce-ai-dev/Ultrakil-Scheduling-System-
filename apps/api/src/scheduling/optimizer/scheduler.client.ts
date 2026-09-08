@@ -70,7 +70,10 @@ export interface SolveResponse {
   unassigned: {
     visit_id: string;
     reason_codes: string[];
+    /** All the sentences joined — a summary line, not a per-reason explanation. */
     message: string;
+    /** One sentence per code, so a reason can be shown beside its own heading. */
+    reason_messages?: Record<string, string>;
   }[];
   solve_seconds: number;
   objective_value: number;

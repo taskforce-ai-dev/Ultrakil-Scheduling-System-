@@ -719,6 +719,38 @@ describe('standard writer publication protocol', () => {
       .toEqual(Array(2).fill(expect.objectContaining({ code: 'EMPLOYEE_DOUBLE_BOOKED' })));
   });
 
+  it('records each refusal reason with its own message and its own remedy', async () => {
+    // The queue shows one card per reason. When every card carried the same
+    // joined sentence, "Service-window conflict" told a manager that an
+    // employee was double-booked — a true fact filed under the wrong heading,
+    // which is worse than no explanation because it looks like an answer.
+    const f = await batchFixture();
+    const refusing = { evaluate: async () => ({
+      isEligible: false,
+      conflicts: [
+        { code: 'EMPLOYEE_DOUBLE_BOOKED', message: 'S Tharilingam is already on another job.', remediation: 'Pick a different technician.', resources: {} },
+        { code: 'OUTSIDE_SERVICE_HOURS', message: 'The site is shut at that hour.', remediation: 'Move the visit inside opening hours.', resources: {} },
+      ],
+    }) } as unknown as EligibilityService;
+
+    await f.solve([{ index: 0, start: 720 }], refusing);
+
+    const rows = await prisma.visitUnassignedReason.findMany({
+      where: { scheduleRunId: f.run.id, generatedVisitId: f.visits[0].visitId },
+      orderBy: { code: 'asc' },
+    });
+
+    expect(rows.map((row) => [row.code, row.message])).toEqual([
+      ['EMPLOYEE_DOUBLE_BOOKED', 'S Tharilingam is already on another job.'],
+      ['OUTSIDE_SERVICE_HOURS', 'The site is shut at that hour.'],
+    ]);
+    // And "What to do" is answered per reason, not left blank.
+    expect(rows.map((row) => (row.details as { remediation?: string } | null)?.remediation)).toEqual([
+      'Pick a different technician.',
+      'Move the visit inside opening hours.',
+    ]);
+  });
+
   it('rolls back an earlier accepted result when a later transactional eligibility check throws a conflict', async () => {
     const f = await batchFixture();
     await app.get(PublishingService).lock(f.visits[0].draft!.id, LockScope.CREW, 'Retain this crew', f.visits[0].actor);
@@ -772,7 +804,14 @@ describe('standard writer publication protocol', () => {
       { evaluate: async (visitId: string) => {
         const outcome = visitId === first.visitId ? firstOutcome : laterOutcome;
         return outcome === 'rejected'
-          ? { isEligible: false, conflicts: [{ code: 'NO_CREW', message: 'No eligible crew' }] }
+          ? { isEligible: false, conflicts: [
+              // Two distinct conflicts on purpose. Each has to keep its own
+              // sentence and its own remedy: they were once flattened into one
+              // joined string written against every code, so the queue showed
+              // the crew clash under the service-hours heading and vice versa.
+              { code: 'NO_CREW', message: 'No eligible crew', remediation: 'Free up a supervisor.' },
+              { code: 'OUTSIDE_SERVICE_HOURS', message: 'The site is shut then.', remediation: 'Move the visit.' },
+            ] }
           : { isEligible: true, conflicts: [] };
       } } as unknown as EligibilityService,
       app.get(AuditService),

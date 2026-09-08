@@ -91,9 +91,27 @@ interface ProposedAssignment extends SolveSnapshot {
   proposedVisit?: { visitDate: Date; windowStartMinute: number; windowEndMinute: number };
 }
 
-interface UnassignedResult extends SolveSnapshot {
-  codes: string[];
+/**
+ * Why one visit could not be staffed, reason by reason.
+ *
+ * Deliberately not a list of codes beside one shared sentence. It was exactly
+ * that, and the queue showed every reason's text under every reason's heading:
+ * a visit that clashed on crew, on hours and on vehicle displayed all three
+ * sentences three times, so "Service-window conflict" read as though the
+ * customer's opening hours were the reason an employee was double-booked. A
+ * manager cannot act on that, and worse, cannot trust the rest of the screen
+ * either.
+ */
+interface UnassignedReason {
+  code: string;
   message: string;
+  /** What to actually do about this one. Shown as "What to do". */
+  remediation?: string;
+  resources?: unknown;
+}
+
+interface UnassignedResult extends SolveSnapshot {
+  reasons: UnassignedReason[];
 }
 
 function dateOnly(value: Date): string {
@@ -330,8 +348,13 @@ export class ScheduleRunService {
 
     const unassigned = solution.unassigned.map((entry) => ({
       visitId: entry.visit_id,
-      codes: entry.reason_codes,
-      message: entry.message,
+      reasons: entry.reason_codes.map((code) => ({
+        code,
+        // The solver sends one sentence per code in `reason_messages`. The
+        // joined `message` is kept only as a fallback for a solver that
+        // predates the split.
+        message: entry.reason_messages?.[code] ?? entry.message,
+      })),
     }));
 
     return this.persistResult(
@@ -526,8 +549,14 @@ export class ScheduleRunService {
           );
           await this.recordUnassigned(tx, runId, [{
             ...entry,
-            codes: verdict.conflicts.map((conflict) => conflict.code),
-            message: verdict.conflicts.map((conflict) => conflict.message).join(' '),
+            // Carried through intact. The engine already wrote a sentence and a
+            // remedy for each conflict; flattening them was the whole bug.
+            reasons: verdict.conflicts.map((conflict) => ({
+              code: conflict.code,
+              message: conflict.message,
+              remediation: conflict.remediation,
+              resources: conflict.resources,
+            })),
           }]);
           rejected += 1;
           continue;
@@ -630,11 +659,17 @@ export class ScheduleRunService {
         where: { generatedVisitId: entry.visitId },
       });
       await tx.visitUnassignedReason.createMany({
-        data: entry.codes.map((code) => ({
+        data: entry.reasons.map((reason) => ({
           generatedVisitId: entry.visitId,
           scheduleRunId: runId,
-          code,
-          message: entry.message,
+          code: reason.code,
+          message: reason.message,
+          // Matches what the manual path records, so the queue reads the same
+          // whether a person or the solver failed to staff the work.
+          details: {
+            remediation: reason.remediation ?? null,
+            resources: reason.resources ?? null,
+          } as unknown as Prisma.InputJsonValue,
         })),
       });
       await tx.generatedVisit.update({

@@ -134,6 +134,13 @@ class UnassignedOutput(BaseModel):
     same whether a human or the solver could not staff the work."""
     reason_codes: list[str]
     message: str
+    """The same sentences keyed by their code.
+
+    `message` joins them all, which is right for a one-line summary and wrong
+    for anything else: written against each code in turn it made the queue
+    claim an employee clash was a service-hours problem. Callers that show a
+    reason on its own read this instead."""
+    reason_messages: dict[str, str] = Field(default_factory=dict)
 
 
 class SolveResponse(BaseModel):
