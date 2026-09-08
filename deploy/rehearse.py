@@ -7,15 +7,75 @@ import secrets
 import socket
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+HOST_READINESS_TIMEOUT_SECONDS = 10
+HOST_READINESS_RETRY_SECONDS = 0.25
+HOST_READINESS_REQUEST_TIMEOUT_SECONDS = 1
+
+
+class HostReadinessResponseError(Exception):
+    pass
 
 
 def free_port():
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         return probe.getsockname()[1]
+
+
+def assert_host_probe_container(label, container):
+    state = container.get('State', {})
+    if (state.get('Status') != 'running' or state.get('Running') is not True
+            or state.get('Health', {}).get('Status') != 'healthy'
+            or container.get('RestartCount') != 0):
+        raise RuntimeError(f'{label} host readiness container is not stable')
+
+
+def require_api_ready(response):
+    if response.status != 200:
+        raise HostReadinessResponseError
+    payload = json.load(response)
+    if not isinstance(payload, dict) or payload.get('status') != 'ok':
+        raise HostReadinessResponseError
+
+
+def require_web_ready(response):
+    if response.status != 200:
+        raise HostReadinessResponseError
+
+
+def wait_for_host_readiness(label, url, validate, *, inspect, opener=urllib.request.urlopen,
+                            monotonic=time.monotonic, sleep=time.sleep):
+    deadline = monotonic() + HOST_READINESS_TIMEOUT_SECONDS
+    while True:
+        assert_host_probe_container(label, inspect())
+        try:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f'{label} host readiness did not become available within 10 seconds')
+            with opener(url, timeout=min(HOST_READINESS_REQUEST_TIMEOUT_SECONDS, remaining)) as response:
+                validate(response)
+        except urllib.error.HTTPError:
+            raise RuntimeError(f'{label} host readiness returned invalid response') from None
+        except (HostReadinessResponseError, json.JSONDecodeError, UnicodeDecodeError):
+            raise RuntimeError(f'{label} host readiness returned invalid response') from None
+        except (ConnectionRefusedError, TimeoutError, urllib.error.URLError):
+            transient_failure = True
+        else:
+            transient_failure = False
+        finally:
+            assert_host_probe_container(label, inspect())
+
+        if not transient_failure:
+            return
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f'{label} host readiness did not become available within 10 seconds')
+        sleep(min(HOST_READINESS_RETRY_SECONDS, remaining))
 
 
 def run(label, command, env=None, expected=0, stdin=None):
@@ -97,7 +157,8 @@ def main():
            'REDIS_PASSWORD': secrets.token_hex(24), 'JWT_SECRET': secrets.token_hex(32),
            'SEED_ADMIN_PASSWORD': secrets.token_hex(24), 'SEED_ADMIN_EMAIL': 'rehearsal@example.invalid',
            'SEED_ADMIN_NAME': 'Synthetic rehearsal administrator', 'NEXT_PUBLIC_API_BASE_URL': api_url,
-           'API_CORS_ORIGINS': web_url, 'API_PORT': str(api_port), 'WEB_PORT': str(web_port),
+           'API_CORS_ORIGINS': web_url, 'API_BIND_ADDRESS': '127.0.0.1', 'API_PORT': str(api_port),
+           'WEB_BIND_ADDRESS': '127.0.0.1', 'WEB_PORT': str(web_port),
            'IMPORT_DIR': str(paths['import']), 'IMPORT_CONFIG_DIR': str(paths['config']),
            'IMPORT_REPORT_DIR': str(paths['reports']), 'BACKUP_DIR': str(paths['backup']),
            'IMPORT_UID': str(os.getuid()), 'IMPORT_GID': str(os.getgid()), 'COMPOSE_PARALLEL_LIMIT': '1'}
@@ -123,6 +184,21 @@ def main():
         dc(f'synthetic maintenance {action}', 'run', '--rm', '--no-deps', '-T', '-e', f'BULLMQ_PREFIX={project}',
            '-v', f'{ROOT / "deploy/test/maintenance-probe.mjs"}:/workspace/deploy/test/maintenance-probe.mjs:ro',
            'migrate', 'node', 'deploy/test/maintenance-probe.mjs', action)
+
+    def inspect_host_probe_container(service):
+        container = subprocess.run([*compose, 'ps', '-q', service], cwd=ROOT, env=child_env,
+                                   text=True, capture_output=True)
+        cid = container.stdout.strip()
+        if container.returncode != 0 or not cid or len(cid.splitlines()) != 1:
+            raise RuntimeError(f'{service} host readiness container is not stable')
+        result = subprocess.run(['docker', 'inspect', '--format', '{{json .}}', cid], cwd=ROOT,
+                                env=child_env, text=True, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(f'{service} host readiness container is not stable')
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError(f'{service} host readiness container is not stable') from None
 
     original_error = None
     try:
@@ -184,12 +260,10 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
            f'{ROOT / "deploy/test/rehearsal-fixture.mjs"}:/workspace/deploy/test/rehearsal-fixture.mjs:ro',
            'migrate', 'node', 'deploy/test/rehearsal-fixture.mjs', 'seed')
         dc('start complete stack', 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'web', 'backup')
-        with urllib.request.urlopen(api_url + '/health/ready', timeout=10) as response:
-            if json.load(response)['status'] != 'ok':
-                raise RuntimeError('API readiness failed')
-        with urllib.request.urlopen(web_url + '/login', timeout=10) as response:
-            if response.status != 200:
-                raise RuntimeError('Next standalone startup failed')
+        wait_for_host_readiness('API', api_url + '/health/ready', require_api_ready,
+                                inspect=lambda: inspect_host_probe_container('api'))
+        wait_for_host_readiness('web', web_url + '/login', require_web_ready,
+                                inspect=lambda: inspect_host_probe_container('web'))
         run('strict browser acceptance', ['corepack', 'pnpm', '--filter', '@ultrakil/manager-web', 'test:e2e'], {
             **child_env, 'E2E_STRICT': '1', 'E2E_REHEARSAL_ID': token, 'E2E_DATABASE_NAME': env['POSTGRES_DB'],
             'E2E_BULLMQ_PREFIX': project, 'E2E_BASE_URL': web_url, 'E2E_API_URL': api_url, 'E2E_DATE': '2026-09-07',

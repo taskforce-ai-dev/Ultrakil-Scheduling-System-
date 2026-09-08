@@ -2,11 +2,15 @@ import contextlib
 import copy
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import unittest
+import urllib.error
 
-spec = importlib.util.spec_from_file_location('rehearse', Path(__file__).resolve().parents[1] / 'rehearse.py')
+
+REHEARSE = Path(__file__).resolve().parents[1] / 'rehearse.py'
+spec = importlib.util.spec_from_file_location('rehearse', REHEARSE)
 rehearse = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rehearse)
 
@@ -57,12 +61,14 @@ class FailureProofTests(unittest.TestCase):
 class CleanupTests(unittest.TestCase):
     def invoke(self, outcomes, original=None):
         calls = []
+
         def execute(command, **kwargs):
             calls.append(command)
             outcome = outcomes[len(calls) - 1]
             if isinstance(outcome, Exception):
                 raise outcome
             return subprocess.CompletedProcess(command, outcome, stdout='PRIVATE', stderr='PRIVATE')
+
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             try:
@@ -89,6 +95,165 @@ class CleanupTests(unittest.TestCase):
         except ValueError as caught:
             self.assertIs(caught, original)
             self.assertTrue(any('teardown' in note for note in caught.__notes__))
+
+
+def healthy_state(restart_count=0):
+    return {
+        'State': {
+            'Status': 'running',
+            'Running': True,
+            'Health': {'Status': 'healthy'},
+        },
+        'RestartCount': restart_count,
+    }
+
+
+class Response:
+    def __init__(self, status=200, body=b'{}'):
+        self.status = status
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def read(self, _size=-1):
+        body, self._body = self._body, b''
+        return body
+
+
+class Clock:
+    def __init__(self):
+        self.value = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.value
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += seconds
+
+
+class HostReadinessTests(unittest.TestCase):
+    def test_retries_transient_transport_failures_until_api_is_ready(self):
+        clock = Clock()
+        attempts = []
+        outcomes = [
+            urllib.error.URLError(ConnectionRefusedError()),
+            TimeoutError(),
+            Response(body=b'{"status":"ok"}'),
+        ]
+
+        def opener(_url, timeout):
+            attempts.append(timeout)
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        rehearse.wait_for_host_readiness(
+            'API', 'http://127.0.0.1:1/api/health/ready', rehearse.require_api_ready,
+            inspect=lambda: healthy_state(), opener=opener,
+            monotonic=clock.monotonic, sleep=clock.sleep,
+        )
+
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(clock.sleeps, [0.25, 0.25])
+        self.assertTrue(all(timeout <= 1 for timeout in attempts))
+
+    def test_bounds_persistent_transport_failure_to_ten_seconds(self):
+        clock = Clock()
+        attempts = 0
+
+        def opener(_url, timeout):
+            nonlocal attempts
+            attempts += 1
+            raise urllib.error.URLError(ConnectionRefusedError())
+
+        with self.assertRaisesRegex(RuntimeError, 'API host readiness did not become available'):
+            rehearse.wait_for_host_readiness(
+                'API', 'http://127.0.0.1:1/api/health/ready', rehearse.require_api_ready,
+                inspect=lambda: healthy_state(), opener=opener,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+
+        self.assertEqual(clock.value, 10.0)
+        self.assertEqual(attempts, 40)
+
+    def test_rejects_non_success_and_bad_api_readiness_responses_without_retry(self):
+        for response in [
+            Response(status=503, body=b'{"status":"ok"}'),
+            Response(body=b'SYNTHETIC_PRIVATE_BODY'),
+            Response(body=json.dumps({'status': 'degraded'}).encode()),
+        ]:
+            with self.subTest(response=response.status):
+                clock = Clock()
+                attempts = 0
+
+                def opener(_url, timeout):
+                    nonlocal attempts
+                    attempts += 1
+                    return response
+
+                with self.assertRaisesRegex(RuntimeError, 'API host readiness returned invalid response') as caught:
+                    rehearse.wait_for_host_readiness(
+                        'API', 'http://127.0.0.1:1/api/health/ready', rehearse.require_api_ready,
+                        inspect=lambda: healthy_state(), opener=opener,
+                        monotonic=clock.monotonic, sleep=clock.sleep,
+                    )
+
+                self.assertEqual(attempts, 1)
+                self.assertEqual(clock.sleeps, [])
+                self.assertNotIn('SYNTHETIC_PRIVATE_BODY', str(caught.exception))
+
+    def test_rejects_web_non_200_without_retry(self):
+        clock = Clock()
+        attempts = 0
+
+        def opener(_url, timeout):
+            nonlocal attempts
+            attempts += 1
+            return Response(status=204)
+
+        with self.assertRaisesRegex(RuntimeError, 'web host readiness returned invalid response'):
+            rehearse.wait_for_host_readiness(
+                'web', 'http://127.0.0.1:1/login', rehearse.require_web_ready,
+                inspect=lambda: healthy_state(), opener=opener,
+                monotonic=clock.monotonic, sleep=clock.sleep,
+            )
+
+        self.assertEqual(attempts, 1)
+        self.assertEqual(clock.sleeps, [])
+
+    def test_rejects_container_restart_after_host_probe(self):
+        states = iter([healthy_state(), healthy_state(restart_count=1)])
+
+        with self.assertRaisesRegex(RuntimeError, 'API host readiness container is not stable'):
+            rehearse.wait_for_host_readiness(
+                'API', 'http://127.0.0.1:1/api/health/ready', rehearse.require_api_ready,
+                inspect=lambda: next(states), opener=lambda _url, timeout: Response(body=b'{"status":"ok"}'),
+            )
+
+    def test_rejects_unhealthy_container_before_host_probe(self):
+        state = healthy_state()
+        state['State']['Health']['Status'] = 'unhealthy'
+        attempts = 0
+
+        def opener(_url, timeout):
+            nonlocal attempts
+            attempts += 1
+            return Response(body=b'{"status":"ok"}')
+
+        with self.assertRaisesRegex(RuntimeError, 'API host readiness container is not stable'):
+            rehearse.wait_for_host_readiness(
+                'API', 'http://127.0.0.1:1/api/health/ready', rehearse.require_api_ready,
+                inspect=lambda: state, opener=opener,
+            )
+
+        self.assertEqual(attempts, 0)
 
 
 if __name__ == '__main__':
