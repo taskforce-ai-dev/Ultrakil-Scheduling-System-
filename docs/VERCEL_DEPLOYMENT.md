@@ -11,8 +11,9 @@ until separate staging and production databases are provisioned.
 
 ## Plan gate
 
-The checked-in functions are capped at 60 seconds so they fit Vercel's current
-Hobby technical limit. Vercel restricts Hobby to personal, non-commercial use,
+The checked-in functions use an explicit, conservative 60-second compatibility
+cap. This remains valid whether or not Fluid Compute raises the account's
+available ceiling. Vercel restricts Hobby to personal, non-commercial use,
 however, so a commercial UltraKIL production deployment requires an eligible
 paid plan or written approval from Vercel. Do not describe Hobby as the
 production entitlement.
