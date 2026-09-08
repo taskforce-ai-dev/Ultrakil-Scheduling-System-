@@ -137,3 +137,20 @@ test('rollback pauses recurring QStash reconciliation until QStash is restored',
   }
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /during her absence/i);
 });
+
+test('recovery schedule operator docs specify the signed JSON request and smoke evidence', () => {
+  for (const file of ['docs/VERCEL_QSTASH_RECOVERY.md', 'docs/VERCEL_DEPLOYMENT.md',
+    'docs/VERCEL_RELEASE_CHECKLIST.md']) {
+    const docs = read(file).replace(/\s+/g, ' ');
+    assert.ok(docs.includes('POST'), `${file}: explicit POST method`);
+    assert.ok(docs.includes('Content-Type: application/json'), `${file}: destination JSON content type`);
+    assert.ok(docs.includes('`{}`'), `${file}: exact empty-object body`);
+    assert.ok(docs.includes('/api/internal/schedule-runs/reconcile'), `${file}: exact recovery path`);
+    assert.ok(docs.includes('*/5 * * * *'), `${file}: five-minute cron cadence`);
+    assert.match(docs, /signed.*smoke|smoke.*signed/i, `${file}: signed smoke evidence`);
+    assert.ok(docs.includes('204'), `${file}: expected successful response`);
+  }
+  const recovery = read('docs/VERCEL_QSTASH_RECOVERY.md');
+  assert.match(recovery, /rawBody/);
+  assert.match(recovery, /401/);
+});

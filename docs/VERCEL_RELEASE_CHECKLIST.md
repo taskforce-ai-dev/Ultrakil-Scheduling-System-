@@ -46,6 +46,18 @@ Record every result against an exact commit SHA; unchecked items remain open.
 - [ ] A recurring signed QStash schedule is configured for staging and
   production with separate environment credentials; both schedule IDs are
   private release evidence. Staging does not rely on Vercel Cron.
+- [ ] Each recurring schedule explicitly sends
+  `POST https://<public-api-host>/api/internal/schedule-runs/reconcile` with
+  destination `Content-Type: application/json`, body exactly `{}`, and cron
+  `*/5 * * * *` (every five minutes, UTC), supported by the selected plan.
+  The stable origin and configured API prefix match the accepted environment.
+  Saved destination headers are verified, as missing JSON content type can
+  cause 401 when the JSON parser does not supply `rawBody`.
+- [ ] Signed smoke evidence from each recurring QStash schedule records the
+  deployed SHA, UTC delivery time, destination settings and **204 No Content**
+  response. Schedule/message IDs remain private; no tokens, signatures or
+  signing keys are copied into shared evidence. An existing schedule without
+  a successful signed delivery leaves this gate open.
 - [ ] A daily Vercel Cron production-only fallback is configured with a
   server-only `CRON_SECRET`; Vercel cron runs only on Production, never Preview.
   `CRON_SECRET` is absent from browser-exposed variables and staging Preview.

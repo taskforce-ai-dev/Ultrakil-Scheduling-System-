@@ -78,6 +78,17 @@ schedule for staging and production; use distinct environment credentials and
 record both schedule IDs privately. QStash is the only recurring recovery
 trigger available to the long-lived staging Preview branch.
 
+Use `POST https://<public-api-host>/api/internal/schedule-runs/reconcile`,
+destination `Content-Type: application/json`, body exactly `{}`, and cron
+`*/5 * * * *` (every five minutes, UTC). Match each environment's stable
+`API_PUBLIC_URL` and configured API prefix exactly. Follow the
+[recovery schedule operator instructions](VERCEL_QSTASH_RECOVERY.md), including
+plan/cadence validation and destination-header verification. Missing JSON
+content type can prevent `rawBody` capture and cause 401 signature rejection.
+Record signed smoke evidence from each recurring schedule: exact release SHA,
+UTC delivery time, destination settings and a **204 No Content** result; keep
+schedule/message IDs private and never publish signing credentials.
+
 Vercel invokes cron jobs only on Production deployments, not Preview
 deployments. Configure the daily Vercel Cron production-only fallback with the
 server-only `CRON_SECRET`; it is not staging evidence and cannot recover a
