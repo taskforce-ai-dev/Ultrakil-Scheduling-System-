@@ -12,6 +12,18 @@ dist/
 build/
 .next/
 out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Test artifacts
+.playwright-artifacts/
+playwright-report/
+test-results/
 
 # Logs
 *.log
