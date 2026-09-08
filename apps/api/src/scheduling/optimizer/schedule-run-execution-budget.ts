@@ -38,3 +38,10 @@ export function qstashMaximumRangeDays(executionBudgetSeconds: number): number {
 // the DTO's 62-day range at its 300-seconds-per-day maximum plus fixed
 // preparation, transport, persistence, and lease reserves.
 export const SELF_HOSTED_EXECUTION_BUDGET_SECONDS = 6 * 60 * 60;
+
+// BullMQ can run long self-hosted solves, but its durable database lease must
+// remain short enough that a process crash is reclaimed before retries exhaust.
+// The worker renews this fenced lease while it is healthy.
+export const BULLMQ_EXECUTION_LEASE_SECONDS = 60;
+export const BULLMQ_LEASE_HEARTBEAT_MILLISECONDS = 20_000;
+export const BULLMQ_RETRY_BACKOFF_MILLISECONDS = 75_000;

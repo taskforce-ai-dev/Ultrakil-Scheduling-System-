@@ -44,6 +44,8 @@ export const scheduleDispatchConfig = registerAs('scheduleDispatch', () => {
     publicUrl,
     executeUrl: endpoint('execute'),
     failureUrl: endpoint('failure'),
+    reconcileUrl: endpoint('reconcile'),
+    reconciliationCronSecret: env.CRON_SECRET || undefined,
     qstash: {
       token: env.QSTASH_TOKEN,
       currentSigningKey: env.QSTASH_CURRENT_SIGNING_KEY,

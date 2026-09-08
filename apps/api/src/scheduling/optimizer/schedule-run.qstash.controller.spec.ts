@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { IS_PUBLIC_KEY } from '../../auth/decorators/public.decorator';
 import { ScheduleRunQStashController } from './schedule-run.qstash.controller';
 import { ScheduleRunService } from './schedule-run.service';
+import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
 
 const runId = 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000';
 const dispatchId = 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4';
@@ -15,9 +16,18 @@ function fixture() {
           'https://ultrakil.example.com/api/internal/schedule-runs/execute',
         'scheduleDispatch.failureUrl':
           'https://ultrakil.example.com/api/internal/schedule-runs/failure',
+        'scheduleDispatch.reconcileUrl':
+          'https://ultrakil.example.com/api/internal/schedule-runs/reconcile',
+        'scheduleDispatch.reconciliationCronSecret': 'sixteen-characters',
         'scheduleDispatch.executionBudgetSeconds': 55,
       };
       return values[key];
+    }),
+    get: jest.fn((key: string) => {
+      if (key === 'scheduleDispatch.reconciliationCronSecret') {
+        return 'sixteen-characters';
+      }
+      return undefined;
     }),
   };
   const runs = {
@@ -29,19 +39,29 @@ function fixture() {
     failForQStash: jest.fn(async () => 'failed'),
   };
   const receiver = { verify: jest.fn(async () => true) };
+  const dispatches = { reconcilePending: jest.fn(async () => undefined) };
   const controller = new ScheduleRunQStashController(
     runs as unknown as ScheduleRunService,
     config as unknown as ConfigService,
     receiver,
+    dispatches as unknown as ScheduleRunDispatchService,
   );
-  const request = (raw: string, destination = 'execute') => ({
+  const request = (
+    raw: string,
+    destination = 'execute',
+    authorization?: string,
+  ) => ({
     rawBody: Buffer.from(raw),
     header: jest.fn((name: string) =>
-      name === 'upstash-signature' ? 'signature' : undefined,
+      name === 'upstash-signature'
+        ? 'signature'
+        : name === 'authorization'
+          ? authorization
+          : undefined,
     ),
     destination,
   });
-  return { config, runs, receiver, controller, request };
+  return { config, runs, receiver, dispatches, controller, request };
 }
 
 describe('ScheduleRunQStashController', () => {
@@ -145,5 +165,38 @@ describe('ScheduleRunQStashController', () => {
       ),
     ).rejects.toMatchObject({ status: 401 });
     expect(f.runs.deliver).not.toHaveBeenCalled();
+  });
+
+  it('reconciles durable dispatches from a signed QStash schedule payload', async () => {
+    const f = fixture();
+    const raw = '{}';
+
+    await expect(
+      f.controller.reconcileQStash(f.request(raw) as never),
+    ).resolves.toBeUndefined();
+
+    expect(f.receiver.verify).toHaveBeenCalledWith({
+      signature: 'signature',
+      body: raw,
+      url: 'https://ultrakil.example.com/api/internal/schedule-runs/reconcile',
+    });
+    expect(f.dispatches.reconcilePending).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts only the configured Vercel Cron bearer secret for the daily sweep', async () => {
+    const f = fixture();
+
+    await expect(
+      f.controller.reconcileVercel(
+        f.request('', 'reconcile', 'Bearer incorrect') as never,
+      ),
+    ).rejects.toMatchObject({ status: 401 });
+    await expect(
+      f.controller.reconcileVercel(
+        f.request('', 'reconcile', 'Bearer sixteen-characters') as never,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(f.dispatches.reconcilePending).toHaveBeenCalledTimes(1);
   });
 });

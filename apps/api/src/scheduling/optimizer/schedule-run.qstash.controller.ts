@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Inject,
@@ -11,10 +12,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'node:crypto';
 import { Request } from 'express';
 import { z } from 'zod';
 
 import { Public } from '../../auth/decorators/public.decorator';
+import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
 import { ScheduleRunService } from './schedule-run.service';
 
 export const QSTASH_RECEIVER = Symbol('QSTASH_RECEIVER');
@@ -50,6 +53,7 @@ export function createQStashReceiver(config: ConfigService): QStashReceiver {
 const executePayload = z
   .object({ runId: z.string().uuid(), dispatchId: z.string().uuid() })
   .strict();
+const reconcilePayload = z.object({}).strict();
 const failurePayload = z
   .object({
     sourceMessageId: z.string().min(1),
@@ -65,6 +69,7 @@ export class ScheduleRunQStashController {
     private readonly runs: ScheduleRunService,
     private readonly config: ConfigService,
     @Inject(QSTASH_RECEIVER) private readonly receiver: QStashReceiver,
+    private readonly dispatches: ScheduleRunDispatchService,
   ) {}
 
   @Post('execute')
@@ -114,10 +119,39 @@ export class ScheduleRunQStashController {
     }
   }
 
+  /** Primary recovery trigger: a recurring QStash schedule signs `{}`. */
+  @Post('reconcile')
+  @Public()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async reconcileQStash(@Req() request: RawBodyRequest<Request>): Promise<void> {
+    const raw = await this.verify(request, 'scheduleDispatch.reconcileUrl');
+    const parsed = reconcilePayload.safeParse(this.parseJson(raw));
+    if (!parsed.success)
+      throw new BadRequestException('Invalid QStash reconciliation payload.');
+    await this.dispatches.reconcilePending();
+  }
+
+  /**
+   * Vercel Cron issues a GET with `Authorization: Bearer $CRON_SECRET`.
+   * Hobby can invoke it only daily, so it is a fallback sweep rather than the
+   * primary QStash recovery cadence.
+   */
+  @Get('reconcile')
+  @Public()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async reconcileVercel(@Req() request: Request): Promise<void> {
+    if (!this.hasValidCronSecret(request.header('authorization'))) {
+      throw new UnauthorizedException('Invalid reconciliation credentials.');
+    }
+    await this.dispatches.reconcilePending();
+  }
+
   private async verify(
     request: RawBodyRequest<Request>,
     destinationConfigKey:
-      'scheduleDispatch.executeUrl' | 'scheduleDispatch.failureUrl',
+      | 'scheduleDispatch.executeUrl'
+      | 'scheduleDispatch.failureUrl'
+      | 'scheduleDispatch.reconcileUrl',
   ): Promise<string> {
     const raw = request.rawBody?.toString('utf8');
     const signature = request.header('upstash-signature');
@@ -162,5 +196,17 @@ export class ScheduleRunQStashController {
     } catch {
       throw new BadRequestException('Invalid QStash JSON payload.');
     }
+  }
+
+  private hasValidCronSecret(authorization: string | undefined): boolean {
+    const secret = this.config.get<string>(
+      'scheduleDispatch.reconciliationCronSecret',
+    );
+    if (!secret || !authorization) return false;
+    const expected = Buffer.from(`Bearer ${secret}`);
+    const received = Buffer.from(authorization);
+    return (
+      expected.length === received.length && timingSafeEqual(expected, received)
+    );
   }
 }

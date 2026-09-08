@@ -7,10 +7,12 @@ import {
   ScheduleRunDispatch,
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
+import { ScheduleRunService } from './schedule-run.service';
 import {
-  ScheduleRunService,
-} from './schedule-run.service';
-import { SELF_HOSTED_EXECUTION_BUDGET_SECONDS } from './schedule-run-execution-budget';
+  BULLMQ_EXECUTION_LEASE_SECONDS,
+  BULLMQ_RETRY_BACKOFF_MILLISECONDS,
+  SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+} from './schedule-run-execution-budget';
 
 export interface ScheduleRunJobData extends ScheduleRunDispatch {
   timeLimitSeconds?: number;
@@ -44,10 +46,12 @@ export class ScheduleRunProcessor extends WorkerHost {
     // boundary so the service releases the lease for every retryable failure
     // and writes FAILED only on BullMQ's final delivery.
     const retryOnFailure =
-      job.attemptsMade + 1 < Math.max(1, job.opts.attempts ?? 1);
+      job.attemptsMade + 1 < Math.max(1, job.opts?.attempts ?? 1);
     const outcome = await this.runs.deliver(runId, {
       timeLimitSeconds,
       executionBudgetSeconds: SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+      executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
+      renewExecutionLease: true,
       retryOnFailure,
       onProgress: async (percent) => {
         await job.updateProgress(percent);
@@ -78,7 +82,9 @@ export class ScheduleRunQueue implements ScheduleRunDispatcher {
       // produce two solves racing each other over the same visits.
       jobId: data.runId,
       attempts: 3,
-      backoff: { type: 'exponential', delay: 2_000 },
+      // A crashed worker's 60-second DB lease must expire before BullMQ spends
+      // another attempt on it. The worker heartbeats the lease while healthy.
+      backoff: { type: 'fixed', delay: BULLMQ_RETRY_BACKOFF_MILLISECONDS },
       removeOnComplete: { age: 24 * 3600, count: 200 },
       removeOnFail: { age: 7 * 24 * 3600 },
     });

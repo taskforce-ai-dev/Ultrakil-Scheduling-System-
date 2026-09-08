@@ -6,6 +6,7 @@ import {
   SCHEDULE_RUN_DISPATCHER,
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
+import { ScheduleRunService } from './schedule-run.service';
 
 type DispatchStatus = 'PENDING' | 'PUBLISHED' | 'CANCELLED';
 type DispatchProvider = 'BULLMQ' | 'QSTASH';
@@ -16,6 +17,10 @@ interface DispatchOutboxRow {
   provider: DispatchProvider;
   status: DispatchStatus;
   messageId: string | null;
+  terminalFailureMessageId: string | null;
+  terminalFailureCode: string | null;
+  terminalFailureMessage: string | null;
+  terminalFailureAt: Date | null;
   run: Pick<ScheduleRun, 'id' | 'status' | 'cancelRequestedAt' | 'jobId'>;
 }
 
@@ -45,6 +50,7 @@ export class ScheduleRunDispatchService {
     private readonly prisma: PrismaService,
     @Inject(SCHEDULE_RUN_DISPATCHER)
     private readonly dispatcher: ScheduleRunDispatcher,
+    private readonly runs: ScheduleRunService,
   ) {}
 
   async dispatch(runId: string): Promise<ScheduleRun | null> {
@@ -91,14 +97,32 @@ export class ScheduleRunDispatchService {
 
   /** Invoked by normal polling endpoints and any future scheduled reconciler. */
   async reconcilePending(): Promise<void> {
-    const provider = this.dispatcher.provider === 'qstash' ? 'QSTASH' : 'BULLMQ';
+    const provider =
+      this.dispatcher.provider === 'qstash' ? 'QSTASH' : 'BULLMQ';
     const pending = await this.outbox(this.prisma).findMany({
-      where: { status: 'PENDING', provider },
+      where: {
+        provider,
+        OR: [
+          { status: 'PENDING', terminalFailureAt: null },
+          ...(provider === 'QSTASH'
+            ? [
+                {
+                  status: { in: ['PENDING', 'PUBLISHED'] },
+                  terminalFailureAt: { not: null },
+                },
+              ]
+            : []),
+        ],
+      },
       orderBy: { updatedAt: 'asc' },
       take: MAX_RECONCILIATION_DISPATCHES,
     });
     await Promise.allSettled(
-      pending.map((dispatch) => this.dispatch(dispatch.scheduleRunId)),
+      pending.map((dispatch) =>
+        this.hasRecordedQStashTerminalFailure(dispatch)
+          ? this.settleRecordedQStashTerminalFailure(dispatch)
+          : this.dispatch(dispatch.scheduleRunId),
+      ),
     );
   }
 
@@ -138,6 +162,35 @@ export class ScheduleRunDispatchService {
       // later API invocation will reconcile it once PostgreSQL is available.
       this.logger.warn('Schedule-run dispatch reconciliation could not persist');
     }
+  }
+
+  private hasRecordedQStashTerminalFailure(
+    dispatch: DispatchOutboxRow,
+  ): boolean {
+    return (
+      dispatch.provider === 'QSTASH' &&
+      dispatch.terminalFailureAt !== null &&
+      dispatch.terminalFailureMessageId !== null &&
+      dispatch.terminalFailureCode !== null &&
+      dispatch.terminalFailureMessage !== null
+    );
+  }
+
+  /**
+   * A QStash failure callback can exhaust its own retries while another worker
+   * still owns the lease. Replaying the signed, durable terminal fact on later
+   * polling safely settles only after that owner has expired.
+   */
+  private async settleRecordedQStashTerminalFailure(
+    dispatch: DispatchOutboxRow,
+  ): Promise<void> {
+    await this.runs.failForQStash(
+      dispatch.scheduleRunId,
+      dispatch.id,
+      dispatch.terminalFailureMessageId as string,
+      dispatch.terminalFailureCode as string,
+      dispatch.terminalFailureMessage as string,
+    );
   }
 
   private outbox(client: unknown): DispatchOutboxModel {

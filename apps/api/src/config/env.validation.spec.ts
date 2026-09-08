@@ -162,6 +162,21 @@ describe('schedule dispatcher environment validation', () => {
     });
   });
 
+  it('allows a blank cron secret and requires a strong value when configured', () => {
+    expect(validateEnv({ ...baseEnv, CRON_SECRET: '' })).toMatchObject({
+      CRON_SECRET: undefined,
+    });
+    expect(() =>
+      validateEnv({ ...baseEnv, CRON_SECRET: 'too-short' }),
+    ).toThrow('CRON_SECRET');
+    expect(
+      validateEnv({
+        ...baseEnv,
+        CRON_SECRET: 'a-secure-cron-secret-that-is-32-chars',
+      }),
+    ).toMatchObject({ CRON_SECRET: 'a-secure-cron-secret-that-is-32-chars' });
+  });
+
   it('allows a QStash budget below the 60-second compatibility ceiling', () => {
     expect(() =>
       validateEnv({

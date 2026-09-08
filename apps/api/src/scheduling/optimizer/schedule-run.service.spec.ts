@@ -16,7 +16,11 @@ import {
   ScheduleRunProcessor,
 } from './schedule-run.processor';
 import { ScheduleRunService } from './schedule-run.service';
-import { SELF_HOSTED_EXECUTION_BUDGET_SECONDS } from './schedule-run-execution-budget';
+import {
+  BULLMQ_EXECUTION_LEASE_SECONDS,
+  BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
+  SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+} from './schedule-run-execution-budget';
 import { SchedulerClient, SolveResponse } from './scheduler.client';
 import { PublishingService } from './publishing.service';
 
@@ -862,7 +866,54 @@ describe('at-least-once schedule-run delivery leases', () => {
   const deliveryOptions = {
     executionBudgetSeconds: SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
     retryOnFailure: true,
+    executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
+    renewExecutionLease: true,
   };
+
+  it('renews a self-hosted lease while the solver is still running', async () => {
+    jest.useFakeTimers({ now: new Date('2027-03-01T00:00:00.000Z') });
+    try {
+      const f = fixture();
+      const pending = f.service.deliver(f.run.id, deliveryOptions);
+      await f.started.promise;
+
+      await jest.advanceTimersByTimeAsync(
+        BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
+      );
+
+      expect(f.run.executionLeaseExpiresAt?.getTime()).toBeGreaterThan(
+        new Date('2027-03-01T00:00:00.000Z').getTime() +
+          BULLMQ_EXECUTION_LEASE_SECONDS * 1_000,
+      );
+      f.release();
+      await expect(pending).resolves.toMatchObject({ kind: 'completed' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reclaims a hard-crashed BullMQ owner after its renewable lease expires', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(
+      Date.now() + BULLMQ_EXECUTION_LEASE_SECONDS * 1_000,
+    );
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'busy' },
+    );
+
+    f.run.executionLeaseExpiresAt = new Date(Date.now() - 1);
+    const recovery = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+    f.release();
+
+    await expect(recovery).resolves.toMatchObject({ kind: 'completed' });
+    expect(f.run.executionLeaseId).not.toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
+  });
 
   it('releases a retryable BullMQ failure so the next delivery can complete', async () => {
     const f = fixture();

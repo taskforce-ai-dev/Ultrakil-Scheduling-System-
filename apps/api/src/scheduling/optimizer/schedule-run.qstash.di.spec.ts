@@ -10,6 +10,7 @@ import {
   ScheduleRunQStashController,
 } from './schedule-run.qstash.controller';
 import { ScheduleRunService } from './schedule-run.service';
+import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
 
 describe('QStash Nest DI wiring', () => {
   it('compiles the QStash dispatcher and signed controller without an Object provider', async () => {
@@ -21,6 +22,8 @@ describe('QStash Nest DI wiring', () => {
             'https://ultrakil.example.com/api/internal/schedule-runs/execute',
           'scheduleDispatch.failureUrl':
             'https://ultrakil.example.com/api/internal/schedule-runs/failure',
+          'scheduleDispatch.reconcileUrl':
+            'https://ultrakil.example.com/api/internal/schedule-runs/reconcile',
           'scheduleDispatch.executionBudgetSeconds': 55,
         };
         return values[key];
@@ -38,6 +41,7 @@ describe('QStash Nest DI wiring', () => {
         QStashScheduleRunDispatcher,
         { provide: ConfigService, useValue: config },
         { provide: ScheduleRunService, useValue: {} },
+        { provide: ScheduleRunDispatchService, useValue: {} },
         { provide: QSTASH_CLIENT, useValue: client },
         { provide: QSTASH_RECEIVER, useValue: receiver },
       ],

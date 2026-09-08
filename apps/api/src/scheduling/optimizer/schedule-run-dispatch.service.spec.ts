@@ -9,9 +9,10 @@ const dispatchId = 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4';
 function fixture() {
   const run = {
     id: runId,
-    status: ScheduleRunStatus.QUEUED,
+    status: ScheduleRunStatus.QUEUED as ScheduleRunStatus,
     cancelRequestedAt: null as Date | null,
     jobId: null as string | null,
+    executionLeaseExpiresAt: null as Date | null,
   };
   const dispatch = {
     id: dispatchId,
@@ -21,6 +22,10 @@ function fixture() {
     messageId: null as string | null,
     attempts: 0,
     lastError: null as string | null,
+    terminalFailureMessageId: null as string | null,
+    terminalFailureCode: null as string | null,
+    terminalFailureMessage: null as string | null,
+    terminalFailureAt: null as Date | null,
     run,
   };
   let failRunWrite = false;
@@ -28,6 +33,27 @@ function fixture() {
     provider: 'qstash' as const,
     enqueue: jest.fn(async () => 'msg_opaque'),
     cancel: jest.fn(),
+  };
+  const terminalFailureFinalizer = {
+    failForQStash: jest.fn(
+      async (
+        _runId: string,
+        _dispatchId: string,
+        _messageId: string,
+        _code: string,
+        _message: string,
+      ) => {
+        if (
+          run.status === ScheduleRunStatus.RUNNING &&
+          run.executionLeaseExpiresAt &&
+          run.executionLeaseExpiresAt > new Date()
+        ) {
+          return 'deferred';
+        }
+        run.status = ScheduleRunStatus.FAILED;
+        return 'failed';
+      },
+    ),
   };
   const prisma = {
     scheduleRunDispatchOutbox: {
@@ -77,12 +103,14 @@ function fixture() {
   const service = new ScheduleRunDispatchService(
     prisma as never,
     dispatcher as unknown as ScheduleRunDispatcher,
+    terminalFailureFinalizer as never,
   );
   return {
     run,
     dispatch,
     prisma,
     dispatcher,
+    terminalFailureFinalizer,
     service,
     failRunWrite: () => {
       failRunWrite = true;
@@ -138,5 +166,26 @@ describe('ScheduleRunDispatchService durable dispatch outbox', () => {
     expect(f.prisma.scheduleRunDispatchOutbox.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 3 }),
     );
+  });
+
+  it('settles a durably recorded QStash terminal failure after the crashed lease expires', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseExpiresAt = new Date(Date.now() + 60_000);
+    f.dispatch.status = 'PUBLISHED';
+    f.dispatch.messageId = 'msg_opaque';
+    f.dispatch.terminalFailureMessageId = 'msg_opaque';
+    f.dispatch.terminalFailureCode = 'QSTASH_DELIVERY_FAILED';
+    f.dispatch.terminalFailureMessage = 'QStash exhausted delivery retries.';
+    f.dispatch.terminalFailureAt = new Date();
+
+    await f.service.reconcilePending();
+    expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
+
+    f.run.executionLeaseExpiresAt = new Date(Date.now() - 1);
+    await f.service.reconcilePending();
+
+    expect(f.terminalFailureFinalizer.failForQStash).toHaveBeenCalledTimes(2);
+    expect(f.run.status).toBe(ScheduleRunStatus.FAILED);
   });
 });

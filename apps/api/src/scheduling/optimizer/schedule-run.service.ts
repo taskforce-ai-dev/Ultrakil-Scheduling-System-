@@ -24,6 +24,8 @@ import {
 } from './schedule-visit-lock';
 import type { ScheduleRunDispatcherProvider } from './schedule-run.dispatcher';
 import {
+  BULLMQ_EXECUTION_LEASE_SECONDS,
+  BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
   SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS,
   SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS,
   SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS,
@@ -52,6 +54,11 @@ interface ExecutionLease {
   expiresAt: Date;
 }
 
+interface ExecutionLeaseHeartbeat {
+  stop(): Promise<void>;
+  assertActive(): void;
+}
+
 type DeliveryOutcome =
   | { kind: 'completed'; scheduled: number; unassigned: number }
   | { kind: 'cancelled' }
@@ -61,6 +68,10 @@ type DeliveryOutcome =
 
 interface DeliveryOptions {
   executionBudgetSeconds: number;
+  /** Optional shorter durable lease for a long-running self-hosted delivery. */
+  executionLeaseSeconds?: number;
+  /** A QStash lease ends with its function; BullMQ renews while its worker lives. */
+  renewExecutionLease?: boolean;
   retryOnFailure: boolean;
   timeLimitSeconds?: number;
   onProgress?: (percent: number) => Promise<void>;
@@ -274,6 +285,8 @@ export class ScheduleRunService {
     const outcome = await this.deliver(runId, {
       executionBudgetSeconds:
         options.executionBudgetSeconds ?? SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+      executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
+      renewExecutionLease: true,
       retryOnFailure: false,
       timeLimitSeconds: options.timeLimitSeconds,
       onProgress: options.onProgress,
@@ -305,14 +318,23 @@ export class ScheduleRunService {
     runId: string,
     options: DeliveryOptions,
   ): Promise<DeliveryOutcome> {
-    const claim = await this.claimExecutionLease(
-      runId,
-      options.executionBudgetSeconds,
-    );
+    const executionLeaseSeconds =
+      options.executionLeaseSeconds ?? options.executionBudgetSeconds;
+    const claim = await this.claimExecutionLease(runId, executionLeaseSeconds);
     if (claim.kind !== 'acquired') return claim;
+
+    const heartbeat = options.renewExecutionLease
+      ? this.startExecutionLeaseHeartbeat(
+          runId,
+          claim.lease,
+          executionLeaseSeconds,
+        )
+      : undefined;
 
     try {
       const result = await this.executeLeased(runId, claim.lease, options);
+      await heartbeat?.stop();
+      heartbeat?.assertActive();
       return result.cancelled
         ? { kind: 'cancelled' }
         : {
@@ -321,17 +343,25 @@ export class ScheduleRunService {
             unassigned: result.unassigned,
           };
     } catch (caught) {
+      await heartbeat?.stop();
+      let failure = caught;
+      try {
+        heartbeat?.assertActive();
+      } catch (heartbeatFailure) {
+        failure = heartbeatFailure;
+      }
       const code =
-        typeof (caught as { code?: unknown }).code === 'string'
-          ? (caught as { code: string }).code
+        typeof (failure as { code?: unknown }).code === 'string'
+          ? (failure as { code: string }).code
           : 'INTERNAL_ERROR';
-      const message = caught instanceof Error ? caught.message : String(caught);
+      const message =
+        failure instanceof Error ? failure.message : String(failure);
       if (options.retryOnFailure) {
         await this.releaseLeaseForRetry(runId, claim.lease);
       } else {
         await this.fail(runId, claim.lease, code, message);
       }
-      throw caught;
+      throw failure;
     }
   }
 
@@ -1086,6 +1116,74 @@ export class ScheduleRunService {
       },
     });
     return settled.count === 1;
+  }
+
+  /**
+   * BullMQ may run a self-hosted solve for hours, but a crashed process must
+   * surrender quickly. Renewal is fenced by the same lease id as every write,
+   * so a reclaimed owner cannot prolong or overwrite the new owner's work.
+   */
+  private startExecutionLeaseHeartbeat(
+    runId: string,
+    lease: ExecutionLease,
+    executionLeaseSeconds: number,
+  ): ExecutionLeaseHeartbeat {
+    let stopped = false;
+    let failure: unknown;
+    let inFlight: Promise<void> | undefined;
+    let renewing = false;
+    const tick = () => {
+      if (stopped || failure || renewing) return;
+      renewing = true;
+      inFlight = this.renewExecutionLease(
+        runId,
+        lease,
+        executionLeaseSeconds,
+      )
+        .catch((error: unknown) => {
+          failure = error;
+        })
+        .finally(() => {
+          renewing = false;
+        });
+    };
+    const timer = setInterval(tick, BULLMQ_LEASE_HEARTBEAT_MILLISECONDS);
+
+    return {
+      stop: async () => {
+        stopped = true;
+        clearInterval(timer);
+        await inFlight;
+      },
+      assertActive: () => {
+        if (failure) throw failure;
+      },
+    };
+  }
+
+  private async renewExecutionLease(
+    runId: string,
+    lease: ExecutionLease,
+    executionLeaseSeconds: number,
+  ): Promise<void> {
+    const expiresAt = new Date(
+      Date.now() + executionLeaseSeconds * 1_000,
+    );
+    const renewed = await this.leaseModel(this.prisma).updateMany({
+      // Cancellation is cooperative: its current owner must keep its fence
+      // until it reaches a safe cancellation check, rather than looking stale.
+      where: this.leaseWhere(runId, lease, true),
+      data: { executionLeaseExpiresAt: expiresAt },
+    });
+    if (renewed.count !== 1) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This schedule run lease is no longer active.',
+        HttpStatus.CONFLICT,
+        { runId },
+      );
+    }
+    lease.expiresAt = expiresAt;
   }
 
   private async releaseLeaseForRetry(

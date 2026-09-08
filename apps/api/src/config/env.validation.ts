@@ -75,6 +75,9 @@ export const envSchema = z.object({
   QSTASH_TOKEN: z.string().optional(),
   QSTASH_CURRENT_SIGNING_KEY: z.string().optional(),
   QSTASH_NEXT_SIGNING_KEY: z.string().optional(),
+  // Vercel Cron supplies this as a bearer token to the daily reconciliation
+  // endpoint. It remains optional because QStash schedules use signatures.
+  CRON_SECRET: optionalSecret,
 
   API_PORT: port(3001),
   API_GLOBAL_PREFIX: apiGlobalPrefix,
