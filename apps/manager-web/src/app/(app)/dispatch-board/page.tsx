@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Footprints,
   ShieldAlert,
   UserCog,
   UserX,
@@ -116,8 +117,13 @@ export default function DispatchBoardPage() {
   const [view, setView] = React.useState<"list" | "calendar">("list");
 
   const sorted = React.useMemo(
-    () => [...visits].sort((a, b) => a.windowStartMinute - b.windowStartMinute),
-    [visits]
+    () =>
+      [...visits].sort(
+        (a, b) =>
+          (assignments[a.id]?.plannedStartMinute ?? a.windowStartMinute) -
+          (assignments[b.id]?.plannedStartMinute ?? b.windowStartMinute),
+      ),
+    [visits, assignments]
   );
 
   return (
@@ -232,7 +238,7 @@ export default function DispatchBoardPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>Customer / Site</TableHead>
-                <TableHead>Window</TableHead>
+                <TableHead>Booked</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead>Supervisor</TableHead>
                 <TableHead>Crew</TableHead>
@@ -261,8 +267,30 @@ export default function DispatchBoardPage() {
                       </p>
                     </TableCell>
                     <TableCell>
-                      {formatMinuteOfDay(visit.windowStartMinute)}–
-                      {formatMinuteOfDay(visit.windowEndMinute)}
+                      {assignment ? (
+                        // The slot the crew is actually booked into. The window
+                        // is when the customer is open — showing only that told
+                        // a manager "08:00-17:00, 60 min" and left them to
+                        // guess which hour anybody is turning up.
+                        <>
+                          <span className="font-medium tabular-nums">
+                            {formatMinuteOfDay(assignment.plannedStartMinute)}–
+                            {formatMinuteOfDay(assignment.plannedEndMinute)}
+                          </span>
+                          <span className="block text-xs text-muted-foreground">
+                            open {formatMinuteOfDay(visit.windowStartMinute)}–
+                            {formatMinuteOfDay(visit.windowEndMinute)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-muted-foreground">Not booked yet</span>
+                          <span className="block text-xs text-muted-foreground">
+                            open {formatMinuteOfDay(visit.windowStartMinute)}–
+                            {formatMinuteOfDay(visit.windowEndMinute)}
+                          </span>
+                        </>
+                      )}
                     </TableCell>
                     <TableCell>{visit.durationMinutes} min</TableCell>
                     <TableCell>
@@ -297,6 +325,16 @@ export default function DispatchBoardPage() {
                                 : vehicle.label
                             )
                             .join(", ")}
+                        </span>
+                      ) : assignment ? (
+                        // A crew that is going but has no vehicle travels by
+                        // public transport — that is a plan, and saying so is
+                        // useful. Only when a crew exists, though: printing it
+                        // against a visit nobody is assigned to would announce
+                        // travel arrangements for a job that is not happening.
+                        <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                          <Footprints className="h-3.5 w-3.5" aria-hidden="true" />
+                          Public transport
                         </span>
                       ) : (
                         <span className="text-sm text-muted-foreground">No vehicle</span>

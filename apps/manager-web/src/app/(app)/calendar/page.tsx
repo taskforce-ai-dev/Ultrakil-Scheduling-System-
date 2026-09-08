@@ -5,7 +5,6 @@ import { ChevronLeft, ChevronRight, Car, Users, Crown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { HoursUnconfirmedBadge } from "@/components/shared/visit-badges";
 import {
   Dialog,
   DialogContent,
@@ -130,7 +129,7 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}${entry.hoursUnconfirmed ? ", opening hours unconfirmed" : ""}`}
+      aria-label={`${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`}
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
@@ -152,9 +151,6 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (
         <Car className="h-3 w-3 shrink-0 opacity-80" aria-hidden="true" />
-      )}
-      {entry.hoursUnconfirmed && (
-        <span className="w-full text-destructive">Hours unconfirmed</span>
       )}
     </button>
   );
@@ -187,7 +183,6 @@ function DetailDialog({
               <Badge className={style.badge}>{style.label}</Badge>
               <Badge variant="outline">{entry.branchCode}</Badge>
               <Badge variant="outline">{entry.jobTypeName}</Badge>
-              {entry.hoursUnconfirmed && <HoursUnconfirmedBadge />}
               {entry.assignment?.publishedAt && (
                 <Badge variant="outline">
                   Published {new Date(entry.assignment.publishedAt).toLocaleString()}
@@ -195,12 +190,6 @@ function DetailDialog({
               )}
             </div>
 
-            {entry.hoursUnconfirmed && (
-              <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
-                No opening hours are recorded for {entry.siteName}. Scheduling uses an assumed{" "}
-                <strong>08:00–17:00</strong> working day. Confirm the site&apos;s real hours before dispatch.
-              </p>
-            )}
 
             {entry.instructions && (
               <div className="rounded-md border border-border bg-muted/40 p-2.5 text-sm">
