@@ -82,8 +82,9 @@ Record every result against an exact commit SHA; unchecked items remain open.
   passes before `db:deploy`. The guard has not backfilled any `RUNNING` run.
 - [ ] A deliberately fresh database is positively confirmed before migration
   only with `pnpm --filter @ultrakil/api dispatch:cutover:check -- --fresh --target=qstash`;
-  it reports no user tables. A database error is not treated as fresh, and the
-  fresh path is not used for an existing target.
+  it reports no application tables in the Prisma-owned `public` schema. A
+  database error is not treated as fresh, and the fresh path is not used for
+  an existing target.
 
 ## Staging acceptance
 

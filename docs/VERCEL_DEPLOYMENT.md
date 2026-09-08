@@ -163,9 +163,11 @@ environment database:
    pnpm --filter @ultrakil/api dispatch:cutover:check -- --fresh --target=qstash
    ```
 
-   `--fresh` succeeds only when PostgreSQL confirms there are no user tables;
-   it does not query `schedule_runs`, it never treats a query error as fresh,
-   and it does not replace the existing-database guard.
+   `--fresh` succeeds only when PostgreSQL confirms there are no application
+   tables in the Prisma-owned `public` schema. Provider-managed schemas such as
+   Neon's `neon_auth` do not make an otherwise new application database look
+   occupied. The guard does not query `schedule_runs`, never treats a query
+   error as fresh, and does not replace the existing-database guard.
 5. Only after the applicable guard succeeds, run
    `pnpm --filter @ultrakil/api db:deploy` and record the command result and
    release SHA.

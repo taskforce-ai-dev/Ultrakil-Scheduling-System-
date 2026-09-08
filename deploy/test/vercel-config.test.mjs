@@ -122,7 +122,8 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /db:deploy/);
   assert.match(docs, /dispatch:cutover:check/);
   assert.match(docs, /--fresh/);
-  assert.match(docs, /no user tables/i);
+  assert.match(docs, /no application\s+tables/i);
+  assert.match(docs, /Prisma-owned `public` schema/i);
   assert.match(docs, /Deployment Protection/);
   assert.match(docs, /SCHEDULER_API_TOKEN/);
   assert.match(docs, /no browser-exposed bypass secret/i);

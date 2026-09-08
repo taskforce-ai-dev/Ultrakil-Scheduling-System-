@@ -32,10 +32,11 @@ const TARGETS: Record<string, DispatchProvider> = {
  * environment could approve a BullMQ cutover when the operator meant QStash.
  */
 export function parseCutoverOptions(args: string[]): DispatchCutoverOptions {
-  const fresh = args.includes('--fresh');
-  const targetArgument = args.find((arg) => arg.startsWith('--target='));
+  const normalizedArgs = args[0] === '--' ? args.slice(1) : args;
+  const fresh = normalizedArgs.includes('--fresh');
+  const targetArgument = normalizedArgs.find((arg) => arg.startsWith('--target='));
   const expectedArgumentCount = fresh ? 2 : 1;
-  if (!targetArgument || args.length !== expectedArgumentCount) {
+  if (!targetArgument || normalizedArgs.length !== expectedArgumentCount) {
     throw new Error(
       'Use --target=qstash or --target=bullmq, with optional --fresh for a positively empty database.',
     );
@@ -61,8 +62,7 @@ async function confirmFreshDatabase(prisma: DispatchCutoverPrisma): Promise<void
           INNER JOIN pg_catalog.pg_namespace AS namespace
             ON namespace.oid = relation.relnamespace
           WHERE relation.relkind IN ('r', 'p')
-            AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
-            AND namespace.nspname NOT LIKE 'pg_toast%'
+            AND namespace.nspname = 'public'
         ) AS has_user_tables
       `,
     );
@@ -79,7 +79,7 @@ async function confirmFreshDatabase(prisma: DispatchCutoverPrisma): Promise<void
   }
   if (rows[0].has_user_tables) {
     throw new Error(
-      'Fresh database guard blocked: the target contains user tables. Do not run migrations as fresh; use the existing-database guard after maintenance instead.',
+      'Fresh database guard blocked: the target public schema contains application tables. Do not run migrations as fresh; use the existing-database guard after maintenance instead.',
     );
   }
 }
