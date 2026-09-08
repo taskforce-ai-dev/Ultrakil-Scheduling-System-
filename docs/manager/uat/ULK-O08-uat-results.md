@@ -336,8 +336,9 @@ Screenshots: `screenshots/vehicle-authorized-driver-picker.png`,
 originally listed here as third clean-save evidence. On review its
 Validation panel visibly shows `EMPLOYEE_DOUBLE_BOOKED` for both Chaminda
 Peiris and Kamala Wijesinghe, comparing this same visit's assignment
-against itself — it is evidence for Defect 1 below, not a clean save, and
-has been moved there. The underlying save and the Dispatch Board's
+against itself — it is historical evidence for finding #1 below (the
+self-overlap defect, already fixed on current `main`), not a clean save,
+and has been moved there. The underlying save and the Dispatch Board's
 read-only view (`dispatch-board-valid-assignment-persisted.png`) remain
 correct, so "Matches expected" above still holds; only the screenshot
 list was wrong.
@@ -412,13 +413,14 @@ claim:** the two screenshots below, and the "confirmed independently
 persisted" wording above, were carried over from an earlier draft. Both
 screenshots actually show the toast layered over a Validation panel
 already flagging `EMPLOYEE_DOUBLE_BOOKED` for the crew against this same
-visit's own just-saved assignment — the same defect as Defect 1 below, not
-independent confirmation via the Dispatch Board's read-only view (unlike
-the vehicle-authorization scenario above, no such reload screenshot was
-taken for either visit here). Reclassified as defect evidence. **Re-run
-required:** confirm both saves independently via a Dispatch Board reload
-(not a drawer reopen) once staging is available, and capture that as the
-clean evidence for this scenario.
+visit's own just-saved assignment — the same pre-fix self-overlap defect
+as finding #1 below (already fixed on current `main`), not independent
+confirmation via the Dispatch Board's read-only view (unlike the
+vehicle-authorization scenario above, no such reload screenshot was taken
+for either visit here). Reclassified as historical defect evidence.
+**Re-run required:** confirm both saves independently via a Dispatch Board
+reload (not a drawer reopen) once staging is available, and capture that
+as the clean evidence for this scenario.
 
 Screenshots (defect evidence, not clean-save evidence — see correction
 above): `screenshots/o09-scenarioA-driver-chaminda-saved.png`,
@@ -596,9 +598,14 @@ calls this out explicitly as a recovery step (already added).
 
 ---
 
-## Defects found
+## Historical local-UAT findings (fixed on current main)
 
-### 1. Re-opening an already-assigned visit shows false "double-booked" errors against itself
+### 1. [Fixed on current main — pending deployed-staging regression retest] Re-opening an already-assigned visit showed false "double-booked" errors against itself
+
+**Status at time of this UAT pass:** open defect, found locally.
+**Status now:** fixed on current `main`. This section is kept as the
+original repro record, not as an open defect — see "Fix verification"
+below.
 
 **Dataset:** The already-saved valid assignment from the vehicle-authorization
 scenario above (Harbour View — Main Building, 2026-09-08, crew [Chaminda
@@ -614,7 +621,7 @@ read Validation panel text immediately on open
 valid assignment should show it as still valid (or at minimum, no false
 conflict against itself).
 
-**Actual result:**
+**Actual result at the time (pre-fix, local baseline):**
 
 - `Employee overlap / EMPLOYEE_DOUBLE_BOOKED` for Chaminda Peiris: "already
   on another job from 08:00 to 12:00 on 2026-09-08" — the "other job" is
@@ -625,47 +632,56 @@ conflict against itself).
 
 `Save assignment` disabled throughout. Reproduced twice: once on a
 completely untouched re-open (screenshot below), and again after adding one
-more crew member on a separate attempt. **Does not match expected** — this
-is a real defect.
+more crew member on a separate attempt. **Did not match expected at the
+time** — a real defect in the local-UAT baseline.
 
-**Impact:** a manager cannot currently make any further edit to an
+**Impact at the time:** a manager could not make any further edit to an
 already-assigned visit (swap a sick employee, change the vehicle, adjust
-the time) — every re-open is blocked by the tool treating the visit's own
-existing assignment as a conflict with itself. Underlying save itself is
+the time) — every re-open was blocked by the tool treating the visit's own
+existing assignment as a conflict with itself. Underlying save itself was
 correct (confirmed via a fresh page reload showing the right
-supervisor/crew/vehicle with no error state) — this is specifically a
+supervisor/crew/vehicle with no error state) — this was specifically a
 re-open/re-validate bug, not a data-corruption bug.
 
-**Root cause (from reading, not modifying, the source):** the check call is
-`POST /visits/{visitId}/assignment/check` — the visit ID is already in the
-URL, so the fix (excluding the visit's own current assignment from its own
-overlap check) belongs in the API's eligibility logic. **Flagged for the
-API owner rather than fixed here** — backend files are out of scope for
-this UAT pass.
+**Root cause:** the eligibility check triggered by
+`POST /visits/{visitId}/assignment/check` was not excluding the visit's own
+current assignment from its own overlap query.
 
-**Suggested severity:** high — blocks a routine manager workflow, though
-data itself is not corrupted and a workaround exists (Remove crew, then
-rebuild from scratch instead of editing in place). Recommend the API owner
-confirms severity/fix before pilot sign-off, per the O08 release gate
-requiring zero unresolved critical/high defects.
+**Fix verification (this correction pass):** current `main` already fixes
+this. `AssignmentsService.check()`
+(`apps/api/src/scheduling/eligibility/assignments.service.ts`) now passes
+the visit's existing draft/current assignment id as `excludeAssignmentId`
+into `EligibilityService`
+(`apps/api/src/scheduling/eligibility/eligibility.service.ts`), which
+excludes that assignment from the employee/vehicle overlap queries. Traced
+back to the ULK-C07 baseline — confirmed by reading the current source, not
+by re-running the UI flow (no staging environment exists yet to run it
+against — see "Known limitations" #2).
 
-Screenshot: `screenshots/permanent-station-validation-and-reopen-bug.png`
+**Suggested severity (historical, at time found):** high — blocked a
+routine manager workflow. **Current status:** not an open defect;
+downgraded from the release-blocking list. **Still required before pilot
+sign-off:** re-run this exact scenario on deployed staging once available,
+and capture a clean "re-open a saved visit, no false conflict" screenshot —
+the fix is verified by code, not yet by a UI regression run.
+
+Screenshot (historical, pre-fix): `screenshots/permanent-station-validation-and-reopen-bug.png`
 (shows the false overlap errors alongside the correct
 `EMPLOYEE_PERMANENTLY_STATIONED` error in the same validation list, proving
-the permanent-station check itself is unaffected — only the overlap check is
-wrong).
+the permanent-station check itself was unaffected — only the overlap check
+was wrong. Kept as the original repro record; superseded by the fix above.)
 
-**Additional evidence of the same defect, found on review of this
-correction pass:** `screenshots/valid-assignment-saved-toast.png`,
+**Additional historical evidence of the same pre-fix defect, found on
+review of this correction pass:** `screenshots/valid-assignment-saved-toast.png`,
 `screenshots/o09-scenarioA-driver-chaminda-saved.png`, and
 `screenshots/o09-scenarioB-driver-kamala-saved.png` were originally
 captured and filed as clean-save evidence elsewhere in this document and
 in the manager guide / demonstration script. All three actually show the
-same self-comparison `EMPLOYEE_DOUBLE_BOOKED` pattern described above.
-They have been reclassified as defect evidence for this item throughout
-this document, the manager guide, and the demonstration script; the
-clean-save evidence they were standing in for still needs to be recaptured
-once this is fixed.
+same self-comparison `EMPLOYEE_DOUBLE_BOOKED` pattern described above,
+against the pre-fix local baseline. They have been reclassified as
+historical defect evidence for this item throughout this document, the
+manager guide, and the demonstration script; clean-save evidence against
+the fixed baseline still needs to be captured on deployed staging.
 
 ### 2. Add Agreement form shows the raw customer/site UUID instead of the name
 

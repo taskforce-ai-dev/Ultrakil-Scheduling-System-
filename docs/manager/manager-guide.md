@@ -168,7 +168,7 @@ You never have to guess.
 | **Missing skill** `SKILL_NOT_HELD` | The job needs a specific skill nobody in the crew holds. | Add someone qualified, or fix the required skills on the agreement. |
 | **No authorized driver** `NO_AUTHORIZED_DRIVER` | A vehicle is assigned but nobody in the crew is checked to drive it. | Name one of the checked drivers already in the crew, or add one who is checked. |
 | **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Use a larger vehicle. **Note:** adding a second, smaller vehicle does not currently split the crew across both — each assigned vehicle is checked against the *full* crew, not a share of it. |
-| **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. **Known issue:** re-opening a visit you *just* saved can show this error against itself — see "Known limitations." Closing and reopening the drawer again does **not** clear it — reopening is what reproduces it. Instead, check the Dispatch Board's read-only view to confirm the saved assignment is correct (it will be), and if you need to make a further change, remove and rebuild the crew rather than editing in place until this is fixed. |
+| **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. |
 
 None of these are colour-only — every one carries text, so they read
 correctly even in black-and-white or for a colour-blind reader.
@@ -257,13 +257,6 @@ validation if you pick a site other than the one they're stationed at.
 **"Save stays greyed out and I don't see an error."**
 Check the **Reason for this change** field — it's required, and an empty
 one silently disables Save with no separate warning.
-
-**"I just saved a valid crew, and now it says the same people are double-booked."**
-This is a known issue — re-opening a visit's crew editor right after saving
-it can show a false conflict against its own just-saved assignment. The
-save itself is fine; check the Dispatch Board's read-only view to confirm.
-If you need to make a further change, you may need to remove and rebuild
-the crew rather than editing in place. This has been flagged for a fix.
 
 **"The site I need isn't in the picker at all."**
 It's most likely inactive. Check the Customers list with the Status filter

@@ -17,22 +17,28 @@ there is no UI for any of them today.
 
 ## Release-relevant findings from this UAT pass
 
-1. **Re-opening an already-assigned visit can show false "double-booked"
-   errors against itself.** After saving a valid crew/vehicle assignment,
-   simply re-opening that same visit's "Edit crew" drawer — with no changes
-   made — shows `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` errors
-   comparing the visit's own saved assignment against itself, and disables
-   Save. The underlying save is unaffected (confirmed correct on the
-   read-only Dispatch Board view), but a manager currently cannot make a
-   *further* edit to an already-assigned visit in place. Root cause: the
-   `POST /visits/{visitId}/assignment/check` endpoint doesn't appear to
-   exclude the visit's own current assignment from its own overlap check.
-   This is a backend fix — flagged for the API owner, not corrected in this
-   pass (backend files were out of scope this round). See
-   `uat/ULK-O08-uat-results.md` for the full repro.
-   **Suggested severity: high** — blocks a routine manager workflow
-   (swapping a sick technician, changing a vehicle) — recommend the API
-   owner confirms before pilot sign-off.
+1. **[Fixed on current main, pending deployed-staging regression retest]
+   Re-opening an already-assigned visit could show false "double-booked"
+   errors against itself.** This is a **historical local-UAT finding**, not
+   a current defect: during this local UAT pass, re-opening a just-saved
+   visit's "Edit crew" drawer — with no changes made — showed
+   `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` errors comparing the
+   visit's own saved assignment against itself, and disabled Save. Root
+   cause was the eligibility check not excluding the visit's own current
+   assignment from its own overlap query. **Current `main` already fixes
+   this** — `AssignmentsService.check()` now passes the visit's existing
+   draft assignment as `excludeAssignmentId` into the eligibility service
+   (`apps/api/src/scheduling/eligibility/assignments.service.ts`,
+   `eligibility.service.ts`), tracing back to the ULK-C07 baseline. See
+   `uat/ULK-O08-uat-results.md` for the original repro and the fix
+   verification.
+   **Still open, and release-relevant:** this fix has not yet been re-run
+   against a deployed staging environment (none exists yet — see #2 below),
+   and the "clean save" screenshots this pass produced were all captured
+   *before* the fix, so they still show the old behavior (see #9 below).
+   **Before pilot sign-off:** re-run this scenario on deployed staging and
+   capture a clean "re-open a saved visit, no false conflict" screenshot to
+   replace the pre-fix ones.
 
 2. **No staging environment exists yet.** All UAT evidence in this pass is
    from a local development stack seeded with fabricated demo data — see
@@ -90,17 +96,19 @@ there is no UI for any of them today.
    other blocking condition is shown, rather than a silent disabled state.
 
 9. **Three "clean save" screenshots in the original draft were actually
-   evidence of defect #1.** `valid-assignment-saved-toast.png`,
-   `o09-scenarioA-driver-chaminda-saved.png`, and
-   `o09-scenarioB-driver-kamala-saved.png` were cited as clean-save
+   evidence of the now-fixed defect #1, captured before the fix.**
+   `valid-assignment-saved-toast.png`, `o09-scenarioA-driver-chaminda-saved.png`,
+   and `o09-scenarioB-driver-kamala-saved.png` were cited as clean-save
    evidence in `uat/ULK-O08-uat-results.md`, `manager-guide.md`, and
    `demonstration-script.md`. On review, all three show the Validation
-   panel already flagging `EMPLOYEE_DOUBLE_BOOKED` / a self-comparison
-   error against the assignment just saved — the same pattern as defect
-   #1, not a clean state. Reclassified as defect evidence throughout this
-   branch. Genuine clean-save screenshots (no errors visible under the
-   toast) still need to be captured once #1 is fixed — do not reuse the
-   three above for that purpose.
+   panel flagging `EMPLOYEE_DOUBLE_BOOKED` / a self-comparison error
+   against the assignment just saved — the pre-fix self-overlap behavior
+   described in #1, taken against the local-UAT baseline before the
+   `excludeAssignmentId` fix landed. Reclassified as historical defect
+   evidence throughout this branch, not current-behavior evidence. Genuine
+   clean-save screenshots (no errors visible under the toast) still need
+   to be captured on deployed staging, against the fixed baseline — do not
+   reuse the three above for that purpose.
 
 10. **Add Agreement form displays a raw internal UUID instead of the
     customer/site name once selected**

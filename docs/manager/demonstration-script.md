@@ -41,13 +41,14 @@ red "No PMS supervisor" warning.
 `uat/screenshots/vehicle-authorized-driver-picker.png`,
 `uat/screenshots/dispatch-board-valid-assignment-persisted.png`.
 **Correction:** an earlier version of this list also cited
-`valid-assignment-saved-toast.png` as clean-save evidence. On review, that
-screenshot's Validation panel visibly shows `EMPLOYEE_DOUBLE_BOOKED`
-errors comparing the assignment against itself — the same defect
-documented in "Known limitations" — so it is defect evidence, not a clean
-save, and has been removed from this list. A clean "Assignment saved"
-screenshot with no errors underneath will be recaptured once staging
-confirms the fix.)*
+`valid-assignment-saved-toast.png` as clean-save evidence. That screenshot
+was actually captured against a self-overlap defect present in the local
+UAT baseline at the time — `EMPLOYEE_DOUBLE_BOOKED` errors comparing the
+assignment against itself — which is already fixed on current `main` (see
+"Known limitations" for the fix). It has been removed from this list as
+historical, pre-fix evidence rather than clean-save evidence. A clean
+"Assignment saved" screenshot with no errors underneath, captured on
+deployed staging against the fixed baseline, is still pending.)*
 
 ---
 
