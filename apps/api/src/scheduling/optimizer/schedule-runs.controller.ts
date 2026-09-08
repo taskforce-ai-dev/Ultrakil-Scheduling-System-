@@ -68,11 +68,15 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
 @Controller()
 export class ScheduleRunsController {
   constructor(
+    @Inject(ScheduleRunService)
     private readonly runs: ScheduleRunService,
     @Inject(SCHEDULE_RUN_DISPATCHER)
     private readonly dispatcher: ScheduleRunDispatcher,
+    @Inject(PublishingService)
     private readonly publishing: PublishingService,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(ScheduleRunDispatchService)
     private readonly dispatches: ScheduleRunDispatchService,
   ) {}
 
@@ -102,7 +106,7 @@ export class ScheduleRunsController {
   async list(
     @Query() query: ScheduleRunQueryDto,
   ): Promise<PaginatedScheduleRunsDto> {
-    await this.dispatches.reconcilePending();
+    await this.reconcileSelfHosted();
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where = {
@@ -132,11 +136,20 @@ export class ScheduleRunsController {
   @ApiResponse({ status: 200, type: ScheduleRunDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   async get(@Param('id', ParseUUIDPipe) id: string): Promise<ScheduleRunDto> {
-    await this.dispatches.reconcilePending();
+    await this.reconcileSelfHosted();
     const run = await this.prisma.scheduleRun.findUniqueOrThrow({
       where: { id },
     });
     return toDto(run);
+  }
+
+  private async reconcileSelfHosted(): Promise<void> {
+    // BullMQ has no external signed cron endpoint. Its polling API provides a
+    // bounded recovery sweep for jobs abandoned after maxStalledCount. QStash
+    // uses its signed schedule instead, keeping Vercel polling reads remote-free.
+    if (this.dispatcher.provider === 'bullmq') {
+      await this.dispatches.reconcilePending();
+    }
   }
 
   @Post('schedule-runs/:id/cancel')

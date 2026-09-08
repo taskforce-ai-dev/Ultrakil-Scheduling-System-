@@ -12,6 +12,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ApiExcludeController } from '@nestjs/swagger';
 import { timingSafeEqual } from 'node:crypto';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -63,12 +64,16 @@ const failurePayload = z
   .passthrough();
 
 /** QStash-only routes. The public controller stays provider-neutral. */
+@ApiExcludeController()
 @Controller('internal/schedule-runs')
 export class ScheduleRunQStashController {
   constructor(
+    @Inject(ScheduleRunService)
     private readonly runs: ScheduleRunService,
+    @Inject(ConfigService)
     private readonly config: ConfigService,
     @Inject(QSTASH_RECEIVER) private readonly receiver: QStashReceiver,
+    @Inject(ScheduleRunDispatchService)
     private readonly dispatches: ScheduleRunDispatchService,
   ) {}
 
@@ -78,7 +83,16 @@ export class ScheduleRunQStashController {
   async execute(@Req() request: RawBodyRequest<Request>): Promise<void> {
     const raw = await this.verify(request, 'scheduleDispatch.executeUrl');
     const payload = this.parseExecutePayload(raw);
+    if (
+      !(await this.dispatches.isCurrentDispatch(
+        payload.runId,
+        payload.dispatchId,
+      ))
+    ) {
+      return;
+    }
     const outcome = await this.runs.deliver(payload.runId, {
+      dispatchId: payload.dispatchId,
       executionBudgetSeconds: this.config.getOrThrow<number>(
         'scheduleDispatch.executionBudgetSeconds',
       ),

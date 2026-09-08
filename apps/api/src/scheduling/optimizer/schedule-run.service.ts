@@ -6,6 +6,7 @@ import {
   CrewRole,
   LockScope,
   Prisma,
+  ScheduleRunDispatchStatus,
   ScheduleRunStatus,
   VisitStatus,
 } from '@prisma/client';
@@ -32,6 +33,10 @@ import {
   SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS,
   SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
 } from './schedule-run-execution-budget';
+import {
+  failScheduleRunForQStash,
+  settleExpiredScheduleRunCancellation,
+} from './schedule-run-recovery';
 
 const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
@@ -68,6 +73,8 @@ type DeliveryOutcome =
 
 interface DeliveryOptions {
   executionBudgetSeconds: number;
+  /** Current durable delivery generation, atomically fenced at lease claim. */
+  dispatchId?: string;
   /** Optional shorter durable lease for a long-running self-hosted delivery. */
   executionLeaseSeconds?: number;
   /** A QStash lease ends with its function; BullMQ renews while its worker lives. */
@@ -320,7 +327,11 @@ export class ScheduleRunService {
   ): Promise<DeliveryOutcome> {
     const executionLeaseSeconds =
       options.executionLeaseSeconds ?? options.executionBudgetSeconds;
-    const claim = await this.claimExecutionLease(runId, executionLeaseSeconds);
+    const claim = await this.claimExecutionLease(
+      runId,
+      executionLeaseSeconds,
+      options.dispatchId,
+    );
     if (claim.kind !== 'acquired') return claim;
 
     const heartbeat = options.renewExecutionLease
@@ -957,6 +968,7 @@ export class ScheduleRunService {
   private async claimExecutionLease(
     runId: string,
     executionBudgetSeconds: number,
+    dispatchId?: string,
   ): Promise<DeliveryOutcome | { kind: 'acquired'; lease: ExecutionLease }> {
     const before = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
@@ -989,21 +1001,38 @@ export class ScheduleRunService {
       id: randomUUID(),
       expiresAt: new Date(now.getTime() + executionBudgetSeconds * 1_000),
     };
+    const claimWhere = {
+      id: runId,
+      cancelRequestedAt: null,
+      ...(dispatchId
+        ? {
+            dispatchOutbox: {
+              is: {
+                id: dispatchId,
+                status: {
+                  in: [
+                    ScheduleRunDispatchStatus.PENDING,
+                    ScheduleRunDispatchStatus.PUBLISHED,
+                  ],
+                },
+                terminalFailureAt: null,
+              },
+            },
+          }
+        : {}),
+      OR: [
+        { status: ScheduleRunStatus.QUEUED },
+        {
+          status: ScheduleRunStatus.RUNNING,
+          OR: [
+            { executionLeaseExpiresAt: { lte: now } },
+            { executionLeaseExpiresAt: null },
+          ],
+        },
+      ],
+    } satisfies Prisma.ScheduleRunWhereInput;
     const changed = await this.leaseModel(this.prisma).updateMany({
-      where: {
-        id: runId,
-        cancelRequestedAt: null,
-        OR: [
-          { status: ScheduleRunStatus.QUEUED },
-          {
-            status: ScheduleRunStatus.RUNNING,
-            OR: [
-              { executionLeaseExpiresAt: { lt: now } },
-              { executionLeaseExpiresAt: null },
-            ],
-          },
-        ],
-      },
+      where: claimWhere,
       data: {
         status: ScheduleRunStatus.RUNNING,
         startedAt: before.startedAt ?? now,
@@ -1098,24 +1127,7 @@ export class ScheduleRunService {
   }
 
   private async settleExpiredCancellation(runId: string): Promise<boolean> {
-    const now = new Date();
-    const settled = await this.leaseModel(this.prisma).updateMany({
-      where: {
-        id: runId,
-        status: ScheduleRunStatus.RUNNING,
-        cancelRequestedAt: { not: null },
-        OR: [
-          { executionLeaseExpiresAt: { lt: now } },
-          { executionLeaseExpiresAt: null },
-        ],
-      },
-      data: {
-        status: ScheduleRunStatus.CANCELLED,
-        finishedAt: now,
-        progressPercent: 100,
-      },
-    });
-    return settled.count === 1;
+    return settleExpiredScheduleRunCancellation(this.prisma, runId);
   }
 
   /**
@@ -1336,60 +1348,14 @@ export class ScheduleRunService {
     code: string,
     message: string,
   ): Promise<'failed' | 'deferred' | 'ignored'> {
-    const now = new Date();
-    const recorded = await this.dispatchOutboxModel(this.prisma).updateMany({
-      where: {
-        id: dispatchId,
-        scheduleRunId: runId,
-        provider: 'QSTASH',
-        status: { in: ['PENDING', 'PUBLISHED'] },
-        OR: [{ messageId: null }, { messageId }],
-      },
-      data: {
-        terminalFailureMessageId: messageId,
-        terminalFailureCode: code,
-        terminalFailureMessage: message,
-        terminalFailureAt: now,
-      },
-    });
-    if (recorded.count !== 1) return 'ignored';
-
-    const failed = await this.leaseModel(this.prisma).updateMany({
-      where: {
-        id: runId,
-        cancelRequestedAt: null,
-        status: { in: [ScheduleRunStatus.QUEUED, ScheduleRunStatus.RUNNING] },
-        AND: [
-          { OR: [{ jobId: null }, { jobId: messageId }] },
-          {
-            OR: [
-              { executionLeaseId: null },
-              { executionLeaseExpiresAt: { lt: now } },
-            ],
-          },
-        ],
-      },
-      data: {
-        status: ScheduleRunStatus.FAILED,
-        finishedAt: now,
-        errorCode: code,
-        errorMessage: message,
-        jobId: messageId,
-      },
-    });
-    if (failed.count === 1) return 'failed';
-
-    const run = await this.prisma.scheduleRun.findUnique({
-      where: { id: runId },
-    });
-    if (
-      run?.status === ScheduleRunStatus.RUNNING &&
-      run.executionLeaseExpiresAt &&
-      run.executionLeaseExpiresAt > now
-    ) {
-      return 'deferred';
-    }
-    return 'ignored';
+    return failScheduleRunForQStash(
+      this.prisma,
+      runId,
+      dispatchId,
+      messageId,
+      code,
+      message,
+    );
   }
 }
 

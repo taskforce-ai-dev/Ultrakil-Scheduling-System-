@@ -816,9 +816,25 @@ describe('standard writer publication protocol', () => {
       } } as unknown as EligibilityService,
       app.get(AuditService),
     );
-    const pending = new ScheduleRunProcessor(service).process({
-      data: { runId: run.id, timeLimitSeconds: 1 }, updateProgress: async () => undefined,
-    } as unknown as Job<ScheduleRunJobData>).then(() => undefined, (error: unknown) => error);
+    const currentDispatch =
+      await prisma.scheduleRunDispatchOutbox.findUniqueOrThrow({
+        where: { scheduleRunId: run.id },
+      });
+    const pending = new ScheduleRunProcessor(service, {
+      isCurrentDispatch: async () => true,
+    } as never)
+      .process({
+        data: {
+          runId: run.id,
+          dispatchId: currentDispatch.id,
+          timeLimitSeconds: 1,
+        },
+        updateProgress: async () => undefined,
+      } as unknown as Job<ScheduleRunJobData>)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
     const solution: SolveResponse = {
       run_id: run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 2,
       assignments: [{ fixture: first, outcome: firstOutcome }, { fixture: later, outcome: laterOutcome }].flatMap(({ fixture, outcome }) => {

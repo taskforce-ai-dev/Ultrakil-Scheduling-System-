@@ -39,7 +39,10 @@ function fixture() {
     failForQStash: jest.fn(async () => 'failed'),
   };
   const receiver = { verify: jest.fn(async () => true) };
-  const dispatches = { reconcilePending: jest.fn(async () => undefined) };
+  const dispatches = {
+    isCurrentDispatch: jest.fn(async () => true),
+    reconcilePending: jest.fn(async () => undefined),
+  };
   const controller = new ScheduleRunQStashController(
     runs as unknown as ScheduleRunService,
     config as unknown as ConfigService,
@@ -93,10 +96,28 @@ describe('ScheduleRunQStashController', () => {
       body: raw,
       url: 'https://ultrakil.example.com/api/internal/schedule-runs/execute',
     });
+    expect(f.dispatches.isCurrentDispatch).toHaveBeenCalledWith(
+      runId,
+      dispatchId,
+    );
     expect(f.runs.deliver).toHaveBeenCalledWith(runId, {
+      dispatchId,
       executionBudgetSeconds: 55,
       retryOnFailure: true,
     });
+  });
+
+  it('acknowledges an execute delivery from a superseded dispatch id without solving', async () => {
+    const f = fixture();
+    f.dispatches.isCurrentDispatch.mockResolvedValueOnce(false);
+
+    await expect(
+      f.controller.execute(
+        f.request(JSON.stringify({ runId, dispatchId })) as never,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(f.runs.deliver).not.toHaveBeenCalled();
   });
 
   it('settles only the run identified by the signed QStash failure callback', async () => {

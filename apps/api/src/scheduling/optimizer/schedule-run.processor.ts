@@ -1,5 +1,5 @@
 import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 
 import { QUEUE_SCHEDULE_RUN } from '../../queue/queue.constants';
@@ -7,6 +7,7 @@ import {
   ScheduleRunDispatch,
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
+import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
 import { ScheduleRunService } from './schedule-run.service';
 import {
   BULLMQ_EXECUTION_LEASE_SECONDS,
@@ -27,18 +28,33 @@ export const SCHEDULE_RUN_JOB = 'solve';
  * and time out behind any proxy. The job is keyed on the run id, which is what
  * makes a retry safe: re-running the same job re-solves the same range and
  * replaces that run's own draft assignments rather than adding a second set.
+ * The job id is the durable dispatch generation, so a permanently stalled job
+ * can be replaced without allowing its late worker to write.
  */
 @Injectable()
 @Processor(QUEUE_SCHEDULE_RUN)
 export class ScheduleRunProcessor extends WorkerHost {
   private readonly logger = new Logger(ScheduleRunProcessor.name);
 
-  constructor(private readonly runs: ScheduleRunService) {
+  constructor(
+    @Inject(ScheduleRunService)
+    private readonly runs: ScheduleRunService,
+    @Inject(ScheduleRunDispatchService)
+    private readonly dispatches: ScheduleRunDispatchService,
+  ) {
     super();
   }
 
   async process(job: Job<ScheduleRunJobData>): Promise<void> {
-    const { runId, timeLimitSeconds } = job.data;
+    const { runId, dispatchId, timeLimitSeconds } = job.data;
+    // Jobs created before dispatch generations were introduced are recovered
+    // from the durable outbox; they must not execute unfenced in the meantime.
+    if (
+      !dispatchId ||
+      !(await this.dispatches.isCurrentDispatch(runId, dispatchId))
+    ) {
+      return;
+    }
     this.logger.log(`Solving schedule run ${runId}`);
 
     // BullMQ increments attemptsMade only after an attempt has failed. Its
@@ -48,6 +64,7 @@ export class ScheduleRunProcessor extends WorkerHost {
     const retryOnFailure =
       job.attemptsMade + 1 < Math.max(1, job.opts?.attempts ?? 1);
     const outcome = await this.runs.deliver(runId, {
+      dispatchId,
       timeLimitSeconds,
       executionBudgetSeconds: SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
       executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
@@ -78,9 +95,10 @@ export class ScheduleRunQueue implements ScheduleRunDispatcher {
 
   async enqueue(data: ScheduleRunDispatch): Promise<string> {
     const job = await this.queue.add(SCHEDULE_RUN_JOB, data, {
-      // The run id is the job id, so submitting the same run twice cannot
-      // produce two solves racing each other over the same visits.
-      jobId: data.runId,
+      // A publish retry reuses this id, while a recovery redrive rotates it.
+      // This lets BullMQ replace a permanently stalled job and fences any late
+      // worker from the superseded generation before it can claim a DB lease.
+      jobId: data.dispatchId,
       attempts: 3,
       // A crashed worker's 60-second DB lease must expire before BullMQ spends
       // another attempt on it. The worker heartbeats the lease while healthy.
@@ -88,7 +106,7 @@ export class ScheduleRunQueue implements ScheduleRunDispatcher {
       removeOnComplete: { age: 24 * 3600, count: 200 },
       removeOnFail: { age: 7 * 24 * 3600 },
     });
-    return job.id ?? data.runId;
+    return job.id ?? data.dispatchId;
   }
 
   async cancel(jobId: string | null): Promise<void> {

@@ -217,13 +217,42 @@ function fixture(
             condition.executionLeaseId !== run.executionLeaseId
           )
             return false;
+          const dispatchRelation = condition.dispatchOutbox as
+            | {
+                is?: {
+                  id?: string;
+                  status?: { in?: string[] };
+                  terminalFailureAt?: Date | null;
+                };
+              }
+            | undefined;
+          if (dispatchRelation?.is) {
+            if (
+              dispatchRelation.is.id &&
+              dispatchRelation.is.id !== dispatchOutbox.id
+            ) {
+              return false;
+            }
+            if (
+              dispatchRelation.is.status?.in &&
+              !dispatchRelation.is.status.in.includes(dispatchOutbox.status)
+            ) {
+              return false;
+            }
+            if (
+              dispatchRelation.is.terminalFailureAt === null &&
+              dispatchOutbox.terminalFailureAt !== null
+            ) {
+              return false;
+            }
+          }
           if (
             condition.executionLeaseExpiresAt === null &&
             run.executionLeaseExpiresAt
           )
             return false;
           const expiry = condition.executionLeaseExpiresAt as
-            { gt?: Date; lt?: Date } | undefined;
+            { gt?: Date; lt?: Date; lte?: Date } | undefined;
           if (
             expiry?.gt &&
             (!run.executionLeaseExpiresAt ||
@@ -234,6 +263,12 @@ function fixture(
             expiry?.lt &&
             (!run.executionLeaseExpiresAt ||
               run.executionLeaseExpiresAt >= expiry.lt)
+          )
+            return false;
+          if (
+            expiry?.lte &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt > expiry.lte)
           )
             return false;
           const conjunction = condition.AND as
@@ -354,9 +389,15 @@ function fixture(
     eligibility as unknown as EligibilityService,
     {} as AuditService,
   );
-  const processor = new ScheduleRunProcessor(service);
+  const processor = new ScheduleRunProcessor(service, {
+    isCurrentDispatch: jest.fn(async () => true),
+  } as never);
   const job = {
-    data: { runId: run.id, timeLimitSeconds: 1 },
+    data: {
+      runId: run.id,
+      dispatchId: dispatchOutbox.id,
+      timeLimitSeconds: 1,
+    },
     updateProgress: jest.fn(),
   } as unknown as Job<ScheduleRunJobData>;
   const release = (unassigned = false) =>
@@ -1062,6 +1103,37 @@ describe('at-least-once schedule-run delivery leases', () => {
     expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
   });
 
+  it('atomically refuses a lease after the delivery generation is superseded', async () => {
+    const f = fixture();
+    const supersededDispatchId = f.dispatchOutbox.id;
+    f.dispatchOutbox.id = '00000000-0000-4000-8000-000000000002';
+
+    await expect(
+      f.service.deliver(f.run.id, {
+        ...deliveryOptions,
+        dispatchId: supersededDispatchId,
+      }),
+    ).resolves.toEqual({ kind: 'busy' });
+
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+  });
+
+  it('atomically refuses a lease after a terminal callback is recorded', async () => {
+    const f = fixture();
+    f.dispatchOutbox.terminalFailureAt = new Date();
+
+    await expect(
+      f.service.deliver(f.run.id, {
+        ...deliveryOptions,
+        dispatchId: f.dispatchOutbox.id,
+      }),
+    ).resolves.toEqual({ kind: 'busy' });
+
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+  });
+
   it('only accepts a QStash failure callback for the stored delivery ID', async () => {
     const f = fixture();
 
@@ -1085,6 +1157,13 @@ describe('at-least-once schedule-run delivery leases', () => {
       status: ScheduleRunStatus.FAILED,
       errorCode: 'QSTASH_DELIVERY_FAILED',
     });
+    expect(f.dispatchOutbox).toMatchObject({
+      status: 'CANCELLED',
+      terminalFailureMessageId: null,
+      terminalFailureCode: null,
+      terminalFailureMessage: null,
+      terminalFailureAt: null,
+    });
   });
 
   it('settles a signed QStash failure after publish succeeded but the job-id write was lost', async () => {
@@ -1107,6 +1186,67 @@ describe('at-least-once schedule-run delivery leases', () => {
       status: ScheduleRunStatus.FAILED,
       jobId: 'msg_recovered',
     });
+    expect(f.dispatchOutbox.status).toBe('CANCELLED');
+    expect(f.dispatchOutbox.terminalFailureAt).toBeNull();
+  });
+
+  it('consumes a matching terminal callback when the run is already settled', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.SUCCEEDED;
+
+    await expect(
+      f.service.failForQStash(
+        f.run.id,
+        f.dispatchOutbox.id,
+        'msg_current',
+        'QSTASH_DELIVERY_FAILED',
+        'failed',
+      ),
+    ).resolves.toBe('ignored');
+
+    expect(f.run.status).toBe(ScheduleRunStatus.SUCCEEDED);
+    expect(f.dispatchOutbox).toMatchObject({
+      status: 'CANCELLED',
+      terminalFailureMessageId: null,
+      terminalFailureCode: null,
+      terminalFailureMessage: null,
+      terminalFailureAt: null,
+    });
+  });
+
+  it('settles an exactly-expiring cancellation during the direct QStash failure callback', async () => {
+    jest.useFakeTimers();
+    try {
+      const now = new Date('2027-03-01T12:00:00.000Z');
+      jest.setSystemTime(now);
+      const f = fixture();
+      f.run.status = ScheduleRunStatus.RUNNING;
+      f.run.cancelRequestedAt = now;
+      f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+      f.run.executionLeaseExpiresAt = now;
+
+      await expect(
+        f.service.failForQStash(
+          f.run.id,
+          f.dispatchOutbox.id,
+          'msg_current',
+          'QSTASH_DELIVERY_FAILED',
+          'failed',
+        ),
+      ).resolves.toBe('ignored');
+
+      expect(f.run).toMatchObject({
+        status: ScheduleRunStatus.CANCELLED,
+        executionLeaseId: null,
+        executionLeaseExpiresAt: null,
+      });
+      expect(f.dispatchOutbox).toMatchObject({
+        status: 'CANCELLED',
+        terminalFailureAt: null,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('durably records a matching QStash terminal failure while another lease is active', async () => {

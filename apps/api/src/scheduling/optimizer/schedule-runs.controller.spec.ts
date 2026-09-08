@@ -41,4 +41,58 @@ describe('ScheduleRunsController QStash bounds', () => {
     ).rejects.toMatchObject({ code: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED' });
     expect(runs.create).not.toHaveBeenCalled();
   });
+
+  it('keeps polling reads independent from remote reconciliation latency', async () => {
+    const dispatches = { reconcilePending: jest.fn() };
+    const prisma = {
+      scheduleRun: {
+        count: jest.fn(async () => 0),
+        findMany: jest.fn(async () => []),
+      },
+    };
+    const controller = new ScheduleRunsController(
+      {} as ScheduleRunService,
+      {
+        provider: 'qstash',
+        enqueue: jest.fn(),
+        cancel: jest.fn(),
+      },
+      {} as PublishingService,
+      prisma as unknown as PrismaService,
+      dispatches as unknown as ScheduleRunDispatchService,
+    );
+
+    await expect(controller.list({})).resolves.toMatchObject({
+      items: [],
+      total: 0,
+    });
+    expect(dispatches.reconcilePending).not.toHaveBeenCalled();
+  });
+
+  it('invokes durable BullMQ recovery from a polling read', async () => {
+    const dispatches = {
+      reconcilePending: jest.fn(async () => undefined),
+    };
+    const prisma = {
+      scheduleRun: {
+        count: jest.fn(async () => 0),
+        findMany: jest.fn(async () => []),
+      },
+    };
+    const controller = new ScheduleRunsController(
+      {} as ScheduleRunService,
+      {
+        provider: 'bullmq',
+        enqueue: jest.fn(),
+        cancel: jest.fn(),
+      },
+      {} as PublishingService,
+      prisma as unknown as PrismaService,
+      dispatches as unknown as ScheduleRunDispatchService,
+    );
+
+    await controller.list({});
+
+    expect(dispatches.reconcilePending).toHaveBeenCalledTimes(1);
+  });
 });

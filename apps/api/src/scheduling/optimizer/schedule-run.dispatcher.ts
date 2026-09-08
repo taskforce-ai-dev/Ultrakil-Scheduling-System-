@@ -6,8 +6,8 @@ export { qstashMaximumRangeDays } from './schedule-run-execution-budget';
 
 export interface ScheduleRunDispatch {
   runId: string;
-  /** Durable outbox UUID; QStash uses it as its deduplication key. */
-  dispatchId?: string;
+  /** Durable outbox generation; every remote provider fences delivery by it. */
+  dispatchId: string;
 }
 
 export type ScheduleRunDispatcherProvider = 'bullmq' | 'qstash';
@@ -60,6 +60,7 @@ export class QStashScheduleRunDispatcher implements ScheduleRunDispatcher {
   private readonly logger = new Logger(QStashScheduleRunDispatcher.name);
 
   constructor(
+    @Inject(ConfigService)
     config: ConfigService,
     @Inject(QSTASH_CLIENT) private readonly client: QStashClient,
   ) {
@@ -76,7 +77,7 @@ export class QStashScheduleRunDispatcher implements ScheduleRunDispatcher {
   private readonly executionBudgetSeconds: number;
   readonly maxRangeDays: number;
 
-  async enqueue({ runId, dispatchId = runId }: ScheduleRunDispatch): Promise<string> {
+  async enqueue({ runId, dispatchId }: ScheduleRunDispatch): Promise<string> {
     const result = await this.client.publishJSON({
       url: this.executeUrl,
       // Both values are opaque UUIDs. The API loads all scheduling detail from

@@ -35,20 +35,23 @@ describe('QStashScheduleRunDispatcher', () => {
     const { client, dispatcher } = fixture();
 
     await expect(
-      dispatcher.enqueue({ runId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000' }),
+      dispatcher.enqueue({
+        runId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
+        dispatchId: 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4',
+      }),
     ).resolves.toBe('msg_opaque');
 
     expect(client.publishJSON).toHaveBeenCalledWith({
       url: 'https://ultrakil.example.com/api/internal/schedule-runs/execute',
       body: {
         runId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
-        dispatchId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
+        dispatchId: 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4',
       },
       failureCallback:
         'https://ultrakil.example.com/api/internal/schedule-runs/failure',
       retries: 3,
       timeout: '55s',
-      deduplicationId: 'e53c9feb-f68f-4c6f-8ba5-31939e3a5000',
+      deduplicationId: 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4',
     });
   });
 
