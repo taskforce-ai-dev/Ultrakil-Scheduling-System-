@@ -33,10 +33,26 @@ test('uses the current Nest and FastAPI entrypoints with a Hobby-safe duration',
   const api = readJson('apps/api/vercel.json');
   const scheduler = readJson('services/scheduler/vercel.json');
 
-  assert.equal(api.functions['src/main.ts'].maxDuration, 60);
+  // The declared function must live under `api/`. Vercel recognises functions
+  // nowhere else on a project with no framework preset, and it rejected the
+  // deployment rather than guessing: "The pattern \"src/main.ts\" defined in
+  // `functions` doesn't match any Serverless Functions inside the `api`
+  // directory." Asserting the key existed was what let that reach a deploy.
+  assert.equal(api.functions['api/index.ts'].maxDuration, 60);
+  assert.ok(Object.keys(api.functions).every((pattern) => pattern.startsWith('api/')));
   assert.equal(scheduler.functions['app/main.py'].maxDuration, 60);
   assert.equal(api.buildCommand, 'pnpm prisma:generate && pnpm build');
+
+  // A handler, not a listener: src/main.ts still calls listen() and is still
+  // how the API runs locally, so the two must stay distinguishable.
+  const handler = read('apps/api/api/index.ts');
+  assert.match(handler, /export default async function handler/);
+  assert.match(handler, /app\.init\(\)/);
+  assert.doesNotMatch(handler, /app\.listen\(/);
   assert.match(read('apps/api/src/main.ts'), /NestFactory/);
+
+  // Everything reaches the one handler; Nest owns routing from there.
+  assert.deepEqual(api.rewrites, [{ source: '/(.*)', destination: '/api/index' }]);
   assert.match(read('services/scheduler/app/main.py'), /app = FastAPI\(/);
 });
 

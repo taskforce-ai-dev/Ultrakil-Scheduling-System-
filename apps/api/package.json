@@ -17,7 +17,7 @@
     "dispatch:cutover:check": "node scripts/with-env.mjs tsx scripts/dispatch-cutover-guard.ts",
     "schedule:import": "node scripts/with-env.mjs tsx scripts/import-schedule.ts",
     "openapi:generate": "node scripts/with-env.mjs tsx scripts/generate-openapi.ts",
-    "lint": "eslint \"{src,test,scripts,prisma}/**/*.ts\" --max-warnings 0",
+    "lint": "eslint \"{api,src,test,scripts,prisma}/**/*.ts\" --max-warnings 0",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "jest --config jest.config.js --selectProjects unit",
     "test:integration": "node scripts/with-env.mjs jest --config jest.config.js --selectProjects integration --runInBand",

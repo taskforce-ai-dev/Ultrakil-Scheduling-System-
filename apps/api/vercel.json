@@ -3,7 +3,7 @@
   "installCommand": "pnpm install --frozen-lockfile",
   "buildCommand": "pnpm prisma:generate && pnpm build",
   "functions": {
-    "src/main.ts": {
+    "api/index.ts": {
       "maxDuration": 60
     }
   },
@@ -11,6 +11,12 @@
     {
       "path": "/api/internal/schedule-runs/reconcile",
       "schedule": "0 3 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ]
 }
