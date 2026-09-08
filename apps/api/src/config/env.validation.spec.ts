@@ -10,6 +10,19 @@ const baseProductionEnv = {
   SCHEDULER_BASE_URL: 'http://scheduler:8000',
 };
 
+const baseVercelEnv = {
+  ...baseProductionEnv,
+  VERCEL: '1',
+  SCHEDULE_DISPATCHER: 'qstash',
+  API_PUBLIC_URL: 'https://api.vercel.app',
+  API_CORS_ORIGINS: 'https://manager.vercel.app',
+  SCHEDULER_BASE_URL: 'https://scheduler.vercel.app',
+  SCHEDULER_API_TOKEN: 's'.repeat(32),
+  QSTASH_TOKEN: 'token',
+  QSTASH_CURRENT_SIGNING_KEY: 'current',
+  QSTASH_NEXT_SIGNING_KEY: 'next',
+};
+
 describe('Vercel-specific production environment validation', () => {
   it('treats blank optional local secrets as unset', () => {
     expect(() =>
@@ -32,44 +45,48 @@ describe('Vercel-specific production environment validation', () => {
   ])('rejects %s for a Vercel deployment', (_name, override) => {
     expect(() =>
       validateEnv({
-        ...baseProductionEnv,
-        VERCEL: '1',
-        API_CORS_ORIGINS: 'https://manager.vercel.app',
-        SCHEDULER_BASE_URL: 'https://scheduler.vercel.app',
+        ...baseVercelEnv,
         ...override,
       }),
     ).toThrow('SCHEDULER_API_TOKEN');
   });
 
-  it('rejects a non-HTTPS scheduler URL on Vercel', () => {
+  it.each([
+    'http://scheduler.internal',
+    'https://scheduler.vercel.app/solve',
+  ])('rejects a non-origin scheduler URL on Vercel: %s', (SCHEDULER_BASE_URL) => {
     expect(() =>
-      validateEnv({
-        ...baseProductionEnv,
-        VERCEL: '1',
-        SCHEDULER_API_TOKEN: 's'.repeat(32),
-        API_CORS_ORIGINS: 'https://manager.vercel.app',
-      }),
+      validateEnv({ ...baseVercelEnv, SCHEDULER_BASE_URL }),
     ).toThrow('SCHEDULER_BASE_URL');
   });
 
-  it.each(['*', 'http://manager.vercel.app'])(
+  it.each(['*', 'http://manager.vercel.app', 'https://manager.vercel.app/app'])(
     'rejects insecure CORS origin %s on Vercel',
     (origin) => {
       expect(() =>
         validateEnv({
-          ...baseProductionEnv,
-          VERCEL: '1',
-          SCHEDULER_API_TOKEN: 's'.repeat(32),
-          SCHEDULER_BASE_URL: 'https://scheduler.vercel.app',
+          ...baseVercelEnv,
           API_CORS_ORIGINS: origin,
         }),
       ).toThrow('API_CORS_ORIGINS');
     },
   );
+
+  it('rejects the non-durable BullMQ provider on Vercel', () => {
+    expect(() =>
+      validateEnv({
+        ...baseVercelEnv,
+        SCHEDULE_DISPATCHER: 'bullmq',
+      }),
+    ).toThrow('SCHEDULE_DISPATCHER');
+  });
 });
 
 const baseEnv = {
   DATABASE_URL: 'postgresql://user:password@localhost:5432/ultrakil',
+  API_CORS_ORIGINS: 'https://manager.example.com',
+  SCHEDULER_BASE_URL: 'https://scheduler.example.com',
+  SCHEDULER_API_TOKEN: 's'.repeat(32),
 };
 
 describe('schedule dispatcher environment validation', () => {
@@ -80,6 +97,20 @@ describe('schedule dispatcher environment validation', () => {
         SCHEDULE_DISPATCHER: 'qstash',
       }),
     ).toThrow('QSTASH_TOKEN');
+  });
+
+  it('requires scheduler authentication in QStash mode without relying on Vercel metadata', () => {
+    expect(() =>
+      validateEnv({
+        ...baseEnv,
+        SCHEDULER_API_TOKEN: undefined,
+        SCHEDULE_DISPATCHER: 'qstash',
+        QSTASH_TOKEN: 'token',
+        QSTASH_CURRENT_SIGNING_KEY: 'current',
+        QSTASH_NEXT_SIGNING_KEY: 'next',
+        API_PUBLIC_URL: 'https://ultrakil.example.com',
+      }),
+    ).toThrow('SCHEDULER_API_TOKEN');
   });
 
   it('does not require Redis settings when qstash dispatching is selected', () => {
@@ -131,7 +162,7 @@ describe('schedule dispatcher environment validation', () => {
     });
   });
 
-  it('allows a QStash budget that leaves five seconds below Vercel Hobby’s 60 second ceiling', () => {
+  it('allows a QStash budget below the 60-second compatibility ceiling', () => {
     expect(() =>
       validateEnv({
         ...baseEnv,
@@ -159,7 +190,7 @@ describe('schedule dispatcher environment validation', () => {
     ).toThrow('SCHEDULE_EXECUTION_BUDGET_SECONDS');
   });
 
-  it('rejects a QStash budget that exceeds the five-second Vercel response reserve', () => {
+  it('rejects a QStash budget that exceeds the five-second response reserve', () => {
     expect(() =>
       validateEnv({
         ...baseEnv,

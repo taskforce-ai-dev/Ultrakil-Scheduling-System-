@@ -14,12 +14,27 @@ const optionalSecret = z.preprocess(
 
 const apiGlobalPrefix = z
   .string()
-  .trim()
   .regex(
     /^[A-Za-z0-9][A-Za-z0-9_-]*(?:\/[A-Za-z0-9][A-Za-z0-9_-]*)*$/,
     'must be non-empty path segments without leading or trailing slashes',
   )
   .default('api');
+
+function isPureHttpsOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      (url.pathname === '/' || url.pathname === '') &&
+      url.search === '' &&
+      url.hash === '' &&
+      url.username === '' &&
+      url.password === ''
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Environment contract for the API. Validated once at boot so a misconfigured
@@ -45,8 +60,8 @@ export const envSchema = z.object({
   /** BullMQ remains the self-hosted default; QStash is the serverless path. */
   SCHEDULE_DISPATCHER: z.enum(['bullmq', 'qstash']).default('bullmq'),
   /**
-   * A QStash execution always stops below Vercel Hobby's current 60-second
-   * maximum, leaving time for persistence and a deterministic response.
+   * A QStash execution stays below the checked-in 60-second compatibility
+   * ceiling, leaving time for persistence and a deterministic response.
    */
   SCHEDULE_EXECUTION_BUDGET_SECONDS: z.coerce
     .number()
@@ -112,23 +127,43 @@ export function validateEnv(raw: Record<string, unknown>): Env {
         'Invalid environment configuration:\n  - SEED_ADMIN_PASSWORD: the default password must not be used in production',
       );
     }
-    if (parsed.data.VERCEL === '1') {
-      if (!parsed.data.SCHEDULER_API_TOKEN) {
-        throw new Error(
-          'Invalid environment configuration:\n  - SCHEDULER_API_TOKEN: required for Vercel (at least 32 characters)',
-        );
-      }
-      if (!parsed.data.SCHEDULER_BASE_URL.startsWith('https://')) {
-        throw new Error(
-          'Invalid environment configuration:\n  - SCHEDULER_BASE_URL: Vercel scheduler URL must use HTTPS',
-        );
-      }
-      const corsOrigins = parsed.data.API_CORS_ORIGINS.split(',').map((origin) => origin.trim());
-      if (corsOrigins.some((origin) => origin === '*' || !origin.startsWith('https://'))) {
-        throw new Error(
-          'Invalid environment configuration:\n  - API_CORS_ORIGINS: Vercel origins must be explicit HTTPS URLs',
-        );
-      }
+  }
+
+  if (
+    parsed.success &&
+    parsed.data.VERCEL === '1' &&
+    parsed.data.SCHEDULE_DISPATCHER !== 'qstash'
+  ) {
+    throw new Error(
+      'Invalid environment configuration:\n  - SCHEDULE_DISPATCHER: Vercel deployments require qstash',
+    );
+  }
+
+  if (
+    parsed.success &&
+    (parsed.data.VERCEL === '1' ||
+      parsed.data.SCHEDULE_DISPATCHER === 'qstash')
+  ) {
+    if (!parsed.data.SCHEDULER_API_TOKEN) {
+      throw new Error(
+        'Invalid environment configuration:\n  - SCHEDULER_API_TOKEN: required for public serverless deployment (at least 32 characters)',
+      );
+    }
+    if (!isPureHttpsOrigin(parsed.data.SCHEDULER_BASE_URL)) {
+      throw new Error(
+        'Invalid environment configuration:\n  - SCHEDULER_BASE_URL: public scheduler URL must be a pure HTTPS origin',
+      );
+    }
+    const corsOrigins = parsed.data.API_CORS_ORIGINS.split(',').map((origin) =>
+      origin.trim(),
+    );
+    if (
+      corsOrigins.length === 0 ||
+      corsOrigins.some((origin) => !isPureHttpsOrigin(origin))
+    ) {
+      throw new Error(
+        'Invalid environment configuration:\n  - API_CORS_ORIGINS: public origins must be explicit pure HTTPS origins',
+      );
     }
   }
 
@@ -159,20 +194,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
         `Invalid environment configuration:\n  - SCHEDULE_EXECUTION_BUDGET_SECONDS: must be between ${QSTASH_MINIMUM_EXECUTION_SECONDS} and ${QSTASH_MAX_EXECUTION_SECONDS} when SCHEDULE_DISPATCHER=qstash`,
       );
     }
-    let hasPureHttpsOrigin = false;
-    try {
-      const publicUrl = new URL(parsed.data.API_PUBLIC_URL ?? '');
-      hasPureHttpsOrigin =
-        publicUrl.protocol === 'https:' &&
-        (publicUrl.pathname === '/' || publicUrl.pathname === '') &&
-        publicUrl.search === '' &&
-        publicUrl.hash === '' &&
-        publicUrl.username === '' &&
-        publicUrl.password === '';
-    } catch {
-      hasPureHttpsOrigin = false;
-    }
-    if (!hasPureHttpsOrigin) {
+    if (!isPureHttpsOrigin(parsed.data.API_PUBLIC_URL ?? '')) {
       throw new Error(
         'Invalid environment configuration:\n  - API_PUBLIC_URL: must be a pure https origin when SCHEDULE_DISPATCHER=qstash',
       );
