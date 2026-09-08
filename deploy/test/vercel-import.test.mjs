@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
-import { createRequire } from 'node:module';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 
-const root = resolve(import.meta.dirname, '../..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const tool = () => import('../vercel-import.mjs');
 const summary = JSON.stringify({ parsed: { employees: 1, vehicles: 1, customers: 1, sites: 1, importableAgreements: 1 } });
 
@@ -69,6 +70,79 @@ test('requires a matching explicit target and a verified TLS PostgreSQL URL', as
   ]) {
     await assert.rejects(runTool(['--apply'], { ...env, ...changed }, () => assert.fail('must not execute')),
       error => !error.message.includes('private-password') && /Invalid operator import configuration/.test(error.message));
+  }
+});
+
+test('permits only the public schema, explicit or implicit, for the confirmed database', async t => {
+  const { env } = fixture(t);
+  const { runTool } = await tool();
+  const execute = () => ({ status: 0, stdout: summary });
+  for (const suffix of ['', '&schema=public']) {
+    assert.equal(await runTool(['--dry-run'], { ...env, DATABASE_URL: env.DATABASE_URL + suffix }, execute), summary);
+  }
+  for (const schema of ['production', 'private', '', 'PUBLIC']) {
+    await assert.rejects(runTool(['--apply'], { ...env, DATABASE_URL: env.DATABASE_URL + '&schema=' + schema }, execute), /Invalid/);
+  }
+});
+
+test('refuses custom CA and client certificate configuration for the public-CA-only command', async t => {
+  const { env } = fixture(t);
+  const { runTool } = await tool();
+  const execute = () => ({ status: 0, stdout: summary });
+  for (const key of ['sslcert', 'sslrootcert', 'sslidentity', 'sslpassword']) {
+    await assert.rejects(runTool(['--dry-run'], { ...env, DATABASE_URL: env.DATABASE_URL + '&' + key + '=private' }, execute), /Invalid/);
+  }
+  for (const key of ['SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS', 'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY']) {
+    await assert.rejects(runTool(['--dry-run'], { ...env, [key]: '/private/certificate' }, execute), /Invalid/);
+  }
+});
+
+test('requires private 0600 workbooks and mappings without altering their permissions', async t => {
+  const { directory, env } = fixture(t);
+  const { runTool } = await tool();
+  const mapping = join(directory, 'mapping.json');
+  writeFileSync(mapping, '{}', { mode: 0o600 });
+  const configured = { ...env, MATRIX_MAPPING_PATH: mapping };
+  for (const path of [env.TECHNICIAN_MATRIX_PATH, env.MASTER_SCHEDULE_PATH, mapping]) {
+    chmodSync(path, 0o640);
+    await assert.rejects(runTool(['--dry-run'], configured, () => ({ status: 0, stdout: summary })), /Invalid/);
+    assert.equal(fs.lstatSync(path).mode & 0o777, 0o640);
+    chmodSync(path, 0o600);
+  }
+});
+
+test('requires owner-only 0700 containing directories without repairing them', async t => {
+  const { directory, env } = fixture(t);
+  const { runTool } = await tool();
+  chmodSync(directory, 0o750);
+  await assert.rejects(runTool(['--dry-run'], env, () => ({ status: 0, stdout: summary })), /Invalid/);
+  assert.equal(fs.lstatSync(directory).mode & 0o777, 0o750);
+});
+
+test('requires the current operator to own each input file and its containing directory', async t => {
+  const { directory, env } = fixture(t);
+  const { runTool } = await tool();
+  const original = fs.lstatSync;
+  for (const wrongOwnerPath of [env.TECHNICIAN_MATRIX_PATH, directory]) {
+    // Simulate ownership metadata only; never chown the fixture or user files.
+    fs.lstatSync = (path, ...args) => {
+      const stat = original(path, ...args);
+      if (path === wrongOwnerPath) stat.uid = process.getuid() + 1;
+      return stat;
+    };
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(runTool(['--dry-run'], env, () => ({ status: 0, stdout: summary })), /Invalid/);
+    } finally {
+      fs.lstatSync = original;
+      syncBuiltinESMExports();
+    }
+  }
+});
+
+test('operator command and imported staging helper avoid newer import.meta.dirname', () => {
+  for (const file of ['deploy/vercel-import.mjs', 'deploy/staging-tool.mjs']) {
+    assert.doesNotMatch(readFileSync(resolve(root, file), 'utf8'), /import\.meta\.dirname/);
   }
 });
 

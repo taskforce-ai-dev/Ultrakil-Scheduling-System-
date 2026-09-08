@@ -191,15 +191,26 @@ No `.env` file is loaded automatically by this command.
 Load these variables securely into the operator process environment. Do not
 paste credentials into shell command arguments, Git, logs or chat:
 
-- `DATABASE_URL`: the target PostgreSQL provider's connection URL, including
+- `DATABASE_URL`: the supported external PostgreSQL endpoint's URL, including
   `sslmode=require&sslaccept=strict` for encrypted, certificate-verified access.
-  Use a provider endpoint accessible to the operator with import write rights.
+  Only the `public` schema is supported: omit `schema` or specify `schema=public`;
+  any other schema is rejected even when the host/database confirmation matches.
+  This command is **public-CA-only**: the endpoint certificate must chain to the
+  operator machine's unmodified public system CA roots. Custom CA and client
+  certificate endpoints are unsupported. Certificate URL parameters and trust
+  overrides (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `PGSSLROOTCERT`,
+  `PGSSLCERT`, `PGSSLKEY`, `NODE_TLS_REJECT_UNAUTHORIZED`) are rejected. Do not
+  disable certificate verification or install a private root to bypass this
+  policy; such an endpoint requires a separately reviewed operator workflow.
+  The supported endpoint must be accessible to the operator with import write rights.
 - `ULTRAKIL_IMPORT_TARGET`: separately confirm `hostname:port/database` from
   that URL, including `:5432` when the URL omits its port. A mismatch fails
   before the importer runs. This confirmation does not grant production approval.
 - `TECHNICIAN_MATRIX_PATH` and `MASTER_SCHEDULE_PATH`: absolute paths to the
-  approved workbooks outside the checkout, readable by the nonroot operator,
-  with no permissions for other users (prefer mode `0600` in a `0700` directory).
+  approved workbooks outside the checkout, owned by the current nonroot operator
+  with mode exactly `0600`. Each containing directory must also be owned by that
+  operator with mode exactly `0700`; group/world access, other owners and symlinks
+  are rejected. Validation never changes file contents, ownership or permissions.
 - Optional `MATRIX_MAPPING_PATH`: an approved private JSON file outside the
   checkout with the same file protections. If omitted, parser defaults apply;
   a supplied missing file fails instead of silently ignoring the override.

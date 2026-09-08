@@ -1,14 +1,20 @@
 /** Trusted operator command, never a Vercel build step or public HTTP route. */
 import { spawnSync } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { safeImportSummary, validateImportFiles } from './staging-tool.mjs';
 
-const root = resolve(import.meta.dirname, '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = key => { throw new Error(`Invalid operator import configuration: ${key}. Values are withheld.`); };
 
 function validateTarget(env, apply) {
+  // This command supports provider certificates chained to the operator's
+  // public system CA roots, not custom roots or client-certificate endpoints.
+  for (const key of ['SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+    'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY', 'NODE_TLS_REJECT_UNAUTHORIZED']) {
+    if (env[key]) fail('public-CA-only TLS');
+  }
   try {
     const url = new URL(env.DATABASE_URL);
     const allowed = new Set(['sslmode', 'sslaccept', 'schema', 'connection_limit',
@@ -16,6 +22,7 @@ function validateTarget(env, apply) {
     if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname
       || !url.username || !url.password || url.hash || !/^\/[^/]+$/.test(url.pathname)
       || url.searchParams.get('sslmode') !== 'require' || url.searchParams.get('sslaccept') !== 'strict'
+      || (url.searchParams.has('schema') && url.searchParams.get('schema') !== 'public')
       || [...url.searchParams.keys()].some(key => !allowed.has(key) || url.searchParams.getAll(key).length !== 1)) {
       fail('DATABASE_URL');
     }
@@ -37,9 +44,13 @@ function validateTarget(env, apply) {
 function externalPrivateFile(path) {
   try {
     if (!isAbsolute(path)) fail('absolute private input path');
+    const operator = process.getuid?.();
     const stat = lstatSync(path);
+    const parent = lstatSync(dirname(path));
     const fromRepository = relative(root, realpathSync(path));
-    if (!stat.isFile() || !stat.size || (stat.mode & 0o007)
+    if (operator === undefined || operator === 0 || !stat.isFile() || !stat.size
+      || stat.uid !== operator || (stat.mode & 0o777) !== 0o600
+      || !parent.isDirectory() || parent.uid !== operator || (parent.mode & 0o777) !== 0o700
       || (fromRepository !== '..' && !fromRepository.startsWith(`..${sep}`))) fail('private input file');
   } catch { fail('private input file'); }
 }

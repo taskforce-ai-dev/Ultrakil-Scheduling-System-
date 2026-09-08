@@ -1,9 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, lstatSync, realpathSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, relative, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = resolve(import.meta.dirname, '..');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fail = key => { throw new Error(`Invalid staging configuration: ${key}. Values are withheld.`); };
 
 export function validateReleaseConfig(env) {

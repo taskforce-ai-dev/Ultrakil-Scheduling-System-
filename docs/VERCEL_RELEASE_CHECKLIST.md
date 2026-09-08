@@ -26,8 +26,11 @@ Record every result against an exact commit SHA; unchecked items remain open.
 - [ ] `pnpm --filter @ultrakil/api db:deploy` and `db:status` pass against the
   target database at the release SHA.
 - [ ] The trusted operator confirms the external `DATABASE_URL` and matching
-  `ULTRAKIL_IMPORT_TARGET`, verified TLS, private inputs outside the checkout,
-  and non-default initial-admin credentials for the explicit apply step.
+  `ULTRAKIL_IMPORT_TARGET`, the `public` schema, and public-CA-only verified TLS.
+  Custom CA/client-certificate endpoints and trust overrides are unsupported by
+  this command. Inputs outside the checkout have mode `0600`, containing
+  directories have mode `0700`, and both belong to the current nonroot operator.
+  Non-default initial-admin credentials are ready for the explicit apply step.
 - [ ] `pnpm vercel:import --dry-run` succeeds for both approved workbook
   checksums at the release SHA; only aggregate totals/issue codes are shared.
   Parsing success is not recorded as database import success.
