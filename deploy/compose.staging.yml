@@ -190,7 +190,7 @@ services:
       SCHEDULER_HEALTH_TIMEOUT_MS: 3000
     ports:
       - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:3001"
-    networks: [backend]
+    networks: [backend, ingress]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -232,7 +232,7 @@ services:
       PORT: 3000
     ports:
       - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
-    networks: [backend]
+    networks: [ingress]
     depends_on:
       api:
         condition: service_healthy
@@ -329,6 +329,9 @@ services:
 networks:
   backend:
     internal: true
+  ingress:
+    driver: bridge
+    internal: false
   export-egress: {}
 
 volumes:

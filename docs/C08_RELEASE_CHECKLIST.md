@@ -7,12 +7,15 @@ script. It does not transfer O08 ownership or include branding PR #36.
 - [ ] C07 accepted; C08 reviewed on that state; full latest-head CI green.
 - [ ] Synthetic Docker lifecycle CI green with all 48 required journeys run,
   no skipped tests, clean/idempotent migrations and both imports repeated.
-- [ ] Exact source SHA and API/web/scheduler/tooling/recovery image IDs recorded.
+- [ ] Exact source SHA, accepted Compose file/retained release checkout and
+  API/web/scheduler/tooling/recovery image IDs recorded.
 - [ ] Authorized UltraKIL host/IP, SSH user/key, sudo scope, host resources,
   DNS names, TLS certificate ownership and firewall/pilot CIDRs confirmed.
 - [ ] Private environment, imports/reports/backups and UID permissions checked.
 - [ ] HTTPS portal/API URLs verified from the pilot network, with readiness,
   login/CORS, every service healthy and ten minutes of clean runtime evidence.
+- [ ] Loopback API/web probes pass locally; same-L2 peer exposure checks prove
+  direct 3000/3001 access is blocked (required firewall evidence on Engine <28).
 - [ ] Real workbooks privately imported twice through the strict wrapper;
   numeric summaries attached, private reports retained only for approved review.
 - [ ] All five multi-driver vehicles, every checked-driver choice, unchecked
@@ -30,9 +33,11 @@ script. It does not transfer O08 ownership or include branding PR #36.
 - [ ] Remote destination, pinned SSH key, upload identity, age recipient and
   separate recovery-key custodian authorized; independent off-host restore
   completed. Local/offline tooling proof alone leaves this item unchecked.
-- [ ] Prior-image schema compatibility reviewed, maintenance ingress verified,
-  queues drained/paused, prebackup verified, all application services restarted
-  from recorded artifacts and no publication/outbox replay observed.
+- [ ] Prior release Compose/image compatibility reviewed, maintenance ingress
+  verified, queues drained/paused, prebackup verified, all application services
+  restarted from the recorded Compose definition and artifacts, and no
+  publication/outbox replay observed. First release records that no prior
+  Compose/image pair exists rather than claiming rollback proof.
 - [ ] Staging build/URL securely handed to Oshadi only after verification.
 - [ ] Oshadi attaches her final real-staging UAT including scenarios 4–7, O09
   regression evidence, screenshots matching the deployed SHA, manager guide,

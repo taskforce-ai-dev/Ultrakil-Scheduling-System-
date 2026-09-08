@@ -35,6 +35,31 @@ def assert_host_probe_container(label, container):
         raise RuntimeError(f'{label} host readiness container is not stable')
 
 
+def assert_selected_loopback_port(label, endpoint, port):
+    if endpoint != f'127.0.0.1:{port}':
+        raise RuntimeError(f'{label} host port mapping is not the selected loopback port')
+
+
+def assert_runtime_network_topology(project, api, web, backend, ingress, backup_export_container_id=None):
+    backend_name = f'{project}_backend'
+    ingress_name = f'{project}_ingress'
+    api_id = api.get('Id')
+    web_id = web.get('Id')
+    api_networks = api.get('NetworkSettings', {}).get('Networks')
+    web_networks = web.get('NetworkSettings', {}).get('Networks')
+    backend_containers = backend.get('Containers')
+    ingress_containers = ingress.get('Containers')
+    if (not isinstance(api_id, str) or not api_id or not isinstance(web_id, str) or not web_id
+            or not isinstance(api_networks, dict) or not isinstance(web_networks, dict)
+            or not isinstance(backend_containers, dict) or not isinstance(ingress_containers, dict)
+            or set(api_networks) != {backend_name, ingress_name}
+            or set(web_networks) != {ingress_name}
+            or api_id not in backend_containers or web_id in backend_containers
+            or (backup_export_container_id is not None and backup_export_container_id in backend_containers)
+            or set(ingress_containers) != {api_id, web_id}):
+        raise RuntimeError('runtime network topology is invalid')
+
+
 def require_api_ready(response):
     if response.status != 200:
         raise HostReadinessResponseError
@@ -200,6 +225,16 @@ def main():
         except json.JSONDecodeError:
             raise RuntimeError(f'{service} host readiness container is not stable') from None
 
+    def inspect_runtime_network(network):
+        result = subprocess.run(['docker', 'network', 'inspect', '--format', '{{json .}}', network], cwd=ROOT,
+                                env=child_env, text=True, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError('runtime network inspection failed')
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError('runtime network inspection failed') from None
+
     original_error = None
     try:
         run('synthetic workbook generation', ['node', 'deploy/test/rehearsal-fixture.mjs', 'workbooks', str(paths['import'])])
@@ -260,6 +295,16 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
            f'{ROOT / "deploy/test/rehearsal-fixture.mjs"}:/workspace/deploy/test/rehearsal-fixture.mjs:ro',
            'migrate', 'node', 'deploy/test/rehearsal-fixture.mjs', 'seed')
         dc('start complete stack', 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'web', 'backup')
+        api_container = inspect_host_probe_container('api')
+        web_container = inspect_host_probe_container('web')
+        backup_export_container_id = dc('backup exporter remains inactive', '--profile', 'offhost', 'ps', '-aq',
+                                        'backup-export') or None
+        assert_runtime_network_topology(
+            project, api_container, web_container, inspect_runtime_network(f'{project}_backend'),
+            inspect_runtime_network(f'{project}_ingress'), backup_export_container_id,
+        )
+        assert_selected_loopback_port('API', dc('API loopback port mapping', 'port', 'api', '3001'), api_port)
+        assert_selected_loopback_port('web', dc('web loopback port mapping', 'port', 'web', '3000'), web_port)
         wait_for_host_readiness('API', api_url + '/health/ready', require_api_ready,
                                 inspect=lambda: inspect_host_probe_container('api'))
         wait_for_host_readiness('web', web_url + '/login', require_web_ready,

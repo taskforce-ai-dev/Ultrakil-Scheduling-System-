@@ -23,11 +23,18 @@ class StagingComposeTest(unittest.TestCase):
         self.assertEqual(migrate["build"]["target"], "tooling")
 
     def test_private_services_have_no_host_ports_and_default_ports_are_loopback(self):
-        for name in ("postgres", "redis", "scheduler", "migrate", "import", "backup"):
+        backend_only = ("postgres", "redis", "scheduler", "migrate", "import", "backup")
+        for name in backend_only:
             self.assertNotIn("ports", self.services[name])
+            self.assertEqual(self.services[name]["networks"], ["backend"])
         for name in ("api", "web"):
             self.assertIn(":-127.0.0.1}", self.services[name]["ports"][0])
+        self.assertEqual(self.services["api"]["networks"], ["backend", "ingress"])
+        self.assertEqual(self.services["web"]["networks"], ["ingress"])
+        self.assertEqual(self.services["backup-export"]["networks"], ["export-egress"])
         self.assertTrue(self.config["networks"]["backend"]["internal"])
+        self.assertEqual(self.config["networks"]["ingress"]["driver"], "bridge")
+        self.assertFalse(self.config["networks"]["ingress"]["internal"])
         example = (ROOT / "deploy/staging.env.example").read_text()
         self.assertNotIn("=0.0.0.0", example)
         self.assertIn("COMPOSE_PROJECT_NAME", self.config["name"])

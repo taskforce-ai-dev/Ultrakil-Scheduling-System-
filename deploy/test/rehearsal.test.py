@@ -137,6 +137,53 @@ class Clock:
         self.value += seconds
 
 
+def runtime_container(identifier, networks):
+    return {'Id': identifier, 'NetworkSettings': {'Networks': {name: {} for name in networks}}}
+
+
+def runtime_network(*identifiers):
+    return {'Containers': {identifier: {} for identifier in identifiers}}
+
+
+class RuntimeNetworkTopologyTests(unittest.TestCase):
+    def setUp(self):
+        self.project = 'ultrakil-rehearsal-synthetic'
+        self.backend = f'{self.project}_backend'
+        self.ingress = f'{self.project}_ingress'
+        self.api = runtime_container('api-id', [self.backend, self.ingress])
+        self.web = runtime_container('web-id', [self.ingress])
+        self.backend_network = runtime_network('api-id', 'backup-id')
+        self.ingress_network = runtime_network('api-id', 'web-id')
+
+    def test_accepts_exact_api_and_web_runtime_memberships(self):
+        rehearse.assert_runtime_network_topology(
+            self.project, self.api, self.web, self.backend_network, self.ingress_network,
+        )
+
+    def test_rejects_wrong_membership_or_private_service_on_ingress(self):
+        wrong_api = runtime_container('api-id', [self.backend])
+        with self.assertRaisesRegex(RuntimeError, 'runtime network topology'):
+            rehearse.assert_runtime_network_topology(
+                self.project, wrong_api, self.web, self.backend_network, self.ingress_network,
+            )
+        exposed_ingress = runtime_network('api-id', 'web-id', 'redis-id')
+        with self.assertRaisesRegex(RuntimeError, 'runtime network topology'):
+            rehearse.assert_runtime_network_topology(
+                self.project, self.api, self.web, self.backend_network, exposed_ingress,
+            )
+        with self.assertRaisesRegex(RuntimeError, 'runtime network topology'):
+            rehearse.assert_runtime_network_topology(
+                self.project, self.api, self.web, runtime_network('api-id', 'web-id', 'exporter-id'),
+                self.ingress_network, backup_export_container_id='exporter-id',
+            )
+
+    def test_requires_exact_selected_loopback_port(self):
+        rehearse.assert_selected_loopback_port('API', '127.0.0.1:31234', 31234)
+        for endpoint in ('0.0.0.0:31234', '127.0.0.1:31235', '127.0.0.1:31234\n[::1]:31234'):
+            with self.subTest(endpoint=endpoint), self.assertRaisesRegex(RuntimeError, 'host port mapping'):
+                rehearse.assert_selected_loopback_port('API', endpoint, 31234)
+
+
 class HostReadinessTests(unittest.TestCase):
     def test_retries_transient_transport_failures_until_api_is_ready(self):
         clock = Clock()

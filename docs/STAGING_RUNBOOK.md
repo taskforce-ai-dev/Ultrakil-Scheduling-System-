@@ -12,13 +12,16 @@ and the separate UI work. No staging host is implied by this runbook.
 
 ## 1. Host prerequisites
 
-- An authorized UltraKIL Linux host with Docker Engine 26+ and Docker Compose
-  v2.24+; confirm host access, DNS, TLS and pilot access with Thivarrakesh.
+- An authorized UltraKIL Linux host with Docker Engine 28+ and Docker Compose
+  v2.24+. An older Engine requires recorded same-L2 peer proof that the host
+  firewall blocks 3000/3001 before pilot access; confirm host access, DNS, TLS
+  and pilot access with Thivarrakesh.
 - At least 2 CPU cores, 4 GB RAM and 20 GB free disk for the pilot.
 - The supplied bindings are loopback-only. Use an HTTPS reverse proxy on the
   authorized host; expose only 443 to the approved pilot range (and 80 only if
   needed for certificate issuance). PostgreSQL, Redis and scheduler have no
-  host ports. Do not publish 3000/3001 directly to the internet.
+  host ports. Do not publish 3000/3001 directly to the internet. On an older
+  Engine, loopback binding alone is not the required peer-exposure control.
 - A DNS name and valid TLS certificate before external/customer UAT.
 
 Create the deployment and import directories:
@@ -89,6 +92,17 @@ Terminate TLS with valid certificates, configure a 60-second proxy read timeout,
 and verify login, CORS and API readiness through HTTPS before inviting users.
 The examples' localhost URLs are only for an operator tunnel/local validation.
 Never publish expanded `docker compose config` output: it contains secrets.
+
+The release Compose topology has a private `backend` network and a non-internal
+bridge `ingress` network. API is attached to both because it needs PostgreSQL,
+Redis and scheduler on `backend` while its loopback-published port needs host
+ingress. The portal is `ingress`-only; PostgreSQL, Redis, scheduler, migration,
+import and backup remain `backend`-only, while `backup-export` stays on its
+separate egress network. A non-internal bridge permits normal container egress,
+so attaching API to `ingress` changes its egress posture even though database
+and queue traffic remain private. Do not add external API calls without a
+separate egress/firewall review, and never attach data or recovery services to
+`ingress`.
 
 ## 3. Place the approved source workbooks
 
@@ -182,6 +196,25 @@ curl -fsS "https://api.pilot.example.test/api/health/ready"
 curl -fsS "https://api.pilot.example.test/api/docs" >/dev/null
 curl -fsS "https://pilot.example.test/login" >/dev/null
 docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml logs --since=10m api scheduler web
+```
+
+Before reverse-proxy access, verify the host mappings locally:
+
+```bash
+curl -fsS http://127.0.0.1:3001/api/health/ready
+curl -fsS http://127.0.0.1:3000/login >/dev/null
+```
+
+From an approved peer on the same L2 segment, test the staging host's actual
+LAN address. Both direct loopback-published application ports must fail; record
+the command/result as firewall evidence, especially for any pre-28 Engine:
+
+```bash
+if curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3001/api/health/live >/dev/null \
+  || curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3000/login >/dev/null; then
+  echo 'unexpected direct application exposure' >&2
+  exit 1
+fi
 ```
 
 Every service must be healthy. API readiness must report database, queue and
@@ -359,15 +392,18 @@ PGHOST=127.0.0.1 PGPORT=55432 PGUSER=dev python3 deploy/test/rehearsal.postgres.
 
 ## 8. Rollback
 
-Application rollback restarts the previously verified image IDs. It must not
-build, pull a mutable tag, run a down migration, reset PostgreSQL, delete volumes
-or flush Redis. Review compatibility of the prior API with the current schema
-before entering the release window. First release has no prior accepted build;
-its rehearsal proves exact-artifact restart, not cross-version compatibility.
+Application rollback restores the previously verified Compose definition and
+image IDs. It must not build, pull a mutable tag, run a down migration, reset
+PostgreSQL, delete volumes or flush Redis. Review compatibility of the prior API
+with the current schema before entering the release window. First release has no
+prior accepted Compose/image pair: its rehearsal proves exact-artifact restart,
+not cross-version rollback, and an operator must not attempt this procedure.
 
-Before each release, record the source SHA and all resolved image IDs in a
-private release record. Keep prior images locally; exclude them from automated
-image pruning while they remain rollback candidates:
+Before each release, retain the exact accepted source checkout (including its
+`deploy/compose.staging.yml`), source SHA and resolved image IDs in a private
+release record. The prior Compose file must remain beside its recorded commit so
+relative Compose paths are preserved. Keep prior images locally; exclude them
+from automated image pruning while they remain rollback candidates:
 
 ```bash
 git rev-parse HEAD
@@ -378,8 +414,9 @@ for service in api web scheduler migrate backup; do
 done
 ```
 
-Copy the exact previously accepted IDs into a private
-`/opt/ultrakil/releases/previous-images.json` file (0700 parent, 0600 file):
+Copy the exact previously accepted IDs into the prior release record's private
+`previous-images.json` file (0700 parent, 0600 file), and record its exact
+commit and Compose file there as well:
 
 ```json
 {"services":{"api":{"image":"sha256:REPLACE_API_ID","pull_policy":"never"},"web":{"image":"sha256:REPLACE_WEB_ID","pull_policy":"never"},"scheduler":{"image":"sha256:REPLACE_SCHEDULER_ID","pull_policy":"never"}}}
@@ -431,15 +468,23 @@ Verify and restore the exact returned archive to a new disposable database as
 in section 7; match counts before proceeding and clean that exact target.
 The snapshot catches publication mutations even if row counts remain the same.
 
-Use the stored prior IDs with no build/pull/dependency recreation:
+Use the stored prior Compose definition and image IDs with no build, pull or
+dependency recreation. An image-only override does not restore a changed
+network graph. Set `prior_release` to the retained checkout of the previously
+accepted release, not the current checkout:
 
 ```bash
+prior_release=/opt/ultrakil/releases/REPLACE_PRIOR_ACCEPTED_SHA
+test -r "$prior_release/deploy/compose.staging.yml"
+test -r "$prior_release/previous-images.json"
 rollback_compose() {
-  docker compose --env-file deploy/staging.env -f deploy/compose.staging.yml \
-    -f /opt/ultrakil/releases/previous-images.json "$@"
+  docker compose --project-directory "$prior_release" \
+    --env-file /opt/ultrakil/app/deploy/staging.env \
+    -f "$prior_release/deploy/compose.staging.yml" \
+    -f "$prior_release/previous-images.json" "$@"
 }
-rollback_compose up -d --no-deps --no-build --pull never --wait scheduler
-rollback_compose up -d --no-deps --no-build --pull never --wait api
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait scheduler
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait api
 maintenance snapshot > /opt/ultrakil/releases/after-rollback.json
 cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-rollback.json
 maintenance resume
@@ -448,7 +493,7 @@ maintenance pause
 maintenance snapshot > /opt/ultrakil/releases/after-resume.json
 cmp /opt/ultrakil/releases/before-rollback.json /opt/ultrakil/releases/after-resume.json
 maintenance resume
-rollback_compose up -d --no-deps --no-build --pull never --wait web
+rollback_compose up -d --no-deps --no-build --pull never --force-recreate --wait web
 ```
 
 Stop immediately on any nonzero command (`set -e` in a scripted operator
