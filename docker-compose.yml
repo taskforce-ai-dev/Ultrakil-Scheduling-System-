@@ -73,8 +73,11 @@ services:
     restart: unless-stopped
     environment:
       SCHEDULER_PORT: 8000
+      # This compose service is private/local; public deployments must leave
+      # the opt-out unset and provide SCHEDULER_API_TOKEN instead.
+      SCHEDULER_ALLOW_UNAUTHENTICATED: "true"
     ports:
-      - '${SCHEDULER_PORT:-8000}:8000'
+      - '127.0.0.1:${SCHEDULER_PORT:-8000}:8000'
     healthcheck:
       test: ['CMD', 'python', '-c', "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live').status==200 else 1)"]
       interval: 10s

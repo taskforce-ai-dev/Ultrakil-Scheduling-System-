@@ -8,13 +8,20 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Inject,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { LockScope, ScheduleRun, UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
+import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   LockAssignmentDto,
@@ -25,7 +32,11 @@ import {
   StartScheduleRunDto,
 } from './dto';
 import { PublishingService } from './publishing.service';
-import { ScheduleRunQueue } from './schedule-run.processor';
+import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
+import {
+  SCHEDULE_RUN_DISPATCHER,
+  ScheduleRunDispatcher,
+} from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
 
 function toDto(run: ScheduleRun): ScheduleRunDto {
@@ -57,10 +68,16 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
 @Controller()
 export class ScheduleRunsController {
   constructor(
+    @Inject(ScheduleRunService)
     private readonly runs: ScheduleRunService,
-    private readonly queue: ScheduleRunQueue,
+    @Inject(SCHEDULE_RUN_DISPATCHER)
+    private readonly dispatcher: ScheduleRunDispatcher,
+    @Inject(PublishingService)
     private readonly publishing: PublishingService,
+    @Inject(PrismaService)
     private readonly prisma: PrismaService,
+    @Inject(ScheduleRunDispatchService)
+    private readonly dispatches: ScheduleRunDispatchService,
   ) {}
 
   @Post('schedule-runs')
@@ -76,22 +93,20 @@ export class ScheduleRunsController {
     @Body() dto: StartScheduleRunDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
-    const run = await this.runs.create(dto, actor);
-    const jobId = await this.queue.enqueue({
-      runId: run.id,
-      timeLimitSeconds: dto.timeLimitSeconds ?? 20,
-    });
-    const withJob = await this.prisma.scheduleRun.update({
-      where: { id: run.id },
-      data: { jobId },
-    });
-    return toDto(withJob);
+    this.assertProviderRange(dto.from, dto.to);
+    const run = await this.runs.create(dto, actor, this.dispatcher.provider);
+    // A durable outbox now owns publish/recovery. Returning the queued run
+    // retains the existing polling API even if the first remote publish fails.
+    return toDto((await this.dispatches.dispatch(run.id)) ?? run);
   }
 
   @Get('schedule-runs')
   @ApiOperation({ summary: 'Past and current schedule runs' })
   @ApiResponse({ status: 200, type: PaginatedScheduleRunsDto })
-  async list(@Query() query: ScheduleRunQueryDto): Promise<PaginatedScheduleRunsDto> {
+  async list(
+    @Query() query: ScheduleRunQueryDto,
+  ): Promise<PaginatedScheduleRunsDto> {
+    await this.reconcileSelfHosted();
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where = {
@@ -115,13 +130,26 @@ export class ScheduleRunsController {
   @Get('schedule-runs/:id')
   @ApiOperation({
     summary: 'One run, with its progress',
-    description: 'Poll this while a solve is working. `progressPercent` moves as it goes.',
+    description:
+      'Poll this while a solve is working. `progressPercent` moves as it goes.',
   })
   @ApiResponse({ status: 200, type: ScheduleRunDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   async get(@Param('id', ParseUUIDPipe) id: string): Promise<ScheduleRunDto> {
-    const run = await this.prisma.scheduleRun.findUniqueOrThrow({ where: { id } });
+    await this.reconcileSelfHosted();
+    const run = await this.prisma.scheduleRun.findUniqueOrThrow({
+      where: { id },
+    });
     return toDto(run);
+  }
+
+  private async reconcileSelfHosted(): Promise<void> {
+    // BullMQ has no external signed cron endpoint. Its polling API provides a
+    // bounded recovery sweep for jobs abandoned after maxStalledCount. QStash
+    // uses its signed schedule instead, keeping Vercel polling reads remote-free.
+    if (this.dispatcher.provider === 'bullmq') {
+      await this.dispatches.reconcilePending();
+    }
   }
 
   @Post('schedule-runs/:id/cancel')
@@ -138,8 +166,29 @@ export class ScheduleRunsController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
     const run = await this.runs.requestCancel(id, actor);
-    await this.queue.cancel(id);
+    await this.dispatches.cancel(run.id, run.jobId);
     return toDto(run);
+  }
+
+  private assertProviderRange(from: string, to: string): void {
+    if (this.dispatcher.maxRangeDays === undefined) return;
+    const days =
+      Math.floor(
+        (new Date(`${to}T00:00:00.000Z`).getTime() -
+          new Date(`${from}T00:00:00.000Z`).getTime()) /
+          86_400_000,
+      ) + 1;
+    if (days <= this.dispatcher.maxRangeDays) return;
+    throw new AppException(
+      'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+      `This QStash deployment can solve at most ${this.dispatcher.maxRangeDays} days per run within Vercel Hobby's execution budget. Use a shorter range.`,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+      {
+        days,
+        maximumDays: this.dispatcher.maxRangeDays,
+        provider: this.dispatcher.provider,
+      },
+    );
   }
 
   @Post('schedule-runs/:id/publish')
@@ -153,14 +202,19 @@ export class ScheduleRunsController {
   @ApiResponse({ status: 200, type: ScheduleRunDto })
   @ApiResponse({
     status: 409,
-    description: 'RESOURCE_CONFLICT — already published, unfinished, or nothing to publish.',
+    description:
+      'RESOURCE_CONFLICT — already published, unfinished, or nothing to publish.',
   })
   async publish(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: PublishScheduleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
-    const { run } = await this.publishing.publish(id, dto.reason ?? null, actor);
+    const { run } = await this.publishing.publish(
+      id,
+      dto.reason ?? null,
+      actor,
+    );
     return toDto(run);
   }
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nestjs",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm prisma:generate && pnpm build",
+  "crons": [
+    {
+      "path": "/api/internal/schedule-runs/reconcile",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

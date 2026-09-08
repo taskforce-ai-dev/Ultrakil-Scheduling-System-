@@ -16,6 +16,11 @@ import {
   ScheduleRunProcessor,
 } from './schedule-run.processor';
 import { ScheduleRunService } from './schedule-run.service';
+import {
+  BULLMQ_EXECUTION_LEASE_SECONDS,
+  BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
+  SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+} from './schedule-run-execution-budget';
 import { SchedulerClient, SolveResponse } from './scheduler.client';
 import { PublishingService } from './publishing.service';
 
@@ -70,10 +75,29 @@ function fixture(
   const run = {
     id: 'run',
     branchCode: BranchCode.COLOMBO,
-    status: ScheduleRunStatus.QUEUED,
+    status: ScheduleRunStatus.QUEUED as ScheduleRunStatus,
     rangeStart: new Date('2027-03-01T00:00:00Z'),
     rangeEnd: new Date('2027-03-07T00:00:00Z'),
-    cancelRequestedAt: null,
+    cancelRequestedAt: null as Date | null,
+    startedAt: null as Date | null,
+    executionLeaseId: null as string | null,
+    executionLeaseExpiresAt: null as Date | null,
+    executionAttempt: 0,
+    timeLimitSeconds: 1,
+    jobId: 'msg_current' as string | null,
+    errorCode: null as string | null,
+    errorMessage: null as string | null,
+  };
+  const dispatchOutbox = {
+    id: 'ab839d87-6e0d-4b08-a6d1-f3e352a6f4a4',
+    scheduleRunId: run.id,
+    provider: 'QSTASH',
+    status: 'PUBLISHED',
+    messageId: run.jobId as string | null,
+    terminalFailureMessageId: null as string | null,
+    terminalFailureCode: null as string | null,
+    terminalFailureMessage: null as string | null,
+    terminalFailureAt: null as Date | null,
   };
   // Model deletion and its FK cascade at the database boundary. The service,
   // snapshot, solver barrier and queue failure handler run unchanged.
@@ -92,10 +116,18 @@ function fixture(
     findMany: jest.fn(
       async ({ where }: { where: { status?: { in: AssignmentStatus[] } } }) =>
         assignments
-          .filter((entry) => !where.status || where.status.in.includes(entry.status))
-          .map((entry) => ({ ...entry, publishedAt: null, _count: {
-            notificationOutboxEntries: outbox.filter((notice) => notice.assignmentId === entry.id).length,
-          } })),
+          .filter(
+            (entry) => !where.status || where.status.in.includes(entry.status),
+          )
+          .map((entry) => ({
+            ...entry,
+            publishedAt: null,
+            _count: {
+              notificationOutboxEntries: outbox.filter(
+                (notice) => notice.assignmentId === entry.id,
+              ).length,
+            },
+          })),
     ),
     delete: jest.fn(async ({ where }: { where: { id: string } }) =>
       remove(where.id),
@@ -148,9 +180,168 @@ function fixture(
     update: jest.fn(async ({ data }: { data: Partial<typeof run> }) =>
       Object.assign(run, data),
     ),
+    updateMany: jest.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown>;
+        data: Record<string, unknown>;
+      }) => {
+        const matches = (condition: Record<string, unknown>): boolean => {
+          if (condition.id && condition.id !== run.id) return false;
+          if (condition.jobId && condition.jobId !== run.jobId) return false;
+          if (condition.status) {
+            const status = condition.status as
+              ScheduleRunStatus | { in?: ScheduleRunStatus[] };
+            if (typeof status === 'string' && status !== run.status)
+              return false;
+            if (
+              typeof status === 'object' &&
+              status.in &&
+              !status.in.includes(run.status)
+            )
+              return false;
+          }
+          if (condition.cancelRequestedAt === null && run.cancelRequestedAt)
+            return false;
+          if (
+            typeof condition.cancelRequestedAt === 'object' &&
+            condition.cancelRequestedAt &&
+            'not' in condition.cancelRequestedAt &&
+            !run.cancelRequestedAt
+          )
+            return false;
+          if (
+            condition.executionLeaseId !== undefined &&
+            condition.executionLeaseId !== run.executionLeaseId
+          )
+            return false;
+          const dispatchRelation = condition.dispatchOutbox as
+            | {
+                is?: {
+                  id?: string;
+                  status?: { in?: string[] };
+                  terminalFailureAt?: Date | null;
+                };
+              }
+            | undefined;
+          if (dispatchRelation?.is) {
+            if (
+              dispatchRelation.is.id &&
+              dispatchRelation.is.id !== dispatchOutbox.id
+            ) {
+              return false;
+            }
+            if (
+              dispatchRelation.is.status?.in &&
+              !dispatchRelation.is.status.in.includes(dispatchOutbox.status)
+            ) {
+              return false;
+            }
+            if (
+              dispatchRelation.is.terminalFailureAt === null &&
+              dispatchOutbox.terminalFailureAt !== null
+            ) {
+              return false;
+            }
+          }
+          if (
+            condition.executionLeaseExpiresAt === null &&
+            run.executionLeaseExpiresAt
+          )
+            return false;
+          const expiry = condition.executionLeaseExpiresAt as
+            { gt?: Date; lt?: Date; lte?: Date } | undefined;
+          if (
+            expiry?.gt &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt <= expiry.gt)
+          )
+            return false;
+          if (
+            expiry?.lt &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt >= expiry.lt)
+          )
+            return false;
+          if (
+            expiry?.lte &&
+            (!run.executionLeaseExpiresAt ||
+              run.executionLeaseExpiresAt > expiry.lte)
+          )
+            return false;
+          const conjunction = condition.AND as
+            | Record<string, unknown>[]
+            | undefined;
+          if (conjunction && !conjunction.every(matches)) return false;
+          const alternatives = condition.OR as
+            Record<string, unknown>[] | undefined;
+          return !alternatives || alternatives.some(matches);
+        };
+        if (!matches(where)) return { count: 0 };
+        for (const [key, value] of Object.entries(data)) {
+          if (typeof value === 'object' && value && 'increment' in value) {
+            (run as Record<string, unknown>)[key] =
+              Number((run as Record<string, unknown>)[key] ?? 0) +
+              Number((value as { increment: number }).increment);
+          } else {
+            (run as Record<string, unknown>)[key] = value;
+          }
+        }
+        return { count: 1 };
+      },
+    ),
+  };
+  const scheduleRunDispatchOutbox = {
+    create: jest.fn(),
+    findUnique: jest.fn(async () => ({ ...dispatchOutbox })),
+    updateMany: jest.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: Record<string, unknown>;
+        data: Record<string, unknown>;
+      }) => {
+        if (where.id && where.id !== dispatchOutbox.id) return { count: 0 };
+        if (
+          where.scheduleRunId &&
+          where.scheduleRunId !== dispatchOutbox.scheduleRunId
+        ) {
+          return { count: 0 };
+        }
+        if (where.provider && where.provider !== dispatchOutbox.provider) {
+          return { count: 0 };
+        }
+        const status = where.status as string | { in?: string[] } | undefined;
+        if (
+          (typeof status === 'string' && status !== dispatchOutbox.status) ||
+          (typeof status === 'object' &&
+            status.in &&
+            !status.in.includes(dispatchOutbox.status))
+        ) {
+          return { count: 0 };
+        }
+        const alternatives = where.OR as Record<string, unknown>[] | undefined;
+        if (
+          alternatives &&
+          !alternatives.some((alternative) =>
+            alternative.messageId === null
+              ? dispatchOutbox.messageId === null
+              : alternative.messageId === dispatchOutbox.messageId,
+          )
+        ) {
+          return { count: 0 };
+        }
+        Object.assign(dispatchOutbox, data);
+        return { count: 1 };
+      },
+    ),
   };
   const tx = {
     scheduleRun,
+    scheduleRunDispatchOutbox,
     assignment,
     assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
@@ -198,9 +389,15 @@ function fixture(
     eligibility as unknown as EligibilityService,
     {} as AuditService,
   );
-  const processor = new ScheduleRunProcessor(service);
+  const processor = new ScheduleRunProcessor(service, {
+    isCurrentDispatch: jest.fn(async () => true),
+  } as never);
   const job = {
-    data: { runId: run.id, timeLimitSeconds: 1 },
+    data: {
+      runId: run.id,
+      dispatchId: dispatchOutbox.id,
+      timeLimitSeconds: 1,
+    },
     updateProgress: jest.fn(),
   } as unknown as Job<ScheduleRunJobData>;
   const release = (unassigned = false) =>
@@ -236,6 +433,8 @@ function fixture(
     started,
     release,
     processor,
+    service,
+    scheduler,
     job,
     run,
     visit,
@@ -248,31 +447,53 @@ function fixture(
     reasons: tx.visitUnassignedReason,
     prisma,
     tx,
+    dispatchOutbox,
   };
 }
 
 describe('solver replacement lifecycle fence', () => {
-  it.each(['assignment', 'unassigned'])('rejects duplicate %s outcomes for an empty assignment snapshot', async (duplicate) => {
-    const f = fixture();
-    f.assignments.length = 0;
-    const pending = f.processor.process(f.job).then(() => undefined, (error: unknown) => error);
-    await f.started.promise;
-    const proposal = {
-      visit_id: f.visit.id, employee_ids: ['employee'], vehicles: [], start_minute: 600,
-      scheduled_date: '2027-03-03',
-    };
-    f.answer.resolve({
-      run_id: f.run.id, status: 'OPTIMAL', solve_seconds: 0, objective_value: 0, visits_considered: 1,
-      assignments: duplicate === 'assignment' ? [proposal, proposal] : [proposal],
-      unassigned: duplicate === 'unassigned'
-        ? [{ visit_id: f.visit.id, reason_codes: ['NO_CREW'], message: 'No crew' }]
-        : [],
-    });
-    expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
-    expect(f.assignments).toEqual([]);
-    expect(f.generatedVisit.update).not.toHaveBeenCalled();
-    expect(f.reasons.createMany).not.toHaveBeenCalled();
-  });
+  it.each(['assignment', 'unassigned'])(
+    'rejects duplicate %s outcomes for an empty assignment snapshot',
+    async (duplicate) => {
+      const f = fixture();
+      f.assignments.length = 0;
+      const pending = f.processor.process(f.job).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await f.started.promise;
+      const proposal = {
+        visit_id: f.visit.id,
+        employee_ids: ['employee'],
+        vehicles: [],
+        start_minute: 600,
+        scheduled_date: '2027-03-03',
+      };
+      f.answer.resolve({
+        run_id: f.run.id,
+        status: 'OPTIMAL',
+        solve_seconds: 0,
+        objective_value: 0,
+        visits_considered: 1,
+        assignments:
+          duplicate === 'assignment' ? [proposal, proposal] : [proposal],
+        unassigned:
+          duplicate === 'unassigned'
+            ? [
+                {
+                  visit_id: f.visit.id,
+                  reason_codes: ['NO_CREW'],
+                  message: 'No crew',
+                },
+              ]
+            : [],
+      });
+      expect(await pending).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.assignments).toEqual([]);
+      expect(f.generatedVisit.update).not.toHaveBeenCalled();
+      expect(f.reasons.createMany).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(
     ['present', 'absent'].flatMap((snapshot) =>
@@ -574,6 +795,10 @@ describe('solver replacement lifecycle fence', () => {
           scheduleRunId: 'run',
           code: 'NO_CREW',
           message: 'No crew available',
+          // Each reason carries its own remedy, matching what the manual path
+          // records, so the queue reads the same either way. Null here because
+          // the solver sent no remediation for this code.
+          details: { remediation: null, resources: null },
         },
       ],
     });
@@ -675,5 +900,395 @@ describe('solver replacement lifecycle fence', () => {
     await f.started.promise;
     f.release();
     await pending;
+  });
+});
+
+describe('at-least-once schedule-run delivery leases', () => {
+  const deliveryOptions = {
+    executionBudgetSeconds: SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
+    retryOnFailure: true,
+    executionLeaseSeconds: BULLMQ_EXECUTION_LEASE_SECONDS,
+    renewExecutionLease: true,
+  };
+
+  it('returns only the public execution result fields', async () => {
+    const f = fixture();
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).resolves.toEqual({
+      scheduled: 1,
+      unassigned: 0,
+      cancelled: false,
+    });
+  });
+
+  it('renews a self-hosted lease while the solver is still running', async () => {
+    jest.useFakeTimers({ now: new Date('2027-03-01T00:00:00.000Z') });
+    try {
+      const f = fixture();
+      const pending = f.service.deliver(f.run.id, deliveryOptions);
+      await f.started.promise;
+
+      await jest.advanceTimersByTimeAsync(
+        BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
+      );
+
+      expect(f.run.executionLeaseExpiresAt?.getTime()).toBeGreaterThan(
+        new Date('2027-03-01T00:00:00.000Z').getTime() +
+          BULLMQ_EXECUTION_LEASE_SECONDS * 1_000,
+      );
+      f.release();
+      await expect(pending).resolves.toMatchObject({ kind: 'completed' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reclaims a hard-crashed BullMQ owner after its renewable lease expires', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(
+      Date.now() + BULLMQ_EXECUTION_LEASE_SECONDS * 1_000,
+    );
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'busy' },
+    );
+
+    f.run.executionLeaseExpiresAt = new Date(Date.now() - 1);
+    const recovery = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+    f.release();
+
+    await expect(recovery).resolves.toMatchObject({ kind: 'completed' });
+    expect(f.run.executionLeaseId).not.toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
+  });
+
+  it('releases a retryable BullMQ failure so the next delivery can complete', async () => {
+    const f = fixture();
+    f.scheduler.solve.mockRejectedValueOnce(
+      new Error('temporary scheduler failure'),
+    );
+
+    await expect(
+      f.service.deliver(f.run.id, deliveryOptions),
+    ).rejects.toThrow('temporary scheduler failure');
+    expect(f.run).toMatchObject({
+      status: ScheduleRunStatus.QUEUED,
+      executionLeaseId: null,
+      executionLeaseExpiresAt: null,
+      errorCode: null,
+    });
+
+    const retry = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+    f.release();
+
+    await expect(retry).resolves.toMatchObject({ kind: 'completed' });
+  });
+
+  it('reports a concurrent duplicate delivery as busy without a second solve', async () => {
+    const f = fixture();
+    const first = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'busy' },
+    );
+    expect(f.scheduler.solve).toHaveBeenCalledTimes(1);
+
+    f.release();
+    await expect(first).resolves.toMatchObject({ kind: 'completed' });
+  });
+
+  it.each([
+    ScheduleRunStatus.SUCCEEDED,
+    ScheduleRunStatus.FAILED,
+    ScheduleRunStatus.SUPERSEDED,
+  ])('acknowledges a settled %s delivery without invoking the solver', async (status) => {
+    const f = fixture();
+    f.run.status = status;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'settled' },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges an already-cancelled delivery as cancelled', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.CANCELLED;
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'cancelled' },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('reclaims an expired lease and completes the delivery', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(Date.now() - 1_000);
+
+    const pending = f.service.deliver(f.run.id, deliveryOptions);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).resolves.toMatchObject({ kind: 'completed' });
+    expect(f.run.executionAttempt).toBe(1);
+    expect(f.run.executionLeaseId).not.toBe(
+      '00000000-0000-4000-8000-000000000001',
+    );
+  });
+
+  it('reserves time for solver transport and persistence inside the execution lease', async () => {
+    const f = fixture();
+    f.run.timeLimitSeconds = 300;
+
+    const pending = f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 55,
+      retryOnFailure: true,
+    });
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.scheduler.solve).toHaveBeenCalledWith(
+      expect.objectContaining({ time_limit_seconds: 9 }),
+      19_000,
+    );
+  });
+
+  it('rejects stale progress, failure, and finalization after another delivery reclaims the lease', async () => {
+    const f = fixture();
+    const staleLease = {
+      id: '00000000-0000-4000-8000-000000000001',
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000002';
+    f.run.executionLeaseExpiresAt = new Date(Date.now() + 60_000);
+
+    await expect(f.service.setProgress(f.run.id, staleLease, 99)).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+    });
+    await expect(
+      f.service.fail(f.run.id, staleLease, 'STALE', 'must not persist'),
+    ).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    await expect(
+      (
+        f.service as unknown as {
+          finish: (
+            id: string,
+            scheduled: number,
+            unassigned: number,
+            lease: typeof staleLease,
+          ) => Promise<unknown>;
+        }
+      ).finish(f.run.id, 9, 0, staleLease),
+    ).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+
+    expect(f.run).toMatchObject({
+      status: ScheduleRunStatus.RUNNING,
+      executionLeaseId: '00000000-0000-4000-8000-000000000002',
+    });
+  });
+
+  it('acknowledges a cancelled delivery without invoking the solver', async () => {
+    const f = fixture();
+    f.run.cancelRequestedAt = new Date();
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      {
+        kind: 'cancelled',
+      },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cancellation delivery retriable while the current lease is live', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.cancelRequestedAt = new Date();
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(Date.now() + 60_000);
+
+    await expect(f.service.deliver(f.run.id, deliveryOptions)).resolves.toEqual(
+      { kind: 'busy' },
+    );
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+    expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
+  });
+
+  it('atomically refuses a lease after the delivery generation is superseded', async () => {
+    const f = fixture();
+    const supersededDispatchId = f.dispatchOutbox.id;
+    f.dispatchOutbox.id = '00000000-0000-4000-8000-000000000002';
+
+    await expect(
+      f.service.deliver(f.run.id, {
+        ...deliveryOptions,
+        dispatchId: supersededDispatchId,
+      }),
+    ).resolves.toEqual({ kind: 'busy' });
+
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+  });
+
+  it('atomically refuses a lease after a terminal callback is recorded', async () => {
+    const f = fixture();
+    f.dispatchOutbox.terminalFailureAt = new Date();
+
+    await expect(
+      f.service.deliver(f.run.id, {
+        ...deliveryOptions,
+        dispatchId: f.dispatchOutbox.id,
+      }),
+    ).resolves.toEqual({ kind: 'busy' });
+
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+  });
+
+  it('only accepts a QStash failure callback for the stored delivery ID', async () => {
+    const f = fixture();
+
+    await f.service.failForQStash(
+      f.run.id,
+      '00000000-0000-4000-8000-000000000000',
+      'msg_other',
+      'QSTASH_DELIVERY_FAILED',
+      'failed',
+    );
+    expect(f.run.status).toBe(ScheduleRunStatus.QUEUED);
+
+    await f.service.failForQStash(
+      f.run.id,
+      f.dispatchOutbox.id,
+      'msg_current',
+      'QSTASH_DELIVERY_FAILED',
+      'failed',
+    );
+    expect(f.run).toMatchObject({
+      status: ScheduleRunStatus.FAILED,
+      errorCode: 'QSTASH_DELIVERY_FAILED',
+    });
+    expect(f.dispatchOutbox).toMatchObject({
+      status: 'CANCELLED',
+      terminalFailureMessageId: null,
+      terminalFailureCode: null,
+      terminalFailureMessage: null,
+      terminalFailureAt: null,
+    });
+  });
+
+  it('settles a signed QStash failure after publish succeeded but the job-id write was lost', async () => {
+    const f = fixture();
+    f.run.jobId = null;
+    f.dispatchOutbox.status = 'PENDING';
+    f.dispatchOutbox.messageId = null;
+
+    await expect(
+      f.service.failForQStash(
+        f.run.id,
+        f.dispatchOutbox.id,
+        'msg_recovered',
+        'QSTASH_DELIVERY_FAILED',
+        'failed',
+      ),
+    ).resolves.toBe('failed');
+
+    expect(f.run).toMatchObject({
+      status: ScheduleRunStatus.FAILED,
+      jobId: 'msg_recovered',
+    });
+    expect(f.dispatchOutbox.status).toBe('CANCELLED');
+    expect(f.dispatchOutbox.terminalFailureAt).toBeNull();
+  });
+
+  it('consumes a matching terminal callback when the run is already settled', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.SUCCEEDED;
+
+    await expect(
+      f.service.failForQStash(
+        f.run.id,
+        f.dispatchOutbox.id,
+        'msg_current',
+        'QSTASH_DELIVERY_FAILED',
+        'failed',
+      ),
+    ).resolves.toBe('ignored');
+
+    expect(f.run.status).toBe(ScheduleRunStatus.SUCCEEDED);
+    expect(f.dispatchOutbox).toMatchObject({
+      status: 'CANCELLED',
+      terminalFailureMessageId: null,
+      terminalFailureCode: null,
+      terminalFailureMessage: null,
+      terminalFailureAt: null,
+    });
+  });
+
+  it('settles an exactly-expiring cancellation during the direct QStash failure callback', async () => {
+    jest.useFakeTimers();
+    try {
+      const now = new Date('2027-03-01T12:00:00.000Z');
+      jest.setSystemTime(now);
+      const f = fixture();
+      f.run.status = ScheduleRunStatus.RUNNING;
+      f.run.cancelRequestedAt = now;
+      f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+      f.run.executionLeaseExpiresAt = now;
+
+      await expect(
+        f.service.failForQStash(
+          f.run.id,
+          f.dispatchOutbox.id,
+          'msg_current',
+          'QSTASH_DELIVERY_FAILED',
+          'failed',
+        ),
+      ).resolves.toBe('ignored');
+
+      expect(f.run).toMatchObject({
+        status: ScheduleRunStatus.CANCELLED,
+        executionLeaseId: null,
+        executionLeaseExpiresAt: null,
+      });
+      expect(f.dispatchOutbox).toMatchObject({
+        status: 'CANCELLED',
+        terminalFailureAt: null,
+      });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('durably records a matching QStash terminal failure while another lease is active', async () => {
+    const f = fixture();
+    f.run.status = ScheduleRunStatus.RUNNING;
+    f.run.executionLeaseId = '00000000-0000-4000-8000-000000000001';
+    f.run.executionLeaseExpiresAt = new Date(Date.now() + 60_000);
+
+    await expect(
+      f.service.failForQStash(
+        f.run.id,
+        f.dispatchOutbox.id,
+        'msg_current',
+        'QSTASH_DELIVERY_FAILED',
+        'failed',
+      ),
+    ).resolves.toBe('deferred');
+
+    expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
+    expect(f.dispatchOutbox.terminalFailureAt).toBeInstanceOf(Date);
   });
 });

@@ -1,4 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
+import { join } from "node:path";
+import { validateStrictEnvironment } from './e2e/strict-policy.mjs';
+
+if (process.env.E2E_STRICT === '1') validateStrictEnvironment(process.env);
+
+const artifactsDirectory = process.env.E2E_PRIVATE_ARTIFACTS_DIR ?? "../../.playwright-artifacts";
 
 /**
  * Runs against a real dev stack (web + API + database), never against
@@ -27,15 +33,19 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./e2e",
-  outputDir: "../../.playwright-artifacts/test-results",
+  outputDir: join(artifactsDirectory, "test-results"),
   fullyParallel: false,
   // Real writes against one real database — a second worker would be
   // fighting the first over the same customers, agreements and runs.
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  // Strict rehearsal is a disposable, deterministic database. Retrying a
+  // stateful journey after it has written part of its workflow can only hide
+  // the first failure or turn it into a misleading no-op failure.
+  retries: process.env.E2E_STRICT === '1' ? 0 : process.env.CI ? 1 : 0,
   reporter: [
     ["list"],
-    ["html", { open: "never", outputFolder: "../../.playwright-artifacts/playwright-report" }],
+    ["html", { open: "never", outputFolder: join(artifactsDirectory, "playwright-report") }],
+    ...(process.env.E2E_STRICT === '1' ? [["./e2e/strict-reporter.mjs"] as [string]] : []),
   ],
   timeout: 30_000,
   use: {
@@ -48,7 +58,7 @@ export default defineConfig({
     { name: "setup", testMatch: /auth\.setup\.ts/ },
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], storageState: "../../.playwright-artifacts/.auth/user.json" },
+      use: { ...devices["Desktop Chrome"], storageState: join(artifactsDirectory, ".auth", "user.json") },
       dependencies: ["setup"],
     },
   ],

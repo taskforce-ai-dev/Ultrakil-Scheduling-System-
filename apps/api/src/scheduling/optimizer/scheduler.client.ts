@@ -70,7 +70,10 @@ export interface SolveResponse {
   unassigned: {
     visit_id: string;
     reason_codes: string[];
+    /** All the sentences joined — a summary line, not a per-reason explanation. */
     message: string;
+    /** One sentence per code, so a reason can be shown beside its own heading. */
+    reason_messages?: Record<string, string>;
   }[];
   solve_seconds: number;
   objective_value: number;
@@ -92,13 +95,17 @@ export class SchedulerClient {
 
   async solve(request: SolveRequest, timeoutMs: number): Promise<SolveResponse> {
     const baseUrl = this.config.getOrThrow<string>('scheduler.baseUrl');
+    const token = this.config.get<string>('scheduler.apiToken');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(`${baseUrl}/solve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(request),
         signal: controller.signal,
       });

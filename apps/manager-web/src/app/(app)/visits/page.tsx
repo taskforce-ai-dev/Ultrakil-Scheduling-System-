@@ -124,6 +124,11 @@ function VisitChip({
         : visit.status === "SCHEDULED"
           ? "border-primary/40 bg-primary/10"
           : "border-border bg-background";
+  // The scheduled tint can itself sit inside today's light green cell. Muted
+  // foreground on those nested tints falls below WCAG AA, so supporting text
+  // uses the normal foreground for scheduled chips.
+  const supportingTextTone =
+    visit.status === "SCHEDULED" ? "text-foreground" : "text-muted-foreground";
 
   return (
     <div
@@ -142,7 +147,7 @@ function VisitChip({
         type="button"
         onClick={onOpen}
         aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
-          visit.hoursUnconfirmed ? ", opening hours unconfirmed" : ""
+          ""
         }`}
         className="min-w-0 flex-1 truncate px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
@@ -153,22 +158,20 @@ function VisitChip({
           {!visit.isLocked && visit.isManuallyAdjusted && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
           )}
-          <span className="shrink-0 tabular-nums text-muted-foreground">
+          <span className={cn("shrink-0 tabular-nums", supportingTextTone)}>
             {formatMinuteOfDay(visit.windowStartMinute)}
           </span>
           <span className="truncate">{visit.customerName}</span>
-          {visit.hoursUnconfirmed && (
-            <span aria-hidden="true" className="shrink-0 text-destructive" title="Opening hours unconfirmed">
-              ⟡
-            </span>
-          )}
         </span>
       </button>
       <button
         type="button"
         onClick={onMoveRequested}
         aria-label={`Move ${visit.customerName}'s visit to a different date`}
-        className="shrink-0 px-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "shrink-0 px-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          supportingTextTone
+        )}
       >
         <Move className="h-3 w-3" aria-hidden="true" />
       </button>
@@ -372,7 +375,6 @@ export default function VisitsPage() {
   const lockedCount = visible.filter((visit) => visit.isLocked).length;
   const adjustedCount = visible.filter((visit) => visit.isManuallyAdjusted).length;
   const unstaffedCount = visible.filter((visit) => visit.assignmentCount === 0).length;
-  const unconfirmedHoursCount = visible.filter((visit) => visit.hoursUnconfirmed).length;
 
   return (
     <div className="space-y-6">
@@ -531,11 +533,6 @@ export default function VisitsPage() {
             {adjustedCount > 0 && (
               <Badge variant="secondary">{adjustedCount} manually modified</Badge>
             )}
-            {unconfirmedHoursCount > 0 && (
-              <Badge variant="destructive">
-                {unconfirmedHoursCount} with opening hours unconfirmed
-              </Badge>
-            )}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
                 {unstaffedCount} with no crew assigned yet
@@ -576,6 +573,7 @@ export default function VisitsPage() {
               className="overflow-x-auto rounded-lg border border-border"
               role="grid"
               aria-label={view === "month" ? "Month calendar" : "Week calendar"}
+              tabIndex={0}
             >
               <div className="grid min-w-3xl grid-cols-7 border-b border-border bg-muted/40" role="row">
                 {WEEKDAY_INITIALS.map((day) => (

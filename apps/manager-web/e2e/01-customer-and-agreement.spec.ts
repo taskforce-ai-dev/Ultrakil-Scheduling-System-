@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 /**
  * The first half of the Phase 1 workflow: a customer and a site must exist
@@ -60,7 +60,7 @@ test("creates a customer with a site, then a service agreement for it, and sees 
     await page.locator(`label[for="allowed-${day}"]`).click();
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = process.env.E2E_DATE ?? new Date().toISOString().slice(0, 10);
   await page.locator("#startDate").fill(today);
 
   await page.getByRole("button", { name: "Save agreement" }).click();
@@ -69,6 +69,9 @@ test("creates a customer with a site, then a service agreement for it, and sees 
     timeout: 10_000,
   });
   await expect(page.getByText("Schedule preview")).toBeVisible();
+  if (process.env.E2E_STRICT === '1') {
+    await expect(page.locator('li', { hasText: /^\d{4}-\d{2}-\d{2}/ }).first()).toBeVisible({ timeout: 10_000 });
+  }
   // A populated preview lists each visit as a plain date/time row (no
   // summary sentence), so this checks for that structure directly rather
   // than guessing wording. Either that, the "nothing in range" message, or

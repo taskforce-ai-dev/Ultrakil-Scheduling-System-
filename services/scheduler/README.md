@@ -1,6 +1,7 @@
 # `services/scheduler` — UltraKIL scheduling service
 
-**Owner: Chanya (@cha-she).**
+**Temporary C07/C08 takeover coordination: Thivarrakesh.** This records the
+current handoff, not a permanent ownership change.
 
 Python / FastAPI service that will solve the crew-and-vehicle assignment problem.
 Phase 1 ships the service, its health endpoints and its deployment; the
@@ -18,10 +19,12 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt -r requirements-dev.txt
 
-uvicorn app.main:app --reload --port 8000
+SCHEDULER_ALLOW_UNAUTHENTICATED=true uvicorn app.main:app --reload --port 8000
 ```
 
-From the repository root, `pnpm dev:scheduler` does the same thing.
+From the repository root, `pnpm dev:scheduler` does the same thing and applies
+the loopback-only `SCHEDULER_ALLOW_UNAUTHENTICATED=true` opt-out. Never use
+that opt-out on a public deployment; provide `SCHEDULER_API_TOKEN` instead.
 
 | Endpoint | Purpose |
 | --- | --- |

@@ -1,8 +1,9 @@
 import { test as setup, expect } from "@playwright/test";
+import { join } from "node:path";
 
 // Outside apps/manager-web on purpose — see the note in playwright.config.ts
 // about the dev server's file watcher.
-const authFile = "../../.playwright-artifacts/.auth/user.json";
+const authFile = join(process.env.E2E_PRIVATE_ARTIFACTS_DIR ?? "../../.playwright-artifacts", ".auth", "user.json");
 
 /**
  * Logs in once via the real UI against the real API, then saves the

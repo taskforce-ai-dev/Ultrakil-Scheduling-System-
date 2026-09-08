@@ -9,6 +9,7 @@ import { HealthService } from './health.service';
  * that reports "ok" while the database is down, is worse than none at all.
  */
 describe('HealthService', () => {
+  let schedulerToken: string | undefined;
   const config = {
     getOrThrow: (key: string) => {
       const values: Record<string, unknown> = {
@@ -18,6 +19,8 @@ describe('HealthService', () => {
       };
       return values[key];
     },
+    get: (key: string) =>
+      key === 'scheduler.apiToken' ? schedulerToken : undefined,
   } as unknown as ConfigService;
 
   const upPrisma = { ping: jest.fn().mockResolvedValue(undefined) };
@@ -43,6 +46,7 @@ describe('HealthService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    schedulerToken = undefined;
     mockSchedulerUp();
   });
 
@@ -124,5 +128,21 @@ describe('HealthService', () => {
     expect(
       Object.values(result.dependencies).every((d) => d.status === 'down'),
     ).toBe(true);
+  });
+
+  it('sends the scheduler bearer token when configured', async () => {
+    schedulerToken = 's'.repeat(32);
+
+    await build(upPrisma, upQueue).check();
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(request.headers).toEqual({ Authorization: `Bearer ${schedulerToken}` });
+  });
+
+  it('does not send scheduler authorization in local development', async () => {
+    await build(upPrisma, upQueue).check();
+
+    const [, request] = (global.fetch as jest.Mock).mock.calls[0];
+    expect(request.headers).toBeUndefined();
   });
 });

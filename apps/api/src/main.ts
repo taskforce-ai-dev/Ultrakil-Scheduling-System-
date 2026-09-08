@@ -8,10 +8,19 @@ import { buildOpenApiDocument } from './openapi';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, { bufferLogs: false });
+  // QStash signs the original bytes. Nest keeps them on the request while
+  // retaining normal JSON parsing for every existing API endpoint.
+  const app = await NestFactory.create(AppModule, {
+    bufferLogs: false,
+    rawBody: true,
+  });
 
   const config = app.get(ConfigService);
-  const port = config.getOrThrow<number>('app.port');
+  // The platform picks the port when it hosts the process; API_PORT is ours.
+  // Vercel's Nest runtime injects PORT and connects to whatever binds it, so
+  // ignoring it would leave the function listening where nothing is listening
+  // for it. Locally and in Docker PORT is unset and API_PORT wins as before.
+  const port = Number(process.env.PORT ?? config.getOrThrow<number>('app.port'));
   const globalPrefix = config.getOrThrow<string>('app.globalPrefix');
   const corsOrigins = config.getOrThrow<string[]>('app.corsOrigins');
 

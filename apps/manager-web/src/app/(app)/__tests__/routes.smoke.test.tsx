@@ -4,6 +4,8 @@ import { render, screen } from "@testing-library/react";
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  // The Unassigned queue reads ?visit= so a "Why?" link can open on one visit.
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // Dashboard calls the real API client on mount — stub the requests so this

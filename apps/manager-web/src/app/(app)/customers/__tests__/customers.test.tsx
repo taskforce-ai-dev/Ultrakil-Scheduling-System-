@@ -13,7 +13,18 @@ import { buildCustomer, buildServiceSite } from "@/test/fixtures";
 
 const existingCustomer = buildCustomer({ id: "customer-1", name: "Cinnamon Grand Colombo" });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
+  vi.mocked(fetchCustomers).mockReset();
   vi.mocked(fetchCustomers).mockResolvedValue({
     items: [existingCustomer],
     total: 1,
@@ -171,6 +182,37 @@ describe("CustomersPage", () => {
     // Text label, not colour alone — scoped to the table, since the Status
     // filter's own (still-mounted) option list can also contain the word.
     expect(within(screen.getByRole("table")).getByText("Inactive")).toBeInTheDocument();
+  });
+
+  it.each(["success", "failure"])("ignores an older active-list %s after the inactive list loads", async (outcome) => {
+    const inactiveCustomer = buildCustomer({
+      id: "customer-inactive",
+      name: "Closed Client Ltd",
+      isActive: false,
+      sites: [],
+    });
+    const older = deferred<Awaited<ReturnType<typeof fetchCustomers>>>();
+    const newer = deferred<Awaited<ReturnType<typeof fetchCustomers>>>();
+    vi.mocked(fetchCustomers).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Inactive" }));
+    expect(fetchCustomers).toHaveBeenCalledTimes(2);
+
+    await act(async () => newer.resolve({ items: [inactiveCustomer], total: 1, page: 1, pageSize: 200 }));
+    expect(screen.getByText("Closed Client Ltd")).toBeInTheDocument();
+    await act(async () => {
+      if (outcome === "success") {
+        older.resolve({ items: [existingCustomer], total: 1, page: 1, pageSize: 200 });
+      } else {
+        older.reject(new Error("Old request failed"));
+      }
+    });
+    expect(screen.getByText("Closed Client Ltd")).toBeInTheDocument();
+    expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old request failed")).not.toBeInTheDocument();
   });
 
   it("collapses a rapid double-click on Save into a single request", async () => {

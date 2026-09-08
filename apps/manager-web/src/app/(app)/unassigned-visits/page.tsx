@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, CircleDashed, ShieldAlert, UserCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +58,15 @@ const GROUP_LABELS: Record<GroupFilter, string> = {
  * record it's about — per ULK-O05.
  */
 export default function UnassignedVisitsPage() {
+  // Set when a manager arrived from a specific visit's "Why?" — the queue then
+  // opens on that one visit instead of at the top of several hundred rows.
+  // Optional chaining is not defensive clutter: this hook returns null when the
+  // component renders outside a router — which is exactly how it is unit
+  // tested — and a page that only works inside one is a page that cannot be
+  // tested.
+  const searchParams = useSearchParams();
+  const focusVisitId = searchParams?.get("visit") ?? null;
+
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [group, setGroup] = React.useState<GroupFilter>("ALL");
   const [items, setItems] = React.useState<UnassignedVisit[]>([]);
@@ -93,9 +104,16 @@ export default function UnassignedVisitsPage() {
   }, [load]);
 
   const filtered = React.useMemo(() => {
+    // A visit asked for by name wins over every filter. Arriving from "Why?"
+    // and being shown an empty list because the branch filter happened to
+    // exclude it would answer the question with silence.
+    if (focusVisitId) {
+      const asked = items.filter((visit) => visit.visitId === focusVisitId);
+      if (asked.length > 0) return asked;
+    }
     if (group === "ALL") return items;
     return items.filter((visit) => visit.conflicts.some((c) => conflictGroup(c.code) === group));
-  }, [items, group]);
+  }, [items, group, focusVisitId]);
 
   const kandyPmsShortage = React.useMemo(
     () =>
@@ -193,12 +211,29 @@ export default function UnassignedVisitsPage() {
         />
       ) : (
         <>
-          {total > items.length && (
-            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-              Showing {items.length} of {total} unassigned visits. Narrow the branch filter to see
-              the rest.
+          {focusVisitId && filtered.length === 1 ? (
+            // Says plainly why the list is one row long, and offers the way back.
+            // A shortened list with no explanation reads as a broken page.
+            <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              Showing the one visit you asked about.
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                nativeButton={false}
+                render={<Link href="/unassigned-visits" />}
+              >
+                Show all unassigned visits
+              </Button>
             </p>
+          ) : (
+            total > items.length && (
+              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                Showing {items.length} of {total} unassigned visits. Narrow the branch filter to see
+                the rest.
+              </p>
+            )
           )}
 
           <ul className="space-y-4">

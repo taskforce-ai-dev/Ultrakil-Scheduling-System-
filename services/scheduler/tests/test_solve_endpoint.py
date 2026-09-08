@@ -7,11 +7,28 @@ which is the promise the API depends on when a manager reruns a schedule.
 
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import _require_scheduler_token, app
+from app.settings import Settings, settings
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def private_local_runtime(monkeypatch):
+    """Existing wire tests model the explicitly opted-in private runtime."""
+    monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "allow_unauthenticated", True)
+
+
+def test_unauthenticated_mode_defaults_to_disabled(monkeypatch):
+    monkeypatch.delenv("SCHEDULER_ALLOW_UNAUTHENTICATED", raising=False)
+
+    assert Settings().allow_unauthenticated is False
 
 PAYLOAD = {
     "run_id": "run-1",
@@ -76,3 +93,45 @@ def test_rejects_a_malformed_request():
     response = client.post("/solve", json={"run_id": "x"})
 
     assert response.status_code == 422
+
+
+def test_requires_the_configured_service_token(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "scheduler-token")
+
+    unauthorized = client.post("/solve", json=PAYLOAD)
+    authorized = client.post(
+        "/solve", json=PAYLOAD, headers={"Authorization": "Bearer scheduler-token"}
+    )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+
+
+def test_rejects_non_ascii_bearer_credentials_without_crashing(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "scheduler-token")
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer", credentials="malformed-tøken"
+    )
+
+    with pytest.raises(HTTPException) as caught:
+        _require_scheduler_token(credentials)
+
+    assert caught.value.status_code == 401
+
+
+def test_allows_local_solves_when_no_service_token_is_configured(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "allow_unauthenticated", True)
+
+    response = client.post("/solve", json=PAYLOAD)
+
+    assert response.status_code == 200
+
+
+def test_rejects_solves_by_default_when_token_is_missing(monkeypatch):
+    monkeypatch.setattr(settings, "api_token", None)
+    monkeypatch.setattr(settings, "allow_unauthenticated", False)
+
+    response = client.post("/solve", json=PAYLOAD)
+
+    assert response.status_code == 503
