@@ -22,6 +22,8 @@ import {
   AssignCrewDto,
   AssignmentDto,
   EligibilityResultDto,
+  EmployeeAssignmentQueryDto,
+  PaginatedEmployeeAssignmentsDto,
   PaginatedUnassignedVisitsDto,
 } from './dto';
 
@@ -41,6 +43,10 @@ export class AssignmentsController {
   })
   @ApiResponse({ status: 200, type: EligibilityResultDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  @ApiResponse({
+    status: 409,
+    description: 'RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check.',
+  })
   check(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignCrewDto,
@@ -98,9 +104,23 @@ export class AssignmentsController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
-  @ApiQuery({ name: 'branchCode', required: false, enum: Object.values(BranchCode) })
-  @ApiQuery({ name: 'from', required: false, type: String, example: '2026-09-07' })
-  @ApiQuery({ name: 'to', required: false, type: String, example: '2026-10-04' })
+  @ApiQuery({
+    name: 'branchCode',
+    required: false,
+    enum: Object.values(BranchCode),
+  })
+  @ApiQuery({
+    name: 'from',
+    required: false,
+    type: String,
+    example: '2026-09-07',
+  })
+  @ApiQuery({
+    name: 'to',
+    required: false,
+    type: String,
+    example: '2026-10-04',
+  })
   @ApiQuery({
     name: 'serviceAgreementId',
     required: false,
@@ -133,5 +153,36 @@ export class AssignmentsController {
       withConflictsOnly: withConflictsOnly === 'true' || withConflictsOnly === '1',
       serviceAgreementId,
     });
+  }
+
+  @Get('employees/:employeeId/assignments')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @ApiOperation({
+    summary: "An employee's published daily assignments",
+    description:
+      'Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
+  @ApiQuery({
+    name: 'from',
+    required: false,
+    type: String,
+    example: '2026-09-07',
+  })
+  @ApiQuery({
+    name: 'to',
+    required: false,
+    type: String,
+    example: '2026-10-04',
+  })
+  @ApiResponse({ status: 200, type: PaginatedEmployeeAssignmentsDto })
+  @ApiResponse({ status: 403, description: 'ADMIN or MANAGER role required.' })
+  @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  employeeAssignments(
+    @Param('employeeId', ParseUUIDPipe) employeeId: string,
+    @Query() query: EmployeeAssignmentQueryDto,
+  ): Promise<PaginatedEmployeeAssignmentsDto> {
+    return this.assignments.employeeAssignments(employeeId, query);
   }
 }

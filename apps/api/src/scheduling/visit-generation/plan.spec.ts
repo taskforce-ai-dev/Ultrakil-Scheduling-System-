@@ -24,6 +24,7 @@ function required(overrides: Partial<RequiredVisit> = {}): RequiredVisit {
 function existing(overrides: Partial<ExistingVisit> = {}): ExistingVisit {
   return {
     id: 'visit-1',
+    updatedAt: new Date('2026-09-01T00:00:00Z'),
     serviceAgreementId: 'agreement-1',
     visitDate: '2026-09-09',
     windowStartMinute: 540,
@@ -68,6 +69,13 @@ describe('protectionReasonFor', () => {
 });
 
 describe('planGeneration', () => {
+  it.each(['update', 'removal'])('carries the exact visit revision internally for a planned %s', (operation) => {
+    const updatedAt = new Date('2026-09-01T12:34:56.789Z');
+    const visit = Object.assign(existing(), { updatedAt });
+    const plan = planGeneration(operation === 'update' ? [required({ durationMinutes: 120 })] : [], [visit]);
+    expect(operation === 'update' ? plan.updates[0] : plan.removals[0]).toMatchObject({ expectedUpdatedAt: updatedAt });
+  });
+
   it('adds a visit the calendar does not have', () => {
     const plan = planGeneration([required()], []);
 
@@ -103,6 +111,7 @@ describe('planGeneration', () => {
     expect(plan.removals).toEqual([
       {
         visitId: 'visit-1',
+        expectedUpdatedAt: new Date('2026-09-01T00:00:00Z'),
         serviceAgreementId: 'agreement-1',
         visitDate: '2026-09-09',
         reason: 'NO_LONGER_REQUIRED',

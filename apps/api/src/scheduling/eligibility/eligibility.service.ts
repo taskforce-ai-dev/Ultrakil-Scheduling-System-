@@ -21,6 +21,18 @@ const LIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.IN_PROGRESS,
 ];
 
+interface EligibilityOptions {
+  excludeAssignmentId?: string;
+  /** Evaluate a solver's proposed move without changing the stored visit. */
+  proposedVisit?: {
+    visitDate: Date;
+    windowStartMinute: number;
+    windowEndMinute: number;
+    durationMinutes?: number;
+    requiredCrewSize?: number;
+  };
+}
+
 /** Minutes from midnight, in the same UTC terms the visit window uses. */
 function minuteOfDay(moment: Date): number {
   return moment.getUTCHours() * 60 + moment.getUTCMinutes();
@@ -47,9 +59,10 @@ export class EligibilityService {
   async buildContext(
     visitId: string,
     proposal: AssignmentProposal,
-    options: { excludeAssignmentId?: string } = {},
+    options: EligibilityOptions = {},
+    client: Prisma.TransactionClient = this.prisma,
   ): Promise<EligibilityContext> {
-    const visit = await this.prisma.generatedVisit.findUnique({
+    const visit = await client.generatedVisit.findUnique({
       where: { id: visitId },
       include: {
         serviceAgreement: {
@@ -77,11 +90,12 @@ export class EligibilityService {
 
     const employeeIds = [...new Set(proposal.crew.map((member) => member.employeeId))];
     const vehicleIds = [...new Set(proposal.vehicles.map((entry) => entry.vehicleId))];
+    const timing = options.proposedVisit ?? visit;
 
     const [employees, vehicles, pmsCount] = await Promise.all([
-      this.loadEmployees(employeeIds, visit.visitDate, options.excludeAssignmentId),
-      this.loadVehicles(vehicleIds, visit.visitDate, options.excludeAssignmentId),
-      this.prisma.employee.count({
+      this.loadEmployees(client, employeeIds, timing.visitDate, options.excludeAssignmentId),
+      this.loadVehicles(client, vehicleIds, timing.visitDate, options.excludeAssignmentId),
+      client.employee.count({
         where: { branchCode: visit.branchCode, isPmsGrade: true, isActive: true },
       }),
     ]);
@@ -100,11 +114,11 @@ export class EligibilityService {
       visit: {
         id: visit.id,
         branchCode: visit.branchCode,
-        visitDate: visit.visitDate.toISOString().slice(0, 10),
-        windowStartMinute: visit.windowStartMinute,
-        windowEndMinute: visit.windowEndMinute,
-        durationMinutes: visit.durationMinutes,
-        requiredCrewSize: visit.requiredCrewSize,
+        visitDate: timing.visitDate.toISOString().slice(0, 10),
+        windowStartMinute: timing.windowStartMinute,
+        windowEndMinute: timing.windowEndMinute,
+        durationMinutes: options.proposedVisit?.durationMinutes ?? visit.durationMinutes,
+        requiredCrewSize: options.proposedVisit?.requiredCrewSize ?? visit.requiredCrewSize,
         serviceSiteId: visit.serviceAgreement.serviceSite.id,
         siteName: visit.serviceAgreement.serviceSite.name,
         customerName: visit.serviceAgreement.customer.name,
@@ -123,20 +137,24 @@ export class EligibilityService {
   async evaluate(
     visitId: string,
     proposal: AssignmentProposal,
-    options: { excludeAssignmentId?: string } = {},
+    options: EligibilityOptions = {},
+    client: Prisma.TransactionClient = this.prisma,
   ): Promise<EligibilityResult> {
-    const context = await this.buildContext(visitId, proposal, options);
+    // A schedule batch supplies its transaction so subsequent proposals see
+    // earlier accepted replacements and all retained/external assignments.
+    const context = await this.buildContext(visitId, proposal, options, client);
     return evaluateAssignment(proposal, context);
   }
 
   private async loadEmployees(
+    client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
     excludeAssignmentId?: string,
   ): Promise<EmployeeFacts[]> {
     if (ids.length === 0) return [];
 
-    const employees = await this.prisma.employee.findMany({
+    const employees = await client.employee.findMany({
       where: { id: { in: ids } },
       include: {
         skills: { select: { skillCode: true } },
@@ -195,13 +213,14 @@ export class EligibilityService {
   }
 
   private async loadVehicles(
+    client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
     excludeAssignmentId?: string,
   ): Promise<VehicleFacts[]> {
     if (ids.length === 0) return [];
 
-    const vehicles = await this.prisma.vehicle.findMany({
+    const vehicles = await client.vehicle.findMany({
       where: { id: { in: ids } },
       include: {
         branch: { select: { code: true } },

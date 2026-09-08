@@ -12,46 +12,26 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3
 
 type Json<T> = T extends { content: { "application/json": infer B } } ? B : never;
 
-export type MetaResponse = Json<
-  paths["/api/meta"]["get"]["responses"]["200"]
->;
-export type HealthResponse = Json<
-  paths["/api/health/ready"]["get"]["responses"]["200"]
->;
-export type LoginResponse = Json<
-  paths["/api/auth/login"]["post"]["responses"]["200"]
->;
-export type CurrentUser = Json<
-  paths["/api/auth/me"]["get"]["responses"]["200"]
->;
-export type PaginatedEmployees = Json<
-  paths["/api/employees"]["get"]["responses"]["200"]
->;
+export type MetaResponse = Json<paths["/api/meta"]["get"]["responses"]["200"]>;
+export type HealthResponse = Json<paths["/api/health/ready"]["get"]["responses"]["200"]>;
+export type LoginResponse = Json<paths["/api/auth/login"]["post"]["responses"]["200"]>;
+export type CurrentUser = Json<paths["/api/auth/me"]["get"]["responses"]["200"]>;
+export type PaginatedEmployees = Json<paths["/api/employees"]["get"]["responses"]["200"]>;
 export type Employee = PaginatedEmployees["items"][number];
-export type PaginatedVehicles = Json<
-  paths["/api/vehicles"]["get"]["responses"]["200"]
->;
+export type BranchCode = Employee["branchCode"];
+export type DeploymentType = Employee["deploymentType"];
+export type PaginatedVehicles = Json<paths["/api/vehicles"]["get"]["responses"]["200"]>;
 export type Vehicle = PaginatedVehicles["items"][number];
 export type AuthorizedDrivers = Json<
   paths["/api/vehicles/{id}/authorized-drivers"]["get"]["responses"]["200"]
 >;
-export type BranchListItem = Json<
-  paths["/api/branches"]["get"]["responses"]["200"]
->[number];
-export type SkillListItem = Json<
-  paths["/api/skills"]["get"]["responses"]["200"]
->[number];
+export type BranchListItem = Json<paths["/api/branches"]["get"]["responses"]["200"]>[number];
+export type SkillListItem = Json<paths["/api/skills"]["get"]["responses"]["200"]>[number];
 
-export type EmployeeQuery = NonNullable<
-  paths["/api/employees"]["get"]["parameters"]["query"]
->;
-export type VehicleQuery = NonNullable<
-  paths["/api/vehicles"]["get"]["parameters"]["query"]
->;
+export type EmployeeQuery = NonNullable<paths["/api/employees"]["get"]["parameters"]["query"]>;
+export type VehicleQuery = NonNullable<paths["/api/vehicles"]["get"]["parameters"]["query"]>;
 
-export type PaginatedCustomers = Json<
-  paths["/api/customers"]["get"]["responses"]["200"]
->;
+export type PaginatedCustomers = Json<paths["/api/customers"]["get"]["responses"]["200"]>;
 export type Customer = PaginatedCustomers["items"][number];
 export type ServiceSite = Customer["sites"][number];
 export type SiteOperatingHoursEntry = ServiceSite["operatingHours"][number];
@@ -65,13 +45,9 @@ export type SchedulePreview = Json<
 >;
 export type AgreementStatus = ServiceAgreement["status"];
 
-export type PaginatedVisits = Json<
-  paths["/api/visits"]["get"]["responses"]["200"]
->;
+export type PaginatedVisits = Json<paths["/api/visits"]["get"]["responses"]["200"]>;
 export type Visit = PaginatedVisits["items"][number];
-export type VisitDetail = Json<
-  paths["/api/visits/{id}"]["get"]["responses"]["200"]
->;
+export type VisitDetail = Json<paths["/api/visits/{id}"]["get"]["responses"]["200"]>;
 export type VisitOrigin = VisitDetail["origin"];
 export type VisitStatus = Visit["status"];
 export type GenerationImpact = Json<
@@ -83,8 +59,13 @@ export type PlannedRemoval = GenerationImpact["removals"][number];
 export type ProtectedVisit = GenerationImpact["protectedVisits"][number];
 export type GenerationShortfall = GenerationImpact["shortfalls"][number];
 
-export type VisitQuery = NonNullable<
-  paths["/api/visits"]["get"]["parameters"]["query"]
+export type VisitQuery = NonNullable<paths["/api/visits"]["get"]["parameters"]["query"]>;
+
+export type CalendarResponse = components["schemas"]["CalendarResponseDto"];
+export type CalendarEntry = components["schemas"]["CalendarEntryDto"];
+export type CalendarAssignment = NonNullable<CalendarEntry["assignment"]>;
+export type CalendarQuery = NonNullable<
+  paths["/api/schedule/calendar"]["get"]["parameters"]["query"]
 >;
 
 export type Conflict = components["schemas"]["ConflictDto"];
@@ -180,9 +161,7 @@ export interface UnassignedVisitsQuery {
   to?: string;
 }
 
-export type CustomerQuery = NonNullable<
-  paths["/api/customers"]["get"]["parameters"]["query"]
->;
+export type CustomerQuery = NonNullable<paths["/api/customers"]["get"]["parameters"]["query"]>;
 export type ServiceAgreementQuery = NonNullable<
   paths["/api/service-agreements"]["get"]["parameters"]["query"]
 >;
@@ -424,25 +403,17 @@ export function fetchAuthorizedDrivers(vehicleId: string): Promise<AuthorizedDri
 }
 
 /** Authorises one employee to drive one vehicle. Returns the updated employee. */
-export function authorizeVehicle(
-  employeeId: string,
-  vehicleId: string
-): Promise<Employee> {
-  return request<Employee>(
-    `/employees/${employeeId}/vehicle-authorizations/${vehicleId}`,
-    { method: "POST" }
-  );
+export function authorizeVehicle(employeeId: string, vehicleId: string): Promise<Employee> {
+  return request<Employee>(`/employees/${employeeId}/vehicle-authorizations/${vehicleId}`, {
+    method: "POST",
+  });
 }
 
 /** Withdraws one driving authorization. */
-export function revokeVehicleAuthorization(
-  employeeId: string,
-  vehicleId: string
-): Promise<void> {
-  return request<void>(
-    `/employees/${employeeId}/vehicle-authorizations/${vehicleId}`,
-    { method: "DELETE" }
-  );
+export function revokeVehicleAuthorization(employeeId: string, vehicleId: string): Promise<void> {
+  return request<void>(`/employees/${employeeId}/vehicle-authorizations/${vehicleId}`, {
+    method: "DELETE",
+  });
 }
 
 export function fetchBranches(): Promise<BranchListItem[]> {
@@ -463,7 +434,7 @@ export function createCustomer(dto: CreateCustomerRequest): Promise<Customer> {
 
 export function createServiceSite(
   customerId: string,
-  dto: CreateServiceSiteRequest
+  dto: CreateServiceSiteRequest,
 ): Promise<ServiceSite> {
   return request<ServiceSite>(`/customers/${customerId}/sites`, {
     method: "POST",
@@ -476,20 +447,23 @@ export function fetchJobTypes(): Promise<JobType[]> {
 }
 
 export function fetchServiceAgreements(
-  query?: ServiceAgreementQuery
+  query?: ServiceAgreementQuery,
 ): Promise<PaginatedServiceAgreements> {
   return request<PaginatedServiceAgreements>(`/service-agreements${buildQuery(query)}`);
 }
 
 export function createServiceAgreement(
-  dto: CreateServiceAgreementRequest
+  dto: CreateServiceAgreementRequest,
 ): Promise<ServiceAgreement> {
-  return request<ServiceAgreement>("/service-agreements", { method: "POST", body: dto });
+  return request<ServiceAgreement>("/service-agreements", {
+    method: "POST",
+    body: dto,
+  });
 }
 
 export function changeAgreementStatus(
   agreementId: string,
-  dto: ChangeAgreementStatusRequest
+  dto: ChangeAgreementStatusRequest,
 ): Promise<ServiceAgreement> {
   return request<ServiceAgreement>(`/service-agreements/${agreementId}/status`, {
     method: "POST",
@@ -506,10 +480,10 @@ export function changeAgreementStatus(
  */
 export function fetchSchedulePreview(
   agreementId: string,
-  options?: { from?: string; horizonWeeks?: number }
+  options?: { from?: string; horizonWeeks?: number },
 ): Promise<SchedulePreview> {
   return request<SchedulePreview>(
-    `/service-agreements/${agreementId}/schedule-preview${buildQuery(options)}`
+    `/service-agreements/${agreementId}/schedule-preview${buildQuery(options)}`,
   );
 }
 
@@ -552,9 +526,7 @@ export function unlockVisit(id: string): Promise<Visit> {
  * What generating this horizon *would* change. Writes nothing — `isPreview`
  * comes back true and `scheduleRunId` is null. Any signed-in user may call it.
  */
-export function previewVisitGeneration(
-  dto: GenerateVisitsRequest
-): Promise<GenerationImpact> {
+export function previewVisitGeneration(dto: GenerateVisitsRequest): Promise<GenerationImpact> {
   return request<GenerationImpact>("/visit-generation/preview", {
     method: "POST",
     body: dto,
@@ -562,9 +534,7 @@ export function previewVisitGeneration(
 }
 
 /** Applies exactly what preview described, and records a schedule run. Admin only. */
-export function confirmVisitGeneration(
-  dto: GenerateVisitsRequest
-): Promise<GenerationImpact> {
+export function confirmVisitGeneration(dto: GenerateVisitsRequest): Promise<GenerationImpact> {
   return request<GenerationImpact>("/visit-generation/confirm", {
     method: "POST",
     body: dto,
@@ -593,10 +563,10 @@ export function fetchVisitAssignment(visitId: string): Promise<Assignment | null
  * dropped, it lands here with an explanation a manager can act on.
  */
 export function fetchUnassignedVisits(
-  query?: UnassignedVisitsQuery
+  query?: UnassignedVisitsQuery,
 ): Promise<PaginatedUnassignedVisits> {
   return request<PaginatedUnassignedVisits>(
-    `/unassigned-visits${buildQuery(query as Record<string, unknown> | undefined)}`
+    `/unassigned-visits${buildQuery(query as Record<string, unknown> | undefined)}`,
   );
 }
 
@@ -607,7 +577,7 @@ export function fetchUnassignedVisits(
  */
 export function checkAssignment(
   visitId: string,
-  dto: AssignCrewRequest
+  dto: AssignCrewRequest,
 ): Promise<EligibilityResult> {
   return request<EligibilityResult>(`/visits/${visitId}/assignment/check`, {
     method: "POST",
@@ -622,7 +592,10 @@ export function checkAssignment(
  * (409 RESOURCE_CONFLICT) if the current assignment is already published.
  */
 export function assignCrew(visitId: string, dto: AssignCrewRequest): Promise<Assignment> {
-  return request<Assignment>(`/visits/${visitId}/assignment`, { method: "PUT", body: dto });
+  return request<Assignment>(`/visits/${visitId}/assignment`, {
+    method: "PUT",
+    body: dto,
+  });
 }
 
 /** Takes the crew off a visit. Refused while published or locked. */
@@ -642,7 +615,7 @@ export function unassignVisit(visitId: string): Promise<void> {
  */
 export function lockAssignment(
   assignmentId: string,
-  dto: LockAssignmentRequest
+  dto: LockAssignmentRequest,
 ): Promise<AssignmentLock> {
   return request<AssignmentLock>(`/assignments/${assignmentId}/lock`, {
     method: "POST",
@@ -650,10 +623,7 @@ export function lockAssignment(
   });
 }
 
-export function unlockAssignment(
-  assignmentId: string,
-  scope: LockScope
-): Promise<AssignmentLock> {
+export function unlockAssignment(assignmentId: string, scope: LockScope): Promise<AssignmentLock> {
   return request<AssignmentLock>(`/assignments/${assignmentId}/unlock`, {
     method: "POST",
     body: { scope },
@@ -670,7 +640,7 @@ export function startScheduleRun(dto: StartScheduleRunRequest): Promise<Schedule
 
 export function fetchScheduleRuns(query?: ScheduleRunQuery): Promise<PaginatedScheduleRuns> {
   return request<PaginatedScheduleRuns>(
-    `/schedule-runs${buildQuery(query as Record<string, unknown> | undefined)}`
+    `/schedule-runs${buildQuery(query as Record<string, unknown> | undefined)}`,
   );
 }
 
@@ -681,7 +651,10 @@ export function fetchScheduleRun(id: string): Promise<ScheduleRun> {
 
 /** Asks a queued or running solve to stop. A run that already finished is left as it is. */
 export function cancelScheduleRun(id: string): Promise<ScheduleRun> {
-  return request<ScheduleRun>(`/schedule-runs/${id}/cancel`, { method: "POST", body: {} });
+  return request<ScheduleRun>(`/schedule-runs/${id}/cancel`, {
+    method: "POST",
+    body: {},
+  });
 }
 
 /**
@@ -691,7 +664,22 @@ export function cancelScheduleRun(id: string): Promise<ScheduleRun> {
  */
 export function publishScheduleRun(
   id: string,
-  dto: PublishScheduleRequest = {}
+  dto: PublishScheduleRequest = {},
 ): Promise<ScheduleRun> {
-  return request<ScheduleRun>(`/schedule-runs/${id}/publish`, { method: "POST", body: dto });
+  return request<ScheduleRun>(`/schedule-runs/${id}/publish`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+/* -------------------------------------------------------------------------
+ * The unified calendar (ULK-C07) — date, time, crew and vehicle joined
+ * server-side into one row per visit, for the manager portal's single
+ * calendar screen.
+ * ---------------------------------------------------------------------- */
+
+export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
+  return request<CalendarResponse>(
+    `/schedule/calendar${buildQuery(query as Record<string, unknown>)}`,
+  );
 }

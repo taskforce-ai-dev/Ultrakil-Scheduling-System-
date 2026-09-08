@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Prisma, VisitStatus } from '@prisma/client';
+import { AssignmentStatus, Prisma, VisitStatus } from '@prisma/client';
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -7,6 +7,8 @@ import { describeFrequency } from '../../catalog/catalog.mapper';
 import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { EligibilityService } from '../eligibility/eligibility.service';
+import { assertUnpublishedVisit, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { protectionReasonFor } from '../visit-generation/plan';
 import {
   AdjustVisitDto,
@@ -50,6 +52,7 @@ export class VisitsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly eligibility: EligibilityService,
   ) {}
 
   async list(query: VisitQueryDto) {
@@ -66,8 +69,16 @@ export class VisitsService {
       ...(query.search
         ? {
             OR: [
-              { customer: { name: { contains: query.search, mode: 'insensitive' } } },
-              { serviceSite: { name: { contains: query.search, mode: 'insensitive' } } },
+              {
+                customer: {
+                  name: { contains: query.search, mode: 'insensitive' },
+                },
+              },
+              {
+                serviceSite: {
+                  name: { contains: query.search, mode: 'insensitive' },
+                },
+              },
             ],
           }
         : {}),
@@ -87,7 +98,9 @@ export class VisitsService {
       ...(query.serviceAgreementId
         ? { serviceAgreementId: query.serviceAgreementId }
         : {}),
-      ...(Object.keys(agreement).length > 0 ? { serviceAgreement: agreement } : {}),
+      ...(Object.keys(agreement).length > 0
+        ? { serviceAgreement: agreement }
+        : {}),
       // Protection is several columns rather than one flag, so the filter has
       // to spell out the same rule the planner applies.
       ...(query.protectedOnly
@@ -95,7 +108,15 @@ export class VisitsService {
             OR: [
               { lockedAt: { not: null } },
               { isManuallyAdjusted: true },
-              { status: { in: [VisitStatus.SCHEDULED, VisitStatus.COMPLETED, VisitStatus.CANCELLED] } },
+              {
+                status: {
+                  in: [
+                    VisitStatus.SCHEDULED,
+                    VisitStatus.COMPLETED,
+                    VisitStatus.CANCELLED,
+                  ],
+                },
+              },
               { assignments: { some: {} } },
             ],
           }
@@ -153,31 +174,105 @@ export class VisitsService {
    * until someone regenerated the horizon.
    */
   async adjust(id: string, dto: AdjustVisitDto, actor: AuthenticatedUser) {
-    const before = await this.load(id);
-    this.assertEditable(before);
-
-    const windowStart = dto.windowStartMinute ?? before.windowStartMinute;
-    const windowEnd = dto.windowEndMinute ?? before.windowEndMinute;
-    if (windowEnd <= windowStart) {
-      throw new AppException(
-        'SERVICE_WINDOW_INVALID',
-        `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
-        HttpStatus.BAD_REQUEST,
-        { windowStart, windowEnd },
-      );
-    }
-
-    const duration = dto.durationMinutes ?? before.durationMinutes;
-    if (duration > windowEnd - windowStart) {
-      throw new AppException(
-        'SERVICE_WINDOW_INVALID',
-        `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
-        HttpStatus.BAD_REQUEST,
-        { duration, windowMinutes: windowEnd - windowStart },
-      );
-    }
-
     const updated = await this.prisma.$transaction(async (tx) => {
+      await lockScheduleVisits(tx, [id]);
+      await assertUnpublishedVisit(tx, id);
+      const before = await this.load(id, tx);
+      this.assertEditable(before);
+
+      const windowStart = dto.windowStartMinute ?? before.windowStartMinute;
+      const windowEnd = dto.windowEndMinute ?? before.windowEndMinute;
+      if (windowEnd <= windowStart) {
+        throw new AppException(
+          'SERVICE_WINDOW_INVALID',
+          `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
+          HttpStatus.BAD_REQUEST,
+          { windowStart, windowEnd },
+        );
+      }
+
+      const duration = dto.durationMinutes ?? before.durationMinutes;
+      if (duration > windowEnd - windowStart) {
+        throw new AppException(
+          'SERVICE_WINDOW_INVALID',
+          `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
+          HttpStatus.BAD_REQUEST,
+          { duration, windowMinutes: windowEnd - windowStart },
+        );
+      }
+
+      const visitDate = dto.visitDate
+        ? parseDateOnly(dto.visitDate)
+        : before.visitDate;
+      const drafts = await tx.assignment.findMany({
+        where: {
+          generatedVisitId: id,
+          status: { in: [AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED] },
+        },
+        include: { crewMembers: true, vehicles: true },
+      });
+      for (const draft of drafts) {
+        const start =
+          draft.plannedStart.getUTCHours() * 60 +
+          draft.plannedStart.getUTCMinutes();
+        const end =
+          start +
+          (dto.durationMinutes ??
+            (draft.plannedEnd.getTime() - draft.plannedStart.getTime()) /
+              60_000);
+        const verdict = await this.eligibility.evaluate(
+          id,
+          {
+            plannedStartMinute: start,
+            plannedEndMinute: end,
+            crew: draft.crewMembers.map((member) => ({
+              employeeId: member.employeeId,
+              role: member.role,
+            })),
+            vehicles: draft.vehicles.map((entry) => ({
+              vehicleId: entry.vehicleId,
+              driverEmployeeId: entry.driverEmployeeId,
+            })),
+          },
+          {
+            excludeAssignmentId: draft.id,
+            proposedVisit: {
+              visitDate,
+              windowStartMinute: windowStart,
+              windowEndMinute: windowEnd,
+              durationMinutes: duration,
+              requiredCrewSize: dto.requiredCrewSize ?? before.requiredCrewSize,
+            },
+          },
+        );
+        if (!verdict.isEligible) {
+          throw new AppException(
+            'ASSIGNMENT_NOT_ELIGIBLE',
+            'This adjustment would make the assigned crew ineligible. Change or remove the draft assignment first.',
+            HttpStatus.CONFLICT,
+            { conflicts: verdict.conflicts },
+          );
+        }
+        const changed = await tx.assignment.updateMany({
+          where: {
+            id: draft.id,
+            status: { in: [AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED] },
+            publishedAt: null,
+          },
+          data: {
+            plannedStart: new Date(visitDate.getTime() + start * 60_000),
+            plannedEnd: new Date(visitDate.getTime() + end * 60_000),
+          },
+        });
+        if (changed.count !== 1) {
+          throw new AppException(
+            'RESOURCE_CONFLICT',
+            'The assignment changed. Refresh and try again.',
+            HttpStatus.CONFLICT,
+            { visitId: id, assignmentId: draft.id },
+          );
+        }
+      }
       const visit = await tx.generatedVisit.update({
         where: { id },
         data: {
@@ -255,7 +350,10 @@ export class VisitsService {
 
   /** A finished or cancelled visit is history; editing it would rewrite it. */
   private assertEditable(visit: VisitWithRelations): void {
-    if (visit.status === VisitStatus.COMPLETED || visit.status === VisitStatus.CANCELLED) {
+    if (
+      visit.status === VisitStatus.COMPLETED ||
+      visit.status === VisitStatus.CANCELLED
+    ) {
       throw new AppException(
         'RESOURCE_CONFLICT',
         `This visit is ${visit.status.toLowerCase()} and cannot be changed. It is a record of what happened.`,
@@ -265,8 +363,11 @@ export class VisitsService {
     }
   }
 
-  private async load(id: string): Promise<VisitWithRelations> {
-    const visit = await this.prisma.generatedVisit.findUnique({
+  private async load(
+    id: string,
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<VisitWithRelations> {
+    const visit = await client.generatedVisit.findUnique({
       where: { id },
       include: VISIT_INCLUDE,
     });

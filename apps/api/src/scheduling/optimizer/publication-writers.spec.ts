@@ -1,0 +1,392 @@
+import {
+  AssignmentStatus,
+  BranchCode,
+  CrewRole,
+  Prisma,
+  ScheduleRunStatus,
+  VisitStatus,
+} from '@prisma/client';
+
+import { AuditService } from '../../audit/audit.service';
+import { AuthenticatedUser } from '../../auth/auth.types';
+import { PrismaService } from '../../prisma/prisma.service';
+import { AssignmentsService } from '../eligibility/assignments.service';
+import { EligibilityService } from '../eligibility/eligibility.service';
+import { VisitsService } from '../visits/visits.service';
+import { PublishingService } from './publishing.service';
+
+const actor = { id: 'actor' } as AuthenticatedUser;
+const proposal = {
+  plannedStartMinute: 540,
+  plannedEndMinute: 630,
+  crew: [{ employeeId: 'employee', role: CrewRole.SUPERVISOR }],
+};
+
+function fixture() {
+  const visit = {
+    id: 'visit',
+    branchId: 'branch',
+    branchCode: BranchCode.COLOMBO,
+    visitDate: new Date('2027-03-03T00:00:00Z'),
+    status: VisitStatus.SCHEDULED,
+    windowStartMinute: 480,
+    windowEndMinute: 1020,
+    durationMinutes: 90,
+    requiredCrewSize: 1,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    isManuallyAdjusted: false,
+    lockedAt: null,
+    serviceAgreement: {
+      customer: { name: 'Customer' },
+      serviceSite: { name: 'Site', _count: { operatingHours: 1 } },
+      jobType: { name: 'Job' },
+    },
+    _count: { assignments: 1 },
+  };
+  const original = {
+    id: 'draft',
+    generatedVisitId: visit.id,
+    status: AssignmentStatus.DRAFT as AssignmentStatus,
+    publishedAt: null as Date | null,
+    scheduleRunId: 'original-run',
+    plannedStart: new Date('2027-03-03T09:00:00Z'),
+    plannedEnd: new Date('2027-03-03T10:30:00Z'),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    branchCode: BranchCode.COLOMBO,
+    crewMembers: [
+      {
+        employeeId: 'employee',
+        employee: { fullName: 'Employee' },
+        role: CrewRole.SUPERVISOR,
+        isPmsSupervisor: true,
+      },
+    ],
+    vehicles: [],
+    locks: [],
+  };
+  const assignments = [original];
+  const outbox: { assignmentId: string }[] = [];
+  let beforeTransaction: () => Promise<void> = async () => undefined;
+  const rows = () =>
+    assignments.map((entry) => ({
+      ...entry,
+      generatedVisit: structuredClone(visit),
+      _count: {
+        notificationOutboxEntries: outbox.filter(
+          (n) => n.assignmentId === entry.id,
+        ).length,
+      },
+    }));
+  const remove = (id: string, statuses?: AssignmentStatus[]) => {
+    const index = assignments.findIndex(
+      (entry) =>
+        entry.id === id && (!statuses || statuses.includes(entry.status)),
+    );
+    if (index < 0) return 0;
+    assignments.splice(index, 1);
+    for (let i = outbox.length - 1; i >= 0; i--)
+      if (outbox[i].assignmentId === id) outbox.splice(i, 1);
+    return 1;
+  };
+  const assignment = {
+    findFirst: jest.fn(
+      async ({ where }: { where: { status?: { in: AssignmentStatus[] } } }) =>
+        rows().find(
+          (entry) => !where.status || where.status.in.includes(entry.status),
+        ) ?? null,
+    ),
+    findUnique: jest.fn(async () => rows()[0] ?? null),
+    findUniqueOrThrow: jest.fn(async () => rows()[0]),
+    findMany: jest.fn(
+      async (args: {
+        where?: {
+          status?: AssignmentStatus | { in: AssignmentStatus[] };
+          id?: { in: string[] };
+        };
+      }) =>
+        rows().filter((entry) => {
+          const status = args.where?.status;
+          return (
+            (!status ||
+              (typeof status === 'string'
+                ? entry.status === status
+                : status.in.includes(entry.status))) &&
+            (!args.where?.id || args.where.id.in.includes(entry.id))
+          );
+        }),
+    ),
+    delete: jest.fn(async ({ where }: { where: { id: string } }) =>
+      remove(where.id),
+    ),
+    deleteMany: jest.fn(
+      async ({
+        where,
+      }: {
+        where: { id: string; status: { in: AssignmentStatus[] } };
+      }) => ({ count: remove(where.id, where.status.in) }),
+    ),
+    updateMany: jest.fn(
+      async ({
+        where,
+        data,
+      }: {
+        where: {
+          id: string | { in: string[] };
+          status?: AssignmentStatus | { in: AssignmentStatus[] };
+        };
+        data: Partial<typeof original>;
+      }) => {
+        let count = 0;
+        for (const entry of assignments) {
+          const matchesId =
+            typeof where.id === 'string'
+              ? entry.id === where.id
+              : where.id.in.includes(entry.id);
+          const status = where.status;
+          if (
+            matchesId &&
+            (!status ||
+              (typeof status === 'string'
+                ? entry.status === status
+                : status.in.includes(entry.status)))
+          ) {
+            Object.assign(entry, data);
+            count++;
+          }
+        }
+        return { count };
+      },
+    ),
+    create: jest.fn(async () => {
+      const created = {
+        ...original,
+        id: 'replacement',
+        status: AssignmentStatus.DRAFT,
+      };
+      assignments.push(created);
+      return created;
+    }),
+  };
+  const audit = { record: jest.fn() };
+  const run = {
+    id: 'original-run',
+    status: ScheduleRunStatus.SUCCEEDED,
+    publishedAt: null,
+  };
+  const prisma = {
+    assignment,
+    generatedVisit: {
+      findUnique: jest.fn(async () => structuredClone(visit)),
+      findUniqueOrThrow: jest.fn(async () => structuredClone(visit)),
+      update: jest.fn(async ({ data }: { data: Partial<typeof visit> }) =>
+        Object.assign(visit, data),
+      ),
+    },
+    employee: {
+      findMany: jest.fn(async () => [{ id: 'employee', isPmsGrade: true }]),
+    },
+    visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
+    assignmentNotificationOutbox: { createMany: jest.fn() },
+    scheduleRun: {
+      findUnique: jest.fn(async () => ({ ...run, assignments: rows() })),
+      findUniqueOrThrow: jest.fn(async () => run),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+    },
+    $queryRaw: jest.fn(async (_query: Prisma.Sql) => [{ id: visit.id }]),
+    $transaction: async (
+      work: (tx: unknown) => Promise<unknown>,
+    ): Promise<unknown> => {
+      await beforeTransaction();
+      return work(prisma);
+    },
+  };
+  const eligibility = {
+    evaluate: jest.fn(async () => ({ isEligible: true, conflicts: [] })),
+  };
+  const client = prisma as unknown as PrismaService;
+  const auditService = audit as unknown as AuditService;
+  return {
+    visit,
+    original,
+    assignments,
+    outbox,
+    prisma,
+    audit,
+    eligibility,
+    manual: new AssignmentsService(
+      client,
+      eligibility as unknown as EligibilityService,
+      auditService,
+    ),
+    visits: new VisitsService(
+      client,
+      auditService,
+      eligibility as unknown as EligibilityService,
+    ),
+    publishing: new PublishingService(client, auditService),
+    beforeTransaction: (hook: () => Promise<void>) => {
+      beforeTransaction = hook;
+    },
+    publish: () => {
+      original.status = AssignmentStatus.PUBLISHED;
+      original.publishedAt = new Date();
+      outbox.push({ assignmentId: original.id });
+    },
+  };
+}
+
+describe('standard writers preserve publication', () => {
+  it.each(['assign', 'unassign'])(
+    'fences %s when publication wins after the draft read',
+    async (operation) => {
+      const f = fixture();
+      f.beforeTransaction(async () => {
+        f.publish();
+      });
+      const pending =
+        operation === 'assign'
+          ? f.manual.assign('visit', proposal, actor)
+          : f.manual.unassign('visit', actor);
+      const failure = await pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(f.assignments).toEqual([f.original]);
+      expect(f.outbox).toHaveLength(1);
+      expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+      expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    },
+  );
+
+  it.each([
+    AssignmentStatus.PUBLISHED,
+    AssignmentStatus.ACKNOWLEDGED,
+    AssignmentStatus.IN_PROGRESS,
+    AssignmentStatus.COMPLETED,
+    AssignmentStatus.SUPERSEDED,
+    AssignmentStatus.CANCELLED,
+  ])(
+    'preserves %s publication history for all manual writers',
+    async (status) => {
+      const f = fixture();
+      f.publish();
+      f.original.status = status;
+      for (const mutation of [
+        () => f.manual.assign('visit', proposal, actor),
+        () => f.manual.unassign('visit', actor),
+        () => f.visits.adjust('visit', { visitDate: '2027-03-04' }, actor),
+      ]) {
+        expect(
+          await mutation().then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+        ).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      }
+      expect(f.outbox).toHaveLength(1);
+      expect(f.assignments).toEqual([f.original]);
+      expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    },
+  );
+
+  it('does not record a rejected empty-snapshot proposal over a new publication', async () => {
+    const f = fixture();
+    f.assignments.splice(0);
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [],
+    });
+    f.beforeTransaction(async () => {
+      f.assignments.push(f.original);
+      f.publish();
+    });
+    const failure = await f.manual.assign('visit', proposal, actor).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.prisma.visitUnassignedReason.createMany).not.toHaveBeenCalled();
+    expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+  });
+
+  it.each(['assign', 'unassign'])(
+    'still permits a legitimate DRAFT %s',
+    async (operation) => {
+      const f = fixture();
+      if (operation === 'assign') {
+        await f.manual.assign('visit', proposal, actor);
+        expect(f.assignments.map((entry) => entry.id)).toEqual(['replacement']);
+      } else {
+        await f.manual.unassign('visit', actor);
+        expect(f.assignments).toHaveLength(0);
+        expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+      }
+    },
+  );
+
+  it('moves draft timing with an eligible visit adjustment', async () => {
+    const f = fixture();
+    await f.visits.adjust('visit', { visitDate: '2027-03-04' }, actor);
+    expect(f.original.plannedStart).toEqual(new Date('2027-03-04T09:00:00Z'));
+    expect(f.original.plannedEnd).toEqual(new Date('2027-03-04T10:30:00Z'));
+    expect(f.eligibility.evaluate).toHaveBeenCalled();
+  });
+
+  it('rejects an adjustment that makes the draft crew ineligible before any write', async () => {
+    const f = fixture();
+    const visitBefore = structuredClone(f.visit);
+    const assignmentBefore = structuredClone(f.original);
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [],
+    });
+    expect(
+      await f.visits.adjust('visit', { requiredCrewSize: 3 }, actor).then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    ).toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(f.visit).toEqual(visitBefore);
+    expect(f.original).toEqual(assignmentBefore);
+    expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('publishes the visit and assignment data reloaded after acquiring the lock', async () => {
+    const f = fixture();
+    f.beforeTransaction(async () => {
+      f.visit.visitDate = new Date('2027-03-04T00:00:00Z');
+      f.original.plannedStart = new Date('2027-03-04T09:00:00Z');
+      f.original.plannedEnd = new Date('2027-03-04T10:30:00Z');
+    });
+    await f.publishing.publish('original-run', null, actor);
+    expect(
+      f.prisma.assignmentNotificationOutbox.createMany,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              visitDate: '2027-03-04',
+              plannedStart: '2027-03-04T09:00:00.000Z',
+            }),
+          }),
+        ],
+      }),
+    );
+    expect(f.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: expect.objectContaining({
+          snapshot: [
+            expect.objectContaining({
+              visitDate: '2027-03-04',
+              plannedStart: '2027-03-04T09:00:00.000Z',
+            }),
+          ],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+});

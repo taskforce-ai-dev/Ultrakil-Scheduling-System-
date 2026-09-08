@@ -2323,6 +2323,9 @@
           },
           "404": {
             "description": "RESOURCE_NOT_FOUND"
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check."
           }
         },
         "security": [
@@ -2514,6 +2517,80 @@
           }
         ],
         "summary": "Work that still needs a crew, and why it has none",
+        "tags": [
+          "assignments"
+        ]
+      }
+    },
+    "/api/employees/{employeeId}/assignments": {
+      "get": {
+        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
+        "operationId": "AssignmentsController_employeeAssignments",
+        "parameters": [
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-04",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-09-07",
+              "type": "string"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedEmployeeAssignmentsDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "403": {
+            "description": "ADMIN or MANAGER role required."
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "An employee's published daily assignments",
         "tags": [
           "assignments"
         ]
@@ -2724,6 +2801,71 @@
         "summary": "Release a pinned part of an assignment",
         "tags": [
           "schedule-runs"
+        ]
+      }
+    },
+    "/api/schedule/calendar": {
+      "get": {
+        "description": "Date, time, crew, vehicle and status joined server-side so the manager portal can render one calendar instead of assembling it from several screens. Bounded to 120 days — page through the visits endpoint for a longer range.",
+        "operationId": "CalendarController_list",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-04",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "example": "2026-09-07",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CalendarResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED — bad or too wide a date range."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The unified schedule, one row per visit",
+        "tags": [
+          "calendar"
         ]
       }
     }
@@ -5060,6 +5202,165 @@
           "pageSize"
         ]
       },
+      "EmployeeAssignmentDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedStartMinute": {
+            "type": "number"
+          },
+          "plannedEndMinute": {
+            "type": "number"
+          },
+          "branchCode": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string",
+            "nullable": true,
+            "description": "Current agreement notes for the visit."
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedCrewMemberDto"
+            }
+          },
+          "supervisorEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "supervisorName": {
+            "type": "string",
+            "nullable": true
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedVehicleDto"
+            }
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "SUPERVISOR",
+              "TECHNICIAN",
+              "DRIVER",
+              "HELPER"
+            ]
+          },
+          "isPmsSupervisor": {
+            "type": "boolean"
+          },
+          "publishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "acknowledgedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "status",
+          "scheduleRunId",
+          "visitId",
+          "visitDate",
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "branchCode",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "instructions",
+          "crew",
+          "supervisorEmployeeId",
+          "supervisorName",
+          "vehicles",
+          "role",
+          "isPmsSupervisor",
+          "publishedAt",
+          "acknowledgedAt",
+          "startedAt",
+          "completedAt"
+        ]
+      },
+      "PaginatedEmployeeAssignmentsDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmployeeAssignmentDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
       "ScheduleRunDto": {
         "type": "object",
         "properties": {
@@ -5189,6 +5490,256 @@
           "total",
           "page",
           "pageSize"
+        ]
+      },
+      "CalendarCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "isPmsSupervisor": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName",
+          "role",
+          "isPmsSupervisor"
+        ]
+      },
+      "CalendarVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "driverName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label",
+          "driverEmployeeId",
+          "driverName"
+        ]
+      },
+      "CalendarAssignmentDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "plannedStartMinute": {
+            "type": "number",
+            "description": "Assigned start, in minutes from visitDate at UTC midnight; distinct from the allowed service window."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "description": "Assigned end, in minutes from visitDate at UTC midnight; 1440 denotes the following midnight."
+          },
+          "supervisorEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The employee carrying the required PMS-grade supervisor on this crew."
+          },
+          "supervisorName": {
+            "type": "string",
+            "nullable": true
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarVehicleDto"
+            }
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The schedule run this assignment came from. Combined with publishedAt this identifies the published schedule version a crew was told about."
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "acknowledgedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "Phase 2 hook. Always null in Phase 1 — no worker app writes this yet."
+          },
+          "startedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "supervisorEmployeeId",
+          "supervisorName",
+          "crew",
+          "vehicles",
+          "scheduleRunId",
+          "publishedAt",
+          "acknowledgedAt",
+          "startedAt",
+          "completedAt"
+        ]
+      },
+      "CalendarEntryDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "hoursUnconfirmed": {
+            "type": "boolean",
+            "description": "True when no site opening hours are recorded; the assumed working day remains unconfirmed."
+          },
+          "visitStatus": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SCHEDULED",
+              "UNASSIGNED",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string",
+            "nullable": true,
+            "description": "What the crew is told to do, from the agreement's notes."
+          },
+          "assignment": {
+            "nullable": true,
+            "description": "Null when the visit has no crew yet — it belongs in the Unassigned queue.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CalendarAssignmentDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "visitId",
+          "visitDate",
+          "windowStartMinute",
+          "windowEndMinute",
+          "durationMinutes",
+          "hoursUnconfirmed",
+          "visitStatus",
+          "branchCode",
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "instructions",
+          "assignment"
+        ]
+      },
+      "CalendarResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CalendarEntryDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total"
         ]
       }
     }
