@@ -10,9 +10,9 @@ pass against the pilot's real data has since started at
 `https://ultrakil-manager-web.vercel.app` (see `known-limitations.md` and
 `uat/ULK-O08-uat-results.md`); Part 1's actual "Save" step hit a live
 defect there (assignment save transaction timeout) rather than going
-untested. That defect is now fixed and deployed (see below) — real,
-passing evidence for this exact flow through the manager portal UI is
-still pending someone re-running it with deployed access.
+untested. That defect is now fixed, deployed, and independently confirmed
+through the manager portal UI itself (see below) — a real "Assignment
+saved" screenshot against the deployed app now exists.
 
 ---
 
@@ -56,13 +56,19 @@ correctly reached "This crew is eligible to take the visit," but clicking
 **Save assignment** failed with a server error, reproduced 3/3 (Prisma
 transaction timeout, see `known-limitations.md` item 1).
 **Fix update, 2026-09-09 ~10:17 UTC:** the API owner shipped and deployed
-a fix (`6fe1838`, PR #49) and reports his own reopen/save verification
+a fix (`6fe1838`, PR #49) and reported his own reopen/save verification
 against the canonical deployed app all returning `HTTP 200` (see
 `known-limitations.md` item 1 and `uat/ULK-O08-uat-results.md` scenario 1,
-"Fix deployed") — but that's the API owner's own report, not an
-independent click-through of this exact manager-portal flow. A clean
-"Assignment saved" screenshot against the deployed app, captured directly
-through the UI, is still pending.)*
+"Fix deployed").
+**Independent confirmation, ~16:50 UTC 2026-09-09:** a click-through of
+this exact flow against the deployed app (visit: SINTESI
+(Incube)/Quantum clothing) — Validation reached "This crew is eligible to
+take the visit," **Save assignment** succeeded with an "Assignment saved"
+toast and no server error, and reopening the same visit showed no false
+double-booked conflict. Screenshots:
+`uat/screenshots/o08-deployed-assignment-save-confirmed.png`,
+`uat/screenshots/o08-deployed-reopen-no-false-conflict.webp` (see
+`uat/ULK-O08-uat-results.md` scenario 1, "Independent UI confirmation").)*
 
 ---
 

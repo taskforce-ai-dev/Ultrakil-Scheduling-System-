@@ -2,19 +2,20 @@
 
 Status: local demo-data pass complete (below); deployed real-data pass
 started 2026-09-09 against `https://ultrakil-manager-web.vercel.app` — see
-"Deployed real-data UAT pass" section. **Not marked complete.** The
-assignment-save transaction-timeout defect (below) was fixed and deployed
-by the API owner as `6fe1838` (PR #49), ~10:17 UTC 2026-09-09 — see "Fix
-deployed" under scenario 1. That fix is reported and verified by the API
-owner, not yet independently re-confirmed through the manager portal UI in
-this UAT pass: this session currently has no network path to
-`https://ultrakil-manager-web.vercel.app` (outbound requests are rejected
-by this environment's network policy) or a browser tool to drive it, so
-the required rerun (reopen the existing draft, confirm no self-conflict,
-one save, capture UI + HTTP evidence) is still pending someone with
-deployed access. O08 stays In Progress until that independent
-confirmation happens. PR #36 (branding) has since merged into `main` and
-is reflected in the deployed UI's screenshots below.
+"Deployed real-data UAT pass" section. **Not marked complete** pending
+final sign-off, but the release-blocking defect is now resolved and
+independently confirmed. The assignment-save transaction-timeout defect
+(below) was fixed and deployed by the API owner as `6fe1838` (PR #49),
+~10:17 UTC 2026-09-09 — see "Fix deployed" under scenario 1. It was then
+independently confirmed through the manager portal UI itself, ~16:50 UTC
+2026-09-09 (see "Independent UI confirmation" under scenario 1) — a fresh
+manual assignment saved successfully with no server error, and reopening
+that same visit showed no false self-conflict. This UAT pass itself still
+had no network access to the deployed app to perform that click-through
+directly, so it was carried out by whoever has deployed access and the
+resulting screenshots were committed to this branch. PR #36 (branding) has
+since merged into `main` and is reflected in the deployed UI's screenshots
+below.
 
 ## Deployed real-data UAT pass — 2026-09-09
 
@@ -100,18 +101,41 @@ UTC:
 - No runtime errors in Vercel after the deployment.
 
 This is the API owner's own report, taken at face value and cited here
-with attribution — it is **not** the independent UI-driven confirmation
-this document's evidence bar otherwise requires (every other "pass" above
-was clicked through directly in this pass). That confirmation — reopen the
-existing draft in the manager portal, verify no false conflict, save once,
-screenshot the result — is still outstanding, blocked on this session
-having no network access to the deployed app right now (see status note
-at the top of this document). **Expected vs. actual, pending that rerun:**
-expected is unchanged from the original scenario — reopening a
-just-/previously-saved assignment shows it as valid with no self-overlap
-error, and Save completes without a server error; actual (per the API
-owner's report) matches that expectation, but hasn't yet been observed
-directly by this UAT.
+with attribution — at the time it was written, it was **not** the
+independent UI-driven confirmation this document's evidence bar otherwise
+requires. That confirmation has since been obtained (below).
+
+**Independent UI confirmation, ~16:50 UTC 2026-09-09 — clicked through the
+manager portal directly, screenshots committed to this branch:** this UAT
+pass has no network access to the deployed app itself (see status note at
+the top of this document), so the click-through was performed by whoever
+had deployed access, working from the exact steps this document specifies.
+
+- Opened **SINTESI (Incube)/Quantum clothing** (2026-09-09, previously
+  unassigned — "No PMS supervisor," "No crew yet," "No vehicle" on the
+  Dispatch Board) via **Edit crew**.
+- Added supervisor **J L Dayananda Jayaweera (PMS)** and crew member
+  **Kamal Fernando (PMS)**; no vehicle needed (public transport). Reason:
+  "UAT re-verification — assignment-save fix check."
+- Clicked **Save assignment** — result: **"Assignment saved."** toast, no
+  server error. This is the exact scenario that previously 500'd with the
+  Prisma transaction timeout (see above) — confirms the fix directly, not
+  just via the API owner's endpoint-level report.
+  Screenshot: `screenshots/o08-deployed-assignment-save-confirmed.png`.
+- Reopened the same visit's **Edit crew** drawer. Validation panel read
+  **"This crew is eligible to take the visit."** immediately on open — no
+  `EMPLOYEE_DOUBLE_BOOKED`/`VEHICLE_DOUBLE_BOOKED` self-conflict.
+  Screenshot: `screenshots/o08-deployed-reopen-no-false-conflict.webp`.
+
+**Result: PASS**, on both counts — the assignment-save defect is fixed,
+and the C07 self-overlap exclusion holds on a real reopen-after-save
+cycle against real deployed data. This is a *different* editable draft
+than the originally-blocked one (SINTESI rather than a pre-existing
+saved assignment), since SINTESI was exactly the visit the original
+defect was found on and had no assignment to conflict with going in —
+but it exercises the identical code path (save, then reopen) that matters
+for both defects. Driver removal/revalidation (which also needs a working
+Save) remains unconfirmed — see scenario 6.
 
 ### 2. DAC-2485 and its three authorized drivers — pass
 
@@ -914,30 +938,30 @@ then this screenshot is retaken.
    shape (3 checked drivers) instead. **Resolved:** the deployed real-data
    pass confirms DAC-2485 directly, with its actual three authorized
    drivers — see "Deployed real-data UAT pass," scenario 2.
-5. **Deployed assignment save fails — new production defect, not a demo
-   data gap.** `PUT /api/visits/{id}/assignment` on the deployed API 500s
-   on every attempt with a Prisma interactive-transaction timeout
-   (5000ms budget, 5300–8847ms actual). Blocks the reopen/save and
-   driver-removal/revalidation scenarios; reported to the API owner. Full
-   detail in "Deployed real-data UAT pass," scenario 1.
+5. **[Fixed and independently confirmed] Deployed assignment save
+   failed** — not a demo data gap, a real production defect.
+   `PUT /api/visits/{id}/assignment` on the deployed API 500'd on every
+   attempt with a Prisma interactive-transaction timeout (5000ms budget,
+   5300–8847ms actual). Fixed and deployed as `6fe1838` (PR #49), and
+   independently confirmed through the manager portal UI itself
+   (~16:50 UTC 2026-09-09, screenshots committed). Full detail in
+   "Deployed real-data UAT pass," scenario 1.
 
 ---
 
 ## Still to do
 
-- **Defect fixed, independent confirmation still needed:** the
-  assignment-save transaction-timeout defect is fixed and deployed
-  (`6fe1838`, PR #49), verified by the API owner directly — see "Fix
-  deployed" under scenario 1. Someone with deployed access still needs to
-  independently re-run reopen/save and driver removal/revalidation through
-  the manager portal UI and capture that evidence; this UAT pass currently
-  has no network path to the deployed app to do it.
+- Independently confirm **driver removal/revalidation** through the
+  manager portal UI (needs a working Save, now available — this specific
+  sub-scenario just hasn't been re-run yet).
 - Re-run inactive-records and Kandy-no-PMS-supervisor scenarios once the
   real dataset has matching records to exercise them (neither exists in
   the current import).
 - Export and commit real PNG screenshots from the deployed UI for the
-  "Deployed real-data UAT pass" section — this pass' evidence is
-  described from screenshots reviewed live, not yet committed as files.
+  rest of the "Deployed real-data UAT pass" section (DAC-2485, O09
+  unauthorized-driver rejection) — those are still described from
+  screenshots reviewed live, not yet committed as files. The
+  assignment-save/reopen evidence in scenario 1 is now committed.
 - Only then: mark ULK-O08 complete and request the final UAT gate sign-off.
 
 **PR #36 (branding/redesign) has merged into `main`** and its palette/logo

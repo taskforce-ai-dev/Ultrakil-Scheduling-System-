@@ -17,8 +17,8 @@ there is no UI for any of them today.
 
 ## Release-relevant findings from this UAT pass
 
-1. **[Fixed and deployed, pending independent UI confirmation] Assignment
-   save failed on the deployed API — Prisma interactive-transaction
+1. **[Fixed, deployed, and independently confirmed] Assignment save
+   failed on the deployed API — Prisma interactive-transaction
    timeout.** Found during the deployed real-data pass, 2026-09-09:
    `PUT /api/visits/{id}/assignment` returned `500 INTERNAL_ERROR` on every
    attempt (reproduced 3/3, 09:20:48–09:21:43 UTC), each attempt slower
@@ -38,13 +38,22 @@ there is no UI for any of them today.
    verification against the canonical deployed manager/API (~10:23 UTC):
    reopen → eligibility check `HTTP 200`, no self-conflict; one save with
    a UAT audit reason → `HTTP 200`; follow-up `GET`/eligibility check →
-   both `HTTP 200`; no runtime errors in Vercel post-deploy. **Still
-   outstanding:** independent confirmation through the manager portal UI
-   itself (reopen, no false conflict, save, screenshot) — this UAT pass
-   currently has no network access to the deployed app to do that rerun.
-   Full detail in `uat/ULK-O08-uat-results.md`, "Deployed real-data UAT
-   pass," scenario 1 ("Fix deployed"). **O08 stays open** until that
-   independent UI confirmation lands.
+   both `HTTP 200`; no runtime errors in Vercel post-deploy.
+   **Independently confirmed through the manager portal UI itself,
+   ~16:50 UTC 2026-09-09** (this UAT pass has no network access to the
+   deployed app, so the click-through was performed by whoever had
+   deployed access, from this document's exact steps, with screenshots
+   committed to the branch): a fresh manual assignment on a previously
+   unassigned visit saved successfully with an "Assignment saved" toast
+   and no server error, and reopening that same visit's Edit crew drawer
+   immediately showed "This crew is eligible to take the visit" with no
+   false `EMPLOYEE_DOUBLE_BOOKED`/`VEHICLE_DOUBLE_BOOKED` error. Full
+   detail in `uat/ULK-O08-uat-results.md`, "Deployed real-data UAT pass,"
+   scenario 1 ("Independent UI confirmation"). **Not release-blocking any
+   more** — driver removal/revalidation (also gated on a working Save)
+   still needs its own confirmation pass; O08 stays open pending that and
+   the remaining screenshot exports (see "Still to do" in the results
+   doc).
 
 2. **[Fixed on current main, partially confirmed on deployed real data]
    Re-opening an already-assigned visit could show false "double-booked"
