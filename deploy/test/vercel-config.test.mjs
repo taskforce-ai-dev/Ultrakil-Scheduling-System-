@@ -138,6 +138,13 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   const checklist = read('docs/VERCEL_RELEASE_CHECKLIST.md');
   assert.match(checklist, /Production/);
   assert.match(checklist, /staging/);
+  assert.match(checklist, /API's 55-second application budget/i);
+  assert.match(checklist, /scheduler's checked-in 60-second Vercel ceiling/i);
+  assert.match(checklist, /dedicated Neon staging target/i);
+  assert.match(checklist, /production PostgreSQL.*provisioned separately/i);
+  assert.doesNotMatch(checklist,
+    /Both backend projects detect the expected runtime and enforce the\s+checked-in 60-second function ceiling/i);
+  assert.doesNotMatch(checklist, /neither is assumed to be Neon/i);
   assert.match(checklist, /--fresh --target=qstash/);
   assert.match(checklist, /Before merge\/promote to `main`/i);
   assert.match(read('deploy/vercel-variables.example'), /SCHEDULE_DISPATCHER=qstash/);
