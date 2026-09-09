@@ -177,6 +177,10 @@ describe("AssignmentEditorDrawer", () => {
     for (const lockLabel of ["Date & time", "Supervisor", "Crew", "Vehicle", "Everything"]) {
       expect(screen.getByRole("button", { name: lockLabel })).toBeDisabled();
     }
+    expect(screen.getByText("Supervisor & crew").closest("div.overflow-y-auto")).toHaveAttribute(
+      "tabindex",
+      "0"
+    );
     }
   );
 
