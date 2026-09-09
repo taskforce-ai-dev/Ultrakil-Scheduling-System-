@@ -196,7 +196,10 @@ export async function importMatrix(
         summary.authorizationsRemoved += removedAuths.count;
       }
     },
-    { timeout: 120_000 },
+    // The supported operator workflow imports into an external PostgreSQL
+    // service. Keep the workforce atomic while allowing for cross-region
+    // latency across the hundreds of reconciliation queries above.
+    { timeout: 600_000 },
   );
 
   return summary;

@@ -105,7 +105,8 @@ export async function importSchedule(
 
     // One transaction per customer rather than one for the whole workbook: a
     // single bad row should not roll back nine hundred good sites, and the
-    // import is re-runnable, so a partial import is recoverable.
+    // import is re-runnable, so a partial import is recoverable. The explicit
+    // timeout absorbs cross-region latency in supported operator imports.
     await prisma.$transaction(async (tx) => {
       const existing = await tx.customer.findFirst({
         where: { name: customer.name },
@@ -251,7 +252,7 @@ export async function importSchedule(
           summary.agreementsCreated += 1;
         }
       }
-    });
+    }, { timeout: 120_000 });
   }
 
   return summary;
