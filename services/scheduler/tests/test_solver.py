@@ -236,6 +236,74 @@ class TestVehicles:
         assert result.assignments[0].vehicles[0].vehicle_id == "van-x"
 
 
+class TestOneVehiclePerVisit:
+    """A crew travels together, so a visit takes one vehicle at most.
+
+    Without a cap every assigned vehicle earned WEIGHT_VEHICLE_ASSIGNED, so the
+    model parked the whole free fleet on one job for the points.
+    """
+
+    DRIVER = employee(
+        id="sup-1",
+        is_pms_grade=True,
+        can_use_public_transport=True,
+        authorized_vehicle_ids=["veh-1", "veh-2", "veh-3"],
+    )
+    MATE = employee(
+        id="tech-1",
+        can_use_public_transport=True,
+        authorized_vehicle_ids=["veh-1", "veh-2", "veh-3"],
+    )
+    FLEET = [
+        VehicleInput(id="veh-1", branch_code="COLOMBO", seat_capacity=4),
+        VehicleInput(id="veh-2", branch_code="COLOMBO", seat_capacity=4),
+        VehicleInput(id="veh-3", branch_code="COLOMBO", seat_capacity=4),
+    ]
+
+    def test_takes_one_vehicle_when_the_whole_fleet_is_free(self):
+        result = solve(
+            request(employees=[self.DRIVER, self.MATE], vehicles=self.FLEET)
+        )
+
+        assert len(result.assignments) == 1
+        assert len(result.assignments[0].vehicles) == 1
+
+    def test_leaves_the_other_vehicles_for_other_visits(self):
+        result = solve(
+            request(
+                visits=[
+                    visit(id="v-1"),
+                    visit(id="v-2", service_agreement_id="agr-2"),
+                    visit(id="v-3", service_agreement_id="agr-3"),
+                ],
+                employees=[
+                    self.DRIVER,
+                    self.MATE,
+                    employee(
+                        id="sup-2",
+                        is_pms_grade=True,
+                        can_use_public_transport=True,
+                        authorized_vehicle_ids=["veh-2"],
+                    ),
+                    employee(
+                        id="tech-2",
+                        can_use_public_transport=True,
+                        authorized_vehicle_ids=["veh-2"],
+                    ),
+                ],
+                vehicles=self.FLEET,
+            )
+        )
+
+        # Guard against a vacuous pass: the point is that work got staffed
+        # *and* no visit hoarded the fleet.
+        assert len(result.assignments) >= 2
+        for assignment in result.assignments:
+            assert len(assignment.vehicles) <= 1
+        taken = [v.vehicle_id for a in result.assignments for v in a.vehicles]
+        assert len(taken) == len(set(taken))
+
+
 class TestGettingToSite:
     """A crew with no vehicle travels by public transport — all of them.
 

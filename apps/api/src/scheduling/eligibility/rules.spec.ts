@@ -431,6 +431,58 @@ describe('eligibility engine', () => {
     });
   });
 
+  describe('one vehicle per visit', () => {
+    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (02 People) DAG-3284' });
+
+    const twoVehicles = () =>
+      evaluateAssignment(
+        proposal({
+          vehicles: [
+            { vehicleId: 'veh-1', driverEmployeeId: SUPERVISOR.id },
+            { vehicleId: 'veh-2', driverEmployeeId: TECHNICIAN.id },
+          ],
+        }),
+        context({
+          employees: [
+            employee({ ...SUPERVISOR, authorizedVehicleIds: ['veh-1'] }),
+            employee({ ...TECHNICIAN, authorizedVehicleIds: ['veh-2'] }),
+          ],
+          vehicles: [vehicle(), SECOND],
+        }),
+      );
+
+    it('refuses a second vehicle even when both are legal on their own', () => {
+      const result = twoVehicles();
+
+      expect(codesOf(result)).toContain('TOO_MANY_VEHICLES');
+      expect(result.isEligible).toBe(false);
+    });
+
+    it('names both vehicles so the manager knows which to release', () => {
+      const conflict = twoVehicles().conflicts.find(
+        (entry) => entry.code === 'TOO_MANY_VEHICLES',
+      );
+
+      expect(conflict?.resources.vehicleIds).toEqual(['veh-1', 'veh-2']);
+      expect(conflict?.remediation).toContain('release');
+    });
+
+    it('accepts a single vehicle', () => {
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: SUPERVISOR.id }] }),
+        context({
+          employees: [
+            employee({ ...SUPERVISOR, authorizedVehicleIds: ['veh-1'] }),
+            TECHNICIAN,
+          ],
+        }),
+      );
+
+      expect(codesOf(result)).not.toContain('TOO_MANY_VEHICLES');
+      expect(result.isEligible).toBe(true);
+    });
+  });
+
   describe('getting to site without a vehicle', () => {
     const NO_BUS = employee({
       id: 'tech-2',

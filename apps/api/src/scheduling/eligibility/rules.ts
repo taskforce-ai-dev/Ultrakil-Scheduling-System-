@@ -404,6 +404,27 @@ export function evaluateAssignment(
     }
   }
 
+  // One vehicle, not several.
+  //
+  // The crew travels together, and a vehicle is only accepted above if it can
+  // seat all of them — so a second vehicle carries nobody. It is not free
+  // either: it stands idle here instead of taking another job.
+  if (proposal.vehicles.length > 1) {
+    const labels = proposal.vehicles
+      .map((proposed) => vehicleById.get(proposed.vehicleId)?.label)
+      .filter((label): label is string => label !== undefined);
+    conflicts.push({
+      code: 'TOO_MANY_VEHICLES',
+      message: `${proposal.vehicles.length} vehicles are assigned to this visit${labels.length > 0 ? ` (${labels.join(', ')})` : ''}; a crew travels in one.`,
+      remediation:
+        'Keep the one vehicle that seats the whole crew and release the rest for other visits.',
+      resources: {
+        visitId: visit.id,
+        vehicleIds: proposal.vehicles.map((proposed) => proposed.vehicleId).sort(),
+      },
+    });
+  }
+
   // --- Getting there -------------------------------------------------------
   //
   // With no vehicle, the crew travels by public transport — and every one of

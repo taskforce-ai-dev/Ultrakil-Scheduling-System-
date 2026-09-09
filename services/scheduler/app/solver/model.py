@@ -594,22 +594,36 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                 driver_vars.append(drive)
             model.Add(sum(driver_vars) == used)
 
-    # Getting there when no vehicle goes.
-    #
-    # A crew with no vehicle travels by public transport, and each person makes
-    # that journey themselves — there is nothing to share. So the rule is every
-    # member, not one: anybody not check-marked for public transport can only go
-    # on a visit that takes a vehicle.
-    #
-    # Written per employee rather than per crew because that is what the model
-    # can express directly: assigning someone who cannot get there forces a
-    # vehicle onto the visit, and where the fleet offers none, forces them off.
+    # How the crew gets there: at most one vehicle, and everybody covered.
     for visit in visits:
         vehicle_vars = [
             uses_vehicle[visit.id, vehicle.id]
             for vehicle in vehicles
             if (visit.id, vehicle.id) in uses_vehicle
         ]
+
+        # One vehicle per visit.
+        #
+        # The crew travels together and the capacity rule above already refuses
+        # any vehicle that cannot seat all of them, so a second vehicle was
+        # never carrying anybody. It was not merely redundant: every assigned
+        # vehicle earns WEIGHT_VEHICLE_ASSIGNED, so with no cap the model
+        # collected every free vehicle onto one job for the points and left
+        # later visits with nothing to drive. A fleet is shared across a day.
+        if len(vehicle_vars) > 1:
+            model.Add(sum(vehicle_vars) <= 1)
+
+        # Getting there when no vehicle goes.
+        #
+        # A crew with no vehicle travels by public transport, and each person
+        # makes that journey themselves — there is nothing to share. So the rule
+        # is every member, not one: anybody not check-marked for public
+        # transport can only go on a visit that takes a vehicle.
+        #
+        # Written per employee rather than per crew because that is what the
+        # model can express directly: assigning someone who cannot get there
+        # forces a vehicle onto the visit, and where the fleet offers none,
+        # forces them off.
         for employee in employees:
             var = assign.get((visit.id, employee.id))
             if var is None or employee.can_use_public_transport:
