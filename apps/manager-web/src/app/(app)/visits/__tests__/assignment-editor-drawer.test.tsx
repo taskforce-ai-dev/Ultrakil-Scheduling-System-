@@ -56,6 +56,17 @@ const technician = buildEmployee({
   branchCode: "COLOMBO",
 });
 
+// Kept in sync with the API's PUBLISHED_HISTORY in
+// apps/api/src/scheduling/optimizer/schedule-visit-lock.ts. The assignment
+// editor must not offer actions the API will reject for publication history.
+const publicationHistoryStatuses = [
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "SUPERSEDED",
+] as const;
+
 function mockEmployeeList(items: Employee[] = [supervisor, technician]) {
   vi.mocked(fetchEmployees).mockResolvedValue({ items, total: items.length, page: 1, pageSize: 200 });
 }
@@ -319,6 +330,108 @@ describe("AssignmentEditorDrawer", () => {
     // scopes are locked (see the note in api-client.ts).
     const pinnedButton = await screen.findByRole("button", { name: "Crew" });
     expect(pinnedButton.querySelector("svg")).toHaveClass("lucide-pin-off");
+  });
+
+  it.each(publicationHistoryStatuses)(
+    "makes a %s publication-history assignment fully read-only",
+    async (status) => {
+      vi.mocked(fetchVisitAssignment).mockResolvedValue(buildAssignment({ status }));
+
+      await openDrawer();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+
+      expect(await screen.findByLabelText("Arrives")).toBeDisabled();
+      expect(checkAssignment).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Leaves by")).toBeDisabled();
+      expect(screen.getByLabelText("Employee")).toBeDisabled();
+      expect(screen.getByLabelText("Role")).toBeDisabled();
+      expect(screen.getByLabelText("Vehicle")).toBeDisabled();
+      expect(screen.getByLabelText("Driver")).toBeDisabled();
+      expect(screen.getByLabelText("Reason for this change")).toBeDisabled();
+
+      expect(screen.getByRole("button", { name: "Add crew member" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove crew member" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Add vehicle" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove vehicle" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove crew" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+      for (const { label } of [
+        { label: "Date & time" },
+        { label: "Supervisor" },
+        { label: "Crew" },
+        { label: "Vehicle" },
+        { label: "Everything" },
+      ]) {
+        expect(screen.getByRole("button", { name: label })).toBeDisabled();
+      }
+    }
+  );
+
+  it.each(["DRAFT", "PROPOSED"] as const)(
+    "keeps a %s assignment editable",
+    async (status) => {
+      vi.mocked(fetchVisitAssignment).mockResolvedValue(buildAssignment({ status }));
+      vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+      const { user } = await openDrawer();
+
+      await screen.findByText("This crew is eligible to take the visit.");
+      await user.type(screen.getByLabelText("Reason for this change"), "Confirmed with customer");
+
+      expect(screen.getByLabelText("Employee")).not.toBeDisabled();
+      expect(screen.getByLabelText("Reason for this change")).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Crew" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove crew" })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save assignment" })).not.toBeDisabled();
+    }
+  );
+
+  it("keeps the current ineligible proposal blocked when an older eligibility request resolves late", async () => {
+    let resolveOlder: ((result: ReturnType<typeof buildEligibilityResult>) => void) | undefined;
+    let resolveCurrent: ((result: ReturnType<typeof buildEligibilityResult>) => void) | undefined;
+    vi.mocked(checkAssignment).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (resolveOlder) resolveCurrent = resolve;
+          else resolveOlder = resolve;
+        })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(checkAssignment).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByLabelText("Employee"));
+    await user.click(await screen.findByRole("option", { name: /N Fernando/ }));
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(checkAssignment).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveCurrent?.(
+        buildEligibilityResult({
+          isEligible: false,
+          conflicts: [buildConflict({ code: "CREW_TOO_SMALL", message: "The replacement crew is invalid." })],
+        })
+      );
+    });
+    await user.type(screen.getByLabelText("Reason for this change"), "Trying another crew");
+    expect(await screen.findByText("The replacement crew is invalid.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+
+    await act(async () => {
+      resolveOlder?.(buildEligibilityResult({ isEligible: true }));
+    });
+
+    expect(screen.getByText("The replacement crew is invalid.")).toBeInTheDocument();
+    expect(screen.queryByText("This crew is eligible to take the visit.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
   });
 
   it("surfaces a backend refusal without losing the drawer", async () => {

@@ -539,7 +539,11 @@ describe('assignment lock concurrency', () => {
     const answer = deferred<SolveResponse>();
     const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
     const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService));
-    const publishing = new PublishingService(locker.client, app.get(AuditService));
+    const publishing = new PublishingService(
+      locker.client,
+      app.get(AuditService),
+      app.get(EligibilityService),
+    );
     const solved = service.execute(run.id).then((value) => ({ value }), (error: unknown) => ({ error }));
     let locked: Promise<{ value: unknown } | { error: unknown }> | undefined;
     const solution: SolveResponse = {
@@ -1075,6 +1079,7 @@ describe('standard writer publication protocol', () => {
       const publishing = new PublishingService(
         publisher.client,
         app.get(AuditService),
+        app.get(EligibilityService),
       );
       const mutate = () =>
         operation === 'assign'
@@ -1576,6 +1581,7 @@ describe('publishing', () => {
       const publishing = new PublishingService(
         publisher.client,
         app.get(AuditService),
+        app.get(EligibilityService),
       );
       const actor = await prisma.user.findUniqueOrThrow({
         where: { email: ADMIN.email },

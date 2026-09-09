@@ -12,6 +12,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AssignmentsService } from '../eligibility/assignments.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { EligibilityResult } from '../eligibility/rules';
 import { VisitsService } from '../visits/visits.service';
 import { PublishingService } from './publishing.service';
 
@@ -63,7 +64,11 @@ function fixture() {
         isPmsSupervisor: true,
       },
     ],
-    vehicles: [],
+    vehicles: [] as {
+      vehicleId: string;
+      vehicle: { label: string };
+      driverEmployeeId: string | null;
+    }[],
     locks: [],
   };
   const assignments = [original];
@@ -203,7 +208,9 @@ function fixture() {
     ),
   };
   const eligibility = {
-    evaluate: jest.fn(async () => ({ isEligible: true, conflicts: [] })),
+    evaluate: jest.fn(
+      async (): Promise<EligibilityResult> => ({ isEligible: true, conflicts: [] }),
+    ),
   };
   const client = prisma as unknown as PrismaService;
   const auditService = audit as unknown as AuditService;
@@ -225,7 +232,11 @@ function fixture() {
       auditService,
       eligibility as unknown as EligibilityService,
     ),
-    publishing: new PublishingService(client, auditService),
+    publishing: new PublishingService(
+      client,
+      auditService,
+      eligibility as unknown as EligibilityService,
+    ),
     beforeTransaction: (hook: () => Promise<void>) => {
       beforeTransaction = hook;
     },
@@ -412,5 +423,59 @@ describe('standard writers preserve publication', () => {
       }),
       expect.anything(),
     );
+  });
+
+  it('refuses a pre-upgrade multi-vehicle draft when publish-time eligibility rejects it', async () => {
+    const f = fixture();
+    f.original.vehicles.push(
+      {
+        vehicleId: 'vehicle-one',
+        vehicle: { label: 'Vehicle one' },
+        driverEmployeeId: 'employee',
+      },
+      {
+        vehicleId: 'vehicle-two',
+        vehicle: { label: 'Vehicle two' },
+        driverEmployeeId: 'employee',
+      },
+    );
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'TOO_MANY_VEHICLES',
+          message: 'A crew travels in one vehicle.',
+          remediation: 'Remove the extra vehicle.',
+          resources: { visitId: 'visit', vehicleIds: ['vehicle-one', 'vehicle-two'] },
+        },
+      ],
+    });
+
+    const failure = await f.publishing
+      .publish('original-run', null, actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.objectContaining({
+        plannedStartMinute: 540,
+        plannedEndMinute: 630,
+        vehicles: [
+          { vehicleId: 'vehicle-one', driverEmployeeId: 'employee' },
+          { vehicleId: 'vehicle-two', driverEmployeeId: 'employee' },
+        ],
+      }),
+      { excludeAssignmentId: 'draft' },
+      f.prisma,
+    );
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+    expect(f.prisma.scheduleRun.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignmentNotificationOutbox.createMany).not.toHaveBeenCalled();
+    expect(f.audit.record).not.toHaveBeenCalled();
   });
 });

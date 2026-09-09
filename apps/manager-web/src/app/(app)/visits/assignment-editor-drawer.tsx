@@ -65,6 +65,16 @@ const LOCK_SCOPES: { scope: LockScope; label: string; help: string }[] = [
   { scope: "FULL", label: "Everything", help: "The next schedule run will leave this assignment exactly as it is." },
 ];
 
+// Keep this aligned with PUBLISHED_HISTORY in the API's schedule-visit-lock.
+// Those assignments are audit history, not an editable scheduling draft.
+const PUBLICATION_HISTORY_STATUSES = new Set([
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "SUPERSEDED",
+]);
+
 let rowKeySeq = 0;
 function nextKey(): string {
   rowKeySeq += 1;
@@ -135,6 +145,7 @@ export function AssignmentEditorDrawer({
 
   const [checkResult, setCheckResult] = React.useState<EligibilityResult | null>(null);
   const [isChecking, setIsChecking] = React.useState(false);
+  const eligibilityRequestGenerationRef = React.useRef(0);
   const [isSaving, setIsSaving] = React.useState(false);
   // A ref alongside each busy state below: two clicks fired in the same tick
   // (a fast double-click) both close over the same pre-update state, so the
@@ -318,25 +329,43 @@ export function AssignmentEditorDrawer({
     [startMinute, endMinute, crewRows, vehicleRows]
   );
 
+  const isPublicationHistory =
+    assignment !== null && PUBLICATION_HISTORY_STATUSES.has(assignment.status);
+
   // Live validation: every edit is checked against the real eligibility
   // engine before Save is enabled, debounced so typing doesn't fire a
-  // request per keystroke. The "reset while there's nothing to check" and
-  // "mark checking" calls are synchronous derived state, not a fetch result.
+  // request per keystroke. A generation fence makes a completed response
+  // authoritative only for the exact proposal that started it.
   /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
-    if (!visitId || !visit || proposal.crew.length === 0) {
+    const generation = eligibilityRequestGenerationRef.current + 1;
+    eligibilityRequestGenerationRef.current = generation;
+    if (!visitId || !visit || isPublicationHistory || proposal.crew.length === 0) {
       setCheckResult(null);
+      setIsChecking(false);
       return;
     }
+    setCheckResult(null);
     setIsChecking(true);
     const timer = setTimeout(() => {
       checkAssignment(visitId, proposal)
-        .then(setCheckResult)
-        .catch(() => setCheckResult(null))
-        .finally(() => setIsChecking(false));
+        .then((result) => {
+          if (eligibilityRequestGenerationRef.current === generation) setCheckResult(result);
+        })
+        .catch(() => {
+          if (eligibilityRequestGenerationRef.current === generation) setCheckResult(null);
+        })
+        .finally(() => {
+          if (eligibilityRequestGenerationRef.current === generation) setIsChecking(false);
+        });
     }, 400);
-    return () => clearTimeout(timer);
-  }, [visitId, visit, proposal]);
+    return () => {
+      clearTimeout(timer);
+      if (eligibilityRequestGenerationRef.current === generation) {
+        eligibilityRequestGenerationRef.current += 1;
+      }
+    };
+  }, [visitId, visit, isPublicationHistory, proposal]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   function addCrewRow() {
@@ -368,7 +397,7 @@ export function AssignmentEditorDrawer({
   }
 
   async function save() {
-    if (!visitId) return;
+    if (!visitId || isPublicationHistory) return;
     if (!reason.trim()) {
       notify.error("A reason is required for a manual override.");
       return;
@@ -397,7 +426,7 @@ export function AssignmentEditorDrawer({
   }
 
   async function removeCrew() {
-    if (!visitId) return;
+    if (!visitId || isPublicationHistory) return;
     if (isRemovingRef.current) return; // Collapses a double-click into one request.
     isRemovingRef.current = true;
     setIsRemoving(true);
@@ -415,7 +444,7 @@ export function AssignmentEditorDrawer({
   }
 
   async function toggleLock(scope: LockScope) {
-    if (!assignment) return;
+    if (!assignment || isPublicationHistory) return;
     if (lockBusyScopeRef.current) return; // Collapses a double-click into one request.
     lockBusyScopeRef.current = scope;
     const currentlyLocked = sessionLocks[scope] !== undefined ? sessionLocks[scope] !== null : null;
@@ -447,13 +476,13 @@ export function AssignmentEditorDrawer({
     }
   }
 
-  const isPublished = assignment?.status === "PUBLISHED";
   const canSave =
     !isSaving &&
-    !isPublished &&
+    !isPublicationHistory &&
+    !isChecking &&
     reason.trim().length > 0 &&
     proposal.crew.length > 0 &&
-    !(checkResult && !checkResult.isEligible);
+    checkResult?.isEligible === true;
 
   return (
     <AppDrawer
@@ -469,7 +498,7 @@ export function AssignmentEditorDrawer({
                 type="button"
                 variant="outline"
                 onClick={removeCrew}
-                disabled={isRemoving || isPublished}
+                disabled={isRemoving || isPublicationHistory}
               >
                 <UserX aria-hidden="true" />
                 Remove crew
@@ -495,11 +524,11 @@ export function AssignmentEditorDrawer({
         />
       ) : visit ? (
         <div className="space-y-6 pb-4">
-          {isPublished && (
+          {isPublicationHistory && (
             <p className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-              This visit is on a <strong>published</strong> schedule and cannot be re-crewed by
-              hand. Run the scheduler again and publish the new run to replace it — the published
-              one is kept as a record.
+              This visit is part of <strong>publication history</strong> and cannot be re-crewed by
+              hand. Run the scheduler again and publish the new run to replace it — the existing
+              schedule is kept as a record.
             </p>
           )}
 
@@ -511,7 +540,7 @@ export function AssignmentEditorDrawer({
                 type="time"
                 value={minuteToTimeInput(startMinute)}
                 onChange={(event) => setStartMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublished}
+                disabled={isPublicationHistory}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
             </div>
@@ -522,7 +551,7 @@ export function AssignmentEditorDrawer({
                 type="time"
                 value={minuteToTimeInput(endMinute)}
                 onChange={(event) => setEndMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublished}
+                disabled={isPublicationHistory}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
             </div>
@@ -531,7 +560,7 @@ export function AssignmentEditorDrawer({
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Supervisor &amp; crew</h3>
-              <Button type="button" variant="outline" size="sm" onClick={addCrewRow} disabled={isPublished}>
+              <Button type="button" variant="outline" size="sm" onClick={addCrewRow} disabled={isPublicationHistory}>
                 <Plus aria-hidden="true" />
                 Add crew member
               </Button>
@@ -545,6 +574,7 @@ export function AssignmentEditorDrawer({
                   <Select
                     items={employeeLabels}
                     value={row.employeeId}
+                    disabled={isPublicationHistory}
                     onValueChange={(value) =>
                       setCrewRows((rows) =>
                         rows.map((entry) =>
@@ -568,6 +598,7 @@ export function AssignmentEditorDrawer({
                   <Select
                     items={ROLE_LABELS}
                     value={row.role}
+                    disabled={isPublicationHistory}
                     onValueChange={(value) =>
                       setCrewRows((rows) =>
                         rows.map((entry) =>
@@ -593,7 +624,7 @@ export function AssignmentEditorDrawer({
                     size="icon"
                     aria-label="Remove crew member"
                     onClick={() => removeCrewRow(row.key)}
-                    disabled={isPublished}
+                    disabled={isPublicationHistory}
                   >
                     <Trash2 aria-hidden="true" />
                   </Button>
@@ -605,7 +636,7 @@ export function AssignmentEditorDrawer({
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Vehicles</h3>
-              <Button type="button" variant="outline" size="sm" onClick={addVehicleRow} disabled={isPublished}>
+              <Button type="button" variant="outline" size="sm" onClick={addVehicleRow} disabled={isPublicationHistory}>
                 <Plus aria-hidden="true" />
                 Add vehicle
               </Button>
@@ -634,6 +665,7 @@ export function AssignmentEditorDrawer({
                     <Select
                       items={vehicleLabels}
                       value={row.vehicleId}
+                      disabled={isPublicationHistory}
                       onValueChange={(value) => onVehicleChosen(row.key, value ?? "")}
                     >
                       <SelectTrigger aria-label="Vehicle" className="flex-1">
@@ -650,6 +682,7 @@ export function AssignmentEditorDrawer({
                     <Select
                       items={driverLabels}
                       value={row.driverEmployeeId}
+                      disabled={isPublicationHistory}
                       onValueChange={(value) =>
                         setVehicleRows((rows) =>
                           rows.map((entry) =>
@@ -681,7 +714,7 @@ export function AssignmentEditorDrawer({
                       size="icon"
                       aria-label="Remove vehicle"
                       onClick={() => removeVehicleRow(row.key)}
-                      disabled={isPublished}
+                      disabled={isPublicationHistory}
                     >
                       <Trash2 aria-hidden="true" />
                     </Button>
@@ -698,7 +731,7 @@ export function AssignmentEditorDrawer({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="Why is this being changed by hand?"
-              disabled={isPublished}
+              disabled={isPublicationHistory}
               className="mt-1.5"
             />
           </section>
@@ -752,7 +785,7 @@ export function AssignmentEditorDrawer({
                       size="sm"
                       title={help}
                       onClick={() => toggleLock(scope)}
-                      disabled={lockBusyScope !== null}
+                      disabled={lockBusyScope !== null || isPublicationHistory}
                     >
                       {isLockedHere ? (
                         <PinOff aria-hidden="true" />

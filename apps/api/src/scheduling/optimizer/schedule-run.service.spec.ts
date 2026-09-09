@@ -649,6 +649,9 @@ describe('solver replacement lifecycle fence', () => {
     const publishing = new PublishingService(
       publishingPrisma as unknown as PrismaService,
       { record: jest.fn() } as unknown as AuditService,
+      {
+        evaluate: jest.fn(async () => ({ isEligible: true, conflicts: [] })),
+      } as unknown as EligibilityService,
     );
     f.reasons.createMany.mockImplementation(async () => {
       atUnassignedWrite.resolve();
