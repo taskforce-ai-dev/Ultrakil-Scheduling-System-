@@ -4966,7 +4966,8 @@
               "OUTSIDE_SERVICE_HOURS",
               "WINDOW_TOO_SHORT",
               "VISIT_NOT_SCHEDULABLE",
-              "ASSIGNMENT_LOCKED"
+              "ASSIGNMENT_LOCKED",
+              "CREW_CANNOT_TRAVEL"
             ]
           },
           "message": {

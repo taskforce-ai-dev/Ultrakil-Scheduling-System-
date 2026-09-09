@@ -6,6 +6,7 @@ import {
   CarFront,
   Clock,
   ExternalLink,
+  Footprints,
   GraduationCap,
   HelpCircle,
   MapPinOff,
@@ -31,6 +32,7 @@ const GROUP_ICON: Record<ConflictGroup, LucideIcon> = {
   SERVICE_WINDOW_CONFLICT: Clock,
   EMPLOYEE_OVERLAP: UsersRound,
   VEHICLE_OVERLAP: Car,
+  CREW_CANNOT_TRAVEL: Footprints,
   OTHER: HelpCircle,
 };
 

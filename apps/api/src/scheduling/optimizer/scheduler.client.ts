@@ -34,6 +34,7 @@ export interface SolveRequest {
     permanent_site_ids: string[];
     skill_codes: string[];
     authorized_vehicle_ids: string[];
+    can_use_public_transport: boolean;
     unavailable_dates: string[];
   }[];
   vehicles: {

@@ -4,7 +4,7 @@ import { CONFLICT_GROUP_LABEL, CONFLICT_GROUPS, conflictGroup } from "@/lib/conf
 import type { ConflictCode } from "@/lib/api-client";
 
 /**
- * Locks in every one of the backend's 19 conflict codes against the 10
+ * Locks in every one of the backend's 20 conflict codes against the 11
  * named groups ULK-O05 asks for (plus "Other" for the 4 that don't fit).
  * A code the backend adds later and this file doesn't know about should
  * fail typecheck (CODE_TO_GROUP is a Record<ConflictCode, ...>), but this
@@ -27,6 +27,7 @@ const EXPECTED: Record<ConflictCode, string> = {
   EMPLOYEE_DOUBLE_BOOKED: "EMPLOYEE_OVERLAP",
   DUPLICATE_CREW_MEMBER: "EMPLOYEE_OVERLAP",
   VEHICLE_DOUBLE_BOOKED: "VEHICLE_OVERLAP",
+  CREW_CANNOT_TRAVEL: "CREW_CANNOT_TRAVEL",
   EMPLOYEE_INACTIVE: "OTHER",
   EMPLOYEE_UNAVAILABLE: "OTHER",
   VISIT_NOT_SCHEDULABLE: "OTHER",
@@ -39,10 +40,10 @@ describe("conflictGroup", () => {
   });
 
   it("covers every conflict code the backend defines", () => {
-    expect(Object.keys(EXPECTED)).toHaveLength(19);
+    expect(Object.keys(EXPECTED)).toHaveLength(20);
   });
 
-  it("lists all ten named groups plus Other, in a stable order", () => {
+  it("lists all eleven named groups plus Other, in a stable order", () => {
     expect(CONFLICT_GROUPS).toEqual([
       "MISSING_PMS",
       "INSUFFICIENT_CREW",
@@ -54,6 +55,7 @@ describe("conflictGroup", () => {
       "SERVICE_WINDOW_CONFLICT",
       "EMPLOYEE_OVERLAP",
       "VEHICLE_OVERLAP",
+      "CREW_CANNOT_TRAVEL",
       "OTHER",
     ]);
   });

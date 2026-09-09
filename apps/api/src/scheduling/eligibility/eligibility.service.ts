@@ -201,6 +201,7 @@ export class EligibilityService {
       authorizedVehicleIds: employee.vehicleAuthorizations
         .map((entry) => entry.vehicleId)
         .sort(),
+      canUsePublicTransport: employee.canUsePublicTransport,
       unavailableReason: employee.availability[0]?.kind ?? null,
       busy: employee.crewMemberships
         .map((entry) => ({

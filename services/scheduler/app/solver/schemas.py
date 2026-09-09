@@ -69,6 +69,10 @@ class EmployeeInput(BaseModel):
     permanent_site_ids: list[str] = Field(default_factory=list)
     skill_codes: list[str] = Field(default_factory=list)
     authorized_vehicle_ids: list[str] = Field(default_factory=list)
+    """Check-marked for public transport in the workforce matrix: this person can
+    reach a site without a company vehicle. Defaults false, so a solver given an
+    older payload keeps everyone in a vehicle rather than stranding them."""
+    can_use_public_transport: bool = False
     """Dates (YYYY-MM-DD) this person cannot work: leave, sickness, training."""
     unavailable_dates: list[str] = Field(default_factory=list)
 

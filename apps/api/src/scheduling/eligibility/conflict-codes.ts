@@ -37,6 +37,7 @@ export const CONFLICT_CODES = [
   ErrorCode.WINDOW_TOO_SHORT,
   ErrorCode.VISIT_NOT_SCHEDULABLE,
   ErrorCode.ASSIGNMENT_LOCKED,
+  ErrorCode.CREW_CANNOT_TRAVEL,
 ] as const;
 
 export type ConflictCode = (typeof CONFLICT_CODES)[number];

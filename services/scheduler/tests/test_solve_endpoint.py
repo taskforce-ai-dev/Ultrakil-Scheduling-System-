@@ -47,8 +47,17 @@ PAYLOAD = {
         }
     ],
     "employees": [
-        {"id": "sup-1", "branch_code": "COLOMBO", "is_pms_grade": True},
-        {"id": "tech-1", "branch_code": "COLOMBO"},
+        {
+            "id": "sup-1",
+            "branch_code": "COLOMBO",
+            "is_pms_grade": True,
+            "can_use_public_transport": True,
+        },
+        {
+            "id": "tech-1",
+            "branch_code": "COLOMBO",
+            "can_use_public_transport": True,
+        },
     ],
     "vehicles": [],
     "locks": [],

@@ -8,7 +8,7 @@ import type { ConflictCode } from "@/lib/api-client";
  * conflict is still shown in full regardless of which group it falls under.
  *
  * Four codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
- * ASSIGNMENT_LOCKED) don't fit any of the ten named groups, so they fall
+ * ASSIGNMENT_LOCKED) don't fit any of the eleven named groups, so they fall
  * under "Other" rather than being force-fit somewhere misleading.
  */
 export type ConflictGroup =
@@ -22,6 +22,7 @@ export type ConflictGroup =
   | "SERVICE_WINDOW_CONFLICT"
   | "EMPLOYEE_OVERLAP"
   | "VEHICLE_OVERLAP"
+  | "CREW_CANNOT_TRAVEL"
   | "OTHER";
 
 export const CONFLICT_GROUP_LABEL: Record<ConflictGroup, string> = {
@@ -35,6 +36,7 @@ export const CONFLICT_GROUP_LABEL: Record<ConflictGroup, string> = {
   SERVICE_WINDOW_CONFLICT: "Service-window conflict",
   EMPLOYEE_OVERLAP: "Employee overlap",
   VEHICLE_OVERLAP: "Vehicle overlap",
+  CREW_CANNOT_TRAVEL: "No way to get there",
   OTHER: "Other",
 };
 
@@ -54,6 +56,7 @@ const CODE_TO_GROUP: Record<ConflictCode, ConflictGroup> = {
   EMPLOYEE_DOUBLE_BOOKED: "EMPLOYEE_OVERLAP",
   DUPLICATE_CREW_MEMBER: "EMPLOYEE_OVERLAP",
   VEHICLE_DOUBLE_BOOKED: "VEHICLE_OVERLAP",
+  CREW_CANNOT_TRAVEL: "CREW_CANNOT_TRAVEL",
   EMPLOYEE_INACTIVE: "OTHER",
   EMPLOYEE_UNAVAILABLE: "OTHER",
   VISIT_NOT_SCHEDULABLE: "OTHER",
@@ -76,5 +79,6 @@ export const CONFLICT_GROUPS: ConflictGroup[] = [
   "SERVICE_WINDOW_CONFLICT",
   "EMPLOYEE_OVERLAP",
   "VEHICLE_OVERLAP",
+  "CREW_CANNOT_TRAVEL",
   "OTHER",
 ];
