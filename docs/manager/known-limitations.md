@@ -17,10 +17,31 @@ there is no UI for any of them today.
 
 ## Release-relevant findings from this UAT pass
 
-1. **[Fixed on current main, pending deployed-staging regression retest]
+1. **[New, live production defect] Assignment save fails on the deployed
+   API — Prisma interactive-transaction timeout.** Found during the
+   deployed real-data pass, 2026-09-09: `PUT /api/visits/{id}/assignment`
+   returns `500 INTERNAL_ERROR` on every attempt (reproduced 3/3,
+   09:20:48–09:21:43 UTC), each attempt slower than the last (5300ms →
+   5328ms → 8847ms), all over the transaction's 5000ms budget. Root cause
+   in the Vercel runtime logs:
+   ```
+   PrismaClientKnownRequestError: Transaction API error: Transaction already
+   closed: ... The timeout for this transaction was 5000 ms, however 8847 ms
+   passed since the start of the transaction.
+   ```
+   at `apps/api/src/scheduling/eligibility/assignments.service.js:93`,
+   inside the transaction opened at line 74 (`AssignmentsService.assign`).
+   **Blocks every O08/O09 scenario that saves a new or changed
+   assignment** — reopen/save, driver removal/revalidation included.
+   Reported to the API owner (Thivarrakesh) with this trace, ~09:22 UTC.
+   Full detail in `uat/ULK-O08-uat-results.md`, "Deployed real-data UAT
+   pass," scenario 1. **This is release-blocking** — O08 cannot be marked
+   complete while this stands.
+
+2. **[Fixed on current main, partially confirmed on deployed real data]
    Re-opening an already-assigned visit could show false "double-booked"
    errors against itself.** This is a **historical local-UAT finding**, not
-   a current defect: during this local UAT pass, re-opening a just-saved
+   a current defect: during the local UAT pass, re-opening a just-saved
    visit's "Edit crew" drawer — with no changes made — showed
    `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` errors comparing the
    visit's own saved assignment against itself, and disabled Save. Root
@@ -32,31 +53,28 @@ there is no UI for any of them today.
    `eligibility.service.ts`), tracing back to the ULK-C07 baseline. See
    `uat/ULK-O08-uat-results.md` for the original repro and the fix
    verification.
-   **Still open, and release-relevant:** this fix has not yet been re-run
-   against a deployed staging environment (none exists yet — see #2 below),
-   and the "clean save" screenshots this pass produced were all captured
-   *before* the fix, so they still show the old behavior (see #9 below).
-   **Before pilot sign-off:** re-run this scenario on deployed staging and
-   capture a clean "re-open a saved visit, no false conflict" screenshot to
-   replace the pre-fix ones.
+   **Deployed real-data pass, 2026-09-09:** re-opening an already-published
+   visit showed no false self-overlap error — but the Validation panel
+   never actually ran (blocked earlier by the visit's publish-lock), so
+   this isn't a clean confirmation. A full save-then-reopen cycle on a
+   fresh manual assignment was attempted to get a clean test, but couldn't
+   complete because of defect #1 above (Save itself fails). **Before pilot
+   sign-off:** once #1 is fixed, re-run reopen/save on a freshly-saved
+   (non-published) assignment and capture a clean "no false conflict"
+   screenshot (see #9 below for why the old screenshots can't be reused).
 
-2. **No staging environment exists yet.** All UAT evidence in this pass is
-   from a local development stack seeded with fabricated demo data — see
-   below. The O08 release gate "screenshots match the deployed staging
-   interface" cannot be satisfied until a staging host exists with the
-   real data imported (this is ULK-O08's stated dependency on ULK-C08).
-
-3. **This pass used fabricated demo data, not the real technician matrix
-   or master schedule.** Per `data/README.md`, the real workbooks
+3. **Local pass used fabricated demo data; a deployed real-data pass has
+   since covered part of this.** Per `data/README.md`, the real workbooks
    (`technician-matrix.xlsx`, `master-schedule-2026.xlsx`) contain real
-   personnel/customer data and are never committed to the repository, and
-   weren't available in this environment. `pnpm db:seed:demo`'s 14
-   fabricated employees and 3 fabricated customers were used instead. Every
-   rule in this document has been proven to work mechanically; a second
-   pass against the real imported data (on staging, once available) is
-   still required before final sign-off — including the specific
-   `DAC-2485` vehicle named in ULK-O09, which doesn't exist in the demo
-   set.
+   personnel/customer data and are never committed to the repository, so
+   the local pass used `pnpm db:seed:demo`'s 14 fabricated employees and 3
+   fabricated customers. Every rule in this document has been proven to
+   work mechanically against demo data. **Update, 2026-09-09:** a deployed
+   pass against `https://ultrakil-manager-web.vercel.app` with the actual
+   imported workbook data has since confirmed DAC-2485 (see #12 below) and
+   unauthorized-driver rejection directly; reopen/save, inactive records,
+   and the Kandy-no-PMS-supervisor scenario remain unconfirmed against real
+   data (see #1 and #13).
 
 4. **Demo-seeded vehicles ship with no branch assigned**
    (`pnpm db:seed:demo` leaves every vehicle's branch null), so the
@@ -96,19 +114,21 @@ there is no UI for any of them today.
    other blocking condition is shown, rather than a silent disabled state.
 
 9. **Three "clean save" screenshots in the original draft were actually
-   evidence of the now-fixed defect #1, captured before the fix.**
+   evidence of the now-fixed defect #2, captured before the fix.**
    `valid-assignment-saved-toast.png`, `o09-scenarioA-driver-chaminda-saved.png`,
    and `o09-scenarioB-driver-kamala-saved.png` were cited as clean-save
    evidence in `uat/ULK-O08-uat-results.md`, `manager-guide.md`, and
    `demonstration-script.md`. On review, all three show the Validation
    panel flagging `EMPLOYEE_DOUBLE_BOOKED` / a self-comparison error
    against the assignment just saved — the pre-fix self-overlap behavior
-   described in #1, taken against the local-UAT baseline before the
+   described in #2, taken against the local-UAT baseline before the
    `excludeAssignmentId` fix landed. Reclassified as historical defect
    evidence throughout this branch, not current-behavior evidence. Genuine
-   clean-save screenshots (no errors visible under the toast) still need
-   to be captured on deployed staging, against the fixed baseline — do not
-   reuse the three above for that purpose.
+   clean-save screenshots (no errors visible under the toast) still need to
+   be captured on the deployed app, against the fixed baseline — an attempt
+   was made during the 2026-09-09 deployed pass but couldn't complete
+   because of defect #1 (Save itself fails). Do not reuse the three above
+   for that purpose.
 
 10. **Add Agreement form displays a raw internal UUID instead of the
     customer/site name once selected**
@@ -127,6 +147,34 @@ there is no UI for any of them today.
     correction pass reports **166 passed (166)**, 17 test files, 0 failed.
     Full console output is saved as auditable evidence at
     `uat/test-run-evidence-manager-web.txt`.
+
+12. **[New, confirmed on deployed real data] DAC-2485 has exactly three
+    authorized drivers, as O09 names it.** Checked directly against the
+    real imported vehicle on `https://ultrakil-manager-web.vercel.app`,
+    2026-09-09: P Selvaraj, S Tharilingam, T M Supun Tharaka Wijeweera
+    (PMS-grade), each an equal "Authorized to drive" row with the correct
+    ownership disclaimer. Matches expected exactly — closes the local
+    pass's item 4 gap (DAC-2485 didn't exist in demo data).
+
+13. **[New] The real imported dataset currently has no inactive
+    customers/sites and no unassigned Kandy visits**, so two O08/O09
+    scenarios can't be demonstrated against real data right now: inactive
+    records producing no future jobs, and Kandy remaining unassigned when
+    no PMS-qualified supervisor is available. Not a defect — the Customers
+    list (filtered Inactive) reports "every customer on record is
+    currently active," and Unassigned Visits (filtered Kandy) reports
+    "every visit currently has a valid crew and vehicle assignment." A
+    positive side-confirmation: the Unassigned Visits conflict-type filter
+    does list `Missing PMS supervisor` as a first-class category, so the
+    mechanism exists — there's just no live instance to screenshot today.
+
+14. **[New, minor] DAC-2485's vehicle record shows "Unassigned branch,"
+    while all three of its authorized drivers are tagged "Colombo."**
+    Observed directly on the deployed vehicle detail page. Not confirmed
+    as a defect — could be a genuine gap in the vehicle's imported branch
+    field, or intentional (a vehicle not yet assigned to a branch can still
+    have branch-tagged authorized drivers). Worth a one-line confirmation
+    from the API/import owner before sign-off.
 
 ## Not a defect, but worth calling out to managers
 

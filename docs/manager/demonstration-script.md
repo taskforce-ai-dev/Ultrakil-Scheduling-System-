@@ -4,12 +4,14 @@ A short, self-contained walkthrough a manager can run without a developer
 present: one visit scheduled cleanly, and one that the system correctly
 refuses to schedule and explains why. Total time: under 5 minutes.
 
-Run this against the pilot's real data once staging is available. The
-steps below are a representative local example — the same flow and
-screens, run against fabricated demo data on a local stack, not the
-deployed staging build. Deployed-staging parity and evidence against
-real customer/technician data are still pending (see
-`known-limitations.md`).
+The steps below are a representative local example — the same flow and
+screens, run against fabricated demo data on a local stack. A deployed
+pass against the pilot's real data has since started at
+`https://ultrakil-manager-web.vercel.app` (see `known-limitations.md` and
+`uat/ULK-O08-uat-results.md`); Part 1's actual "Save" step is currently
+blocked there by a live defect (assignment save transaction timeout, see
+below) rather than untested — real, passing evidence for this exact flow
+is still pending that fix.
 
 ---
 
@@ -37,7 +39,7 @@ see it save.
 Board row now shows the supervisor, full crew, and vehicle instead of the
 red "No PMS supervisor" warning.
 
-*(Evidence from this exact flow, run during UAT:
+*(Evidence from this exact flow, run during the local UAT pass:
 `uat/screenshots/vehicle-authorized-driver-picker.png`,
 `uat/screenshots/dispatch-board-valid-assignment-persisted.png`.
 **Correction:** an earlier version of this list also cited
@@ -46,9 +48,14 @@ was actually captured against a self-overlap defect present in the local
 UAT baseline at the time — `EMPLOYEE_DOUBLE_BOOKED` errors comparing the
 assignment against itself — which is already fixed on current `main` (see
 "Known limitations" for the fix). It has been removed from this list as
-historical, pre-fix evidence rather than clean-save evidence. A clean
-"Assignment saved" screenshot with no errors underneath, captured on
-deployed staging against the fixed baseline, is still pending.)*
+historical, pre-fix evidence rather than clean-save evidence.
+**Deployed-pass update, 2026-09-09:** attempted this exact flow against
+real data at `https://ultrakil-manager-web.vercel.app` — Validation
+correctly reached "This crew is eligible to take the visit," but clicking
+**Save assignment** failed with a server error, reproduced 3/3 (Prisma
+transaction timeout, see `known-limitations.md` item 1). A clean
+"Assignment saved" screenshot against the deployed app is blocked on that
+fix, not merely un-attempted.)*
 
 ---
 

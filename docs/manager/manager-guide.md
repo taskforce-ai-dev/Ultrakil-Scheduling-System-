@@ -6,12 +6,15 @@ conflicts the system flags, overriding them by hand when needed, and
 publishing a schedule. It assumes you can already sign in — if not, ask
 your administrator for an account.
 
-Screenshots in this guide are from a local test environment with sample
-data, not the live UltraKIL fleet and not the deployed staging build —
-they are representative local examples of each screen, not a guarantee
-of pixel-for-pixel parity with staging. Deployed-staging screenshots and
-a pass against real customer/technician data are still pending (see
-`known-limitations.md`) and will replace these once available.
+Most screenshots in this guide are still from a local test environment
+with fabricated sample data, not the live UltraKIL fleet — they are
+representative local examples of each screen, not a guarantee of
+pixel-for-pixel parity with the deployed app. A deployed pass against real
+customer/technician data has since started at
+`https://ultrakil-manager-web.vercel.app` (see `known-limitations.md` and
+`uat/ULK-O08-uat-results.md`, "Deployed real-data UAT pass") and confirmed
+several screens directly, but real screenshot files from that pass are not
+yet exported and swapped into this guide — that remains a follow-up.
 
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS

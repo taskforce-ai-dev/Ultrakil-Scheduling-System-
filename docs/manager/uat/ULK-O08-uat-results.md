@@ -1,8 +1,136 @@
 # ULK-O08 — UAT results (working draft)
 
-Status: locally executable scenarios complete. Held for the staging URL and
-final UAT gate per Whyshni's instruction (2026-09-07) — **not marked
-complete, PR #36 not merged into the release candidate.**
+Status: local demo-data pass complete (below); deployed real-data pass
+started 2026-09-09 against `https://ultrakil-manager-web.vercel.app` — see
+"Deployed real-data UAT pass" section. **Not marked complete** — one
+production defect found during the deployed pass (assignment save fails,
+see below) is a live blocker reported to the API owner; O08 stays In
+Progress until it's resolved and the affected scenarios are re-run. PR #36
+(branding) has since merged into `main` and is reflected in the deployed
+UI's screenshots below.
+
+## Deployed real-data UAT pass — 2026-09-09
+
+**Deployed URL:** `https://ultrakil-manager-web.vercel.app`
+**Tested release:** API commit `5645913b544c8221e777b9f4198d7c0dc376ad6f`
+(deployment `dpl_DQpV9Hf8sEebV5QEXLuNgJAVuCht`, PR #48) — one commit ahead
+of `b191187` (PR #47), the release cited when this pass was requested; both
+are on `main`, `5645913` was simply the current production deployment at
+test time.
+**Test window:** approximately 2026-09-09 08:59–09:47 UTC.
+**Login:** the seed admin account (`admin@taskforceai.tech`) works against
+the deployed API — confirmed by successfully signing in and pulling real
+data through it.
+**Real data confirmed:** the Dispatch Board shows real customers —
+Ceylon Chocolate - Bluemandal, Ceylon Electricity Board, MCA, SINTESI
+(Incube)/Quantum clothing — not the fabricated demo set used in the local
+pass below. `DAC-2485` (named explicitly in O09, absent from demo data) is
+present in this data.
+
+**Screenshots:** this section's evidence is described from screenshots
+reviewed live during the session (browser, not this repo's checkout) —
+the actual image files have not yet been exported and committed here.
+Retaking and committing real PNG evidence for this section is a genuine
+remaining gap, not done in this pass (see "Still to do").
+
+### 1. Reopen/save an assigned visit, no false self-conflict — blocked
+
+**Result: inconclusive — blocked by a new, unrelated production defect,
+not by the self-overlap defect this scenario targets.**
+
+Opened an already-**published**, scheduler-generated visit ("Ceylon
+Chocolate - Bluemandal - April 2026"): the app correctly refused manual
+re-crewing with *"This visit is on a published schedule and cannot be
+re-crewed by hand. Run the scheduler again and publish the new run to
+replace it — the published one is kept as a record."* The Validation panel
+never ran an eligibility check (blocked earlier, by the publish-lock), so
+**no false `EMPLOYEE_DOUBLE_BOOKED`/`VEHICLE_DOUBLE_BOOKED` error appeared**
+— nothing here contradicts the C07 `excludeAssignmentId` fix — but this
+isn't a clean confirmation of it either, since the Validation panel was
+never exercised.
+
+To get a clean test, built a fresh manual assignment instead (visit:
+"SINTESI (Incube)/Quantum clothing," 2026-09-09; crew: K Kanagaraja (PMS),
+Kamal Fernando (PMS), Saman Priyantha). Validation correctly progressed
+through `CREW_TOO_SMALL` → *"This crew is eligible to take the visit"* as
+crew was added. Clicking **Save assignment** then failed:
+
+> Something went wrong on the server. The team has been notified — please
+> retry, and report the timestamp if it persists.
+
+**Reproduced 3/3** (09:20:48, 09:21:04, 09:21:43 UTC), same visit, no
+change to steps. Root cause, from the deployed API's Vercel runtime logs:
+
+```
+PrismaClientKnownRequestError: Transaction API error: Transaction already closed:
+A query cannot be executed on an expired transaction. The timeout for this
+transaction was 5000 ms, however 8847 ms passed since the start of the transaction.
+```
+at `apps/api/src/scheduling/eligibility/assignments.service.js:93`, inside
+the interactive transaction opened at line 74 (`AssignmentsService.assign`).
+Duration got worse across attempts: 5300ms → 5328ms → 8847ms, all over the
+5000ms budget — not a one-off flake.
+
+**Impact:** blocks this scenario, and any other O08/O09 scenario that
+requires saving a new or changed assignment (driver removal/revalidation
+included). Reported to the API owner (Thivarrakesh) with this exact trace,
+~09:22 UTC 2026-09-09. **Does not affect** scenarios that only read
+existing data.
+
+### 2. DAC-2485 and its three authorized drivers — pass
+
+`DAC-2485` (Bolero Truck, 2 seats) detail page lists **exactly three**
+authorized drivers, each an equal row reading only "Authorized to drive,"
+with the correct disclaimer ("not an ownership or primary-driver
+assignment"): P Selvaraj, S Tharilingam, T M Supun Tharaka Wijeweera (the
+last tagged PMS-grade). Matches expected exactly.
+
+**Side observation, not a defect:** the vehicle itself shows
+**"Unassigned branch,"** while all three drivers are tagged "Colombo" —
+worth a mention in known-limitations, not necessarily a bug.
+
+### 3. Inactive records producing no future jobs — not testable right now
+
+**Result: cannot be exercised against current real data.** The Customers
+list, filtered to Status = Inactive, returns *"No inactive customers —
+every customer on record is currently active."* No inactive
+customer/site exists in the real imported dataset at all right now, so
+there is nothing to generate zero future jobs *from*. Not a defect — a
+data-availability gap in this pass.
+
+### 4. Kandy remaining unassigned when no PMS-qualified supervisor is available — not testable right now
+
+**Result: cannot be exercised against current real data.** Unassigned
+Visits, filtered to Branch = Kandy, returns *"Nothing unassigned — every
+visit currently has a valid crew and vehicle assignment."* Every Kandy
+visit is currently staffed, so there's no live example of this scenario
+today. Not a defect.
+
+**Side observation:** the Conflict-type filter on this screen confirms
+`Missing PMS supervisor` exists as a first-class category alongside
+`Insufficient crew`, `Missing skill`, `No authorized driver`, `Unavailable
+vehicle`, `Branch restriction`, `Permanent-staff restriction`,
+`Service-window conflict`, `Employee overlap`, `Vehicle overlap`, `Other`
+— useful confirmation even without a live example to screenshot.
+
+### 5. O09 regression: unauthorized-driver rejection — pass
+
+On the same published Ceylon Chocolate visit (5 vehicles, all with drivers
+already assigned), opened the driver dropdown for each vehicle in turn.
+Every dropdown offered **only the crew members actually authorized for
+that specific vehicle** — e.g. one vehicle's dropdown offered exactly 2
+names (P Selvaraj, T M Supun Tharaka Wijeweera), not the full crew or
+employee list. Matches expected.
+
+**Side observation:** these dropdowns were interactive despite the visit
+being publish-locked for saving — worth a mention, not necessarily a bug.
+
+### 6. O09 regression: driver removal/revalidation, preserved history, inactive-record exclusion from pickers — not run
+
+Driver removal/revalidation requires a Save to observe the revalidation
+step, blocked by defect #1 above. Preserved-history and inactive-picker
+exclusion both require an inactive record to exist, blocked by the
+data gap in #3 above. None attempted this pass.
 
 ## Environment — exact setup commands
 
@@ -419,8 +547,9 @@ confirmation via the Dispatch Board's read-only view (unlike the
 vehicle-authorization scenario above, no such reload screenshot was taken
 for either visit here). Reclassified as historical defect evidence.
 **Re-run required:** confirm both saves independently via a Dispatch Board
-reload (not a drawer reopen) once staging is available, and capture that
-as the clean evidence for this scenario.
+reload (not a drawer reopen) on the deployed app, and capture that as the
+clean evidence for this scenario — blocked for now by the deployed
+assignment-save defect (see "Deployed real-data UAT pass," scenario 1).
 
 Screenshots (defect evidence, not clean-save evidence — see correction
 above): `screenshots/o09-scenarioA-driver-chaminda-saved.png`,
@@ -600,7 +729,7 @@ calls this out explicitly as a recovery step (already added).
 
 ## Historical local-UAT findings (fixed on current main)
 
-### 1. [Fixed on current main — pending deployed-staging regression retest] Re-opening an already-assigned visit showed false "double-booked" errors against itself
+### 1. [Fixed on current main, partially confirmed on deployed real data] Re-opening an already-assigned visit showed false "double-booked" errors against itself
 
 **Status at time of this UAT pass:** open defect, found locally.
 **Status now:** fixed on current `main`. This section is kept as the
@@ -655,15 +784,19 @@ into `EligibilityService`
 (`apps/api/src/scheduling/eligibility/eligibility.service.ts`), which
 excludes that assignment from the employee/vehicle overlap queries. Traced
 back to the ULK-C07 baseline — confirmed by reading the current source, not
-by re-running the UI flow (no staging environment exists yet to run it
-against — see "Known limitations" #2).
+by re-running the UI flow. A deployed real-data attempt was made
+2026-09-09 (see "Deployed real-data UAT pass," scenario 1), but it hit the
+visit's publish-lock before the Validation panel ever ran, so it isn't a
+clean confirmation either.
 
 **Suggested severity (historical, at time found):** high — blocked a
 routine manager workflow. **Current status:** not an open defect;
 downgraded from the release-blocking list. **Still required before pilot
-sign-off:** re-run this exact scenario on deployed staging once available,
-and capture a clean "re-open a saved visit, no false conflict" screenshot —
-the fix is verified by code, not yet by a UI regression run.
+sign-off:** once the deployed assignment-save defect (item 1 in
+`known-limitations.md`) is fixed, re-run this exact scenario on a freshly
+saved (non-published) assignment and capture a clean "re-open a saved
+visit, no false conflict" screenshot — the fix is verified by code, not
+yet by a UI regression run.
 
 Screenshot (historical, pre-fix): `screenshots/permanent-station-validation-and-reopen-bug.png`
 (shows the false overlap errors alongside the correct
@@ -681,7 +814,9 @@ same self-comparison `EMPLOYEE_DOUBLE_BOOKED` pattern described above,
 against the pre-fix local baseline. They have been reclassified as
 historical defect evidence for this item throughout this document, the
 manager guide, and the demonstration script; clean-save evidence against
-the fixed baseline still needs to be captured on deployed staging.
+the fixed baseline still needs to be captured on the deployed app, once
+the assignment-save defect (see "Deployed real-data UAT pass," scenario 1)
+is fixed.
 
 ### 2. Add Agreement form shows the raw customer/site UUID instead of the name
 
@@ -712,51 +847,53 @@ then this screenshot is retaken.
 
 ## Known limitations of this UAT pass
 
-1. **Not the real employee matrix or master schedule.** Per
-   `data/README.md`, `technician-matrix.xlsx` and `master-schedule-2026.xlsx`
-   are never committed (real personnel/customer data) and weren't available
-   in this sandbox. This pass used `pnpm db:seed:demo`'s fabricated 14-person
-   workforce and 3 fabricated customers. Every rule above is proven to work
-   *mechanically*; O08 also requires the same walk-through against the real
-   imported data on staging. **Per Whyshni's update:** C07 is reconciled,
-   local typechecks/lint/unit tests/production builds are green, and the
-   real workbook dry-runs pass (including DAC-2485 normalization and 30 red
-   inactive records) — staging package/runbook is ready locally, pending a
-   staging host and GitHub PR/CI. This document will be re-run against that
-   data once the staging URL is available.
-2. **Demo vehicles need a branch assigned by hand.** See Environment section
-   above for the exact fix applied locally (not a code or migration change).
-   Worth a demo-seed follow-up (owner: API) so a fresh demo environment can
-   exercise vehicle assignment out of the box.
-3. **No inactive customer/site existed in demo data**, so one site and one
-   customer were deactivated directly in the local database (see
-   Environment section) to exercise the O09 inactive-record scenarios.
-   Also revealed: **manager-web has no deactivate/reactivate control in the
-   UI itself** — `isActive` is read-only in this phase, set only by the
-   master-schedule import. If a manager is expected to deactivate a
-   customer/site themselves during the pilot (rather than it always coming
-   from a re-import), that's a gap worth confirming with the Project Lead
-   before sign-off.
+1. **Not the real employee matrix or master schedule (local pass only).**
+   Per `data/README.md`, `technician-matrix.xlsx` and
+   `master-schedule-2026.xlsx` are never committed and weren't available in
+   this sandbox, so this local pass used `pnpm db:seed:demo`'s fabricated
+   14-person workforce and 3 fabricated customers. Every rule above is
+   proven to work *mechanically* against demo data. **Superseded:** the
+   deployed real-data pass (see top of this document) has since re-run
+   several of these scenarios against the actual imported workbook data.
+2. **Demo vehicles need a branch assigned by hand (local pass only).** See
+   Environment section above for the exact fix applied locally (not a code
+   or migration change). Worth a demo-seed follow-up (owner: API) so a
+   fresh demo environment can exercise vehicle assignment out of the box.
+3. **No inactive customer/site existed in demo data (local pass)**, so one
+   site and one customer were deactivated directly in the local database
+   (see Environment section) to exercise the O09 inactive-record
+   scenarios. Also revealed: **manager-web has no deactivate/reactivate
+   control in the UI itself** — `isActive` is read-only in this phase, set
+   only by the master-schedule import. If a manager is expected to
+   deactivate a customer/site themselves during the pilot (rather than it
+   always coming from a re-import), that's a gap worth confirming with the
+   Project Lead before sign-off. **Note:** the real imported dataset has
+   the same gap right now — see "Deployed real-data UAT pass," scenario 3.
 4. **`DAC-2485` (the real vehicle named explicitly in O09) doesn't exist in
    demo data** — sub-scenario 1 used a demo vehicle with an equivalent
-   shape (3 checked drivers) instead. Per Whyshni's update, the real
-   workbook dry-run already covers DAC-2485 normalization on her side;
-   this doc's own screenshot-based check against it is still pending the
-   staging URL.
-5. **Release gate "screenshots match the deployed staging interface"
-   cannot be satisfied yet** — there is no staging deployment reachable
-   from this UAT pass. All screenshots in this document are from local
-   dev. Waiting on the staging URL per Whyshni's message.
+   shape (3 checked drivers) instead. **Resolved:** the deployed real-data
+   pass confirms DAC-2485 directly, with its actual three authorized
+   drivers — see "Deployed real-data UAT pass," scenario 2.
+5. **Deployed assignment save fails — new production defect, not a demo
+   data gap.** `PUT /api/visits/{id}/assignment` on the deployed API 500s
+   on every attempt with a Prisma interactive-transaction timeout
+   (5000ms budget, 5300–8847ms actual). Blocks the reopen/save and
+   driver-removal/revalidation scenarios; reported to the API owner. Full
+   detail in "Deployed real-data UAT pass," scenario 1.
 
 ---
 
-## Still to do (blocked on staging)
+## Still to do
 
-- Re-run every scenario above against the real imported data once the
-  staging URL is available, including the specific DAC-2485 check.
-- Re-take every screenshot against the deployed staging interface (release
-  gate requirement).
+- Get the assignment-save transaction-timeout defect fixed and confirm on
+  a re-run (reopen/save, driver removal/revalidation).
+- Re-run inactive-records and Kandy-no-PMS-supervisor scenarios once the
+  real dataset has matching records to exercise them (neither exists in
+  the current import).
+- Export and commit real PNG screenshots from the deployed UI for the
+  "Deployed real-data UAT pass" section — this pass' evidence is
+  described from screenshots reviewed live, not yet committed as files.
 - Only then: mark ULK-O08 complete and request the final UAT gate sign-off.
 
-**PR #36 (branding/redesign) stays separate and unmerged into the release
-candidate per instruction — not part of this UAT scope.**
+**PR #36 (branding/redesign) has merged into `main`** and its palette/logo
+are what the deployed screenshots above actually show.
