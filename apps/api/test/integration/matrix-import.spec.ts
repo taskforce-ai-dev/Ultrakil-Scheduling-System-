@@ -12,7 +12,15 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BranchCode, DeploymentType, PrismaClient } from '@prisma/client';
+import {
+  AgreementStatus,
+  AssignmentStatus,
+  BranchCode,
+  DeploymentType,
+  FrequencyUnit,
+  PrismaClient,
+  VisitStatus,
+} from '@prisma/client';
 import ExcelJS from 'exceljs';
 import { DEFAULT_MAPPING } from '../../src/workforce/matrix-import/mapping';
 import { importMatrix } from '../../src/workforce/matrix-import/importer';
@@ -189,6 +197,141 @@ describe('importing the workforce matrix', () => {
       .toEqual(employees.map(({ id }) => ({ id })));
     expect(await prisma.vehicleAuthorization.findMany({ orderBy: { employee: { fullName: 'asc' } } }))
       .toEqual(authorizations);
+  });
+
+  it('consolidates a normalized legacy vehicle without losing assignment or audit history', async () => {
+    const fixturePath = join(workDir, 'normalized-legacy-dac.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Bolero Truck DAC- 2485'],
+      ['Colombo Branch', 1, 'Fixture Aspen', '', 'SPMS', '✓'],
+      ['', 2, 'Fixture Birch', '', 'Junior PMT', '✓'],
+      ['', 3, 'Fixture Cedar', '', 'Junior PMT', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+    await importMatrix(prisma, parsed);
+
+    const canonical = await prisma.vehicle.findUniqueOrThrow({ where: { code: 'DAC-2485' } });
+    const legacy = await prisma.vehicle.create({ data: { code: 'DAC 2485', label: 'Legacy DAC' } });
+    const branch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
+    const driver = await prisma.employee.findFirstOrThrow({ where: { fullName: 'Fixture Aspen' } });
+    const canonicalAuthorization = await prisma.vehicleAuthorization.findUniqueOrThrow({
+      where: { employeeId_vehicleId: { employeeId: driver.id, vehicleId: canonical.id } },
+    });
+    const legacyAuthorization = await prisma.vehicleAuthorization.create({
+      data: { employeeId: driver.id, vehicleId: legacy.id },
+    });
+    const customer = await prisma.customer.create({
+      data: {
+        name: 'Matrix normalization customer',
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+      },
+    });
+    const site = await prisma.serviceSite.create({
+      data: {
+        customerId: customer.id,
+        name: 'Matrix normalization site',
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+      },
+    });
+    const jobType = await prisma.jobType.create({
+      data: { code: 'MATRIX_NORMALIZATION', name: 'Matrix normalization' },
+    });
+    const agreement = await prisma.serviceAgreement.create({
+      data: {
+        customerId: customer.id,
+        serviceSiteId: site.id,
+        jobTypeId: jobType.id,
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.MONTH,
+        crewSize: 1,
+        durationMinutes: 60,
+        startDate: new Date('2026-01-01T00:00:00.000Z'),
+        status: AgreementStatus.ARCHIVED,
+      },
+    });
+    const visit = await prisma.generatedVisit.create({
+      data: {
+        serviceAgreementId: agreement.id,
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+        visitDate: new Date('2026-01-02T00:00:00.000Z'),
+        windowStartMinute: 480,
+        windowEndMinute: 1020,
+        durationMinutes: 60,
+        requiredCrewSize: 1,
+        status: VisitStatus.COMPLETED,
+      },
+    });
+    const assignment = await prisma.assignment.create({
+      data: {
+        generatedVisitId: visit.id,
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+        status: AssignmentStatus.COMPLETED,
+        plannedStart: new Date('2026-01-02T08:00:00.000Z'),
+        plannedEnd: new Date('2026-01-02T09:00:00.000Z'),
+      },
+    });
+    const historicalLink = await prisma.assignmentVehicle.create({
+      data: { assignmentId: assignment.id, vehicleId: legacy.id, driverEmployeeId: driver.id },
+    });
+    const vehicleAudit = await prisma.auditEvent.create({
+      data: {
+        entityType: 'Vehicle', entityId: legacy.id, action: 'vehicle.updated',
+        correlationId: 'matrix-normalization-test',
+      },
+    });
+    const authorizationAudit = await prisma.auditEvent.create({
+      data: {
+        entityType: 'VehicleAuthorization', entityId: legacyAuthorization.id,
+        action: 'vehicle_authorization.created', correlationId: 'matrix-normalization-test',
+      },
+    });
+
+    try {
+      const summary = await importMatrix(prisma, parsed);
+
+      expect(summary.authorizationsRemoved).toBe(1);
+      expect(await prisma.vehicle.findMany({
+        where: { code: { in: ['DAC-2485', 'DAC 2485'] } },
+        select: { id: true, code: true },
+      })).toEqual([{ id: canonical.id, code: 'DAC-2485' }]);
+      expect(await prisma.assignmentVehicle.findUniqueOrThrow({
+        where: { id: historicalLink.id },
+      })).toEqual({
+        ...historicalLink,
+        vehicleId: canonical.id,
+        updatedAt: expect.any(Date),
+      });
+      expect(await prisma.vehicleAuthorization.count({
+        where: { employeeId: driver.id, vehicleId: canonical.id },
+      })).toBe(1);
+      expect(await prisma.auditEvent.findUniqueOrThrow({ where: { id: vehicleAudit.id } }))
+        .toEqual({ ...vehicleAudit, entityId: canonical.id });
+      expect(await prisma.auditEvent.findUniqueOrThrow({ where: { id: authorizationAudit.id } }))
+        .toEqual({ ...authorizationAudit, entityId: canonicalAuthorization.id });
+
+      await importMatrix(prisma, parsed);
+      expect(await prisma.vehicle.count({
+        where: { code: { in: ['DAC-2485', 'DAC 2485'] } },
+      })).toBe(1);
+      expect(await prisma.assignmentVehicle.count({ where: { id: historicalLink.id } })).toBe(1);
+    } finally {
+      await prisma.auditEvent.deleteMany({ where: { correlationId: 'matrix-normalization-test' } });
+      await prisma.serviceAgreement.deleteMany({ where: { id: agreement.id } });
+      await prisma.serviceSite.deleteMany({ where: { id: site.id } });
+      await prisma.customer.deleteMany({ where: { id: customer.id } });
+      await prisma.jobType.deleteMany({ where: { id: jobType.id } });
+    }
   });
 
   it('reads merged section labels and assigns the right branch', async () => {
