@@ -91,7 +91,12 @@
   --secondary: #eaf6e4;
   --secondary-foreground: var(--brand-deep-green);
   --muted: #f1f5ef;
-  --muted-foreground: #6b7a6e;
+  /* #6b7a6e (the first retint) measured 4.38:1 against --background — under
+     WCAG AA's 4.5:1 for normal text, and this is the shared page-subtitle
+     color used under every h1 across the app, so it failed the axe
+     color-contrast rule on every route. Darkened until it clears AA with
+     margin: 5.21:1 against --background, 5.39:1 against --card. */
+  --muted-foreground: #5f6e62;
   --accent: #e3f2dc;
   --accent-foreground: var(--brand-deep-green);
   --destructive: #c0332a;
