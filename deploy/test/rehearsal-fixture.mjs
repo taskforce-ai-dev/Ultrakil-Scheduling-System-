@@ -8,6 +8,7 @@ const ExcelJS = require('exceljs');
 const day = '2026-09-07';
 const names = ['T M Supun Tharaka Wijeweera', 'S Tharilingam', 'P Selvaraj', 'R O Elders',
   'Hasitha Bandara', 'Raj Kumar', 'Ruwan Sampath', 'Ajith Alwis'];
+const publicTransport = new Set(['T M Supun Tharaka Wijeweera', 'Ajith Alwis']);
 const codes = ['DAG-3284', 'ABE-7244', 'PJ-6796', 'DAI-0191', 'DAC-2485'];
 const checked = [[0, 1, 2], [3, 4, 5, 6], [7, 0], [1, 2], [0, 1, 2]];
 
@@ -19,9 +20,9 @@ async function workbooks(directory) {
   const matrix = new ExcelJS.Workbook();
   matrix.addWorksheet('Matrix').addRows([
     ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation', 'GPC',
-      ...codes.map(code => `Van( 04 People) ${code === 'DAC-2485' ? 'DAC- 2485' : code}`)],
+      'Public Vehicles', ...codes.map(code => `Van( 04 People) ${code === 'DAC-2485' ? 'DAC- 2485' : code}`)],
     ...names.map((name, index) => [index === 0 ? 'Colombo Branch' : '', String(index + 1), name, '', 'SPMS', '✓',
-      ...checked.map(drivers => drivers.includes(index) ? '✓' : '')]),
+      publicTransport.has(name) ? '✓' : '', ...checked.map(drivers => drivers.includes(index) ? '✓' : '')]),
   ]);
   const master = new ExcelJS.Workbook();
   const sheet = master.addWorksheet('Main');

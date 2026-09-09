@@ -96,11 +96,17 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
     # between a manager seeing "nobody who can serve this is checked for any
     # van" and seeing an unexplained blank.
     usable = [v for v in request.vehicles if _vehicle_serves_branch(v, visit)]
-    drivable = [
+    authorized = [
         v for v in usable if any(v.id in e.authorized_vehicle_ids for e in eligible)
     ]
-    if usable and not drivable:
+    if usable and not authorized:
         reasons.append("NO_AUTHORIZED_DRIVER")
+
+    drivable = [
+        v
+        for v in authorized
+        if v.seat_capacity is None or v.seat_capacity >= visit.required_crew_size
+    ]
 
     # With no vehicle this crew could take, everybody going has to travel by
     # public transport. Reported only when that is genuinely the binding
