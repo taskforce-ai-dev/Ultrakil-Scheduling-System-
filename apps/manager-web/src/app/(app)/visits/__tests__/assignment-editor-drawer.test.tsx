@@ -56,6 +56,14 @@ const technician = buildEmployee({
   branchCode: "COLOMBO",
 });
 
+const immutableAssignmentStatuses = [
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "SUPERSEDED",
+] as const;
+
 function mockEmployeeList(items: Employee[] = [supervisor, technician]) {
   vi.mocked(fetchEmployees).mockResolvedValue({ items, total: items.length, page: 1, pageSize: 200 });
 }
@@ -118,6 +126,130 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.getByLabelText("Role")).toBeInTheDocument();
     expect(screen.getByLabelText("Reason for this change")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add vehicle" })).toBeInTheDocument();
+  });
+
+  it.each(immutableAssignmentStatuses)(
+    "keeps a %s assignment read-only without checking it",
+    async (status) => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status,
+        crew: [
+          {
+            employeeId: supervisor.id,
+            fullName: supervisor.fullName,
+            role: "SUPERVISOR",
+            isPmsSupervisor: true,
+          },
+        ],
+        vehicles: [
+          {
+            vehicleId: "vehicle-1",
+            label: "Van 253-4289",
+            driverEmployeeId: supervisor.id,
+            driverName: supervisor.fullName,
+          },
+        ],
+      })
+    );
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+
+    await openDrawer();
+    await screen.findByLabelText("Employee");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(checkAssignment).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Arrives")).toBeDisabled();
+    expect(screen.getByLabelText("Leaves by")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add crew member" })).toBeDisabled();
+    expect(screen.getByLabelText("Employee")).toBeDisabled();
+    expect(screen.getByLabelText("Role")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove crew member" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add vehicle" })).toBeDisabled();
+    expect(screen.getByLabelText("Vehicle")).toBeDisabled();
+    expect(screen.getByLabelText("Driver")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove vehicle" })).toBeDisabled();
+    expect(screen.getByLabelText("Reason for this change")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove crew" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    for (const lockLabel of ["Date & time", "Supervisor", "Crew", "Vehicle", "Everything"]) {
+      expect(screen.getByRole("button", { name: lockLabel })).toBeDisabled();
+    }
+    }
+  );
+
+  it("keeps a draft assignment editable and validates it", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "DRAFT",
+        crew: [
+          {
+            employeeId: supervisor.id,
+            fullName: supervisor.fullName,
+            role: "SUPERVISOR",
+            isPmsSupervisor: true,
+          },
+        ],
+      })
+    );
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+
+    await openDrawer();
+    await screen.findByLabelText("Employee");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(checkAssignment).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Employee")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Crew" })).toBeEnabled();
+  });
+
+  it("clears an in-flight eligibility result when an assignment becomes published", async () => {
+    const draftAssignment = buildAssignment({
+      status: "DRAFT",
+      crew: [
+        {
+          employeeId: supervisor.id,
+          fullName: supervisor.fullName,
+          role: "SUPERVISOR",
+          isPmsSupervisor: true,
+        },
+      ],
+    });
+    const publishedAssignment = buildAssignment({
+      ...draftAssignment,
+      status: "PUBLISHED",
+    });
+    vi.mocked(fetchVisitAssignment)
+      .mockResolvedValueOnce(draftAssignment)
+      .mockResolvedValueOnce(publishedAssignment);
+    let resolveCheck: ((result: ReturnType<typeof buildEligibilityResult>) => void) | undefined;
+    vi.mocked(checkAssignment).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = resolve;
+        })
+    );
+    vi.mocked(assignCrew).mockResolvedValue(publishedAssignment);
+
+    const { user } = await openDrawer();
+    await screen.findByLabelText("Employee");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(checkAssignment).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByLabelText("Reason for this change"), "Publish replacement");
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+    await screen.findByText("published", { selector: "strong" });
+    await act(async () => {
+      resolveCheck?.(buildEligibilityResult({ isEligible: true }));
+    });
+
+    expect(screen.queryByText("This crew is eligible to take the visit.")).not.toBeInTheDocument();
   });
 
   it("saves a valid replacement once the crew checks out and a reason is given", async () => {
