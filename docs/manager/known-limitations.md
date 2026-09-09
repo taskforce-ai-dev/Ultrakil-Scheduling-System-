@@ -17,13 +17,13 @@ there is no UI for any of them today.
 
 ## Release-relevant findings from this UAT pass
 
-1. **[New, live production defect] Assignment save fails on the deployed
-   API — Prisma interactive-transaction timeout.** Found during the
-   deployed real-data pass, 2026-09-09: `PUT /api/visits/{id}/assignment`
-   returns `500 INTERNAL_ERROR` on every attempt (reproduced 3/3,
-   09:20:48–09:21:43 UTC), each attempt slower than the last (5300ms →
-   5328ms → 8847ms), all over the transaction's 5000ms budget. Root cause
-   in the Vercel runtime logs:
+1. **[Fixed and deployed, pending independent UI confirmation] Assignment
+   save failed on the deployed API — Prisma interactive-transaction
+   timeout.** Found during the deployed real-data pass, 2026-09-09:
+   `PUT /api/visits/{id}/assignment` returned `500 INTERNAL_ERROR` on every
+   attempt (reproduced 3/3, 09:20:48–09:21:43 UTC), each attempt slower
+   than the last (5300ms → 5328ms → 8847ms), all over the transaction's
+   5000ms budget. Root cause in the Vercel runtime logs:
    ```
    PrismaClientKnownRequestError: Transaction API error: Transaction already
    closed: ... The timeout for this transaction was 5000 ms, however 8847 ms
@@ -31,12 +31,20 @@ there is no UI for any of them today.
    ```
    at `apps/api/src/scheduling/eligibility/assignments.service.js:93`,
    inside the transaction opened at line 74 (`AssignmentsService.assign`).
-   **Blocks every O08/O09 scenario that saves a new or changed
-   assignment** — reopen/save, driver removal/revalidation included.
    Reported to the API owner (Thivarrakesh) with this trace, ~09:22 UTC.
+   **Fixed and deployed ~10:17 UTC 2026-09-09** as
+   `6fe1838ef2513d4214d4dc1846388a3b59d6711d` (PR #49, keeps manager
+   eligibility writes in the transaction). The API owner's own
+   verification against the canonical deployed manager/API (~10:23 UTC):
+   reopen → eligibility check `HTTP 200`, no self-conflict; one save with
+   a UAT audit reason → `HTTP 200`; follow-up `GET`/eligibility check →
+   both `HTTP 200`; no runtime errors in Vercel post-deploy. **Still
+   outstanding:** independent confirmation through the manager portal UI
+   itself (reopen, no false conflict, save, screenshot) — this UAT pass
+   currently has no network access to the deployed app to do that rerun.
    Full detail in `uat/ULK-O08-uat-results.md`, "Deployed real-data UAT
-   pass," scenario 1. **This is release-blocking** — O08 cannot be marked
-   complete while this stands.
+   pass," scenario 1 ("Fix deployed"). **O08 stays open** until that
+   independent UI confirmation lands.
 
 2. **[Fixed on current main, partially confirmed on deployed real data]
    Re-opening an already-assigned visit could show false "double-booked"

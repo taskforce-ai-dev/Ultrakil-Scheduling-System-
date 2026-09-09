@@ -2,12 +2,19 @@
 
 Status: local demo-data pass complete (below); deployed real-data pass
 started 2026-09-09 against `https://ultrakil-manager-web.vercel.app` — see
-"Deployed real-data UAT pass" section. **Not marked complete** — one
-production defect found during the deployed pass (assignment save fails,
-see below) is a live blocker reported to the API owner; O08 stays In
-Progress until it's resolved and the affected scenarios are re-run. PR #36
-(branding) has since merged into `main` and is reflected in the deployed
-UI's screenshots below.
+"Deployed real-data UAT pass" section. **Not marked complete.** The
+assignment-save transaction-timeout defect (below) was fixed and deployed
+by the API owner as `6fe1838` (PR #49), ~10:17 UTC 2026-09-09 — see "Fix
+deployed" under scenario 1. That fix is reported and verified by the API
+owner, not yet independently re-confirmed through the manager portal UI in
+this UAT pass: this session currently has no network path to
+`https://ultrakil-manager-web.vercel.app` (outbound requests are rejected
+by this environment's network policy) or a browser tool to drive it, so
+the required rerun (reopen the existing draft, confirm no self-conflict,
+one save, capture UI + HTTP evidence) is still pending someone with
+deployed access. O08 stays In Progress until that independent
+confirmation happens. PR #36 (branding) has since merged into `main` and
+is reflected in the deployed UI's screenshots below.
 
 ## Deployed real-data UAT pass — 2026-09-09
 
@@ -77,6 +84,35 @@ included). Reported to the API owner (Thivarrakesh) with this exact trace,
 ~09:22 UTC 2026-09-09. **Does not affect** scenarios that only read
 existing data.
 
+**Fix deployed, ~10:17–10:23 UTC 2026-09-09 — reported and verified by the
+API owner, not independently re-run in this UAT pass:** Thivarrakesh
+shipped `apps/api/src/scheduling/eligibility/assignments.service.ts` +
+`visits.service.ts` changes keeping manager eligibility writes inside the
+transaction, merged as `6fe1838ef2513d4214d4dc1846388a3b59d6711d` (PR #49).
+His own verification against the canonical deployed manager/API, ~10:23
+UTC:
+
+- Reopened the existing editable draft — eligibility check `HTTP 200`, no
+  self-conflict.
+- Saved the unchanged assignment once with a UAT audit reason —
+  `PUT /api/visits/{id}/assignment` → `HTTP 200`.
+- Follow-up assignment `GET` and eligibility check — both `HTTP 200`.
+- No runtime errors in Vercel after the deployment.
+
+This is the API owner's own report, taken at face value and cited here
+with attribution — it is **not** the independent UI-driven confirmation
+this document's evidence bar otherwise requires (every other "pass" above
+was clicked through directly in this pass). That confirmation — reopen the
+existing draft in the manager portal, verify no false conflict, save once,
+screenshot the result — is still outstanding, blocked on this session
+having no network access to the deployed app right now (see status note
+at the top of this document). **Expected vs. actual, pending that rerun:**
+expected is unchanged from the original scenario — reopening a
+just-/previously-saved assignment shows it as valid with no self-overlap
+error, and Save completes without a server error; actual (per the API
+owner's report) matches that expectation, but hasn't yet been observed
+directly by this UAT.
+
 ### 2. DAC-2485 and its three authorized drivers — pass
 
 `DAC-2485` (Bolero Truck, 2 seats) detail page lists **exactly three**
@@ -128,9 +164,13 @@ being publish-locked for saving — worth a mention, not necessarily a bug.
 ### 6. O09 regression: driver removal/revalidation, preserved history, inactive-record exclusion from pickers — not run
 
 Driver removal/revalidation requires a Save to observe the revalidation
-step, blocked by defect #1 above. Preserved-history and inactive-picker
+step; the transaction-timeout defect that blocked this is now fixed on
+deployed (`6fe1838`, see "Fix deployed" under scenario 1) but this scenario
+still hasn't been re-attempted — this UAT pass has no network access to
+the deployed app to attempt it. Preserved-history and inactive-picker
 exclusion both require an inactive record to exist, blocked by the
-data gap in #3 above. None attempted this pass.
+data gap in #3 above (unchanged — still no inactive records in the live
+dataset). None attempted this pass.
 
 ## Environment — exact setup commands
 
@@ -885,8 +925,13 @@ then this screenshot is retaken.
 
 ## Still to do
 
-- Get the assignment-save transaction-timeout defect fixed and confirm on
-  a re-run (reopen/save, driver removal/revalidation).
+- **Defect fixed, independent confirmation still needed:** the
+  assignment-save transaction-timeout defect is fixed and deployed
+  (`6fe1838`, PR #49), verified by the API owner directly — see "Fix
+  deployed" under scenario 1. Someone with deployed access still needs to
+  independently re-run reopen/save and driver removal/revalidation through
+  the manager portal UI and capture that evidence; this UAT pass currently
+  has no network path to the deployed app to do it.
 - Re-run inactive-records and Kandy-no-PMS-supervisor scenarios once the
   real dataset has matching records to exercise them (neither exists in
   the current import).

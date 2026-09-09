@@ -8,10 +8,11 @@ The steps below are a representative local example — the same flow and
 screens, run against fabricated demo data on a local stack. A deployed
 pass against the pilot's real data has since started at
 `https://ultrakil-manager-web.vercel.app` (see `known-limitations.md` and
-`uat/ULK-O08-uat-results.md`); Part 1's actual "Save" step is currently
-blocked there by a live defect (assignment save transaction timeout, see
-below) rather than untested — real, passing evidence for this exact flow
-is still pending that fix.
+`uat/ULK-O08-uat-results.md`); Part 1's actual "Save" step hit a live
+defect there (assignment save transaction timeout) rather than going
+untested. That defect is now fixed and deployed (see below) — real,
+passing evidence for this exact flow through the manager portal UI is
+still pending someone re-running it with deployed access.
 
 ---
 
@@ -53,9 +54,15 @@ historical, pre-fix evidence rather than clean-save evidence.
 real data at `https://ultrakil-manager-web.vercel.app` — Validation
 correctly reached "This crew is eligible to take the visit," but clicking
 **Save assignment** failed with a server error, reproduced 3/3 (Prisma
-transaction timeout, see `known-limitations.md` item 1). A clean
-"Assignment saved" screenshot against the deployed app is blocked on that
-fix, not merely un-attempted.)*
+transaction timeout, see `known-limitations.md` item 1).
+**Fix update, 2026-09-09 ~10:17 UTC:** the API owner shipped and deployed
+a fix (`6fe1838`, PR #49) and reports his own reopen/save verification
+against the canonical deployed app all returning `HTTP 200` (see
+`known-limitations.md` item 1 and `uat/ULK-O08-uat-results.md` scenario 1,
+"Fix deployed") — but that's the API owner's own report, not an
+independent click-through of this exact manager-portal flow. A clean
+"Assignment saved" screenshot against the deployed app, captured directly
+through the UI, is still pending.)*
 
 ---
 
