@@ -195,12 +195,12 @@ function fixture() {
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
     $queryRaw: jest.fn(async (_query: Prisma.Sql) => [{ id: visit.id }]),
-    $transaction: async (
-      work: (tx: unknown) => Promise<unknown>,
-    ): Promise<unknown> => {
-      await beforeTransaction();
-      return work(prisma);
-    },
+    $transaction: jest.fn(
+      async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => {
+        await beforeTransaction();
+        return work(prisma);
+      },
+    ),
   };
   const eligibility = {
     evaluate: jest.fn(async () => ({ isEligible: true, conflicts: [] })),
@@ -326,12 +326,36 @@ describe('standard writers preserve publication', () => {
     },
   );
 
+  it('checks and replaces a manual assignment inside one bounded transaction', async () => {
+    const f = fixture();
+
+    await f.manual.assign('visit', proposal, actor);
+
+    expect(f.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 30_000,
+    });
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.any(Object),
+      { excludeAssignmentId: 'draft' },
+      f.prisma,
+    );
+  });
+
   it('moves draft timing with an eligible visit adjustment', async () => {
     const f = fixture();
     await f.visits.adjust('visit', { visitDate: '2027-03-04' }, actor);
     expect(f.original.plannedStart).toEqual(new Date('2027-03-04T09:00:00Z'));
     expect(f.original.plannedEnd).toEqual(new Date('2027-03-04T10:30:00Z'));
-    expect(f.eligibility.evaluate).toHaveBeenCalled();
+    expect(f.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 30_000,
+    });
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.any(Object),
+      expect.objectContaining({ excludeAssignmentId: 'draft' }),
+      f.prisma,
+    );
   });
 
   it('rejects an adjustment that makes the draft crew ineligible before any write', async () => {
