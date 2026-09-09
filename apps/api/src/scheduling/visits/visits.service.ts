@@ -244,6 +244,7 @@ export class VisitsService {
               requiredCrewSize: dto.requiredCrewSize ?? before.requiredCrewSize,
             },
           },
+          tx,
         );
         if (!verdict.isEligible) {
           throw new AppException(
@@ -303,7 +304,7 @@ export class VisitsService {
       );
 
       return visit;
-    });
+    }, { timeout: 30_000 });
 
     return toVisitDto(updated);
   }

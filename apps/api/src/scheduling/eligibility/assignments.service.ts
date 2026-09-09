@@ -122,7 +122,7 @@ export class AssignmentsService {
       });
       const result = await this.eligibility.evaluate(visitId, proposal, {
         excludeAssignmentId: existing?.id,
-      });
+      }, tx);
       if (!result.isEligible) {
         // Commit refusal reasons before returning the error to the caller.
         // A refused replacement leaves the existing crew and queue untouched.
@@ -195,7 +195,7 @@ export class AssignmentsService {
       );
 
       return { kind: 'assigned' as const, assignment };
-    });
+    }, { timeout: 30_000 });
 
     if (saved.kind === 'rejected') {
       const tail = saved.hadAssignment
