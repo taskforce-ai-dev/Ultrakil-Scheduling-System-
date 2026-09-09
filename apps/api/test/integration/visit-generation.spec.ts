@@ -465,6 +465,7 @@ describe('regeneration never loses manager-controlled work', () => {
               branchId: visit.branchId,
               branchCode: visit.branchCode,
               isPmsGrade: true,
+              canUsePublicTransport: true,
             },
           });
           employeeId = employee.id;
