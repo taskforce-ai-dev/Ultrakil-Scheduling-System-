@@ -367,6 +367,10 @@ describe("AssignmentEditorDrawer", () => {
       ]) {
         expect(screen.getByRole("button", { name: label })).toBeDisabled();
       }
+      expect(screen.getByText("Supervisor & crew").closest("div.overflow-y-auto")).toHaveAttribute(
+        "tabindex",
+        "0"
+      );
     }
   );
 

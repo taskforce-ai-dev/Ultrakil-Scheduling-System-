@@ -490,6 +490,7 @@ export function AssignmentEditorDrawer({
       onOpenChange={onOpenChange}
       title={visit ? `Edit crew — ${visit.customerName}` : "Edit crew"}
       description={visit ? formatLongDate(visit.visitDate) : undefined}
+      contentTabIndex={isPublicationHistory}
       footer={
         visit ? (
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
