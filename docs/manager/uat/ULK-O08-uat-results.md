@@ -35,11 +35,11 @@ Ceylon Chocolate - Bluemandal, Ceylon Electricity Board, MCA, SINTESI
 pass below. `DAC-2485` (named explicitly in O09, absent from demo data) is
 present in this data.
 
-**Screenshots:** this section's evidence is described from screenshots
-reviewed live during the session (browser, not this repo's checkout) —
-the actual image files have not yet been exported and committed here.
-Retaking and committing real PNG evidence for this section is a genuine
-remaining gap, not done in this pass (see "Still to do").
+**Screenshots:** real PNG evidence is now committed for scenarios 1, 2,
+and 5 (the assignment-save/reopen confirmation, DAC-2485, and the O09
+driver-dropdown filter) — see each scenario below. Scenarios 3 and 4 have
+no evidence to capture (nothing exists in the current dataset to
+screenshot — see below), and scenario 6 remains a genuine gap.
 
 ### 1. Reopen/save an assigned visit, no false self-conflict — blocked
 
@@ -150,6 +150,8 @@ last tagged PMS-grade). Matches expected exactly.
 **"Unassigned branch,"** while all three drivers are tagged "Colombo" —
 worth a mention in known-limitations, not necessarily a bug.
 
+Screenshot: `screenshots/o08-deployed-dac2485-drivers.png`.
+
 ### 3. Inactive records producing no future jobs — not testable right now
 
 **Result: cannot be exercised against current real data.** The Customers
@@ -185,6 +187,9 @@ employee list. Matches expected.
 
 **Side observation:** these dropdowns were interactive despite the visit
 being publish-locked for saving — worth a mention, not necessarily a bug.
+
+Screenshot: `screenshots/o08-deployed-o09-driver-dropdown-filtered.png`
+(dropdown open, showing only the 2 authorized names for that vehicle).
 
 ### 6. O09 regression: driver removal/revalidation, preserved history, inactive-record exclusion from pickers — driver removal attempted, blocked by data gap; other two not run
 
@@ -976,11 +981,6 @@ then this screenshot is retaken.
 - Re-run inactive-records and Kandy-no-PMS-supervisor scenarios once the
   real dataset has matching records to exercise them (neither exists in
   the current import).
-- Export and commit real PNG screenshots from the deployed UI for the
-  rest of the "Deployed real-data UAT pass" section (DAC-2485, O09
-  unauthorized-driver rejection) — those are still described from
-  screenshots reviewed live, not yet committed as files. The
-  assignment-save/reopen evidence in scenario 1 is now committed.
 - Only then: mark ULK-O08 complete and request the final UAT gate sign-off.
 
 **PR #36 (branding/redesign) has merged into `main`** and its palette/logo
