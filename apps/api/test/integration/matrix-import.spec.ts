@@ -219,9 +219,6 @@ describe('importing the workforce matrix', () => {
     const legacy = await prisma.vehicle.create({ data: { code: 'DAC 2485', label: 'Legacy DAC' } });
     const branch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
     const driver = await prisma.employee.findFirstOrThrow({ where: { fullName: 'Fixture Aspen' } });
-    const canonicalAuthorization = await prisma.vehicleAuthorization.findUniqueOrThrow({
-      where: { employeeId_vehicleId: { employeeId: driver.id, vehicleId: canonical.id } },
-    });
     const legacyAuthorization = await prisma.vehicleAuthorization.create({
       data: { employeeId: driver.id, vehicleId: legacy.id },
     });
@@ -316,9 +313,9 @@ describe('importing the workforce matrix', () => {
         where: { employeeId: driver.id, vehicleId: canonical.id },
       })).toBe(1);
       expect(await prisma.auditEvent.findUniqueOrThrow({ where: { id: vehicleAudit.id } }))
-        .toEqual({ ...vehicleAudit, entityId: canonical.id });
+        .toEqual(vehicleAudit);
       expect(await prisma.auditEvent.findUniqueOrThrow({ where: { id: authorizationAudit.id } }))
-        .toEqual({ ...authorizationAudit, entityId: canonicalAuthorization.id });
+        .toEqual(authorizationAudit);
 
       await importMatrix(prisma, parsed);
       expect(await prisma.vehicle.count({

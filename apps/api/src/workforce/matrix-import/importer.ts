@@ -65,10 +65,6 @@ async function mergeVehicleAliases(
       });
     }
     for (const duplicate of group.filter(({ id }) => id !== survivor.id)) {
-      await tx.auditEvent.updateMany({
-        where: { entityType: 'VehicleAuthorization', entityId: duplicate.id },
-        data: { entityId: survivor.id },
-      });
       await tx.vehicleAuthorization.delete({ where: { id: duplicate.id } });
       authorizationsRemoved += 1;
     }
@@ -77,10 +73,6 @@ async function mergeVehicleAliases(
   await tx.assignmentVehicle.updateMany({
     where: { vehicleId: { in: aliasVehicleIds } },
     data: { vehicleId: canonicalVehicleId },
-  });
-  await tx.auditEvent.updateMany({
-    where: { entityType: 'Vehicle', entityId: { in: aliasVehicleIds } },
-    data: { entityId: canonicalVehicleId },
   });
   await tx.vehicle.deleteMany({ where: { id: { in: aliasVehicleIds } } });
   return authorizationsRemoved;
