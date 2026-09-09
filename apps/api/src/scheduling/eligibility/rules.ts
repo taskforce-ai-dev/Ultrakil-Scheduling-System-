@@ -369,7 +369,7 @@ export function evaluateAssignment(
       conflicts.push({
         code: 'VEHICLE_CAPACITY_EXCEEDED',
         message: `${vehicle.label} seats ${vehicle.seatCapacity} and the crew is ${crew.length}.`,
-        remediation: 'Use a larger vehicle, or add a second one.',
+        remediation: 'Use a larger vehicle.',
         resources: { visitId: visit.id, vehicleIds: [vehicle.id] },
       });
     }

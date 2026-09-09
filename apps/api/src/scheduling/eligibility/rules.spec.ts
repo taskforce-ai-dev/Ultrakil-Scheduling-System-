@@ -382,6 +382,11 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('VEHICLE_CAPACITY_EXCEEDED');
+      const conflict = result.conflicts.find(
+        (entry) => entry.code === 'VEHICLE_CAPACITY_EXCEEDED',
+      );
+      expect(conflict?.remediation).toBe('Use a larger vehicle.');
+      expect(conflict?.remediation).not.toContain('second');
     });
 
     it('does not refuse a vehicle whose branch was never recorded', () => {

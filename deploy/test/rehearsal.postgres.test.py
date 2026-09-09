@@ -39,6 +39,7 @@ def main():
             importer = ['node', str(ROOT / 'apps/api/node_modules/tsx/dist/cli.mjs'), 'scripts/staging-import.ts']
             parsed = json.loads(run([*importer, '--dry-run'], env, ROOT / 'apps/api'))['parsed']
             assert parsed['employees'] == 8 and parsed['vehicles'] == 5
+            assert parsed['publicTransportEmployees'] == 2
             assert parsed['customers'] == 3 and parsed['sites'] == 4
             assert parsed['scheduleIssues']['RECORD_INACTIVE'] == 2
             for _ in range(2):

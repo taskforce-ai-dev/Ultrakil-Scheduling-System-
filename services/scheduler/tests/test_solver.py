@@ -211,6 +211,22 @@ class TestVehicles:
 
         assert result.assignments[0].vehicles == []
 
+    def test_explains_when_an_authorized_vehicle_cannot_fit_the_crew(self):
+        bike = VehicleInput(id="bike-1", branch_code="COLOMBO", seat_capacity=1)
+        driver = employee(
+            id="sup-1",
+            is_pms_grade=True,
+            authorized_vehicle_ids=["bike-1"],
+            can_use_public_transport=False,
+        )
+        technician = employee(id="tech-1", can_use_public_transport=False)
+
+        result = solve(request(employees=[driver, technician], vehicles=[bike]))
+
+        assert result.assignments == []
+        assert "CREW_CANNOT_TRAVEL" in result.unassigned[0].reason_codes
+        assert "NO_AUTHORIZED_DRIVER" not in result.unassigned[0].reason_codes
+
     def test_never_sends_one_vehicle_to_two_overlapping_visits(self):
         van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
         drivers = [

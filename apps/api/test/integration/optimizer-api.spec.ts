@@ -252,6 +252,7 @@ beforeAll(async () => {
         isPmsGrade: true,
         branchId: colombo.id,
         branchCode: BranchCode.COLOMBO,
+        canUsePublicTransport: true,
       },
     });
     supervisorIds.push(sup.id);
@@ -263,6 +264,7 @@ beforeAll(async () => {
         gradeLabel: 'Junior PMT',
         branchId: colombo.id,
         branchCode: BranchCode.COLOMBO,
+        canUsePublicTransport: true,
       },
     });
     technicianIds.push(tech.id);
