@@ -193,6 +193,18 @@ there is no UI for any of them today.
     have branch-tagged authorized drivers). Worth a one-line confirmation
     from the API/import owner before sign-off.
 
+15. **[New, minor] Driver removal/revalidation (O09) can't currently be
+    exercised — the visit used for the assignment-save confirmation
+    (SINTESI (Incube)/Quantum clothing) has no vehicles at all in its
+    picker.** Observed directly on the deployed manager portal, 2026-09-09:
+    opening **Edit crew → + Add vehicle** on that visit returns an empty
+    list. Consistent with item 14 above — likely the same underlying
+    branch-tagging gap, just affecting a different visit's site rather
+    than a specific vehicle. Not release-blocking (crew-size and
+    self-overlap validation are both already confirmed independently); to
+    close out this one remaining O09 sub-scenario, find or create an
+    unassigned visit whose branch/site does have vehicles available.
+
 ## Not a defect, but worth calling out to managers
 
 - Permanently stationed employees are **not** filtered out of the crew

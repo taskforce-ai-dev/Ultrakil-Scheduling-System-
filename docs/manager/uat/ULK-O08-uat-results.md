@@ -135,7 +135,8 @@ saved assignment), since SINTESI was exactly the visit the original
 defect was found on and had no assignment to conflict with going in —
 but it exercises the identical code path (save, then reopen) that matters
 for both defects. Driver removal/revalidation (which also needs a working
-Save) remains unconfirmed — see scenario 6.
+Save) was attempted but blocked by an unrelated data gap — no vehicle
+available to assign in the first place — see scenario 6.
 
 ### 2. DAC-2485 and its three authorized drivers — pass
 
@@ -185,16 +186,31 @@ employee list. Matches expected.
 **Side observation:** these dropdowns were interactive despite the visit
 being publish-locked for saving — worth a mention, not necessarily a bug.
 
-### 6. O09 regression: driver removal/revalidation, preserved history, inactive-record exclusion from pickers — not run
+### 6. O09 regression: driver removal/revalidation, preserved history, inactive-record exclusion from pickers — driver removal attempted, blocked by data gap; other two not run
 
-Driver removal/revalidation requires a Save to observe the revalidation
-step; the transaction-timeout defect that blocked this is now fixed on
-deployed (`6fe1838`, see "Fix deployed" under scenario 1) but this scenario
-still hasn't been re-attempted — this UAT pass has no network access to
-the deployed app to attempt it. Preserved-history and inactive-picker
-exclusion both require an inactive record to exist, blocked by the
-data gap in #3 above (unchanged — still no inactive records in the live
-dataset). None attempted this pass.
+**Driver removal/revalidation — attempted, blocked by data availability, not
+a defect:** with the transaction-timeout defect fixed, this was attempted
+directly through the manager portal UI (~2026-09-09) on the SINTESI
+(Incube)/Quantum clothing visit used for scenario 1's independent
+confirmation. Opened **Edit crew**, clicked **+ Add vehicle**, and opened
+the vehicle picker — it returned **empty**, no vehicles listed at all for
+this visit's branch/site. Consistent with the vehicle branch-tagging gap
+already noted elsewhere (item 14 in `known-limitations.md` — some
+deployed vehicles show "Unassigned branch"): if a visit's branch/site has
+no vehicles wired up, there's nothing to assign a driver to in the first
+place, so removal/revalidation can't be exercised on it. **Not attempted
+further** — no other unassigned, non-published visit with an available
+vehicle was found in the current dataset for this date; trying additional
+dates was judged not worth the time for a non-blocking confirmation.
+**To close this out:** find or create an unassigned visit whose
+branch/site actually has vehicles in the picker, assign one with a driver,
+save, then remove that crew member and confirm the vehicle's Driver field
+clears with a `NO_AUTHORIZED_DRIVER` validation.
+
+Preserved-history and inactive-picker exclusion both still require an
+inactive record to exist, blocked by the data gap in #3 above (unchanged
+— still no inactive records in the live dataset). Neither attempted this
+pass.
 
 ## Environment — exact setup commands
 
@@ -951,9 +967,12 @@ then this screenshot is retaken.
 
 ## Still to do
 
-- Independently confirm **driver removal/revalidation** through the
-  manager portal UI (needs a working Save, now available — this specific
-  sub-scenario just hasn't been re-run yet).
+- Confirm **driver removal/revalidation** through the manager portal UI
+  once an unassigned, non-published visit with an actual vehicle available
+  in its picker exists — attempted on SINTESI (Incube)/Quantum clothing,
+  blocked by that visit's branch/site having no vehicles wired up at all
+  (see "Deployed real-data UAT pass," scenario 6). Not a defect; a data
+  gap.
 - Re-run inactive-records and Kandy-no-PMS-supervisor scenarios once the
   real dataset has matching records to exercise them (neither exists in
   the current import).
