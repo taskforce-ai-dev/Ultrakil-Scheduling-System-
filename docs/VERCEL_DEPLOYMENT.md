@@ -5,10 +5,11 @@ manager portal, Nest API and FastAPI scheduler each have their own build and
 stable URL; the API uses QStash for durable, request-driven schedule execution.
 The Docker/Compose deployment remains supported separately for self-hosting.
 
-Staging uses the dedicated Neon project recorded in the private operator
-configuration. Production PostgreSQL has not been provisioned. `DATABASE_URL`
-remains deliberately blank in the checked-in template: never copy the staging
-connection into production, and do not record either credential in Git.
+Use a dedicated Neon project for staging and record its identity in the private
+operator configuration. Provision production PostgreSQL separately.
+`DATABASE_URL` remains deliberately blank in the checked-in template: never
+copy the staging connection into production, and do not record either
+credential in Git.
 
 ## Plan gate
 

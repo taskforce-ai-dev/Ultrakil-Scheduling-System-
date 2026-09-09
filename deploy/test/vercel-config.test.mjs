@@ -143,9 +143,9 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(read('deploy/vercel-variables.example'), /SCHEDULE_DISPATCHER=qstash/);
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
   assert.match(docs, /Docker\/Compose/);
-  assert.match(docs, /Staging uses the dedicated Neon project/);
-  assert.match(docs, /Production PostgreSQL has not been provisioned/);
-  assert.match(docs, /never copy the staging\s+connection into production/i);
+  assert.match(docs, /dedicated Neon project for staging/);
+  assert.match(docs, /Provision production PostgreSQL separately/);
+  assert.match(docs, /never\s+copy the staging\s+connection into production/i);
 });
 
 test('keeps staging reachable while its QStash schedule is active', () => {
