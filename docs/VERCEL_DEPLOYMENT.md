@@ -5,18 +5,22 @@ manager portal, Nest API and FastAPI scheduler each have their own build and
 stable URL; the API uses QStash for durable, request-driven schedule execution.
 The Docker/Compose deployment remains supported separately for self-hosting.
 
-No PostgreSQL service has been selected yet. `DATABASE_URL` is deliberately a
-required blank in the checked-in template, and deployment must not proceed
-until separate staging and production databases are provisioned.
+Use a dedicated Neon project for staging and record its identity in the private
+operator configuration. Provision production PostgreSQL separately.
+`DATABASE_URL` remains deliberately blank in the checked-in template: never
+copy the staging connection into production, and do not record either
+credential in Git.
 
 ## Plan gate
 
-The checked-in functions use an explicit, conservative 60-second compatibility
-cap. This remains valid whether or not Fluid Compute raises the account's
-available ceiling. Vercel restricts Hobby to personal, non-commercial use,
-however, so a commercial UltraKIL production deployment requires an eligible
-paid plan or written approval from Vercel. Do not describe Hobby as the
-production entitlement.
+The API's native Nest deployment uses Fluid Compute, whose current Hobby
+default is 300 seconds, above the API's 55-second application execution budget.
+Do not add a `functions` override for `src/main.ts`: Vercel's Nest preset owns
+the generated function and rejects that pattern. The scheduler separately
+declares a conservative 60-second cap. Vercel restricts Hobby to personal,
+non-commercial use, however, so a commercial UltraKIL production deployment
+requires an eligible paid plan or written approval from Vercel. Do not describe
+Hobby as the production entitlement.
 
 ## Create the projects
 
@@ -33,9 +37,11 @@ Enable **Include source files outside of the Root Directory** for all three
 projects. The workspace lockfile and shared `packages/api-contracts` package
 live above the application roots.
 
-The checked-in `vercel.json` files keep builds and function duration explicit.
-The scheduler's `pyproject.toml` contains production dependencies, while
-`app/main.py` is a Vercel-recognized FastAPI entrypoint.
+The checked-in `vercel.json` files keep build behavior explicit. The scheduler
+also declares its function duration; the API uses Vercel's native Nest preset
+and Fluid Compute duration described above. The scheduler's `pyproject.toml`
+contains production dependencies, while `app/main.py` is a Vercel-recognized
+FastAPI entrypoint.
 
 ## Staging and production topology
 
