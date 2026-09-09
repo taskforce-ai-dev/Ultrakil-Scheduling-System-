@@ -1,4 +1,5 @@
-import { BranchCode, DeploymentType, PrismaClient } from '@prisma/client';
+import { BranchCode, DeploymentType, Prisma, PrismaClient } from '@prisma/client';
+import { normalizeHeader } from './mapping';
 import { ParsedMatrix } from './types';
 
 export interface ImportSummary {
@@ -20,6 +21,62 @@ const BRANCH_NAMES: Record<BranchCode, string> = {
   [BranchCode.COLOMBO]: 'Colombo Branch',
   [BranchCode.KANDY]: 'Kandy Branch',
 };
+
+function vehicleIdentity(code: string): string {
+  return normalizeHeader(code).replace(/ /g, '');
+}
+
+async function mergeVehicleAliases(
+  tx: Prisma.TransactionClient,
+  canonicalVehicleId: string,
+  aliasVehicleIds: string[],
+): Promise<number> {
+  if (!aliasVehicleIds.length) return 0;
+  let authorizationsRemoved = 0;
+  const vehicleIds = [canonicalVehicleId, ...aliasVehicleIds];
+  const assignmentLinks = await tx.assignmentVehicle.findMany({
+    where: { vehicleId: { in: vehicleIds } },
+    select: { assignmentId: true },
+  });
+  const linksByAssignment = new Map<string, number>();
+  for (const { assignmentId } of assignmentLinks) {
+    const count = (linksByAssignment.get(assignmentId) ?? 0) + 1;
+    if (count > 1) throw new Error('MATRIX_VEHICLE_ASSIGNMENT_COLLISION');
+    linksByAssignment.set(assignmentId, count);
+  }
+
+  const authorizations = await tx.vehicleAuthorization.findMany({
+    where: { vehicleId: { in: vehicleIds } },
+    select: { id: true, employeeId: true, vehicleId: true },
+  });
+  const authorizationsByEmployee = new Map<string, typeof authorizations>();
+  for (const authorization of authorizations) {
+    const group = authorizationsByEmployee.get(authorization.employeeId) ?? [];
+    group.push(authorization);
+    authorizationsByEmployee.set(authorization.employeeId, group);
+  }
+  for (const group of authorizationsByEmployee.values()) {
+    const survivor =
+      group.find(({ vehicleId }) => vehicleId === canonicalVehicleId) ?? group[0];
+    if (survivor.vehicleId !== canonicalVehicleId) {
+      await tx.vehicleAuthorization.update({
+        where: { id: survivor.id },
+        data: { vehicleId: canonicalVehicleId },
+      });
+    }
+    for (const duplicate of group.filter(({ id }) => id !== survivor.id)) {
+      await tx.vehicleAuthorization.delete({ where: { id: duplicate.id } });
+      authorizationsRemoved += 1;
+    }
+  }
+
+  await tx.assignmentVehicle.updateMany({
+    where: { vehicleId: { in: aliasVehicleIds } },
+    data: { vehicleId: canonicalVehicleId },
+  });
+  await tx.vehicle.deleteMany({ where: { id: { in: aliasVehicleIds } } });
+  return authorizationsRemoved;
+}
 
 /**
  * Writes a parsed matrix into the database.
@@ -65,28 +122,58 @@ export async function importMatrix(
         summary.branchesEnsured += 1;
       }
 
+      const existingVehicles = await tx.vehicle.findMany({
+        select: { id: true, code: true },
+      });
+      const vehiclesByIdentity = new Map<string, typeof existingVehicles>();
+      for (const existing of existingVehicles) {
+        const identity = vehicleIdentity(existing.code);
+        const group = vehiclesByIdentity.get(identity) ?? [];
+        group.push(existing);
+        vehiclesByIdentity.set(identity, group);
+      }
+      const parsedCodesByIdentity = new Map<string, string>();
+      for (const vehicle of parsed.vehicles) {
+        const identity = vehicleIdentity(vehicle.code);
+        const previous = parsedCodesByIdentity.get(identity);
+        if (previous && previous !== vehicle.code) {
+          throw new Error('MATRIX_VEHICLE_IDENTITY_DUPLICATE');
+        }
+        parsedCodesByIdentity.set(identity, vehicle.code);
+      }
+
       const vehicleIds = new Map<string, string>();
       for (const vehicle of parsed.vehicles) {
-        const existing = await tx.vehicle.findUnique({
-          where: { code: vehicle.code },
-          select: { id: true },
-        });
-
-        const record = await tx.vehicle.upsert({
-          where: { code: vehicle.code },
-          create: {
-            code: vehicle.code,
-            label: vehicle.label,
-            seatCapacity: vehicle.seatCapacity,
-          },
-          update: {
-            label: vehicle.label,
-            seatCapacity: vehicle.seatCapacity,
-          },
-        });
+        const identity = vehicleIdentity(vehicle.code);
+        const matches = [...(vehiclesByIdentity.get(identity) ?? [])].sort(
+          (left, right) => left.code.localeCompare(right.code) || left.id.localeCompare(right.id),
+        );
+        const exact = matches.find(({ code }) => code === vehicle.code);
+        const survivor = exact ?? matches[0];
+        const record = survivor
+          ? await tx.vehicle.update({
+              where: { id: survivor.id },
+              data: {
+                code: vehicle.code,
+                label: vehicle.label,
+                seatCapacity: vehicle.seatCapacity,
+              },
+            })
+          : await tx.vehicle.create({
+              data: {
+                code: vehicle.code,
+                label: vehicle.label,
+                seatCapacity: vehicle.seatCapacity,
+              },
+            });
+        summary.authorizationsRemoved += await mergeVehicleAliases(
+          tx,
+          record.id,
+          matches.filter(({ id }) => id !== record.id).map(({ id }) => id),
+        );
 
         vehicleIds.set(vehicle.code, record.id);
-        if (existing) summary.vehiclesUpdated += 1;
+        if (survivor) summary.vehiclesUpdated += 1;
         else summary.vehiclesCreated += 1;
       }
 
