@@ -29,6 +29,10 @@ venv/
 apps/api/prisma/*.db
 apps/api/prisma/*.db-journal
 
+# Redis — local dev snapshot, written wherever the redis-server process
+# happened to be started from.
+*.rdb
+
 # Test / coverage
 coverage/
 .nyc_output/
