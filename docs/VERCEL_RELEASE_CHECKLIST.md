@@ -14,13 +14,15 @@ Record every result against an exact commit SHA; unchecked items remain open.
   branch-specific Preview variables for all three projects.
 - [ ] `main` is the Production branch; its variables and resources are separate
   from staging.
-- [ ] Both backend projects detect the expected runtime and enforce the
-  checked-in 60-second function ceiling.
+- [ ] Both backend projects detect the expected runtime. Vercel's native Nest
+  Fluid Compute duration exceeds the API's 55-second application budget, and
+  the scheduler's checked-in 60-second Vercel ceiling is active.
 
 ## Environment and data gates
 
-- [ ] Separate staging and production PostgreSQL targets are identified;
-  neither is assumed to be Neon and staging cannot access production data.
+- [ ] The dedicated Neon staging target is identified in private operator
+  evidence. Production PostgreSQL is provisioned separately, and staging cannot
+  access production data or credentials.
 - [ ] The target database backup/restore mechanism is recorded before applying
   migrations to existing data.
 - [ ] `pnpm --filter @ultrakil/api db:deploy` and `db:status` pass against the
@@ -82,8 +84,9 @@ Record every result against an exact commit SHA; unchecked items remain open.
   passes before `db:deploy`. The guard has not backfilled any `RUNNING` run.
 - [ ] A deliberately fresh database is positively confirmed before migration
   only with `pnpm --filter @ultrakil/api dispatch:cutover:check -- --fresh --target=qstash`;
-  it reports no user tables. A database error is not treated as fresh, and the
-  fresh path is not used for an existing target.
+  it reports no application tables in the Prisma-owned `public` schema. A
+  database error is not treated as fresh, and the fresh path is not used for
+  an existing target.
 
 ## Staging acceptance
 

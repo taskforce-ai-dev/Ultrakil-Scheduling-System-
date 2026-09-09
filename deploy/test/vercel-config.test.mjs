@@ -44,9 +44,10 @@ test('deploys the API through the supported Nest preset, not a hand-rolled funct
   // The first deployment failed on a `functions` override naming src/main.ts:
   //   The pattern "src/main.ts" defined in `functions` doesn't match any
   //   Serverless Functions inside the `api` directory.
-  // The preset owns that function, so no override can name it. A catch-all
-  // rewrite is equally wrong: it would rewrite every request onto one
-  // destination path and lose the pathname Nest routes on.
+  // The Nest preset owns the generated function, so no override can name it.
+  // Its current Fluid Compute default exceeds the API's 55-second application
+  // budget. A catch-all rewrite is equally wrong: it would rewrite every
+  // request onto one destination path and lose the pathname Nest routes on.
   assert.equal(api.functions, undefined);
   assert.equal(api.rewrites, undefined);
   assert.equal(existsSync(resolve(root, 'apps/api/api')), false,
@@ -122,7 +123,8 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   assert.match(docs, /db:deploy/);
   assert.match(docs, /dispatch:cutover:check/);
   assert.match(docs, /--fresh/);
-  assert.match(docs, /no user tables/i);
+  assert.match(docs, /no application\s+tables/i);
+  assert.match(docs, /Prisma-owned `public` schema/i);
   assert.match(docs, /Deployment Protection/);
   assert.match(docs, /SCHEDULER_API_TOKEN/);
   assert.match(docs, /no browser-exposed bypass secret/i);
@@ -136,12 +138,21 @@ test('explains branch-based staging, production, QStash and preserved Docker', (
   const checklist = read('docs/VERCEL_RELEASE_CHECKLIST.md');
   assert.match(checklist, /Production/);
   assert.match(checklist, /staging/);
+  assert.match(checklist, /API's 55-second application budget/i);
+  assert.match(checklist, /scheduler's checked-in 60-second Vercel ceiling/i);
+  assert.match(checklist, /dedicated Neon staging target/i);
+  assert.match(checklist, /production PostgreSQL.*provisioned separately/i);
+  assert.doesNotMatch(checklist,
+    /Both backend projects detect the expected runtime and enforce the\s+checked-in 60-second function ceiling/i);
+  assert.doesNotMatch(checklist, /neither is assumed to be Neon/i);
   assert.match(checklist, /--fresh --target=qstash/);
   assert.match(checklist, /Before merge\/promote to `main`/i);
   assert.match(read('deploy/vercel-variables.example'), /SCHEDULE_DISPATCHER=qstash/);
   assert.doesNotMatch(read('docs/C08_RELEASE_CHECKLIST.md'), /Current deployment target: Vercel/);
   assert.match(docs, /Docker\/Compose/);
-  assert.match(docs, /No PostgreSQL service has been selected yet/);
+  assert.match(docs, /dedicated Neon project for staging/);
+  assert.match(docs, /Provision production PostgreSQL separately/);
+  assert.match(docs, /never\s+copy the staging\s+connection into production/i);
 });
 
 test('keeps staging reachable while its QStash schedule is active', () => {

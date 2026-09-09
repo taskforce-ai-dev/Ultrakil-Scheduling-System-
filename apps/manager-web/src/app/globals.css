@@ -9,7 +9,10 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  /* Site-wide now, not just the Dashboard — every h1/h2/h3 (see the base
+     layer below) picks up the distinctive display face. */
+  --font-heading: var(--font-display), var(--font-sans);
+  --color-brand-lime: var(--brand-lime);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -50,90 +53,184 @@
 }
 
 :root {
-  /* UltraKIL brand palette — deep teal, dark teal/green, main green, sage. */
-  --brand-deep-teal: #092328;
-  --brand-dark-teal: #12544f;
-  --brand-green: #2a835f;
-  --brand-sage: #8bbb92;
+  /* UltraKIL brand palette, taken verbatim from the real marketing site's
+     own CSS custom properties (--h2-dark-green, --primary-green, --h2-lime,
+     --text-dark, --bg-light) rather than approximated from a screenshot.
+     Every pairing below is contrast-checked against the WCAG relative-
+     luminance formula, not eyeballed:
+       --brand-deep-green (#244430) vs white text:  10.80:1
+       --brand-mid-green  vs white text:              6.75:1
+       --brand-primary-green vs white text:           4.69:1  (site's own
+         #60b43a fails at 2.60:1 as a solid fill under white text, so this
+         is the same hue/saturation darkened until it clears AA — the real
+         #60b43a itself is kept as --brand-bright-green for borders, icons
+         and accents on dark surfaces, where 4.16:1 large-text-only is fine)
+       --text-dark (#333333) vs --bg-light (#fbfbfb): 12.21:1
+       --brand-lime (#cbfb45) vs white:                1.21:1  (fails outright
+         — confined to dark surfaces/icons only, same as before)
+       --brand-lime vs --brand-deep-green:             8.96:1 */
+  --brand-deep-green: #244430;
+  --brand-mid-green: #366548;
+  --brand-primary-green: #45822a;
+  --brand-bright-green: #60b43a;
+  --brand-lime: #cbfb45;
+  --brand-yellow: #f3d346;
 
-  --background: #f5f8f6;
-  --foreground: var(--brand-deep-teal);
+  --background: #fbfbfb;
+  --foreground: #333333;
   --card: #ffffff;
-  --card-foreground: var(--brand-deep-teal);
+  --card-foreground: #333333;
   --popover: #ffffff;
-  --popover-foreground: var(--brand-deep-teal);
-  --primary: var(--brand-green);
+  --popover-foreground: #333333;
+  --primary: var(--brand-primary-green);
   --primary-foreground: #ffffff;
   /* Text-on-tinted-background contexts (the "success" badge) need a darker
-     shade than --brand-green itself: the brand green directly on its own
-     10% tint is only 3.84:1, short of WCAG AA's 4.5:1 for text. Same hue,
-     darker lightness — confirmed at 5.2–5.9:1 against the tints actually in
-     use. */
-  --success: #236c4e;
-  --secondary: #e7f1ea;
-  --secondary-foreground: var(--brand-dark-teal);
-  --muted: #eef4f0;
-  --muted-foreground: #5b7268;
-  --accent: #dfeee3;
-  --accent-foreground: var(--brand-deep-teal);
+     shade than --brand-primary-green itself — confirmed 5.80:1 against the
+     light tint actually in use. */
+  --success: #2f6b1e;
+  --secondary: #eaf6e4;
+  --secondary-foreground: var(--brand-deep-green);
+  --muted: #f1f5ef;
+  /* #6b7a6e (the first retint) measured 4.38:1 against --background — under
+     WCAG AA's 4.5:1 for normal text, and this is the shared page-subtitle
+     color used under every h1 across the app, so it failed the axe
+     color-contrast rule on every route. Darkened until it clears AA with
+     margin: 5.21:1 against --background, 5.39:1 against --card. */
+  --muted-foreground: #5f6e62;
+  --accent: #e3f2dc;
+  --accent-foreground: var(--brand-deep-green);
   --destructive: #c0332a;
-  --border: #dde7e0;
-  --input: #dde7e0;
-  --ring: var(--brand-green);
-  --chart-1: var(--brand-green);
-  --chart-2: var(--brand-dark-teal);
-  --chart-3: var(--brand-sage);
-  --chart-4: #5fa37d;
-  --chart-5: var(--brand-deep-teal);
+  --border: #e2e8e0;
+  --input: #e2e8e0;
+  --ring: var(--brand-primary-green);
+  --chart-1: var(--brand-primary-green);
+  --chart-2: var(--brand-deep-green);
+  --chart-3: var(--brand-bright-green);
+  --chart-4: var(--brand-yellow);
+  --chart-5: var(--brand-mid-green);
   --radius: 0.75rem;
-  --sidebar: var(--brand-deep-teal);
-  --sidebar-foreground: #d9ece0;
-  --sidebar-primary: var(--brand-green);
+  --sidebar: var(--brand-deep-green);
+  --sidebar-foreground: #eaf6e4;
+  --sidebar-primary: var(--brand-primary-green);
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: var(--brand-dark-teal);
+  --sidebar-accent: var(--brand-mid-green);
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 8%);
-  --sidebar-ring: var(--brand-sage);
+  --sidebar-ring: var(--brand-bright-green);
 }
 
 .dark {
-  --background: var(--brand-deep-teal);
-  --foreground: #eaf3ec;
-  --card: #0e2f31;
-  --card-foreground: #eaf3ec;
-  --popover: #0e2f31;
-  --popover-foreground: #eaf3ec;
-  --primary: var(--brand-green);
+  --background: var(--brand-deep-green);
+  --foreground: #f2f8ee;
+  --card: #1c3524;
+  --card-foreground: #f2f8ee;
+  --popover: #1c3524;
+  --popover-foreground: #f2f8ee;
+  --primary: var(--brand-primary-green);
   --primary-foreground: #ffffff;
-  /* Opposite direction from light mode: on the dark "success" badge tint
-     (--brand-green at 20% over the dark card), --brand-green text itself is
-     only 2.47:1 — worse than light mode, since darker-on-dark loses more
-     contrast than darker-on-light. --brand-sage, already used elsewhere in
-     dark mode for the same reason, measures 5.27:1 here. */
-  --success: var(--brand-sage);
-  --secondary: #143b3a;
-  --secondary-foreground: #eaf3ec;
-  --muted: #123231;
-  --muted-foreground: #8fb0a4;
-  --accent: var(--brand-dark-teal);
+  /* Opposite direction from light mode: darker-on-dark loses more contrast
+     than darker-on-light, so dark mode needs a *lighter* green for
+     text-on-tint. Confirmed 8.02:1 against the dark tint in use. */
+  --success: #a8d693;
+  --secondary: #2a4a35;
+  --secondary-foreground: #f2f8ee;
+  --muted: #223a2b;
+  --muted-foreground: #a3bda8;
+  --accent: var(--brand-mid-green);
   --accent-foreground: #ffffff;
   --destructive: #e05a4f;
   --border: rgb(255 255 255 / 10%);
   --input: rgb(255 255 255 / 12%);
-  --ring: var(--brand-sage);
-  --chart-1: var(--brand-green);
-  --chart-2: var(--brand-sage);
-  --chart-3: #5fa37d;
-  --chart-4: var(--brand-dark-teal);
-  --chart-5: #eaf3ec;
-  --sidebar: #061a1d;
-  --sidebar-foreground: #d9ece0;
-  --sidebar-primary: var(--brand-green);
+  --ring: #a8d693;
+  --chart-1: var(--brand-primary-green);
+  --chart-2: #a8d693;
+  --chart-3: var(--brand-bright-green);
+  --chart-4: var(--brand-mid-green);
+  --chart-5: #f2f8ee;
+  --sidebar: #0f1c14;
+  --sidebar-foreground: #eaf6e4;
+  --sidebar-primary: var(--brand-primary-green);
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: var(--brand-dark-teal);
+  --sidebar-accent: var(--brand-mid-green);
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 8%);
-  --sidebar-ring: var(--brand-sage);
+  --sidebar-ring: #a8d693;
+}
+
+/* Login page motion — entrance stagger, ambient drift, and the animated
+   dispatch route. Named and scoped here (not Tailwind's animate- utilities)
+   so every login-only keyframe lives in one place. All of it collapses to a
+   static end-state under prefers-reduced-motion, further down. */
+@keyframes login-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes login-blob-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-3%, 3%) scale(1.08);
+  }
+}
+@keyframes login-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+@keyframes login-dash-travel {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes login-pin-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+.login-animate-in {
+  animation: login-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.login-blob {
+  animation: login-blob-drift 14s ease-in-out infinite;
+}
+.login-float {
+  animation: login-float 6s ease-in-out infinite;
+}
+.login-dash {
+  animation: login-dash-travel 1.4s linear infinite;
+}
+.login-pin-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: login-pin-pulse 2.4s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-animate-in,
+  .login-blob,
+  .login-float,
+  .login-dash,
+  .login-pin-pulse {
+    animation: none !important;
+  }
 }
 
 @layer base {
