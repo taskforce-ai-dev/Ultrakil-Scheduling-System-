@@ -554,7 +554,14 @@ export function confirmVisitGeneration(dto: GenerateVisitsRequest): Promise<Gene
  * state right after generation. Flagged as a contract gap in the PR.
  */
 export function fetchVisitAssignment(visitId: string): Promise<Assignment | null> {
-  return request<Assignment | null>(`/visits/${visitId}/assignment`);
+  // A visit with no assignment yet gets a 204, which the generic `request`
+  // helper resolves to `undefined` — not `null`. Callers compare against
+  // `null` (e.g. the crew editor's `assignment !== null` publication-history
+  // check), and `undefined !== null` is true in JS, so an unnormalised
+  // `undefined` slips past that guard and crashes the next property read.
+  return request<Assignment | null>(`/visits/${visitId}/assignment`).then(
+    (result) => result ?? null
+  );
 }
 
 /**
