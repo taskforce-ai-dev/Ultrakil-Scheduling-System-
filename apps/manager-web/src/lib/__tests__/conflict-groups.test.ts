@@ -33,6 +33,7 @@ const EXPECTED: Record<ConflictCode, string> = {
   EMPLOYEE_UNAVAILABLE: "OTHER",
   VISIT_NOT_SCHEDULABLE: "OTHER",
   ASSIGNMENT_LOCKED: "OTHER",
+  NO_FEASIBLE_CREW: "OTHER",
 };
 
 describe("conflictGroup", () => {
@@ -41,7 +42,7 @@ describe("conflictGroup", () => {
   });
 
   it("covers every conflict code the backend defines", () => {
-    expect(Object.keys(EXPECTED)).toHaveLength(21);
+    expect(Object.keys(EXPECTED)).toHaveLength(22);
   });
 
   it("lists all eleven named groups plus Other, in a stable order", () => {

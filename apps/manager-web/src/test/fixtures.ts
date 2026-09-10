@@ -280,6 +280,8 @@ export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment
     generatedVisitId: "visit-1",
     status: "CONFIRMED",
     branchCode: "COLOMBO",
+    supersedesAssignmentId: null,
+    publishedByRepairId: null,
     plannedStartMinute: 540,
     plannedEndMinute: 630,
     crew: [

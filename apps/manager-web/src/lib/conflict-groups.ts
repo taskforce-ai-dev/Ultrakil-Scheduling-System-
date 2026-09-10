@@ -7,8 +7,8 @@ import type { ConflictCode } from "@/lib/api-client";
  * eligibility/conflict-codes.ts`) has no concept of it, and every individual
  * conflict is still shown in full regardless of which group it falls under.
  *
- * Four codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
- * ASSIGNMENT_LOCKED) don't fit any of the eleven named groups, so they fall
+ * Five codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
+ * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW) don't fit any of the eleven named groups, so they fall
  * under "Other" rather than being force-fit somewhere misleading.
  */
 export type ConflictGroup =
@@ -62,6 +62,7 @@ const CODE_TO_GROUP: Record<ConflictCode, ConflictGroup> = {
   EMPLOYEE_UNAVAILABLE: "OTHER",
   VISIT_NOT_SCHEDULABLE: "OTHER",
   ASSIGNMENT_LOCKED: "OTHER",
+  NO_FEASIBLE_CREW: "OTHER",
 };
 
 export function conflictGroup(code: ConflictCode): ConflictGroup {
