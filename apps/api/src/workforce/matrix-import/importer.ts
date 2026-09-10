@@ -157,6 +157,7 @@ export async function importMatrix(
                 code: vehicle.code,
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
+                ownershipGroup: vehicle.ownershipGroup,
               },
             })
           : await tx.vehicle.create({
@@ -164,6 +165,7 @@ export async function importMatrix(
                 code: vehicle.code,
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
+                ownershipGroup: vehicle.ownershipGroup,
               },
             });
         summary.authorizationsRemoved += await mergeVehicleAliases(

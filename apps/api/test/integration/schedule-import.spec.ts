@@ -65,11 +65,13 @@ function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule 
 
 beforeAll(async () => {
   await prisma.$connect();
-  await prisma.branch.upsert({
-    where: { code: 'COLOMBO' },
-    create: { code: 'COLOMBO', name: 'Colombo Branch' },
-    update: {},
-  });
+  await Promise.all(['COLOMBO', 'KANDY'].map((code) =>
+    prisma.branch.upsert({
+      where: { code: code as 'COLOMBO' | 'KANDY' },
+      create: { code: code as 'COLOMBO' | 'KANDY', name: `${code} Branch` },
+      update: {},
+    }),
+  ));
 });
 
 afterAll(async () => {
@@ -94,6 +96,10 @@ describe('master schedule import', () => {
 
     expect(customer.branchCode).toBe('COLOMBO');
     expect(customer.serviceSites[0].addressLine).toBe('1 Test Road, Colombo 03');
+    expect(customer.serviceSites[0]).toMatchObject({
+      branchConfidence: 'MATCHED',
+      branchSource: 'ADDRESS_MATCH',
+    });
 
     const agreement = customer.serviceAgreements[0];
     expect(agreement).toMatchObject({
@@ -102,6 +108,9 @@ describe('master schedule import', () => {
       // Taken from the workbook's "Duration and PCT", not the job type default.
       crewSize: 3,
       durationMinutes: 90,
+      crewSizeProvenance: 'SOURCE',
+      durationProvenance: 'SOURCE',
+      dayRuleProvenance: 'SOURCE',
       status: AgreementStatus.ACTIVE,
     });
     expect(agreement.dayRules.map((rule) => rule.weekday).sort()).toEqual([
@@ -197,6 +206,83 @@ describe('master schedule import', () => {
     expect(agreement.notes).toMatch(/were not stated/);
     expect(agreement.notes).toMatch(/FRI×6/);
     expect(agreement.notes).toMatch(/Confirm with the customer/);
+    expect(agreement.dayRuleProvenance).toBe('DERIVED');
+  });
+
+  it('records defaults without passing them off as workbook facts', async () => {
+    const name = `Defaulted Values Co ${suffix}`;
+    const schedule = buildSchedule();
+    schedule.customers = [
+      {
+        ...schedule.customers[0],
+        name,
+        sites: [
+          { name: `${name} — Site`, addressLine: null, regionLabel: null, locationCode: null, isServiced: true },
+        ],
+        agreements: [
+          {
+            ...schedule.customers[0].agreements[0],
+            siteName: `${name} — Site`,
+            effort: { durationMinutes: null, crewSize: null },
+          },
+        ],
+      },
+    ];
+
+    await importSchedule(prisma, schedule);
+
+    const agreement = await prisma.serviceAgreement.findFirstOrThrow({
+      where: { customer: { name } },
+    });
+    expect(agreement.crewSizeProvenance).toBe('DEFAULTED');
+    expect(agreement.durationProvenance).toBe('DEFAULTED');
+  });
+
+  it('does not overwrite a manager-confirmed branch or agreement values on re-import', async () => {
+    await importSchedule(prisma, buildSchedule());
+
+    const kandy = await prisma.branch.findUniqueOrThrow({ where: { code: 'KANDY' } });
+    const customer = await prisma.customer.findFirstOrThrow({
+      where: { name: CUSTOMER },
+      include: { serviceSites: true, serviceAgreements: true },
+    });
+    const site = customer.serviceSites[0];
+    const agreement = customer.serviceAgreements[0];
+
+    await prisma.serviceSite.update({
+      where: { id: site.id },
+      data: {
+        branchId: kandy.id,
+        branchCode: 'KANDY',
+        branchConfidence: 'CONFIRMED',
+        branchSource: 'MANAGER_CONFIRMED',
+      },
+    });
+    await prisma.serviceAgreement.update({
+      where: { id: agreement.id },
+      data: {
+        crewSize: 7,
+        durationMinutes: 135,
+        crewSizeProvenance: 'MANAGER_CONFIRMED',
+        durationProvenance: 'MANAGER_CONFIRMED',
+        dayRuleProvenance: 'MANAGER_CONFIRMED',
+      },
+    });
+
+    await importSchedule(prisma, buildSchedule());
+
+    expect(await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } })).toMatchObject({
+      branchCode: 'KANDY',
+      branchConfidence: 'CONFIRMED',
+      branchSource: 'MANAGER_CONFIRMED',
+    });
+    expect(await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: agreement.id } })).toMatchObject({
+      crewSize: 7,
+      durationMinutes: 135,
+      crewSizeProvenance: 'MANAGER_CONFIRMED',
+      durationProvenance: 'MANAGER_CONFIRMED',
+      dayRuleProvenance: 'MANAGER_CONFIRMED',
+    });
   });
 
   it('reuses one job type per treatment combination', async () => {
@@ -278,6 +364,10 @@ describe('records the workbook marks red', () => {
     await prisma.serviceSite.updateMany({
       where: { customer: { name: CUSTOMER } },
       data: { isActive: true, importedInactiveAt: null },
+    });
+    await prisma.serviceAgreement.updateMany({
+      where: { customer: { name: CUSTOMER } },
+      data: { importedInactiveAt: null },
     });
 
     await importSchedule(prisma, buildSchedule());

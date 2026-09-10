@@ -732,6 +732,19 @@ describe('a site with no recorded opening hours', () => {
       .set(auth(adminToken))
       .query({ serviceAgreementId: agreement.id });
     expect(listed.body.items[0].hoursUnconfirmed).toBe(true);
+
+    // Empty actual hours stay empty. The generated rows make the 08:00–17:00
+    // fallback explicit instead of quietly turning it into a site fact.
+    expect(await prisma.siteOperatingHours.count({ where: { serviceSiteId: site.body.id } })).toBe(0);
+    expect(await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: agreement.id },
+      select: { windowProvenance: true },
+    })).toEqual([
+      { windowProvenance: 'DEFAULTED' },
+      { windowProvenance: 'DEFAULTED' },
+      { windowProvenance: 'DEFAULTED' },
+      { windowProvenance: 'DEFAULTED' },
+    ]);
   });
 
 });

@@ -1,6 +1,7 @@
 import {
   AgreementStatus,
   BranchCode,
+  DataProvenance,
   DayRuleKind,
   PrismaClient,
   Weekday,
@@ -45,6 +46,24 @@ function activation(isServiced: boolean): {
 } {
   if (!isServiced) return { isActive: false, importedInactiveAt: new Date() };
   return {};
+}
+
+function agreementActivation(
+  isServiced: boolean,
+  existing: { importedInactiveAt: Date | null } | null,
+): { status?: AgreementStatus; importedInactiveAt?: Date | null } {
+  if (!isServiced) return { status: AgreementStatus.ARCHIVED, importedInactiveAt: new Date() };
+  // A red cell is an explicit import fact. Its later disappearance is not a
+  // reactivation instruction, so preserve the archive until a person clears
+  // the marker through the normal manager workflow.
+  if (existing?.importedInactiveAt) return {};
+  return { status: AgreementStatus.ACTIVE, importedInactiveAt: null };
+}
+
+function importedBranch(decision: ReturnType<typeof decideBranch>) {
+  return decision.confidence === 'matched'
+    ? { branchConfidence: 'MATCHED' as const, branchSource: 'ADDRESS_MATCH' as const }
+    : { branchConfidence: 'UNCERTAIN' as const, branchSource: 'FALLBACK_DEFAULT' as const };
 }
 
 /**
@@ -152,16 +171,27 @@ export async function importSchedule(
 
         const existingSite = await tx.serviceSite.findFirst({
           where: { customerId: record.id, name: site.name },
-          select: { id: true },
+          select: { id: true, branchId: true, branchCode: true, branchSource: true },
         });
+
+        const preservesManagerBranch = existingSite?.branchSource === 'MANAGER_CONFIRMED';
+        const branchData = preservesManagerBranch
+          ? {
+              branchId: existingSite!.branchId,
+              branchCode: existingSite!.branchCode,
+            }
+          : {
+              branchId: siteBranchId,
+              branchCode: siteBranch,
+              ...importedBranch(decision ?? decideBranch([])),
+            };
 
         const siteRecord = existingSite
           ? await tx.serviceSite.update({
               where: { id: existingSite.id },
               data: {
                 addressLine: site.addressLine,
-                branchId: siteBranchId,
-                branchCode: siteBranch,
+                ...branchData,
                 ...activation(site.isServiced),
               },
             })
@@ -170,16 +200,15 @@ export async function importSchedule(
                 customerId: record.id,
                 name: site.name,
                 addressLine: site.addressLine,
-                branchId: siteBranchId,
-                branchCode: siteBranch,
+                ...branchData,
                 isActive: site.isServiced,
                 importedInactiveAt: site.isServiced ? null : new Date(),
               },
             });
 
         siteIds.set(site.name.toLowerCase(), siteRecord.id);
-        siteBranchIds.set(siteRecord.id, siteBranchId);
-        siteBranchCodes.set(siteRecord.id, siteBranch);
+        siteBranchIds.set(siteRecord.id, siteRecord.branchId);
+        siteBranchCodes.set(siteRecord.id, siteRecord.branchCode);
         if (existingSite) summary.sitesUpdated += 1;
         else summary.sitesCreated += 1;
       }
@@ -208,8 +237,20 @@ export async function importSchedule(
 
         const existingAgreement = await tx.serviceAgreement.findFirst({
           where: { serviceSiteId: siteId, jobTypeId },
-          select: { id: true },
+          select: {
+            id: true,
+            importedInactiveAt: true,
+            crewSizeProvenance: true,
+            durationProvenance: true,
+            dayRuleProvenance: true,
+          },
         });
+
+        const sourceCrewSize = agreement.effort.crewSize ?? jobType.defaultCrewSize;
+        const sourceDuration = agreement.effort.durationMinutes ?? jobType.defaultDurationMinutes;
+        const preservesCrewSize = existingAgreement?.crewSizeProvenance === DataProvenance.MANAGER_CONFIRMED;
+        const preservesDuration = existingAgreement?.durationProvenance === DataProvenance.MANAGER_CONFIRMED;
+        const preservesDayRules = existingAgreement?.dayRuleProvenance === DataProvenance.MANAGER_CONFIRMED;
 
         const data = {
           customerId: record.id,
@@ -220,8 +261,32 @@ export async function importSchedule(
           frequencyCount: agreement.frequency.frequency.count,
           frequencyUnit: agreement.frequency.frequency.unit,
           frequencyInterval: agreement.frequency.frequency.interval,
-          crewSize: agreement.effort.crewSize ?? jobType.defaultCrewSize,
-          durationMinutes: agreement.effort.durationMinutes ?? jobType.defaultDurationMinutes,
+          ...(preservesCrewSize
+            ? {}
+            : {
+                crewSize: sourceCrewSize,
+                crewSizeProvenance:
+                  agreement.effort.crewSize === null
+                    ? DataProvenance.DEFAULTED
+                    : DataProvenance.SOURCE,
+              }),
+          ...(preservesDuration
+            ? {}
+            : {
+                durationMinutes: sourceDuration,
+                durationProvenance:
+                  agreement.effort.durationMinutes === null
+                    ? DataProvenance.DEFAULTED
+                    : DataProvenance.SOURCE,
+              }),
+          ...(preservesDayRules
+            ? {}
+            : {
+                dayRuleProvenance:
+                  agreement.dayRule.kind === 'derived'
+                    ? DataProvenance.DERIVED
+                    : DataProvenance.SOURCE,
+              }),
           startDate,
           endDate: agreement.endDate
             ? new Date(`${agreement.endDate}T00:00:00.000Z`)
@@ -230,7 +295,7 @@ export async function importSchedule(
           // — it is the record of what was once promised, and its past visits
           // still hang off it. ARCHIVED is what keeps it out of generation and
           // out of the optimizer without losing any of that.
-          status: agreement.isServiced ? AgreementStatus.ACTIVE : AgreementStatus.ARCHIVED,
+          ...agreementActivation(agreement.isServiced, existingAgreement),
           notes:
             agreement.dayRule.kind === 'derived'
               ? `Imported from the master schedule workbook (${customer.sourceSheet}). The allowed days were not stated — they were read from the ${agreement.dayRule.sampleSize} visit dates already booked (${agreement.dayRule.evidence}). Confirm with the customer.`
@@ -242,12 +307,32 @@ export async function importSchedule(
         if (existingAgreement) {
           await tx.serviceAgreement.update({
             where: { id: existingAgreement.id },
-            data: { ...data, dayRules: { deleteMany: {}, create: dayRules } },
+            data: {
+              ...data,
+              ...(preservesDayRules ? {} : { dayRules: { deleteMany: {}, create: dayRules } }),
+            },
           });
           summary.agreementsUpdated += 1;
         } else {
           await tx.serviceAgreement.create({
-            data: { ...data, dayRules: { create: dayRules } },
+            data: {
+              ...data,
+              crewSize: sourceCrewSize,
+              crewSizeProvenance:
+                agreement.effort.crewSize === null
+                  ? DataProvenance.DEFAULTED
+                  : DataProvenance.SOURCE,
+              durationMinutes: sourceDuration,
+              durationProvenance:
+                agreement.effort.durationMinutes === null
+                  ? DataProvenance.DEFAULTED
+                  : DataProvenance.SOURCE,
+              dayRuleProvenance:
+                agreement.dayRule.kind === 'derived'
+                  ? DataProvenance.DERIVED
+                  : DataProvenance.SOURCE,
+              dayRules: { create: dayRules },
+            },
           });
           summary.agreementsCreated += 1;
         }

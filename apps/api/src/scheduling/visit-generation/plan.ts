@@ -1,4 +1,4 @@
-import { BranchCode } from '@prisma/client';
+import { BranchCode, DataProvenance } from '@prisma/client';
 
 /**
  * Decides what a generation run would change, before anything is written.
@@ -27,6 +27,7 @@ export interface RequiredVisit {
   branchCode: BranchCode;
   /** The agreement version this requirement came from. */
   agreementVersionId: string | null;
+  windowProvenance?: DataProvenance;
   isPreferredDay: boolean;
 }
 

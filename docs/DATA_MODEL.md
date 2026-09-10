@@ -15,6 +15,10 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 - **Times are minutes from midnight.** Operating hours and service windows are
   stored as integers, so comparisons carry no timezone ambiguity. Dates are
   `@db.Date` in Asia/Colombo terms.
+- **Imported facts keep their provenance.** `DataProvenance` distinguishes a
+  stated workbook value from a derived value, a fallback default, and an
+  explicit manager confirmation. Old rows migrate as `UNKNOWN`, never as a
+  confidence claim the system cannot support.
 
 ---
 
@@ -33,7 +37,7 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 | `employees` | One row per person in the technician matrix. `sourceKey` is the idempotency key for re-import. `isPmsGrade` marks a supervisor. `deploymentType` marks whether the person is mobile or permanently stationed. |
 | `employee_skills` | Normalised `skillCode` for matching, `skillLabel` for display. |
 | `permanent_assignments` | Employee ↔ site, with effective dates. A person with an active row here is never dispatched elsewhere. |
-| `vehicles` | One row per vehicle column in the matrix. |
+| `vehicles` | One row per vehicle column in the matrix. `ownershipGroup` preserves the matrix heading; `branchId` stays null until confirmed because the matrix does not state it. |
 | `vehicle_authorizations` | A checkmark: this employee may drive this vehicle. Authorization only — no ownership, no primary driver. |
 
 ### Customers
@@ -41,15 +45,15 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 | Table | Purpose |
 | --- | --- |
 | `customers` | Customer with its branch. |
-| `service_sites` | A physical location belonging to a customer. |
-| `site_operating_hours` | Opening windows by weekday. A weekday with no row is closed. Several rows per weekday are allowed — a site that shuts over lunch is two windows, not one long one. |
+| `service_sites` | A physical location belonging to a customer. `branchConfidence` and `branchSource` distinguish address evidence, a Colombo fallback, and a manager confirmation. |
+| `site_operating_hours` | Confirmed opening windows by weekday. A weekday with no row is closed when any actual hours exist; an entirely empty set remains unknown, not an invented row. Several rows per weekday are allowed — a site that shuts over lunch is two windows, not one long one. |
 
 ### Services
 
 | Table | Purpose |
 | --- | --- |
 | `job_types` | Type of work, with default duration, default crew size and whether a PMS supervisor is required. |
-| `service_agreements` | The contract: frequency (N per week/month), crew size, duration, optional service window, date range, and lifecycle `status`. |
+| `service_agreements` | The contract: frequency (N per week/month), crew size, duration, optional service window, date range, lifecycle `status`, and provenance for crew, duration and day rules. A red import leaves `importedInactiveAt` until a manager deliberately clears it. |
 | `service_agreement_required_skills` | Skills a crew member must hold for this agreement, on top of the job type's own requirement. |
 | `service_agreement_versions` | Append-only snapshot per version. A generated visit records the version it came from, so a schedule stays explainable after the agreement changes. |
 | `service_agreement_day_rules` | `ALLOWED` rows are hard constraints; `PREFERRED` rows only affect ranking. Kept as rows rather than a bitmask so the reason for a rejected day is explainable. |
@@ -58,7 +62,7 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 
 | Table | Purpose |
 | --- | --- |
-| `generated_visits` | One concrete visit produced from an agreement. Exists whether or not it can be staffed. |
+| `generated_visits` | One concrete visit produced from an agreement. Exists whether or not it can be staffed. `windowProvenance` records whether the window was derived from actual hours or the disclosed 08:00-17:00 fallback. |
 | `visit_unassigned_reasons` | Why a visit could not be staffed: a stable `code` plus a manager-readable `message`. This is what the Unassigned queue displays. |
 | `assignments` | A crew and vehicle proposal for one visit, with its lifecycle timestamps. |
 | `assignment_crew_members` | Who is on the crew, their role, and whether they are the PMS supervisor. |

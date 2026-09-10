@@ -121,6 +121,12 @@ describe('importing the workforce matrix', () => {
       expect(first.authorizationsLinked).toBe(4);
       const vehicles = await prisma.vehicle.findMany({ orderBy: { code: 'asc' } });
       expect(vehicles.map(({ code }) => code)).toEqual(['CP CAB-1234', 'DAC-2485', 'WP CAB-1234']);
+      // The matrix says which transport group owns the column, but never the
+      // vehicle's branch. Preserve the former and leave the latter unknown.
+      expect(vehicles.find(({ code }) => code === 'DAC-2485')).toMatchObject({
+        ownershipGroup: context === 'group' ? 'Transport' : null,
+        branchId: null,
+      });
       const employees = await prisma.employee.findMany({
         orderBy: { fullName: 'asc' }, include: {
           vehicleAuthorizations: { orderBy: { vehicle: { code: 'asc' } }, include: { vehicle: true } },
@@ -165,6 +171,8 @@ describe('importing the workforce matrix', () => {
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { code: 'DAC-2485' } });
     expect(vehicle.label).toBe('Bolero Truck DAC-2485');
     expect(vehicle.seatCapacity).toBeNull();
+    expect(vehicle.ownershipGroup).toBeNull();
+    expect(vehicle.branchId).toBeNull();
     const employees = await prisma.employee.findMany({ orderBy: { fullName: 'asc' } });
     expect(employees.map(({ fullName }) => fullName)).toEqual([
       'Fixture Aspen', 'Fixture Birch', 'Fixture Cedar', 'Fixture Elm',
