@@ -396,7 +396,7 @@ describe('regeneration never loses manager-controlled work', () => {
   )(
     'aborts a stale generation $operation after $change without applying any of its plan',
     async ({ operation, change }) => {
-      const agreement = await createAgreement();
+      const agreement = await createAgreement({ crewSize: 1 });
       const dto = { ...HORIZON, serviceAgreementIds: [agreement.id] };
       await confirm({ serviceAgreementIds: [agreement.id] });
       const [visit] = await prisma.generatedVisit.findMany({

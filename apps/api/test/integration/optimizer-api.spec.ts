@@ -651,6 +651,77 @@ async function manualPublicationFixture(withDraft = true) {
   return { visitId, run, draft, createDraft, actor, proposal };
 }
 
+describe('assignment history lookup', () => {
+  it.each([AssignmentStatus.COMPLETED, AssignmentStatus.SUPERSEDED])(
+    'returns %s history when the visit has no live assignment',
+    async (status) => {
+      const f = await manualPublicationFixture();
+      await prisma.assignment.update({
+        where: { id: f.draft!.id },
+        data: { status },
+      });
+
+      const response = await request(http)
+        .get(`/api/visits/${f.visitId}/assignment`)
+        .set(auth(managerToken));
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ id: f.draft!.id, status });
+    },
+  );
+
+  it('returns the most recently updated completed or superseded history', async () => {
+    const f = await manualPublicationFixture();
+    await prisma.assignment.update({
+      where: { id: f.draft!.id },
+      data: {
+        status: AssignmentStatus.COMPLETED,
+        updatedAt: new Date('2030-01-01T00:00:00.000Z'),
+      },
+    });
+    const superseded = await f.createDraft();
+    await prisma.assignment.update({
+      where: { id: superseded.id },
+      data: {
+        status: AssignmentStatus.SUPERSEDED,
+        updatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      },
+    });
+
+    const response = await request(http)
+      .get(`/api/visits/${f.visitId}/assignment`)
+      .set(auth(managerToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: superseded.id,
+      status: AssignmentStatus.SUPERSEDED,
+    });
+  });
+
+  it('prefers a live draft over newer assignment history', async () => {
+    const f = await manualPublicationFixture();
+    await prisma.assignment.update({
+      where: { id: f.draft!.id },
+      data: {
+        status: AssignmentStatus.COMPLETED,
+        updatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      },
+    });
+    const liveDraft = await f.createDraft();
+
+    const response = await request(http)
+      .get(`/api/visits/${f.visitId}/assignment`)
+      .set(auth(managerToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: liveDraft.id,
+      status: AssignmentStatus.DRAFT,
+    });
+  });
+});
+
 describe('standard writer publication protocol', () => {
   async function batchFixture(withVehicle = false) {
     const visits = [await manualPublicationFixture(), await manualPublicationFixture()];

@@ -6,7 +6,10 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
-import { lockScheduleVisits } from './schedule-visit-lock';
+import {
+  assertUnpublishedAssignment,
+  lockScheduleVisits,
+} from './schedule-visit-lock';
 
 const PUBLISH_ASSIGNMENT_INCLUDE = {
   crewMembers: { include: { employee: { select: { fullName: true } } } },
@@ -314,7 +317,7 @@ export class PublishingService {
         run: await tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } }),
         publishedCount: publishable.length,
       };
-    });
+    }, { timeout: 30_000 });
 
     return published;
   }
@@ -342,8 +345,20 @@ export class PublishingService {
 
     return this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [assignment.generatedVisitId]);
-      const current = await tx.assignment.findUnique({ where: { id: assignmentId } });
-      if (!current || current.updatedAt.getTime() !== assignment.updatedAt.getTime()) {
+      const current = await tx.assignment.findUnique({
+        where: { id: assignmentId },
+        select: {
+          updatedAt: true,
+          status: true,
+          publishedAt: true,
+          _count: { select: { notificationOutboxEntries: true } },
+        },
+      });
+      if (!current) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      assertUnpublishedAssignment(assignmentId, current);
+      if (current.updatedAt.getTime() !== assignment.updatedAt.getTime()) {
         throw this.assignmentChanged(assignmentId);
       }
       const lock = await tx.assignmentLock.upsert({
@@ -381,6 +396,18 @@ export class PublishingService {
 
     return this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [snapshot.assignment.generatedVisitId]);
+      const assignment = await tx.assignment.findUnique({
+        where: { id: assignmentId },
+        select: {
+          status: true,
+          publishedAt: true,
+          _count: { select: { notificationOutboxEntries: true } },
+        },
+      });
+      if (!assignment) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      assertUnpublishedAssignment(assignmentId, assignment);
       const existing = await tx.assignmentLock.findUnique({
         where: { assignmentId_scope: { assignmentId, scope } },
       });

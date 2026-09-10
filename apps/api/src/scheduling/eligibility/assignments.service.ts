@@ -27,6 +27,11 @@ const LIVE_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.IN_PROGRESS,
 ];
 
+const HISTORY_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.COMPLETED,
+  AssignmentStatus.SUPERSEDED,
+];
+
 /** States descended from a published assignment and therefore still visible
  * to the employee who was told about the job. */
 const EMPLOYEE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
@@ -265,11 +270,19 @@ export class AssignmentsService {
   }
 
   async get(visitId: string): Promise<AssignmentDto | null> {
-    const assignment = await this.prisma.assignment.findFirst({
+    const live = await this.prisma.assignment.findFirst({
       where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
       include: ASSIGNMENT_INCLUDE,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     });
-    return assignment ? toAssignmentDto(assignment) : null;
+    if (live) return toAssignmentDto(live);
+
+    const history = await this.prisma.assignment.findFirst({
+      where: { generatedVisitId: visitId, status: { in: HISTORY_STATUSES } },
+      include: ASSIGNMENT_INCLUDE,
+      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    });
+    return history ? toAssignmentDto(history) : null;
   }
 
   /**
