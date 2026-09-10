@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyPublishedAssignmentRepair,
   ApiError,
+  buildPublishedAssignmentRepairPlan,
   fetchHealth,
   fetchMeta,
   fetchOperationsDay,
+  fetchPublishedAssignmentRepairFindings,
   fetchVisitAssignment,
 } from "../api-client";
 
@@ -104,6 +107,69 @@ describe("api-client", () => {
     expect(global.fetch).toHaveBeenCalledWith(
       "http://localhost:3001/api/operations/day?date=2026-09-10&branchCode=KANDY",
       expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("uses the published-assignment repair boundary for findings and zero-write planning", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 })),
+    }) as unknown as typeof fetch;
+
+    await fetchPublishedAssignmentRepairFindings({ page: 1, pageSize: 100 });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/findings?page=1&pageSize=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+
+    await buildPublishedAssignmentRepairPlan({
+      sourceAssignmentIds: ["assignment-1"],
+      acknowledgeCurrentDay: true,
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/plans",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sourceAssignmentIds: ["assignment-1"],
+          acknowledgeCurrentDay: true,
+        }),
+      }),
+    );
+  });
+
+  it("passes the reviewed plan and browser idempotency key unchanged to apply", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            repairId: "repair-1",
+            planHash: "a".repeat(64),
+            idempotencyKey: "repair-browser-1",
+            communicationState: "APPLIED_PENDING_COMMUNICATION",
+            items: [],
+          }),
+        ),
+    }) as unknown as typeof fetch;
+
+    await applyPublishedAssignmentRepair({
+      operations: [{ sourceAssignmentId: "assignment-1", action: "WITHDRAWN", unassignedReasons: [{ code: "NO_VEHICLE", message: "No vehicle." }] }],
+      planHash: "a".repeat(64),
+      sourceFingerprints: [{ sourceAssignmentId: "assignment-1", fingerprint: "f".repeat(64) }],
+      confirmation: true,
+      reason: "Remove an invalid published assignment",
+      idempotencyKey: "repair-browser-1",
+    });
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/apply",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"idempotencyKey":"repair-browser-1"'),
+      }),
     );
   });
 });

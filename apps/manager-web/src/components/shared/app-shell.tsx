@@ -17,14 +17,23 @@ import {
   History,
   Menu,
   LogOut,
+  Wrench,
+  type LucideIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/lib/auth";
+import { useAuth, type ManagerRole } from "@/lib/auth";
 
-const NAV_ITEMS = [
+interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  roles?: ManagerRole[];
+}
+
+const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/calendar", label: "Calendar", icon: CalendarRange },
   { href: "/customers", label: "Customers", icon: Users },
@@ -37,6 +46,12 @@ const NAV_ITEMS = [
     href: "/unassigned-visits",
     label: "Unassigned Visits",
     icon: AlertTriangle,
+  },
+  {
+    href: "/published-assignment-repairs",
+    label: "Repair Center",
+    icon: Wrench,
+    roles: ["ADMIN", "MANAGER"],
   },
   { href: "/schedule-history", label: "Schedule History", icon: History },
 ];
@@ -59,12 +74,12 @@ function Brand() {
   );
 }
 
-function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+function NavLinks({ role, onNavigate }: { role?: ManagerRole; onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
     <nav className="flex flex-col gap-0.5">
-      {NAV_ITEMS.map((item) => {
+      {NAV_ITEMS.filter((item) => !item.roles || (role && item.roles.includes(role))).map((item) => {
         const isActive = pathname === item.href;
         const Icon = item.icon;
 
@@ -126,7 +141,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Brand />
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-4">
-          <NavLinks />
+          <NavLinks role={user?.role} />
         </div>
         <UserFooter name={user?.fullName} onSignOut={logout} />
       </aside>
@@ -159,7 +174,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Brand />
               </SheetTitle>
               <div className="flex-1 px-3 py-4">
-                <NavLinks onNavigate={() => setMobileNavOpen(false)} />
+                <NavLinks role={user?.role} onNavigate={() => setMobileNavOpen(false)} />
               </div>
               <UserFooter name={user?.fullName} onSignOut={logout} />
             </SheetContent>

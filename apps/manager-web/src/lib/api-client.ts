@@ -180,6 +180,130 @@ export interface OperationsDayResponse {
   items: OperationsDayItem[];
 }
 
+/* -------------------------------------------------------------------------
+ * Published assignment repair
+ *
+ * This is one deliberately narrow adapter around the recovery API. The
+ * planner endpoint is landing alongside this screen, so no page reaches into
+ * its wire format directly. Replace these temporary view-model aliases with
+ * generated contract types when the backend contract is merged; callers and
+ * all safety gates remain unchanged.
+ * ---------------------------------------------------------------------- */
+
+export type PublishedAssignmentRepairTimeScope = "HISTORICAL" | "CURRENT_DAY" | "FUTURE";
+export type PublishedAssignmentRepairAction = "REPLACED" | "WITHDRAWN";
+
+export interface PublishedAssignmentRepairConflict {
+  code: string;
+  message: string;
+  remediation?: string;
+}
+
+export interface PublishedAssignmentRepairFinding {
+  assignmentId: string;
+  visitId: string;
+  visitDate: string;
+  customerName: string;
+  siteName: string;
+  conflicts: PublishedAssignmentRepairConflict[];
+  sourceFingerprint: string;
+  timeScope: PublishedAssignmentRepairTimeScope;
+  isSelectableForRepair: boolean;
+}
+
+export interface PublishedAssignmentRepairFindingsPage {
+  items: PublishedAssignmentRepairFinding[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface PublishedAssignmentRepairReason {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface PublishedAssignmentRepairCrewMember {
+  employeeId: string;
+  fullName?: string;
+  role: string;
+}
+
+export interface PublishedAssignmentRepairVehicle {
+  vehicleId: string;
+  label?: string;
+  driverEmployeeId?: string | null;
+  driverName?: string;
+}
+
+export interface PublishedAssignmentRepairReplacement {
+  plannedStartMinute: number;
+  plannedEndMinute: number;
+  crew: PublishedAssignmentRepairCrewMember[];
+  vehicles?: PublishedAssignmentRepairVehicle[];
+}
+
+export interface PublishedAssignmentRepairOperation {
+  sourceAssignmentId: string;
+  action: PublishedAssignmentRepairAction;
+  replacement?: PublishedAssignmentRepairReplacement;
+  unassignedReasons?: PublishedAssignmentRepairReason[];
+}
+
+export interface PublishedAssignmentRepairPlanItem {
+  sourceAssignmentId: string;
+  visitId: string;
+  visitDate: string;
+  repairability: "CURRENT_DAY" | "FUTURE";
+  action: PublishedAssignmentRepairAction;
+  replacement?: PublishedAssignmentRepairReplacement;
+  unassignedReasons?: PublishedAssignmentRepairReason[];
+  preserved: {
+    crewEmployeeIds: string[];
+    vehicleIds: string[];
+    keptOriginalTime: boolean;
+  };
+  conflicts: PublishedAssignmentRepairConflict[];
+}
+
+export interface PublishedAssignmentRepairPlan {
+  planHash: string;
+  sourceFingerprints: Array<{ sourceAssignmentId: string; fingerprint: string }>;
+  solver: { status: string; solveSeconds: number };
+  items: PublishedAssignmentRepairPlanItem[];
+  operations: PublishedAssignmentRepairOperation[];
+}
+
+export interface BuildPublishedAssignmentRepairPlanRequest {
+  sourceAssignmentIds: string[];
+  acknowledgeCurrentDay?: true;
+  timeLimitSeconds?: number;
+}
+
+export interface ApplyPublishedAssignmentRepairRequest {
+  operations: PublishedAssignmentRepairOperation[];
+  planHash: string;
+  sourceFingerprints: Array<{ sourceAssignmentId: string; fingerprint: string }>;
+  acknowledgeCurrentDay?: true;
+  confirmation: true;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface PublishedAssignmentRepairResult {
+  repairId: string;
+  planHash: string;
+  idempotencyKey: string;
+  communicationState: string;
+  items: Array<{
+    sourceAssignmentId: string;
+    visitId: string;
+    action: PublishedAssignmentRepairAction;
+    replacementAssignmentId: string | null;
+  }>;
+}
+
 const OPERATION_STATES = new Set<OperationState>([
   "READY",
   "PROPOSED",
@@ -1003,5 +1127,34 @@ export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
 export function fetchOperationsDay(query: OperationsDayQuery): Promise<OperationsDayResponse> {
   return request<unknown>(`/operations/day${buildQuery(query as unknown as Record<string, unknown>)}`).then(
     parseOperationsDay,
+  );
+}
+
+/** Lists invalid published assignments. This call is read-only. */
+export function fetchPublishedAssignmentRepairFindings(
+  query: { page?: number; pageSize?: number } = {},
+): Promise<PublishedAssignmentRepairFindingsPage> {
+  return request<PublishedAssignmentRepairFindingsPage>(
+    `/operations/published-assignment-repairs/findings${buildQuery(query)}`,
+  );
+}
+
+/** Asks the solver for an exact, zero-write repair manifest. */
+export function buildPublishedAssignmentRepairPlan(
+  dto: BuildPublishedAssignmentRepairPlanRequest,
+): Promise<PublishedAssignmentRepairPlan> {
+  return request<PublishedAssignmentRepairPlan>(
+    "/operations/published-assignment-repairs/plans",
+    { method: "POST", body: dto },
+  );
+}
+
+/** Applies the exact reviewed manifest. The API revalidates every safety gate. */
+export function applyPublishedAssignmentRepair(
+  dto: ApplyPublishedAssignmentRepairRequest,
+): Promise<PublishedAssignmentRepairResult> {
+  return request<PublishedAssignmentRepairResult>(
+    "/operations/published-assignment-repairs/apply",
+    { method: "POST", body: dto },
   );
 }
