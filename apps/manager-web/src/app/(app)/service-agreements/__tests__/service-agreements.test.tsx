@@ -111,6 +111,24 @@ describe("ServiceAgreementsPage", () => {
     expect(screen.queryByRole("option", { name: "Closed Warehouse" })).not.toBeInTheDocument();
   });
 
+  it("shows customer and site names after selection instead of their internal ids", async () => {
+    const user = await openForm();
+    const customerTrigger = screen.getByLabelText("Customer");
+
+    await user.click(customerTrigger);
+    await user.click(await screen.findByRole("option", { name: customer.name }));
+
+    expect(customerTrigger).toHaveTextContent(customer.name);
+    expect(customerTrigger).not.toHaveTextContent(customer.id);
+
+    const siteTrigger = screen.getByLabelText("Site");
+    await user.click(siteTrigger);
+    await user.click(await screen.findByRole("option", { name: site.name }));
+
+    expect(siteTrigger).toHaveTextContent(site.name);
+    expect(siteTrigger).not.toHaveTextContent(site.id);
+  });
+
   it("requires a start date before saving", async () => {
     const user = await openForm();
 

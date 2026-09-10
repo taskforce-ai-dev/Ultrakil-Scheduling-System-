@@ -172,6 +172,10 @@ export default function ServiceAgreementsPage() {
   // unfiltered by the API (it's the customer-level `active` param that's
   // filtered, not the nested sites), so this has to filter client-side.
   const sitesForCustomer = (selectedCustomer?.sites ?? []).filter((site) => site.isActive);
+  const customerLabels = Object.fromEntries(
+    customers.map((customer) => [customer.id, customer.name])
+  );
+  const siteLabels = Object.fromEntries(sitesForCustomer.map((site) => [site.id, site.name]));
   const selectedSite: ServiceSite | undefined = sitesForCustomer.find(
     (site) => site.id === serviceSiteId
   );
@@ -529,7 +533,11 @@ export default function ServiceAgreementsPage() {
                   name="customerId"
                   rules={{ required: true }}
                   render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <Select
+                      items={customerLabels}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    >
                       <SelectTrigger id="customerId" className="w-full">
                         <SelectValue placeholder="Select a customer" />
                       </SelectTrigger>
@@ -551,7 +559,11 @@ export default function ServiceAgreementsPage() {
                   name="serviceSiteId"
                   rules={{ required: true }}
                   render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
+                    <Select
+                      items={siteLabels}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    >
                       <SelectTrigger id="serviceSiteId" className="w-full">
                         <SelectValue placeholder="Select a site" />
                       </SelectTrigger>
