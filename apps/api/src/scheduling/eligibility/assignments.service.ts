@@ -439,7 +439,10 @@ export class AssignmentsService {
 
     const where: Prisma.AssignmentWhereInput = {
       status: { in: EMPLOYEE_ASSIGNMENT_STATUSES },
-      scheduleRunId: { not: null },
+      OR: [
+        { scheduleRunId: { not: null } },
+        { publishedByRepairId: { not: null } },
+      ],
       publishedAt: { not: null },
       crewMembers: { some: { employeeId } },
       ...(query.from || query.to
@@ -514,7 +517,9 @@ export class AssignmentsService {
       return {
         assignmentId: assignment.id,
         status: assignment.status,
-        scheduleRunId: assignment.scheduleRunId!,
+        scheduleRunId: assignment.scheduleRunId,
+        publishedByRepairId: assignment.publishedByRepairId,
+        supersedesAssignmentId: assignment.supersedesAssignmentId,
         visitId: assignment.generatedVisitId,
         visitDate: assignment.plannedStart.toISOString().slice(0, 10),
         plannedStartMinute: minutes(assignment.plannedStart),
@@ -661,6 +666,8 @@ function toAssignmentDto(assignment: AssignmentWithRelations): AssignmentDto {
     generatedVisitId: assignment.generatedVisitId,
     status: assignment.status,
     branchCode: assignment.branchCode,
+    supersedesAssignmentId: assignment.supersedesAssignmentId,
+    publishedByRepairId: assignment.publishedByRepairId,
     plannedStartMinute: minutes(assignment.plannedStart),
     plannedEndMinute: minutes(assignment.plannedEnd),
     crew: assignment.crewMembers

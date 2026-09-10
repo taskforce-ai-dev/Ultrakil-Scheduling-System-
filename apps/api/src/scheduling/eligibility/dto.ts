@@ -136,6 +136,10 @@ export class AssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) generatedVisitId!: string;
   @ApiProperty({ type: String }) status!: string;
   @ApiProperty({ type: String }) branchCode!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supersedesAssignmentId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  publishedByRepairId!: string | null;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;
   @ApiProperty({ type: Number }) plannedEndMinute!: number;
   @ApiProperty({ type: [AssignedCrewMemberDto] })
@@ -235,7 +239,12 @@ export class EmployeeAssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) assignmentId!: string;
   @ApiProperty({ type: String, enum: Object.values(AssignmentStatus) })
   status!: AssignmentStatus;
-  @ApiProperty({ type: String, format: 'uuid' }) scheduleRunId!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  scheduleRunId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  publishedByRepairId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supersedesAssignmentId!: string | null;
   @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
   @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;

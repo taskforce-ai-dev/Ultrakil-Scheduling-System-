@@ -2465,7 +2465,8 @@
                 "VISIT_NOT_SCHEDULABLE",
                 "ASSIGNMENT_LOCKED",
                 "CREW_CANNOT_TRAVEL",
-                "TOO_MANY_VEHICLES"
+                "TOO_MANY_VEHICLES",
+                "NO_FEASIBLE_CREW"
               ],
               "type": "string"
             }
@@ -2566,7 +2567,7 @@
     },
     "/api/employees/{employeeId}/assignments": {
       "get": {
-        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
+        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with schedule-run or repair provenance and non-null publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
         "operationId": "AssignmentsController_employeeAssignments",
         "parameters": [
           {
@@ -2958,6 +2959,141 @@
         "summary": "Authoritative operational view for one day",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/findings": {
+      "get": {
+        "description": "Read-only validation. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.",
+        "operationId": "PublishedAssignmentRepairController_findings",
+        "parameters": [
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentFindingsResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Find current published assignments that violate hard rules",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/preview": {
+      "post": {
+        "description": "Returns a canonical plan hash and exact source fingerprints. Apply rejects them if any source or rule result changes.",
+        "operationId": "PublishedAssignmentRepairController_preview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Validate a repair batch without writing anything",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/apply": {
+      "post": {
+        "description": "Requires an administrator, reason, explicit confirmation, idempotency key, matching plan hash, and unchanged source fingerprints.",
+        "operationId": "PublishedAssignmentRepairController_apply",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairApplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairResultDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT or ASSIGNMENT_NOT_ELIGIBLE — run a new preview before retrying."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Atomically apply a confirmed published-assignment repair",
+        "tags": [
+          "published-assignment-repairs"
         ]
       }
     }
@@ -5060,7 +5196,8 @@
               "VISIT_NOT_SCHEDULABLE",
               "ASSIGNMENT_LOCKED",
               "CREW_CANNOT_TRAVEL",
-              "TOO_MANY_VEHICLES"
+              "TOO_MANY_VEHICLES",
+              "NO_FEASIBLE_CREW"
             ]
           },
           "message": {
@@ -5175,6 +5312,16 @@
           "branchCode": {
             "type": "string"
           },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
           "plannedStartMinute": {
             "type": "number"
           },
@@ -5210,6 +5357,8 @@
           "generatedVisitId",
           "status",
           "branchCode",
+          "supersedesAssignmentId",
+          "publishedByRepairId",
           "plannedStartMinute",
           "plannedEndMinute",
           "crew",
@@ -5329,6 +5478,17 @@
           },
           "scheduleRunId": {
             "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
             "format": "uuid"
           },
           "visitId": {
@@ -5419,6 +5579,8 @@
           "assignmentId",
           "status",
           "scheduleRunId",
+          "publishedByRepairId",
+          "supersedesAssignmentId",
           "visitId",
           "visitDate",
           "plannedStartMinute",
@@ -6140,6 +6302,423 @@
         "required": [
           "items",
           "total"
+        ]
+      },
+      "PublishedAssignmentFindingDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "sourceFingerprint": {
+            "type": "string"
+          },
+          "timeScope": {
+            "type": "string",
+            "enum": [
+              "HISTORICAL",
+              "CURRENT_DAY",
+              "FUTURE"
+            ]
+          },
+          "isSelectableForRepair": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "visitId",
+          "visitDate",
+          "customerName",
+          "siteName",
+          "conflicts",
+          "sourceFingerprint",
+          "timeScope",
+          "isSelectableForRepair"
+        ]
+      },
+      "PublishedAssignmentFindingsResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentFindingDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "page": {
+            "type": "number"
+          },
+          "pageSize": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page",
+          "pageSize"
+        ]
+      },
+      "RepairCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "SUPERVISOR",
+              "TECHNICIAN",
+              "DRIVER",
+              "HELPER"
+            ]
+          }
+        },
+        "required": [
+          "employeeId",
+          "role"
+        ]
+      },
+      "RepairVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId"
+        ]
+      },
+      "RepairReplacementDto": {
+        "type": "object",
+        "properties": {
+          "plannedStartMinute": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairVehicleDto"
+            }
+          }
+        },
+        "required": [
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "crew"
+        ]
+      },
+      "RepairUnassignedReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "details": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "PublishedAssignmentRepairOperationDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "replacement": {
+            "$ref": "#/components/schemas/RepairReplacementDto"
+          },
+          "unassignedReasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairUnassignedReasonDto"
+            }
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "action"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewDto": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewItemDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "sourceFingerprint": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "timeScope": {
+            "type": "string",
+            "enum": [
+              "CURRENT_DAY",
+              "FUTURE"
+            ]
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "visitId",
+          "action",
+          "sourceFingerprint",
+          "isValid",
+          "conflicts",
+          "timeScope"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewResponseDto": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewItemDto"
+            }
+          }
+        },
+        "required": [
+          "planHash",
+          "isValid",
+          "items"
+        ]
+      },
+      "RepairSourceFingerprintDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 fingerprint returned by preview."
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "fingerprint"
+        ]
+      },
+      "PublishedAssignmentRepairApplyDto": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          },
+          "planHash": {
+            "type": "string",
+            "description": "Canonical SHA-256 plan hash returned by preview."
+          },
+          "sourceFingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairSourceFingerprintDto"
+            }
+          },
+          "confirmation": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Must be exactly true."
+          },
+          "acknowledgeCurrentDay": {
+            "type": "boolean",
+            "description": "Must be true when any target visit is on the current Colombo day."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "operations",
+          "planHash",
+          "sourceFingerprints",
+          "confirmation",
+          "reason",
+          "idempotencyKey"
+        ]
+      },
+      "PublishedAssignmentRepairResultItemDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "replacementAssignmentId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "visitId",
+          "action",
+          "replacementAssignmentId"
+        ]
+      },
+      "PublishedAssignmentRepairResultDto": {
+        "type": "object",
+        "properties": {
+          "repairId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "communicationState": {
+            "type": "string",
+            "enum": [
+              "APPLIED_PENDING_COMMUNICATION",
+              "COMMUNICATION_CONFIRMED"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairResultItemDto"
+            }
+          }
+        },
+        "required": [
+          "repairId",
+          "planHash",
+          "idempotencyKey",
+          "communicationState",
+          "items"
         ]
       }
     }

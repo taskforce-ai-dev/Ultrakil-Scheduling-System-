@@ -32,6 +32,8 @@ import { VisitGenerationController } from './visit-generation/visit-generation.c
 import { VisitGenerationService } from './visit-generation/visit-generation.service';
 import { VisitsController } from './visits/visits.controller';
 import { VisitsService } from './visits/visits.service';
+import { PublishedAssignmentRepairController } from './repair/published-assignment-repair.controller';
+import { PublishedAssignmentRepairService } from './repair/published-assignment-repair.service';
 
 /**
  * Turning commitments into dated work.
@@ -54,6 +56,7 @@ export class SchedulingModule {
         ScheduleRunsController,
         CalendarController,
         OperationsController,
+        PublishedAssignmentRepairController,
         ...(qstash ? [ScheduleRunQStashController] : []),
       ],
       providers: [
@@ -67,6 +70,7 @@ export class SchedulingModule {
         PublishingService,
         CalendarService,
         OperationsService,
+        PublishedAssignmentRepairService,
         ...(qstash
           ? [
               {

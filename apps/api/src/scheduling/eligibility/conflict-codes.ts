@@ -39,6 +39,7 @@ export const CONFLICT_CODES = [
   ErrorCode.ASSIGNMENT_LOCKED,
   ErrorCode.CREW_CANNOT_TRAVEL,
   ErrorCode.TOO_MANY_VEHICLES,
+  ErrorCode.NO_FEASIBLE_CREW,
 ] as const;
 
 export type ConflictCode = (typeof CONFLICT_CODES)[number];

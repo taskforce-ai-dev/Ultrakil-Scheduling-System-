@@ -125,6 +125,19 @@ enum AssignmentStatus {
   SUPERSEDED
 }
 
+/// The two safe outcomes for correcting already-published work. Published
+/// predecessors are retained in both cases; replacement adds a successor,
+/// while withdrawal returns the visit to the unassigned queue.
+enum AssignmentRepairAction {
+  REPLACED
+  WITHDRAWN
+}
+
+enum PublishedAssignmentRepairCommunicationState {
+  APPLIED_PENDING_COMMUNICATION
+  COMMUNICATION_CONFIRMED
+}
+
 enum CrewRole {
   SUPERVISOR
   TECHNICIAN
@@ -764,6 +777,7 @@ model GeneratedVisit {
 
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
+  repairItems       PublishedAssignmentRepairItem[]
 
   // Idempotency: one visit per agreement, date and start time. Generating the
   // same horizon twice therefore updates rather than duplicating.
@@ -824,6 +838,15 @@ model Assignment {
   startedAt      DateTime?
   completedAt    DateTime?
 
+  /// Assignment-level published lineage. A correction points at the exact
+  /// published predecessor it supersedes; the predecessor itself is immutable.
+  supersedesAssignmentId String?     @unique @db.Uuid
+  supersedesAssignment   Assignment? @relation("AssignmentSupersession", fields: [supersedesAssignmentId], references: [id], onDelete: Restrict)
+  supersededByAssignment Assignment? @relation("AssignmentSupersession")
+
+  publishedByRepairId String?                      @db.Uuid
+  publishedByRepair   PublishedAssignmentRepair?  @relation("RepairPublishedAssignments", fields: [publishedByRepairId], references: [id], onDelete: Restrict)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -831,11 +854,70 @@ model Assignment {
   vehicles                  AssignmentVehicle[]
   locks                     AssignmentLock[]
   notificationOutboxEntries AssignmentNotificationOutbox[]
+  repairItemsAsSource       PublishedAssignmentRepairItem[] @relation("RepairSourceAssignment")
+  repairItemAsReplacement   PublishedAssignmentRepairItem?  @relation("RepairReplacementAssignment")
 
   @@index([branchId, status])
   @@index([generatedVisitId])
   @@index([plannedStart])
+  @@index([publishedByRepairId])
   @@map("assignments")
+}
+
+/// One administrator-confirmed, idempotent repair transaction. The request
+/// and result hashes make retries safe without rewriting published history.
+model PublishedAssignmentRepair {
+  id String @id @default(uuid()) @db.Uuid
+
+  idempotencyKey String @unique
+  requestHash    String
+  planHash       String
+  reason         String
+
+  actorUserId String
+  actorLabel  String
+
+  result Json
+
+  communicationState       PublishedAssignmentRepairCommunicationState @default(APPLIED_PENDING_COMMUNICATION)
+  communicationConfirmedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  items                        PublishedAssignmentRepairItem[]
+  publishedAssignments         Assignment[]                    @relation("RepairPublishedAssignments")
+  cancelledNotificationIntents AssignmentNotificationOutbox[]  @relation("OutboxCancelledByRepair")
+
+  @@index([createdAt])
+  @@map("published_assignment_repairs")
+}
+
+/// Immutable before/after evidence for one assignment in a repair batch.
+model PublishedAssignmentRepairItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  repairId String                    @db.Uuid
+  repair   PublishedAssignmentRepair @relation(fields: [repairId], references: [id], onDelete: Restrict)
+
+  sourceAssignmentId String     @unique @db.Uuid
+  sourceAssignment   Assignment @relation("RepairSourceAssignment", fields: [sourceAssignmentId], references: [id], onDelete: Restrict)
+
+  replacementAssignmentId String?     @unique @db.Uuid
+  replacementAssignment   Assignment? @relation("RepairReplacementAssignment", fields: [replacementAssignmentId], references: [id], onDelete: Restrict)
+
+  generatedVisitId  String                 @db.Uuid
+  generatedVisit    GeneratedVisit         @relation(fields: [generatedVisitId], references: [id], onDelete: Restrict)
+  action            AssignmentRepairAction
+  sourceFingerprint String
+
+  before Json
+  after  Json
+
+  createdAt DateTime @default(now())
+
+  @@unique([repairId, sourceAssignmentId])
+  @@index([generatedVisitId])
+  @@map("published_assignment_repair_items")
 }
 
 model AssignmentCrewMember {
@@ -1038,8 +1120,16 @@ model AssignmentNotificationOutbox {
   /// Phase 1 — this column exists so adding one needs no migration either.
   processedAt DateTime?
 
+  /// A published intent made obsolete by a repair is retained as evidence but
+  /// must never be delivered. Database constraints keep this terminal state
+  /// mutually exclusive with successful processing.
+  cancelledAt         DateTime?
+  cancelledByRepairId String?                    @db.Uuid
+  cancelledByRepair   PublishedAssignmentRepair? @relation("OutboxCancelledByRepair", fields: [cancelledByRepairId], references: [id], onDelete: Restrict)
+
   @@unique([assignmentId, employeeId, eventType])
   @@index([processedAt])
+  @@index([cancelledAt])
   @@index([employeeId])
   @@map("assignment_notification_outbox")
 }

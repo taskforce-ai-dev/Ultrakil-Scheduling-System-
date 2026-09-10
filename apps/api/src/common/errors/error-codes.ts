@@ -97,6 +97,8 @@ export const ErrorCode = {
   /// The crew travels together in one vehicle, and a vehicle must seat all of
   /// them. A second vehicle carries nobody and keeps it off another job.
   TOO_MANY_VEHICLES: 'TOO_MANY_VEHICLES',
+  /** No legal crew/vehicle combination exists for the visit as currently defined. */
+  NO_FEASIBLE_CREW: 'NO_FEASIBLE_CREW',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

@@ -960,7 +960,7 @@ export interface paths {
         };
         /**
          * An employee's published daily assignments
-         * @description Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.
+         * @description Manager/admin read model prepared for a future worker app. Only published-descended assignments with schedule-run or repair provenance and non-null publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.
          */
         get: operations["AssignmentsController_employeeAssignments"];
         put?: never;
@@ -1103,6 +1103,66 @@ export interface paths {
         get: operations["CalendarController_list"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/operations/published-assignment-repairs/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find current published assignments that violate hard rules
+         * @description Read-only validation. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.
+         */
+        get: operations["PublishedAssignmentRepairController_findings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/operations/published-assignment-repairs/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a repair batch without writing anything
+         * @description Returns a canonical plan hash and exact source fingerprints. Apply rejects them if any source or rule result changes.
+         */
+        post: operations["PublishedAssignmentRepairController_preview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/operations/published-assignment-repairs/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Atomically apply a confirmed published-assignment repair
+         * @description Requires an administrator, reason, explicit confirmation, idempotency key, matching plan hash, and unchanged source fingerprints.
+         */
+        post: operations["PublishedAssignmentRepairController_apply"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1810,7 +1870,7 @@ export interface components {
         };
         ConflictDto: {
             /** @enum {string} */
-            code: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES";
+            code: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW";
             /** @description Written for a manager. */
             message: string;
             /** @description What to actually do about it. */
@@ -1845,6 +1905,10 @@ export interface components {
             generatedVisitId: string;
             status: string;
             branchCode: string;
+            /** Format: uuid */
+            supersedesAssignmentId: string | null;
+            /** Format: uuid */
+            publishedByRepairId: string | null;
             plannedStartMinute: number;
             plannedEndMinute: number;
             crew: components["schemas"]["AssignedCrewMemberDto"][];
@@ -1883,7 +1947,11 @@ export interface components {
             /** @enum {string} */
             status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
             /** Format: uuid */
-            scheduleRunId: string;
+            scheduleRunId: string | null;
+            /** Format: uuid */
+            publishedByRepairId: string | null;
+            /** Format: uuid */
+            supersedesAssignmentId: string | null;
             /** Format: uuid */
             visitId: string;
             /** Format: date */
@@ -2035,6 +2103,119 @@ export interface components {
         CalendarResponseDto: {
             items: components["schemas"]["CalendarEntryDto"][];
             total: number;
+        };
+        PublishedAssignmentFindingDto: {
+            /** Format: uuid */
+            assignmentId: string;
+            /** Format: uuid */
+            visitId: string;
+            /** Format: date */
+            visitDate: string;
+            customerName: string;
+            siteName: string;
+            conflicts: components["schemas"]["ConflictDto"][];
+            sourceFingerprint: string;
+            /** @enum {string} */
+            timeScope: "HISTORICAL" | "CURRENT_DAY" | "FUTURE";
+            isSelectableForRepair: boolean;
+        };
+        PublishedAssignmentFindingsResponseDto: {
+            items: components["schemas"]["PublishedAssignmentFindingDto"][];
+            total: number;
+            page: number;
+            pageSize: number;
+        };
+        RepairCrewMemberDto: {
+            /** Format: uuid */
+            employeeId: string;
+            /** @enum {string} */
+            role: "SUPERVISOR" | "TECHNICIAN" | "DRIVER" | "HELPER";
+        };
+        RepairVehicleDto: {
+            /** Format: uuid */
+            vehicleId: string;
+            /** Format: uuid */
+            driverEmployeeId?: string | null;
+        };
+        RepairReplacementDto: {
+            plannedStartMinute: number;
+            plannedEndMinute: number;
+            crew: components["schemas"]["RepairCrewMemberDto"][];
+            vehicles?: components["schemas"]["RepairVehicleDto"][];
+        };
+        RepairUnassignedReasonDto: {
+            code: string;
+            message: string;
+            details?: Record<string, never>;
+        };
+        PublishedAssignmentRepairOperationDto: {
+            /** Format: uuid */
+            sourceAssignmentId: string;
+            /** @enum {string} */
+            action: "REPLACED" | "WITHDRAWN";
+            replacement?: components["schemas"]["RepairReplacementDto"];
+            unassignedReasons?: components["schemas"]["RepairUnassignedReasonDto"][];
+        };
+        PublishedAssignmentRepairPreviewDto: {
+            operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
+        };
+        PublishedAssignmentRepairPreviewItemDto: {
+            /** Format: uuid */
+            sourceAssignmentId: string;
+            /** Format: uuid */
+            visitId: string;
+            /** @enum {string} */
+            action: "REPLACED" | "WITHDRAWN";
+            sourceFingerprint: string;
+            isValid: boolean;
+            conflicts: components["schemas"]["ConflictDto"][];
+            /** @enum {string} */
+            timeScope: "CURRENT_DAY" | "FUTURE";
+        };
+        PublishedAssignmentRepairPreviewResponseDto: {
+            planHash: string;
+            isValid: boolean;
+            items: components["schemas"]["PublishedAssignmentRepairPreviewItemDto"][];
+        };
+        RepairSourceFingerprintDto: {
+            /** Format: uuid */
+            sourceAssignmentId: string;
+            /** @description SHA-256 fingerprint returned by preview. */
+            fingerprint: string;
+        };
+        PublishedAssignmentRepairApplyDto: {
+            operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
+            /** @description Canonical SHA-256 plan hash returned by preview. */
+            planHash: string;
+            sourceFingerprints: components["schemas"]["RepairSourceFingerprintDto"][];
+            /**
+             * @description Must be exactly true.
+             * @enum {boolean}
+             */
+            confirmation: true;
+            /** @description Must be true when any target visit is on the current Colombo day. */
+            acknowledgeCurrentDay?: boolean;
+            reason: string;
+            idempotencyKey: string;
+        };
+        PublishedAssignmentRepairResultItemDto: {
+            /** Format: uuid */
+            sourceAssignmentId: string;
+            /** Format: uuid */
+            visitId: string;
+            /** @enum {string} */
+            action: "REPLACED" | "WITHDRAWN";
+            /** Format: uuid */
+            replacementAssignmentId: string | null;
+        };
+        PublishedAssignmentRepairResultDto: {
+            /** Format: uuid */
+            repairId: string;
+            planHash: string;
+            idempotencyKey: string;
+            /** @enum {string} */
+            communicationState: "APPLIED_PENDING_COMMUNICATION" | "COMMUNICATION_CONFIRMED";
+            items: components["schemas"]["PublishedAssignmentRepairResultItemDto"][];
         };
     };
     responses: never;
@@ -4270,6 +4451,102 @@ export interface operations {
             };
             /** @description Missing or invalid token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PublishedAssignmentRepairController_findings: {
+        parameters: {
+            query?: {
+                pageSize?: number;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedAssignmentFindingsResponseDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PublishedAssignmentRepairController_preview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishedAssignmentRepairPreviewDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedAssignmentRepairPreviewResponseDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PublishedAssignmentRepairController_apply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishedAssignmentRepairApplyDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedAssignmentRepairResultDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT or ASSIGNMENT_NOT_ELIGIBLE — run a new preview before retrying. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
