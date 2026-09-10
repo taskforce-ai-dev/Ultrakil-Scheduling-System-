@@ -136,11 +136,48 @@ describe("ScheduleHistoryPage", () => {
     expect(publishButton).toBeDisabled();
 
     await user.click(screen.getByRole("checkbox", { name: /I understand/i }));
+    expect(publishButton).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("Reason (required for partial schedules)"),
+      "Manager reviewed the remaining unassigned visits.",
+    );
 
     vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
     await user.click(publishButton);
 
-    expect(publishScheduleRun).toHaveBeenCalledWith("run-2", {});
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-2", {
+      acknowledgePartial: true,
+      reason: "Manager reviewed the remaining unassigned visits.",
+    });
+  });
+
+  it("publishes a partial run only after acknowledgement and a non-empty reason", async () => {
+    const run = buildScheduleRun({
+      id: "run-partial-reason",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 1,
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    const reason = screen.getByLabelText("Reason (required for partial schedules)");
+
+    await user.click(screen.getByRole("checkbox", { name: /I understand/i }));
+    expect(publishButton).toBeDisabled();
+    await user.type(reason, "Reviewed the one visit that remains unassigned.");
+
+    vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
+    expect(publishButton).toBeEnabled();
+    await user.click(publishButton);
+
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-partial-reason", {
+      acknowledgePartial: true,
+      reason: "Reviewed the one visit that remains unassigned.",
+    });
   });
 
   it("collapses a rapid double-click on Publish into a single request", async () => {
@@ -168,6 +205,7 @@ describe("ScheduleHistoryPage", () => {
     await userEvent.click(confirmButton, { skipHover: true });
 
     expect(publishScheduleRun).toHaveBeenCalledTimes(1);
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-4", {});
     await act(async () => {
       resolvePublish?.();
     });

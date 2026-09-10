@@ -285,13 +285,16 @@ export default function ScheduleHistoryPage() {
 
   async function confirmPublish() {
     if (!publishTarget) return;
-    if (publishTarget.visitsUnassigned > 0 && !partialAcknowledged) return;
+    const isPartial = publishTarget.visitsUnassigned > 0;
+    const reason = publishReason.trim();
+    if (isPartial && (!partialAcknowledged || !reason)) return;
     if (isPublishingRef.current) return; // Collapses a double-click into one request.
     isPublishingRef.current = true;
     setIsPublishing(true);
     try {
       await publishScheduleRun(publishTarget.id, {
-        ...(publishReason.trim() ? { reason: publishReason.trim() } : {}),
+        ...(isPartial ? { acknowledgePartial: true } : {}),
+        ...(reason ? { reason } : {}),
       });
       notify.success("Schedule published.");
       setPublishTarget(null);
@@ -559,12 +562,17 @@ export default function ScheduleHistoryPage() {
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="publish-reason">Reason (optional)</Label>
+            <Label htmlFor="publish-reason">
+              {publishTarget && publishTarget.visitsUnassigned > 0
+                ? "Reason (required for partial schedules)"
+                : "Reason (optional)"}
+            </Label>
             <Textarea
               id="publish-reason"
               value={publishReason}
               onChange={(event) => setPublishReason(event.target.value)}
               placeholder="Why is this being published now?"
+              aria-required={(publishTarget?.visitsUnassigned ?? 0) > 0}
             />
           </div>
 
@@ -576,7 +584,8 @@ export default function ScheduleHistoryPage() {
               onClick={confirmPublish}
               disabled={
                 isPublishing ||
-                ((publishTarget?.visitsUnassigned ?? 0) > 0 && !partialAcknowledged)
+                ((publishTarget?.visitsUnassigned ?? 0) > 0 &&
+                  (!partialAcknowledged || !publishReason.trim()))
               }
             >
               {isPublishing ? "Publishing…" : "Publish"}

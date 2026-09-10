@@ -571,6 +571,7 @@ export interface ScheduleRunQuery {
 /** `PublishScheduleDto` — same request-body gap. */
 export interface PublishScheduleRequest {
   reason?: string;
+  acknowledgePartial?: boolean;
 }
 /**
  * Hand-typed: the published contract has no `path`/`query` types for

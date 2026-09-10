@@ -9,6 +9,7 @@ import {
   fetchOperationsDay,
   fetchPublishedAssignmentRepairFindings,
   fetchVisitAssignment,
+  publishScheduleRun,
 } from "../api-client";
 
 describe("api-client", () => {
@@ -169,6 +170,30 @@ describe("api-client", () => {
       expect.objectContaining({
         method: "POST",
         body: expect.stringContaining('"idempotencyKey":"repair-browser-1"'),
+      }),
+    );
+  });
+
+  it("serializes a partial publish acknowledgement and reason at the API boundary", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve("{}"),
+    }) as unknown as typeof fetch;
+
+    await publishScheduleRun("run-partial", {
+      acknowledgePartial: true,
+      reason: "Manager reviewed the remaining unassigned visits.",
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/api/schedule-runs/run-partial/publish",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          acknowledgePartial: true,
+          reason: "Manager reviewed the remaining unassigned visits.",
+        }),
       }),
     );
   });
