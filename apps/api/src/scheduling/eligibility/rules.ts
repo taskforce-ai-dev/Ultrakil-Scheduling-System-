@@ -57,6 +57,11 @@ export interface EmployeeFacts {
   permanentSiteIds: string[];
   skillCodes: string[];
   authorizedVehicleIds: string[];
+  /**
+   * Check-marked under "Public Vehicles" in the workforce matrix: this person
+   * can reach a site by bus. Not a vehicle authorization — there is no vehicle.
+   */
+  canUsePublicTransport: boolean;
   /** Leave, sickness or training covering the visit date. */
   unavailableReason: string | null;
   /** Other visits already assigned to this person on this date. */
@@ -315,8 +320,10 @@ export function evaluateAssignment(
 
   // --- Vehicles ------------------------------------------------------------
   //
-  // A vehicle is optional: a crew that can use public transport needs none. But
-  // a vehicle that is brought must be drivable by somebody actually going.
+  // A vehicle is optional: a crew who can all use public transport needs none.
+  // But a vehicle that is brought must be drivable by somebody actually going,
+  // and a crew without one must be able to make its own way — see "Getting
+  // there" below.
 
   for (const proposed of proposal.vehicles) {
     const vehicle = vehicleById.get(proposed.vehicleId);
@@ -362,7 +369,7 @@ export function evaluateAssignment(
       conflicts.push({
         code: 'VEHICLE_CAPACITY_EXCEEDED',
         message: `${vehicle.label} seats ${vehicle.seatCapacity} and the crew is ${crew.length}.`,
-        remediation: 'Use a larger vehicle, or add a second one.',
+        remediation: 'Use a larger vehicle.',
         resources: { visitId: visit.id, vehicleIds: [vehicle.id] },
       });
     }
@@ -392,6 +399,53 @@ export function evaluateAssignment(
           visitId: visit.id,
           vehicleIds: [vehicle.id],
           employeeIds: driver ? [driver.id] : [],
+        },
+      });
+    }
+  }
+
+  // One vehicle, not several.
+  //
+  // The crew travels together, and a vehicle is only accepted above if it can
+  // seat all of them — so a second vehicle carries nobody. It is not free
+  // either: it stands idle here instead of taking another job.
+  if (proposal.vehicles.length > 1) {
+    const labels = proposal.vehicles
+      .map((proposed) => vehicleById.get(proposed.vehicleId)?.label)
+      .filter((label): label is string => label !== undefined);
+    conflicts.push({
+      code: 'TOO_MANY_VEHICLES',
+      message: `${proposal.vehicles.length} vehicles are assigned to this visit${labels.length > 0 ? ` (${labels.join(', ')})` : ''}; a crew travels in one.`,
+      remediation:
+        'Keep the one vehicle that seats the whole crew and release the rest for other visits.',
+      resources: {
+        visitId: visit.id,
+        vehicleIds: proposal.vehicles.map((proposed) => proposed.vehicleId).sort(),
+      },
+    });
+  }
+
+  // --- Getting there -------------------------------------------------------
+  //
+  // With no vehicle, the crew travels by public transport — and every one of
+  // them makes that journey. There is no vehicle to share, so a colleague's
+  // checkmark carries nobody but themselves: the rule is all of them, not one.
+  //
+  // Only asked of a crew that exists. A visit with nobody on it has no travel
+  // arrangements to be wrong about, and saying otherwise would put a reason in
+  // the queue about people who were never proposed.
+  if (crew.length > 0 && proposal.vehicles.length === 0) {
+    const stranded = crew.filter((employee) => !employee.canUsePublicTransport);
+    if (stranded.length > 0) {
+      const names = stranded.map((employee) => employee.fullName).join(' and ');
+      conflicts.push({
+        code: 'CREW_CANNOT_TRAVEL',
+        message: `This visit has no vehicle, and ${names} ${stranded.length === 1 ? 'is' : 'are'} not marked as able to travel by public transport.`,
+        remediation:
+          'Assign a vehicle somebody in the crew is authorized to drive, or crew it with people who can travel by public transport.',
+        resources: {
+          visitId: visit.id,
+          employeeIds: stranded.map((employee) => employee.id).sort(),
         },
       });
     }

@@ -46,6 +46,9 @@ function employee(overrides: Partial<EmployeeFacts> = {}): EmployeeFacts {
     permanentSiteIds: [],
     skillCodes: [],
     authorizedVehicleIds: [],
+    // The default crew member can get themselves to site, so tests about other
+    // rules are not derailed by a travel conflict they never meant to create.
+    canUsePublicTransport: true,
     unavailableReason: null,
     busy: [],
     ...overrides,
@@ -379,6 +382,11 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('VEHICLE_CAPACITY_EXCEEDED');
+      const conflict = result.conflicts.find(
+        (entry) => entry.code === 'VEHICLE_CAPACITY_EXCEEDED',
+      );
+      expect(conflict?.remediation).toBe('Use a larger vehicle.');
+      expect(conflict?.remediation).not.toContain('second');
     });
 
     it('does not refuse a vehicle whose branch was never recorded', () => {
@@ -425,6 +433,145 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('VEHICLE_INACTIVE');
+    });
+  });
+
+  describe('one vehicle per visit', () => {
+    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (02 People) DAG-3284' });
+
+    const twoVehicles = () =>
+      evaluateAssignment(
+        proposal({
+          vehicles: [
+            { vehicleId: 'veh-1', driverEmployeeId: SUPERVISOR.id },
+            { vehicleId: 'veh-2', driverEmployeeId: TECHNICIAN.id },
+          ],
+        }),
+        context({
+          employees: [
+            employee({ ...SUPERVISOR, authorizedVehicleIds: ['veh-1'] }),
+            employee({ ...TECHNICIAN, authorizedVehicleIds: ['veh-2'] }),
+          ],
+          vehicles: [vehicle(), SECOND],
+        }),
+      );
+
+    it('refuses a second vehicle even when both are legal on their own', () => {
+      const result = twoVehicles();
+
+      expect(codesOf(result)).toContain('TOO_MANY_VEHICLES');
+      expect(result.isEligible).toBe(false);
+    });
+
+    it('names both vehicles so the manager knows which to release', () => {
+      const conflict = twoVehicles().conflicts.find(
+        (entry) => entry.code === 'TOO_MANY_VEHICLES',
+      );
+
+      expect(conflict?.resources.vehicleIds).toEqual(['veh-1', 'veh-2']);
+      expect(conflict?.remediation).toContain('release');
+    });
+
+    it('accepts a single vehicle', () => {
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: SUPERVISOR.id }] }),
+        context({
+          employees: [
+            employee({ ...SUPERVISOR, authorizedVehicleIds: ['veh-1'] }),
+            TECHNICIAN,
+          ],
+        }),
+      );
+
+      expect(codesOf(result)).not.toContain('TOO_MANY_VEHICLES');
+      expect(result.isEligible).toBe(true);
+    });
+  });
+
+  describe('getting to site without a vehicle', () => {
+    const NO_BUS = employee({
+      id: 'tech-2',
+      fullName: 'W Bandara',
+      canUsePublicTransport: false,
+    });
+
+    const withoutBus = (overrides = {}) => ({
+      proposal: proposal({
+        vehicles: [],
+        crew: [
+          { employeeId: SUPERVISOR.id, role: CrewRole.SUPERVISOR },
+          { employeeId: NO_BUS.id, role: CrewRole.TECHNICIAN },
+        ],
+        ...overrides,
+      }),
+      context: context({ employees: [SUPERVISOR, NO_BUS] }),
+    });
+
+    it('refuses a vehicle-less crew when one member cannot travel by public transport', () => {
+      const { proposal: p, context: c } = withoutBus();
+      const result = evaluateAssignment(p, c);
+
+      expect(codesOf(result)).toContain('CREW_CANNOT_TRAVEL');
+      expect(result.isEligible).toBe(false);
+    });
+
+    it('names only the people who cannot get there, not the whole crew', () => {
+      const { proposal: p, context: c } = withoutBus();
+      const conflict = evaluateAssignment(p, c).conflicts.find(
+        (entry) => entry.code === 'CREW_CANNOT_TRAVEL',
+      );
+
+      expect(conflict?.resources.employeeIds).toEqual([NO_BUS.id]);
+      expect(conflict?.message).toContain('W Bandara');
+      expect(conflict?.message).not.toContain('S Silva');
+      expect(conflict?.remediation).not.toBe('');
+    });
+
+    it('accepts the same crew once a vehicle is assigned', () => {
+      const { context: c } = withoutBus();
+      const result = evaluateAssignment(
+        proposal({
+          crew: [
+            { employeeId: SUPERVISOR.id, role: CrewRole.SUPERVISOR },
+            { employeeId: NO_BUS.id, role: CrewRole.TECHNICIAN },
+          ],
+          vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: SUPERVISOR.id }],
+        }),
+        {
+          ...c,
+          employees: [
+            employee({ ...SUPERVISOR, authorizedVehicleIds: ['veh-1'] }),
+            NO_BUS,
+          ],
+        },
+      );
+
+      expect(codesOf(result)).not.toContain('CREW_CANNOT_TRAVEL');
+    });
+
+    it('accepts a vehicle-less crew when everybody can travel by public transport', () => {
+      const result = evaluateAssignment(proposal({ vehicles: [] }), context());
+
+      expect(codesOf(result)).not.toContain('CREW_CANNOT_TRAVEL');
+      expect(result.isEligible).toBe(true);
+    });
+
+    // One member's checkmark is not transport for anybody else: each person
+    // makes their own journey. This is the rule UltraKIL confirmed.
+    it('is not satisfied by a single colleague who can use public transport', () => {
+      const { proposal: p, context: c } = withoutBus();
+
+      expect(codesOf(evaluateAssignment(p, c))).toContain('CREW_CANNOT_TRAVEL');
+    });
+
+    // A visit nobody is on has no travel arrangements to be wrong about.
+    it('says nothing about travel when no crew has been proposed', () => {
+      const result = evaluateAssignment(
+        proposal({ crew: [], vehicles: [] }),
+        context(),
+      );
+
+      expect(codesOf(result)).not.toContain('CREW_CANNOT_TRAVEL');
     });
   });
 

@@ -43,7 +43,14 @@ def visit(**overrides) -> VisitInput:
 
 
 def employee(**overrides) -> EmployeeInput:
-    base = dict(id="emp-1", branch_code="COLOMBO", is_pms_grade=False)
+    # The default person can get themselves to site, so tests about other rules
+    # are not derailed by a travel constraint they never meant to exercise.
+    base = dict(
+        id="emp-1",
+        branch_code="COLOMBO",
+        is_pms_grade=False,
+        can_use_public_transport=True,
+    )
     base.update(overrides)
     return EmployeeInput(**base)
 
@@ -204,6 +211,22 @@ class TestVehicles:
 
         assert result.assignments[0].vehicles == []
 
+    def test_explains_when_an_authorized_vehicle_cannot_fit_the_crew(self):
+        bike = VehicleInput(id="bike-1", branch_code="COLOMBO", seat_capacity=1)
+        driver = employee(
+            id="sup-1",
+            is_pms_grade=True,
+            authorized_vehicle_ids=["bike-1"],
+            can_use_public_transport=False,
+        )
+        technician = employee(id="tech-1", can_use_public_transport=False)
+
+        result = solve(request(employees=[driver, technician], vehicles=[bike]))
+
+        assert result.assignments == []
+        assert "CREW_CANNOT_TRAVEL" in result.unassigned[0].reason_codes
+        assert "NO_AUTHORIZED_DRIVER" not in result.unassigned[0].reason_codes
+
     def test_never_sends_one_vehicle_to_two_overlapping_visits(self):
         van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
         drivers = [
@@ -227,6 +250,136 @@ class TestVehicles:
         result = solve(request(employees=[driver, TECHNICIAN], vehicles=[van]))
 
         assert result.assignments[0].vehicles[0].vehicle_id == "van-x"
+
+
+class TestOneVehiclePerVisit:
+    """A crew travels together, so a visit takes one vehicle at most.
+
+    Without a cap every assigned vehicle earned WEIGHT_VEHICLE_ASSIGNED, so the
+    model parked the whole free fleet on one job for the points.
+    """
+
+    DRIVER = employee(
+        id="sup-1",
+        is_pms_grade=True,
+        can_use_public_transport=True,
+        authorized_vehicle_ids=["veh-1", "veh-2", "veh-3"],
+    )
+    MATE = employee(
+        id="tech-1",
+        can_use_public_transport=True,
+        authorized_vehicle_ids=["veh-1", "veh-2", "veh-3"],
+    )
+    FLEET = [
+        VehicleInput(id="veh-1", branch_code="COLOMBO", seat_capacity=4),
+        VehicleInput(id="veh-2", branch_code="COLOMBO", seat_capacity=4),
+        VehicleInput(id="veh-3", branch_code="COLOMBO", seat_capacity=4),
+    ]
+
+    def test_takes_one_vehicle_when_the_whole_fleet_is_free(self):
+        result = solve(
+            request(employees=[self.DRIVER, self.MATE], vehicles=self.FLEET)
+        )
+
+        assert len(result.assignments) == 1
+        assert len(result.assignments[0].vehicles) == 1
+
+    def test_leaves_the_other_vehicles_for_other_visits(self):
+        result = solve(
+            request(
+                visits=[
+                    visit(id="v-1"),
+                    visit(id="v-2", service_agreement_id="agr-2"),
+                    visit(id="v-3", service_agreement_id="agr-3"),
+                ],
+                employees=[
+                    self.DRIVER,
+                    self.MATE,
+                    employee(
+                        id="sup-2",
+                        is_pms_grade=True,
+                        can_use_public_transport=True,
+                        authorized_vehicle_ids=["veh-2"],
+                    ),
+                    employee(
+                        id="tech-2",
+                        can_use_public_transport=True,
+                        authorized_vehicle_ids=["veh-2"],
+                    ),
+                ],
+                vehicles=self.FLEET,
+            )
+        )
+
+        # Guard against a vacuous pass: the point is that work got staffed
+        # *and* no visit hoarded the fleet.
+        assert len(result.assignments) >= 2
+        for assignment in result.assignments:
+            assert len(assignment.vehicles) <= 1
+        taken = [v.vehicle_id for a in result.assignments for v in a.vehicles]
+        assert len(taken) == len(set(taken))
+
+
+class TestGettingToSite:
+    """A crew with no vehicle travels by public transport — all of them.
+
+    One colleague's checkmark is transport for that colleague and nobody else,
+    so a single ticked crew member cannot carry the rest of the crew.
+    """
+
+    WALKER = employee(id="sup-1", is_pms_grade=True, can_use_public_transport=True)
+    STRANDED = employee(id="tech-2", can_use_public_transport=False)
+
+    def test_will_not_send_someone_who_cannot_get_there_without_a_vehicle(self):
+        result = solve(
+            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
+        )
+
+        assert result.assignments == []
+        assert [u.visit_id for u in result.unassigned] == ["visit-1"]
+
+    def test_one_crew_member_with_public_transport_does_not_carry_the_others(self):
+        # Exactly the case UltraKIL asked about: one tick, one blank.
+        result = solve(
+            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
+        )
+
+        assert result.assignments == []
+
+    def test_staffs_the_same_crew_once_a_vehicle_is_available(self):
+        result = solve(
+            request(
+                employees=[
+                    employee(
+                        id="sup-1",
+                        is_pms_grade=True,
+                        can_use_public_transport=True,
+                        authorized_vehicle_ids=["veh-1"],
+                    ),
+                    self.STRANDED,
+                ],
+                vehicles=[VehicleInput(id="veh-1", branch_code="COLOMBO", seat_capacity=4)],
+            )
+        )
+
+        assert len(result.assignments) == 1
+        assert [v.vehicle_id for v in result.assignments[0].vehicles] == ["veh-1"]
+        assert sorted(result.assignments[0].employee_ids) == ["sup-1", "tech-2"]
+
+    def test_staffs_without_a_vehicle_when_everybody_can_travel(self):
+        result = solve(request(vehicles=[]))
+
+        assert len(result.assignments) == 1
+        assert result.assignments[0].vehicles == []
+
+    def test_explains_why_rather_than_leaving_it_blank(self):
+        result = solve(
+            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
+        )
+
+        entry = result.unassigned[0]
+        assert "CREW_CANNOT_TRAVEL" in entry.reason_codes
+        assert "public transport" in entry.reason_messages["CREW_CANNOT_TRAVEL"]
 
 
 class TestLocks:

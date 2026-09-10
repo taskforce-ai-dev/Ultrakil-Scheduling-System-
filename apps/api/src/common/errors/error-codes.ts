@@ -91,6 +91,12 @@ export const ErrorCode = {
   VEHICLE_BRANCH_MISMATCH: 'VEHICLE_BRANCH_MISMATCH',
   WINDOW_TOO_SHORT: 'WINDOW_TOO_SHORT',
   VISIT_NOT_SCHEDULABLE: 'VISIT_NOT_SCHEDULABLE',
+  /// A crew with no vehicle travels by public transport, and every member has
+  /// to make that journey. One colleague's checkmark cannot carry the rest.
+  CREW_CANNOT_TRAVEL: 'CREW_CANNOT_TRAVEL',
+  /// The crew travels together in one vehicle, and a vehicle must seat all of
+  /// them. A second vehicle carries nobody and keeps it off another job.
+  TOO_MANY_VEHICLES: 'TOO_MANY_VEHICLES',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

@@ -49,6 +49,38 @@ const PUBLISHED_HISTORY: AssignmentStatus[] = [
   AssignmentStatus.SUPERSEDED,
 ];
 
+type PublicationHistoryAssignment = {
+  status: AssignmentStatus;
+  publishedAt: Date | null;
+  _count: { notificationOutboxEntries: number };
+};
+
+/** Publication is lineage, not only a current status. */
+export function isPublicationHistory(
+  assignment: PublicationHistoryAssignment,
+) {
+  return (
+    PUBLISHED_HISTORY.includes(assignment.status) ||
+    assignment.publishedAt !== null ||
+    assignment._count.notificationOutboxEntries > 0
+  );
+}
+
+/** A direct assignment writer must guard its target after taking the visit lock. */
+export function assertUnpublishedAssignment(
+  assignmentId: string,
+  assignment: PublicationHistoryAssignment,
+) {
+  if (isPublicationHistory(assignment)) {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'This assignment is part of a published schedule and cannot be changed. The published schedule is kept as a record.',
+      HttpStatus.CONFLICT,
+      { assignmentId },
+    );
+  }
+}
+
 /** Inspect publication history. Writers hold the visit lock; dry-run readers
  * get a point-in-time check and must revalidate before writing. */
 export async function assertUnpublishedVisit(
@@ -65,14 +97,7 @@ export async function assertUnpublishedVisit(
       _count: { select: { notificationOutboxEntries: true } },
     },
   });
-  if (
-    assignments.some(
-      (assignment) =>
-        PUBLISHED_HISTORY.includes(assignment.status) ||
-        assignment.publishedAt !== null ||
-        assignment._count.notificationOutboxEntries > 0,
-    )
-  ) {
+  if (assignments.some(isPublicationHistory)) {
     throw new AppException(
       'RESOURCE_CONFLICT',
       'This visit is part of a published schedule and cannot be changed. The published schedule is kept as a record.',

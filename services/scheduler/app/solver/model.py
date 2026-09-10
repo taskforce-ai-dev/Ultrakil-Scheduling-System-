@@ -96,10 +96,26 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
     # between a manager seeing "nobody who can serve this is checked for any
     # van" and seeing an unexplained blank.
     usable = [v for v in request.vehicles if _vehicle_serves_branch(v, visit)]
-    if usable and not any(
-        v.id in e.authorized_vehicle_ids for v in usable for e in eligible
-    ):
+    authorized = [
+        v for v in usable if any(v.id in e.authorized_vehicle_ids for e in eligible)
+    ]
+    if usable and not authorized:
         reasons.append("NO_AUTHORIZED_DRIVER")
+
+    drivable = [
+        v
+        for v in authorized
+        if v.seat_capacity is None or v.seat_capacity >= visit.required_crew_size
+    ]
+
+    # With no vehicle this crew could take, everybody going has to travel by
+    # public transport. Reported only when that is genuinely the binding
+    # constraint: there is no drivable vehicle *and* too few people who could
+    # make their own way to crew the job at all.
+    if not drivable:
+        walkers = [e for e in eligible if e.can_use_public_transport]
+        if len(walkers) < visit.required_crew_size:
+            reasons.append("CREW_CANNOT_TRAVEL")
 
     return reasons
 
@@ -584,6 +600,45 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                 driver_vars.append(drive)
             model.Add(sum(driver_vars) == used)
 
+    # How the crew gets there: at most one vehicle, and everybody covered.
+    for visit in visits:
+        vehicle_vars = [
+            uses_vehicle[visit.id, vehicle.id]
+            for vehicle in vehicles
+            if (visit.id, vehicle.id) in uses_vehicle
+        ]
+
+        # One vehicle per visit.
+        #
+        # The crew travels together and the capacity rule above already refuses
+        # any vehicle that cannot seat all of them, so a second vehicle was
+        # never carrying anybody. It was not merely redundant: every assigned
+        # vehicle earns WEIGHT_VEHICLE_ASSIGNED, so with no cap the model
+        # collected every free vehicle onto one job for the points and left
+        # later visits with nothing to drive. A fleet is shared across a day.
+        if len(vehicle_vars) > 1:
+            model.Add(sum(vehicle_vars) <= 1)
+
+        # Getting there when no vehicle goes.
+        #
+        # A crew with no vehicle travels by public transport, and each person
+        # makes that journey themselves — there is nothing to share. So the rule
+        # is every member, not one: anybody not check-marked for public
+        # transport can only go on a visit that takes a vehicle.
+        #
+        # Written per employee rather than per crew because that is what the
+        # model can express directly: assigning someone who cannot get there
+        # forces a vehicle onto the visit, and where the fleet offers none,
+        # forces them off.
+        for employee in employees:
+            var = assign.get((visit.id, employee.id))
+            if var is None or employee.can_use_public_transport:
+                continue
+            if vehicle_vars:
+                model.Add(sum(vehicle_vars) >= 1).OnlyEnforceIf(var)
+            else:
+                model.Add(var == 0)
+
     # --- Manager locks ------------------------------------------------------
     #
     # A lock is a hard constraint, not a preference. It can never make an
@@ -779,6 +834,10 @@ _MESSAGES = {
     "WINDOW_TOO_SHORT": "The customer's window is shorter than the job takes.",
     "NO_AUTHORIZED_DRIVER": (
         "Nobody who could serve this visit is authorized to drive any available vehicle."
+    ),
+    "CREW_CANNOT_TRAVEL": (
+        "No vehicle is available for this visit and too few of the people who "
+        "could serve it can travel by public transport."
     ),
     "NO_FEASIBLE_CREW": (
         "No combination of available people satisfies every rule for this visit."

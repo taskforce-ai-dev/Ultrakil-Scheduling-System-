@@ -5,7 +5,11 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
-import { lockScheduleVisits } from './schedule-visit-lock';
+import { EligibilityService } from '../eligibility/eligibility.service';
+import {
+  assertUnpublishedAssignment,
+  lockScheduleVisits,
+} from './schedule-visit-lock';
 
 const PUBLISH_ASSIGNMENT_INCLUDE = {
   crewMembers: { include: { employee: { select: { fullName: true } } } },
@@ -34,6 +38,7 @@ export class PublishingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly eligibility: EligibilityService,
   ) {}
 
   /**
@@ -121,6 +126,48 @@ export class PublishingService {
           { runId },
         );
       }
+
+      for (const assignment of publishable) {
+        const verdict = await this.eligibility.evaluate(
+          assignment.generatedVisitId,
+          {
+            plannedStartMinute: Math.round(
+              (assignment.plannedStart.getTime() -
+                assignment.generatedVisit.visitDate.getTime()) /
+                60_000,
+            ),
+            plannedEndMinute: Math.round(
+              (assignment.plannedEnd.getTime() -
+                assignment.generatedVisit.visitDate.getTime()) /
+                60_000,
+            ),
+            crew: assignment.crewMembers.map((member) => ({
+              employeeId: member.employeeId,
+              role: member.role,
+            })),
+            vehicles: assignment.vehicles.map((entry) => ({
+              vehicleId: entry.vehicleId,
+              driverEmployeeId: entry.driverEmployeeId,
+            })),
+          },
+          { excludeAssignmentId: assignment.id },
+          tx,
+        );
+        if (!verdict.isEligible) {
+          throw new AppException(
+            'ASSIGNMENT_NOT_ELIGIBLE',
+            'This schedule contains an assignment that no longer meets the eligibility rules. Change or remove the draft assignment before publishing.',
+            HttpStatus.CONFLICT,
+            {
+              runId,
+              assignmentId: assignment.id,
+              visitId: assignment.generatedVisitId,
+              conflicts: verdict.conflicts,
+            },
+          );
+        }
+      }
+
       const snapshot = publishable.map((assignment) => ({
         assignmentId: assignment.id,
         visitId: assignment.generatedVisitId,
@@ -270,7 +317,7 @@ export class PublishingService {
         run: await tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } }),
         publishedCount: publishable.length,
       };
-    });
+    }, { timeout: 30_000 });
 
     return published;
   }
@@ -298,8 +345,20 @@ export class PublishingService {
 
     return this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [assignment.generatedVisitId]);
-      const current = await tx.assignment.findUnique({ where: { id: assignmentId } });
-      if (!current || current.updatedAt.getTime() !== assignment.updatedAt.getTime()) {
+      const current = await tx.assignment.findUnique({
+        where: { id: assignmentId },
+        select: {
+          updatedAt: true,
+          status: true,
+          publishedAt: true,
+          _count: { select: { notificationOutboxEntries: true } },
+        },
+      });
+      if (!current) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      assertUnpublishedAssignment(assignmentId, current);
+      if (current.updatedAt.getTime() !== assignment.updatedAt.getTime()) {
         throw this.assignmentChanged(assignmentId);
       }
       const lock = await tx.assignmentLock.upsert({
@@ -337,6 +396,18 @@ export class PublishingService {
 
     return this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [snapshot.assignment.generatedVisitId]);
+      const assignment = await tx.assignment.findUnique({
+        where: { id: assignmentId },
+        select: {
+          status: true,
+          publishedAt: true,
+          _count: { select: { notificationOutboxEntries: true } },
+        },
+      });
+      if (!assignment) {
+        throw this.assignmentChanged(assignmentId);
+      }
+      assertUnpublishedAssignment(assignmentId, assignment);
       const existing = await tx.assignmentLock.findUnique({
         where: { assignmentId_scope: { assignmentId, scope } },
       });

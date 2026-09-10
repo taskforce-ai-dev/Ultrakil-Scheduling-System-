@@ -252,6 +252,7 @@ beforeAll(async () => {
         isPmsGrade: true,
         branchId: colombo.id,
         branchCode: BranchCode.COLOMBO,
+        canUsePublicTransport: true,
       },
     });
     supervisorIds.push(sup.id);
@@ -263,6 +264,7 @@ beforeAll(async () => {
         gradeLabel: 'Junior PMT',
         branchId: colombo.id,
         branchCode: BranchCode.COLOMBO,
+        canUsePublicTransport: true,
       },
     });
     technicianIds.push(tech.id);
@@ -537,7 +539,11 @@ describe('assignment lock concurrency', () => {
     const answer = deferred<SolveResponse>();
     const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
     const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService));
-    const publishing = new PublishingService(locker.client, app.get(AuditService));
+    const publishing = new PublishingService(
+      locker.client,
+      app.get(AuditService),
+      app.get(EligibilityService),
+    );
     const solved = service.execute(run.id).then((value) => ({ value }), (error: unknown) => ({ error }));
     let locked: Promise<{ value: unknown } | { error: unknown }> | undefined;
     const solution: SolveResponse = {
@@ -644,6 +650,77 @@ async function manualPublicationFixture(withDraft = true) {
   };
   return { visitId, run, draft, createDraft, actor, proposal };
 }
+
+describe('assignment history lookup', () => {
+  it.each([AssignmentStatus.COMPLETED, AssignmentStatus.SUPERSEDED])(
+    'returns %s history when the visit has no live assignment',
+    async (status) => {
+      const f = await manualPublicationFixture();
+      await prisma.assignment.update({
+        where: { id: f.draft!.id },
+        data: { status },
+      });
+
+      const response = await request(http)
+        .get(`/api/visits/${f.visitId}/assignment`)
+        .set(auth(managerToken));
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ id: f.draft!.id, status });
+    },
+  );
+
+  it('returns the most recently updated completed or superseded history', async () => {
+    const f = await manualPublicationFixture();
+    await prisma.assignment.update({
+      where: { id: f.draft!.id },
+      data: {
+        status: AssignmentStatus.COMPLETED,
+        updatedAt: new Date('2030-01-01T00:00:00.000Z'),
+      },
+    });
+    const superseded = await f.createDraft();
+    await prisma.assignment.update({
+      where: { id: superseded.id },
+      data: {
+        status: AssignmentStatus.SUPERSEDED,
+        updatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      },
+    });
+
+    const response = await request(http)
+      .get(`/api/visits/${f.visitId}/assignment`)
+      .set(auth(managerToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: superseded.id,
+      status: AssignmentStatus.SUPERSEDED,
+    });
+  });
+
+  it('prefers a live draft over newer assignment history', async () => {
+    const f = await manualPublicationFixture();
+    await prisma.assignment.update({
+      where: { id: f.draft!.id },
+      data: {
+        status: AssignmentStatus.COMPLETED,
+        updatedAt: new Date('2030-01-02T00:00:00.000Z'),
+      },
+    });
+    const liveDraft = await f.createDraft();
+
+    const response = await request(http)
+      .get(`/api/visits/${f.visitId}/assignment`)
+      .set(auth(managerToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      id: liveDraft.id,
+      status: AssignmentStatus.DRAFT,
+    });
+  });
+});
 
 describe('standard writer publication protocol', () => {
   async function batchFixture(withVehicle = false) {
@@ -1073,6 +1150,7 @@ describe('standard writer publication protocol', () => {
       const publishing = new PublishingService(
         publisher.client,
         app.get(AuditService),
+        app.get(EligibilityService),
       );
       const mutate = () =>
         operation === 'assign'
@@ -1574,6 +1652,7 @@ describe('publishing', () => {
       const publishing = new PublishingService(
         publisher.client,
         app.get(AuditService),
+        app.get(EligibilityService),
       );
       const actor = await prisma.user.findUniqueOrThrow({
         where: { email: ADMIN.email },

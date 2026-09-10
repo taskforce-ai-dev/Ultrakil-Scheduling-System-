@@ -2,6 +2,7 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  LockScope,
   Prisma,
   ScheduleRunStatus,
   VisitStatus,
@@ -12,6 +13,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AssignmentsService } from '../eligibility/assignments.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { EligibilityResult } from '../eligibility/rules';
 import { VisitsService } from '../visits/visits.service';
 import { PublishingService } from './publishing.service';
 
@@ -63,11 +65,23 @@ function fixture() {
         isPmsSupervisor: true,
       },
     ],
-    vehicles: [],
+    vehicles: [] as {
+      vehicleId: string;
+      vehicle: { label: string };
+      driverEmployeeId: string | null;
+    }[],
     locks: [],
   };
   const assignments = [original];
   const outbox: { assignmentId: string }[] = [];
+  let heldLock: {
+    assignmentId: string;
+    scope: LockScope;
+    reason: string | null;
+    lockedByUserId: string;
+    releasedAt: Date | null;
+    updatedAt: Date;
+  } | null = null;
   let beforeTransaction: () => Promise<void> = async () => undefined;
   const rows = () =>
     assignments.map((entry) => ({
@@ -97,8 +111,14 @@ function fixture() {
           (entry) => !where.status || where.status.in.includes(entry.status),
         ) ?? null,
     ),
-    findUnique: jest.fn(async () => rows()[0] ?? null),
-    findUniqueOrThrow: jest.fn(async () => rows()[0]),
+    findUnique: jest.fn(
+      async ({ where }: { where: { id: string } }) =>
+        rows().find((entry) => entry.id === where.id) ?? null,
+    ),
+    findUniqueOrThrow: jest.fn(
+      async ({ where }: { where: { id: string } }) =>
+        rows().find((entry) => entry.id === where.id)!,
+    ),
     findMany: jest.fn(
       async (args: {
         where?: {
@@ -169,6 +189,29 @@ function fixture() {
       return created;
     }),
   };
+  const assignmentLock = {
+    findUnique: jest.fn(async ({ include }: { include?: unknown }) =>
+      heldLock
+        ? {
+            ...heldLock,
+            ...(include
+              ? { assignment: { generatedVisitId: original.generatedVisitId } }
+              : {}),
+          }
+        : null,
+    ),
+    upsert: jest.fn(
+      async ({ create, update }: { create: typeof heldLock; update: object }) => {
+        heldLock = heldLock
+          ? Object.assign(heldLock, update)
+          : { ...create!, releasedAt: null, updatedAt: new Date() };
+        return heldLock;
+      },
+    ),
+    update: jest.fn(async ({ data }: { data: object }) =>
+      Object.assign(heldLock!, data),
+    ),
+  };
   const audit = { record: jest.fn() };
   const run = {
     id: 'original-run',
@@ -177,6 +220,7 @@ function fixture() {
   };
   const prisma = {
     assignment,
+    assignmentLock,
     generatedVisit: {
       findUnique: jest.fn(async () => structuredClone(visit)),
       findUniqueOrThrow: jest.fn(async () => structuredClone(visit)),
@@ -203,7 +247,9 @@ function fixture() {
     ),
   };
   const eligibility = {
-    evaluate: jest.fn(async () => ({ isEligible: true, conflicts: [] })),
+    evaluate: jest.fn(
+      async (): Promise<EligibilityResult> => ({ isEligible: true, conflicts: [] }),
+    ),
   };
   const client = prisma as unknown as PrismaService;
   const auditService = audit as unknown as AuditService;
@@ -212,6 +258,17 @@ function fixture() {
     original,
     assignments,
     outbox,
+    heldLock: () => heldLock,
+    holdLock: () => {
+      heldLock = {
+        assignmentId: original.id,
+        scope: LockScope.CREW,
+        reason: 'Existing lock',
+        lockedByUserId: actor.id,
+        releasedAt: null,
+        updatedAt: new Date(),
+      };
+    },
     prisma,
     audit,
     eligibility,
@@ -225,7 +282,11 @@ function fixture() {
       auditService,
       eligibility as unknown as EligibilityService,
     ),
-    publishing: new PublishingService(client, auditService),
+    publishing: new PublishingService(
+      client,
+      auditService,
+      eligibility as unknown as EligibilityService,
+    ),
     beforeTransaction: (hook: () => Promise<void>) => {
       beforeTransaction = hook;
     },
@@ -377,7 +438,7 @@ describe('standard writers preserve publication', () => {
     expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
   });
 
-  it('publishes the visit and assignment data reloaded after acquiring the lock', async () => {
+  it('publishes locked, reloaded assignment data inside one bounded transaction', async () => {
     const f = fixture();
     f.beforeTransaction(async () => {
       f.visit.visitDate = new Date('2027-03-04T00:00:00Z');
@@ -412,5 +473,161 @@ describe('standard writers preserve publication', () => {
       }),
       expect.anything(),
     );
+    expect(f.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 30_000,
+    });
+  });
+
+  const publicationHistoryCases = [
+    ...[
+      AssignmentStatus.PUBLISHED,
+      AssignmentStatus.ACKNOWLEDGED,
+      AssignmentStatus.IN_PROGRESS,
+      AssignmentStatus.COMPLETED,
+      AssignmentStatus.SUPERSEDED,
+    ].map((status) => ({ label: status, status, publishedAt: null, outbox: false })),
+    {
+      label: 'publishedAt lineage',
+      status: AssignmentStatus.DRAFT,
+      publishedAt: new Date('2027-03-03T10:31:00Z'),
+      outbox: false,
+    },
+    {
+      label: 'notification outbox lineage',
+      status: AssignmentStatus.DRAFT,
+      publishedAt: null,
+      outbox: true,
+    },
+  ];
+
+  const targetHistoryMutationCases = (['lock', 'unlock'] as const).flatMap(
+    (operation) =>
+      publicationHistoryCases.map((history) => ({ operation, ...history })),
+  );
+
+  it.each(targetHistoryMutationCases)(
+    '$label prevents $operation from mutating the historical target',
+    async ({ operation, ...history }) => {
+      const f = fixture();
+      f.original.status = history.status;
+      f.original.publishedAt = history.publishedAt;
+      if (history.outbox) f.outbox.push({ assignmentId: f.original.id });
+      if (operation === 'unlock') f.holdLock();
+
+      const failure = await (operation === 'lock'
+        ? f.publishing.lock(
+            f.original.id,
+            LockScope.CREW,
+            'Do not mutate history',
+            actor,
+          )
+        : f.publishing.unlock(f.original.id, LockScope.CREW, actor)
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.prisma.assignmentLock.upsert).not.toHaveBeenCalled();
+      expect(f.prisma.assignmentLock.update).not.toHaveBeenCalled();
+      expect(f.prisma.generatedVisit.update).not.toHaveBeenCalled();
+      expect(f.audit.record).not.toHaveBeenCalled();
+    },
+  );
+
+  it('allows a mutable draft target to be locked and unlocked', async () => {
+    const f = fixture();
+
+    await f.publishing.lock(
+      f.original.id,
+      LockScope.CREW,
+      'Keep this crew',
+      actor,
+    );
+    await f.publishing.unlock(f.original.id, LockScope.CREW, actor);
+
+    expect(f.prisma.assignmentLock.upsert).toHaveBeenCalledTimes(1);
+    expect(f.prisma.assignmentLock.update).toHaveBeenCalledTimes(1);
+    expect(f.heldLock()!.releasedAt).toBeInstanceOf(Date);
+  });
+
+  it('allows locking and unlocking a mutable draft when the visit has older publication history', async () => {
+    const f = fixture();
+    f.assignments.unshift({
+      ...f.original,
+      id: 'published-history',
+      status: AssignmentStatus.SUPERSEDED,
+      publishedAt: new Date('2027-03-02T10:30:00Z'),
+    });
+    f.outbox.push({ assignmentId: 'published-history' });
+
+    await f.publishing.lock(
+      f.original.id,
+      LockScope.CREW,
+      'Keep the new draft crew',
+      actor,
+    );
+    await f.publishing.unlock(f.original.id, LockScope.CREW, actor);
+
+    expect(f.prisma.assignmentLock.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ assignmentId: f.original.id }),
+      }),
+    );
+    expect(f.prisma.assignmentLock.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a pre-upgrade multi-vehicle draft when publish-time eligibility rejects it', async () => {
+    const f = fixture();
+    f.original.vehicles.push(
+      {
+        vehicleId: 'vehicle-one',
+        vehicle: { label: 'Vehicle one' },
+        driverEmployeeId: 'employee',
+      },
+      {
+        vehicleId: 'vehicle-two',
+        vehicle: { label: 'Vehicle two' },
+        driverEmployeeId: 'employee',
+      },
+    );
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'TOO_MANY_VEHICLES',
+          message: 'A crew travels in one vehicle.',
+          remediation: 'Remove the extra vehicle.',
+          resources: { visitId: 'visit', vehicleIds: ['vehicle-one', 'vehicle-two'] },
+        },
+      ],
+    });
+
+    const failure = await f.publishing
+      .publish('original-run', null, actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.objectContaining({
+        plannedStartMinute: 540,
+        plannedEndMinute: 630,
+        vehicles: [
+          { vehicleId: 'vehicle-one', driverEmployeeId: 'employee' },
+          { vehicleId: 'vehicle-two', driverEmployeeId: 'employee' },
+        ],
+      }),
+      { excludeAssignmentId: 'draft' },
+      f.prisma,
+    );
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+    expect(f.prisma.scheduleRun.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignmentNotificationOutbox.createMany).not.toHaveBeenCalled();
+    expect(f.audit.record).not.toHaveBeenCalled();
   });
 });

@@ -721,6 +721,7 @@ export class ScheduleRunService {
         authorized_vehicle_ids: employee.vehicleAuthorizations
           .map((a) => a.vehicleId)
           .sort(),
+        can_use_public_transport: employee.canUsePublicTransport,
         unavailable_dates: expandDates(employee.availability),
       })),
       vehicles: vehicles.map((vehicle) => ({
