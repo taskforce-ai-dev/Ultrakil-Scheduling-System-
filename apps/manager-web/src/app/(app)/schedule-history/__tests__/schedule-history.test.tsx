@@ -132,9 +132,13 @@ describe("ScheduleHistoryPage", () => {
     expect(
       await screen.findByText(/3 visits in this range could not be staffed/)
     ).toBeInTheDocument();
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    expect(publishButton).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /I understand/i }));
 
     vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
-    await user.click(screen.getByRole("button", { name: "Publish" }));
+    await user.click(publishButton);
 
     expect(publishScheduleRun).toHaveBeenCalledWith("run-2", {});
   });
@@ -182,6 +186,21 @@ describe("ScheduleHistoryPage", () => {
     await user.click(await screen.findByRole("button", { name: "Publish" }));
 
     expect(screen.queryByText(/could not be staffed/)).not.toBeInTheDocument();
+  });
+
+  it("blocks publication of a zero-result run and says why", async () => {
+    const empty = buildScheduleRun({
+      id: "run-empty",
+      visitsConsidered: 0,
+      visitsScheduled: 0,
+      visitsUnassigned: 0,
+      isPublished: false,
+    });
+    mockRuns([empty]);
+    await renderPage();
+
+    expect(await screen.findByText("Draft — no dispatchable assignments")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
   });
 
   it("distinguishes draft, published and superseded runs", async () => {

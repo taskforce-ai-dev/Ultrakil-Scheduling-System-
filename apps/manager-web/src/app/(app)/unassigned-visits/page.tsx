@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { AlertTriangle, CircleDashed, ShieldAlert, UserCog } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, CircleDashed, ShieldAlert, UserCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,7 @@ import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { ConflictList } from "@/components/shared/conflict-list";
 import { ApiError, fetchUnassignedVisits, type UnassignedVisit } from "@/lib/api-client";
-import { formatLongDate } from "@/lib/calendar";
+import { formatLongDate, todayIso } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
   CONFLICT_GROUP_LABEL,
@@ -34,7 +34,7 @@ type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type GroupFilter = "ALL" | ConflictGroup;
 
 const KANDY_PMS_CODES = new Set(["NO_PMS_SUPERVISOR_AVAILABLE", "BRANCH_HAS_NO_PMS_SUPERVISOR"]);
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 25;
 
 const BRANCH_LABELS: Record<BranchFilter, string> = {
   ALL: "Both branches",
@@ -69,6 +69,9 @@ export default function UnassignedVisitsPage() {
 
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [group, setGroup] = React.useState<GroupFilter>("ALL");
+  const [date, setDate] = React.useState(todayIso());
+  const [status, setStatus] = React.useState<"ALL" | "UNASSIGNED" | "EXCEPTION">("ALL");
+  const [page, setPage] = React.useState(1);
   const [items, setItems] = React.useState<UnassignedVisit[]>([]);
   const [total, setTotal] = React.useState(0);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -80,8 +83,13 @@ export default function UnassignedVisitsPage() {
     setIsLoading(true);
     setError(null);
     fetchUnassignedVisits({
+      page,
       pageSize: PAGE_SIZE,
+      from: date,
+      to: date,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
+      ...(status === "ALL" ? {} : { status }),
+      ...(group === "ALL" ? {} : { conflictCode: group }),
     })
       .then((page) => {
         setItems(page.items);
@@ -95,7 +103,7 @@ export default function UnassignedVisitsPage() {
         );
       })
       .finally(() => setIsLoading(false));
-  }, [branch]);
+  }, [branch, date, group, page, status]);
 
   React.useEffect(() => {
     // Fetching from the API — an external system, which is what effects are for.
@@ -156,7 +164,10 @@ export default function UnassignedVisitsPage() {
           <Select
             items={BRANCH_LABELS}
             value={branch}
-            onValueChange={(value) => setBranch((value as BranchFilter) ?? "ALL")}
+            onValueChange={(value) => {
+              setBranch((value as BranchFilter) ?? "ALL");
+              setPage(1);
+            }}
           >
             <SelectTrigger id="unassigned-branch" className="w-44">
               <SelectValue />
@@ -170,11 +181,36 @@ export default function UnassignedVisitsPage() {
         </div>
 
         <div className="space-y-1.5">
+          <Label htmlFor="unassigned-date">Date</Label>
+          <input
+            id="unassigned-date"
+            type="date"
+            value={date}
+            onChange={(event) => { if (event.target.value) { setDate(event.target.value); setPage(1); } }}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="unassigned-status">Status</Label>
+          <Select value={status} onValueChange={(value) => { setStatus((value as typeof status) ?? "ALL"); setPage(1); }}>
+            <SelectTrigger id="unassigned-status" className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">All unresolved</SelectItem>
+              <SelectItem value="UNASSIGNED">Unassigned</SelectItem>
+              <SelectItem value="EXCEPTION">Exceptions</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1.5">
           <Label htmlFor="unassigned-conflict-type">Conflict type</Label>
           <Select
             items={GROUP_LABELS}
             value={group}
-            onValueChange={(value) => setGroup((value as GroupFilter) ?? "ALL")}
+            onValueChange={(value) => { setGroup((value as GroupFilter) ?? "ALL"); setPage(1); }}
           >
             <SelectTrigger id="unassigned-conflict-type" className="w-56">
               <SelectValue />
@@ -292,6 +328,19 @@ export default function UnassignedVisitsPage() {
               </li>
             ))}
           </ul>
+          {total > PAGE_SIZE && (
+            <nav className="flex items-center justify-between border-t pt-4" aria-label="Unassigned visit pages">
+              <p className="text-sm text-muted-foreground">Page {page} of {Math.max(1, Math.ceil(total / PAGE_SIZE))}</p>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>
+                  <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Previous
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => current + 1)} disabled={page >= Math.ceil(total / PAGE_SIZE)}>
+                  Next <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </div>
+            </nav>
+          )}
         </>
       )}
 

@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, fetchMeta, fetchHealth, fetchVisitAssignment } from "../api-client";
+import {
+  ApiError,
+  fetchHealth,
+  fetchMeta,
+  fetchOperationsDay,
+  fetchVisitAssignment,
+} from "../api-client";
 
 describe("api-client", () => {
   const originalFetch = global.fetch;
@@ -72,5 +78,36 @@ describe("api-client", () => {
     }) as unknown as typeof fetch;
 
     await expect(fetchVisitAssignment("visit-1")).resolves.toBeNull();
+  });
+
+  it("sends every operational day filter and parses the server read model", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            date: "2026-09-10",
+            summary: { total: 0 },
+            items: [],
+          }),
+        ),
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchOperationsDay({
+        date: "2026-09-10",
+        branchCode: "KANDY",
+        status: "EXCEPTION",
+        conflict: "UNKNOWN_BRANCH",
+        page: 2,
+        pageSize: 25,
+      }),
+    ).resolves.toMatchObject({ date: "2026-09-10" });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/api/operations/day?date=2026-09-10&branchCode=KANDY&status=EXCEPTION&conflict=UNKNOWN_BRANCH&page=2&pageSize=25",
+      expect.objectContaining({ method: "GET" }),
+    );
   });
 });

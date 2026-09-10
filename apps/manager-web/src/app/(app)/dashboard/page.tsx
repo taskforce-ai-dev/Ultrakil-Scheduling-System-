@@ -6,7 +6,9 @@ import { GitBranch, Clock, MapPin, ShieldCheck } from "lucide-react";
 import { LoadingState } from "@/components/shared/loading-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { cn } from "@/lib/utils";
-import { ApiError, fetchMeta, type MetaResponse } from "@/lib/api-client";
+import { ApiError, fetchMeta, fetchOperationsDay, type MetaResponse, type OperationsDayResponse } from "@/lib/api-client";
+import { OperationsDayPanel } from "@/components/shared/operations";
+import { todayIso } from "@/lib/calendar";
 
 interface StatTile {
   label: string;
@@ -27,6 +29,7 @@ export default function DashboardPage() {
   const [meta, setMeta] = React.useState<MetaResponse | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
 
   const loadMeta = React.useCallback(() => {
     setIsLoading(true);
@@ -49,6 +52,12 @@ export default function DashboardPage() {
     // async boundary, not synchronous derived state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMeta();
+    fetchOperationsDay({ date: todayIso() })
+      .then(setOperations)
+      .catch(() => {
+        // The operational read model is additive while older API deployments
+        // roll forward; metadata remains useful when it is unavailable.
+      });
   }, [loadMeta]);
 
   const tiles: StatTile[] = meta
@@ -88,6 +97,8 @@ export default function DashboardPage() {
 
       {/* Content */}
       <div className="space-y-4 px-6">
+        {operations && <OperationsDayPanel data={operations} />}
+
         <div className="flex items-center gap-2">
           <span className="h-1.5 w-1.5 rounded-full bg-brand-lime" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-muted-foreground">API connection</h2>

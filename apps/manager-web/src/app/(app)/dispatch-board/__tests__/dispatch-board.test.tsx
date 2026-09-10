@@ -128,4 +128,19 @@ describe("dispatch board", () => {
 
     expect(await screen.findByText("Nothing scheduled for this date")).toBeInTheDocument();
   });
+
+  it("keeps assumed site hours visible on the dispatch row", async () => {
+    mockVisits([
+      buildVisit({
+        id: "visit-assumed-hours",
+        customerName: "Assumed-hours customer",
+        hoursUnconfirmed: true,
+        assignmentCount: 0,
+      }),
+    ]);
+    render(<DispatchBoardPage />);
+
+    const row = (await screen.findByText("Assumed-hours customer")).closest("tr")!;
+    expect(within(row).getByText(/Assumed hours/)).toBeInTheDocument();
+  });
 });

@@ -77,6 +77,273 @@ export type PaginatedUnassignedVisits = components["schemas"]["PaginatedUnassign
 export type EligibilityResult = components["schemas"]["EligibilityResultDto"];
 export type CrewRole = Assignment["crew"][number]["role"];
 
+/* -------------------------------------------------------------------------
+ * Manager operational read model
+ *
+ * This endpoint is intentionally parsed at the boundary. It is newer than
+ * the generated contract on this branch and a manager screen must remain
+ * readable when an older API omits an optional field. In particular, a
+ * missing/invalid assignment is never turned into a positive dispatch claim.
+ * ---------------------------------------------------------------------- */
+
+export type OperationState =
+  | "READY"
+  | "PROPOSED"
+  | "UNASSIGNED"
+  | "EXCEPTION"
+  | "COMPLETED"
+  | "CANCELLED";
+
+export interface OperationsDayQuery {
+  date: string;
+  branchCode?: "COLOMBO" | "KANDY";
+  status?: OperationState;
+  conflict?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface OperationsVisit {
+  id: string;
+  customerName: string;
+  siteName: string;
+  jobTypeName: string;
+  requiredCrewSize: number | null;
+  windowStartMinute: number | null;
+  windowEndMinute: number | null;
+  hoursUnconfirmed: boolean;
+  branchCode?: string;
+}
+
+export interface OperationsCrewMember {
+  id?: string;
+  employeeId?: string;
+  fullName?: string;
+  role?: string;
+  isPmsSupervisor?: boolean;
+}
+
+export interface OperationsVehicle {
+  id?: string;
+  vehicleId?: string;
+  label?: string;
+  driverName?: string;
+  driverEmployeeId?: string;
+}
+
+export interface OperationsAssignment {
+  id?: string;
+  status?: string;
+  crew: OperationsCrewMember[];
+  vehicles: OperationsVehicle[];
+  plannedStartMinute?: number | null;
+  plannedEndMinute?: number | null;
+}
+
+export interface OperationViolation {
+  code: string;
+  message: string;
+  remediation?: string;
+}
+
+export interface OperationsScheduleVersion {
+  id?: string;
+  version?: number | null;
+  status?: string;
+  predecessorId?: string | null;
+  publishedAt?: string | null;
+}
+
+export interface OperationsDayItem {
+  visit: OperationsVisit;
+  state: OperationState;
+  dispatchAssignment: OperationsAssignment | null;
+  proposedAssignment: OperationsAssignment | null;
+  violations: OperationViolation[];
+  nextAction: string;
+  scheduleVersion: OperationsScheduleVersion | null;
+  warnings: string[];
+}
+
+export interface OperationsSummary {
+  total: number;
+  ready: number;
+  proposed: number;
+  unassigned: number;
+  exceptions: number;
+  hoursUnconfirmed: number;
+}
+
+export interface OperationsDayResponse {
+  date: string;
+  branchCode?: string;
+  summary: OperationsSummary;
+  items: OperationsDayItem[];
+}
+
+const OPERATION_STATES = new Set<OperationState>([
+  "READY",
+  "PROPOSED",
+  "UNASSIGNED",
+  "EXCEPTION",
+  "COMPLETED",
+  "CANCELLED",
+]);
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function parseAssignment(value: unknown): OperationsAssignment | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = asRecord(value);
+  const crew = Array.isArray(record.crew)
+    ? record.crew.filter((member) => typeof member === "object" && member !== null).map((member) => {
+        const row = asRecord(member);
+        return {
+          id: typeof row.id === "string" ? row.id : undefined,
+          employeeId: typeof row.employeeId === "string" ? row.employeeId : undefined,
+          fullName: typeof row.fullName === "string" ? row.fullName : undefined,
+          role: typeof row.role === "string" ? row.role : undefined,
+          isPmsSupervisor: typeof row.isPmsSupervisor === "boolean" ? row.isPmsSupervisor : undefined,
+        };
+      })
+    : [];
+  const vehicles = Array.isArray(record.vehicles)
+    ? record.vehicles.filter((vehicle) => typeof vehicle === "object" && vehicle !== null).map((vehicle) => {
+        const row = asRecord(vehicle);
+        return {
+          id: typeof row.id === "string" ? row.id : undefined,
+          vehicleId: typeof row.vehicleId === "string" ? row.vehicleId : undefined,
+          label: typeof row.label === "string" ? row.label : undefined,
+          driverName: typeof row.driverName === "string" ? row.driverName : undefined,
+          driverEmployeeId: typeof row.driverEmployeeId === "string" ? row.driverEmployeeId : undefined,
+        };
+      })
+    : [];
+  return {
+    id: typeof record.id === "string" ? record.id : undefined,
+    status: typeof record.status === "string" ? record.status : undefined,
+    crew,
+    vehicles,
+    plannedStartMinute: asNullableNumber(record.plannedStartMinute),
+    plannedEndMinute: asNullableNumber(record.plannedEndMinute),
+  };
+}
+
+function parseOperationsItem(value: unknown): OperationsDayItem | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = asRecord(value);
+  const visitRecord = asRecord(record.visit);
+  const stateValue = asString(record.state);
+  const hasKnownState = OPERATION_STATES.has(stateValue as OperationState);
+  const state = hasKnownState
+    ? (stateValue as OperationState)
+    : "UNASSIGNED";
+  const violations = Array.isArray(record.violations)
+    ? record.violations.filter((violation) => typeof violation === "object" && violation !== null).map((violation) => {
+        const row = asRecord(violation);
+        return {
+          code: asString(row.code, "UNKNOWN_VIOLATION"),
+          message: asString(row.message, "This visit needs review."),
+          remediation: typeof row.remediation === "string" ? row.remediation : undefined,
+        };
+      })
+    : [];
+  const version = asRecord(record.scheduleVersion);
+  const hasVersion = Object.keys(version).length > 0;
+  const warningValues = [record.warnings, record.sourceDataWarnings];
+  const warnings = warningValues.flatMap((raw) =>
+    Array.isArray(raw)
+      ? raw.flatMap((warning) => {
+          if (typeof warning === "string") return [warning];
+          if (typeof warning !== "object" || warning === null) return [];
+          const warningRecord = asRecord(warning);
+          const message = asString(warningRecord.message || warningRecord.warning);
+          if (!message) return [];
+          const source = asString(
+            warningRecord.source || warningRecord.provenance || warningRecord.sourceField,
+          );
+          return [source ? `${message} (source: ${source})` : message];
+        })
+      : [],
+  );
+  return {
+    visit: {
+      id: asString(visitRecord.id),
+      customerName: asString(visitRecord.customerName, "Unknown customer"),
+      siteName: asString(visitRecord.siteName, "Unknown site"),
+      jobTypeName: asString(visitRecord.jobTypeName, "Visit"),
+      requiredCrewSize: asNullableNumber(visitRecord.requiredCrewSize),
+      windowStartMinute: asNullableNumber(visitRecord.windowStartMinute),
+      windowEndMinute: asNullableNumber(visitRecord.windowEndMinute),
+      hoursUnconfirmed: asBoolean(visitRecord.hoursUnconfirmed),
+      branchCode: typeof visitRecord.branchCode === "string" ? visitRecord.branchCode : undefined,
+    },
+    state,
+    // An unknown state cannot safely be treated as dispatch truth, even when
+    // an older server happened to include an assignment-shaped object.
+    dispatchAssignment:
+      state === "READY" || state === "COMPLETED" || state === "CANCELLED"
+        ? parseAssignment(record.dispatchAssignment)
+        : null,
+    proposedAssignment: parseAssignment(record.proposedAssignment),
+    violations,
+    nextAction: asString(record.nextAction, state === "READY" ? "No action needed" : "Review visit"),
+    scheduleVersion: hasVersion
+      ? {
+          id: typeof version.id === "string" ? version.id : undefined,
+          version: typeof version.version === "number" ? version.version : null,
+          status: typeof version.status === "string" ? version.status : undefined,
+          predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
+          publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
+        }
+      : null,
+    warnings: [...new Set(warnings)],
+  };
+}
+
+export function parseOperationsDay(payload: unknown): OperationsDayResponse {
+  const record = asRecord(payload);
+  const summary = asRecord(record.summary);
+  const items = Array.isArray(record.items)
+    ? record.items.map(parseOperationsItem).filter((item): item is OperationsDayItem => item !== null)
+    : [];
+  return {
+    date: asString(record.date),
+    branchCode: typeof record.branchCode === "string" ? record.branchCode : undefined,
+    summary: {
+      total: asNumber(summary.total),
+      ready: asNumber(summary.ready),
+      proposed: asNumber(summary.proposed),
+      unassigned: asNumber(summary.unassigned),
+      exceptions: asNumber(summary.exceptions),
+      hoursUnconfirmed: asNumber(summary.hoursUnconfirmed),
+    },
+    items,
+  };
+}
+
+export function isDispatchableOperation(item: OperationsDayItem): boolean {
+  return item.state === "READY" && item.dispatchAssignment !== null && item.violations.length === 0;
+}
+
 /**
  * Hand-typed request body — `AssignCrewDto` at
  * `apps/api/src/scheduling/eligibility/dto.ts`. Used for both the dry-run
@@ -159,6 +426,8 @@ export interface UnassignedVisitsQuery {
   branchCode?: "COLOMBO" | "KANDY";
   from?: string;
   to?: string;
+  status?: "UNASSIGNED" | "EXCEPTION";
+  conflictCode?: string;
 }
 
 export type CustomerQuery = NonNullable<paths["/api/customers"]["get"]["parameters"]["query"]>;
@@ -688,5 +957,16 @@ export function publishScheduleRun(
 export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
   return request<CalendarResponse>(
     `/schedule/calendar${buildQuery(query as Record<string, unknown>)}`,
+  );
+}
+
+/**
+ * Authoritative manager read model for one operating day. The response is
+ * parsed here rather than in each page so every view agrees that a proposal
+ * or an invalid assignment is not dispatch truth.
+ */
+export function fetchOperationsDay(query: OperationsDayQuery): Promise<OperationsDayResponse> {
+  return request<unknown>(`/operations/day${buildQuery(query as unknown as Record<string, unknown>)}`).then(
+    parseOperationsDay,
   );
 }

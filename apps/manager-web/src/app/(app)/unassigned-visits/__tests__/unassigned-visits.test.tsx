@@ -132,6 +132,22 @@ describe("unassigned visits queue", () => {
     expect(lastCall).toMatchObject({ branchCode: "KANDY" });
   });
 
+  it("returns to the first server page when the branch changes", async () => {
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall], 640);
+    const user = await renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({ page: 2 });
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      branchCode: "KANDY",
+      page: 1,
+    });
+  });
+
   it("filters by conflict type on the client", async () => {
     const user = await renderPage();
 

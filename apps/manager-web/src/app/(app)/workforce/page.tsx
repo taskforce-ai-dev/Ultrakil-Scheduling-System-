@@ -139,6 +139,11 @@ export default function WorkforcePage() {
         <p className="text-muted-foreground">
           Employees, branch assignment, PMS grade and vehicle authorizations.
         </p>
+        <p className="mt-2 max-w-2xl rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
+          Vehicle authorization is a permission, not a live allocation. It does not mean the
+          employee or vehicle is assigned to today&apos;s work; Dispatch Board shows the published
+          dispatch plan.
+        </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
