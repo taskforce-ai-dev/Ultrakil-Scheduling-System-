@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import {
   assertUnpublishedAssignment,
+  lockScheduleResources,
   lockScheduleVisits,
 } from './schedule-visit-lock';
 import { publishReadiness } from './publish-readiness';
@@ -137,6 +138,16 @@ export class PublishingService {
           { runId },
         );
       }
+
+      await lockScheduleResources(
+        tx,
+        publishable.flatMap((assignment) =>
+          assignment.crewMembers.map((member) => member.employeeId),
+        ),
+        publishable.flatMap((assignment) =>
+          assignment.vehicles.map((vehicle) => vehicle.vehicleId),
+        ),
+      );
 
       for (const assignment of publishable) {
         const verdict = await this.eligibility.evaluate(

@@ -263,6 +263,48 @@ class TestPublishedReservations:
 
         assert result.assignments[0].start_minute == 9 * 60
 
+    def test_repair_keeps_every_reservation_except_the_named_predecessor(self):
+        movable = visit(
+            duration_minutes=60,
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=9 * 60,
+                    latest_start_minute=10 * 60,
+                )
+            ]
+        )
+        predecessor = ReservationInput(
+            assignment_id="published-predecessor",
+            scheduled_date="2026-09-09",
+            start_minute=9 * 60,
+            end_minute=10 * 60,
+            employee_ids=["sup-1", "tech-1"],
+        )
+        other_published = ReservationInput(
+            assignment_id="other-published-assignment",
+            scheduled_date="2026-09-09",
+            start_minute=10 * 60,
+            end_minute=11 * 60,
+            employee_ids=["sup-1", "tech-1"],
+        )
+
+        result = solve(
+            request(
+                visits=[movable],
+                existing=[
+                    ExistingAssignmentInput(
+                        visit_id="visit-1",
+                        start_minute=10 * 60,
+                    )
+                ],
+                reservations=[predecessor, other_published],
+                excluded_reservation_assignment_ids=["published-predecessor"],
+            )
+        )
+
+        assert result.assignments[0].start_minute == 9 * 60
+
 
 class TestVehicles:
     def test_only_assigns_a_vehicle_somebody_going_can_drive(self):
@@ -495,6 +537,58 @@ class TestLocks:
 
         assert result.assignments[0].start_minute == 11 * 60
 
+    def test_a_time_lock_participates_in_employee_overlap_constraints(self):
+        locked = visit(id="v-1", duration_minutes=60)
+        simultaneous = visit(
+            id="v-2",
+            service_agreement_id="agreement-2",
+            window_start_minute=11 * 60,
+            duration_minutes=60,
+        )
+        lock = LockInput(visit_id="v-1", scope="TIME", start_minute=11 * 60)
+
+        result = solve(request(visits=[locked, simultaneous], locks=[lock]))
+
+        assert len(result.assignments) == 1
+
+    def test_a_time_lock_participates_in_vehicle_overlap_constraints(self):
+        locked = visit(id="v-1", duration_minutes=60)
+        simultaneous = visit(
+            id="v-2",
+            service_agreement_id="agreement-2",
+            window_start_minute=11 * 60,
+            duration_minutes=60,
+        )
+        van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
+        pool = [
+            employee(
+                id="sup-1",
+                is_pms_grade=True,
+                can_use_public_transport=False,
+                authorized_vehicle_ids=["van-1"],
+            ),
+            employee(id="tech-1", can_use_public_transport=False),
+            employee(
+                id="sup-2",
+                is_pms_grade=True,
+                can_use_public_transport=False,
+                authorized_vehicle_ids=["van-1"],
+            ),
+            employee(id="tech-2", can_use_public_transport=False),
+        ]
+        lock = LockInput(visit_id="v-1", scope="TIME", start_minute=11 * 60)
+
+        result = solve(
+            request(
+                visits=[locked, simultaneous],
+                employees=pool,
+                vehicles=[van],
+                locks=[lock],
+            )
+        )
+
+        assert len(result.assignments) == 1
+
     def test_a_vehicle_lock_is_honoured(self):
         vans = [
             VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4),
@@ -511,6 +605,69 @@ class TestLocks:
 
 
 class TestSoftPreferences:
+    def test_keeps_an_existing_start_time_when_legal_slots_are_equal(self):
+        movable = visit(
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=9 * 60,
+                    latest_start_minute=10 * 60,
+                )
+            ]
+        )
+        existing = ExistingAssignmentInput(
+            visit_id="visit-1",
+            start_minute=10 * 60,
+        )
+
+        result = solve(request(visits=[movable], existing=[existing]))
+
+        assert result.assignments[0].start_minute == 10 * 60
+
+    def test_existing_start_time_never_overrides_a_published_reservation(self):
+        movable = visit(
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=9 * 60,
+                    latest_start_minute=10 * 60,
+                )
+            ]
+        )
+        existing = ExistingAssignmentInput(
+            visit_id="visit-1",
+            start_minute=9 * 60,
+        )
+        held = ReservationInput(
+            assignment_id="other-published-assignment",
+            scheduled_date="2026-09-09",
+            start_minute=9 * 60,
+            end_minute=10 * 60,
+            employee_ids=["sup-1", "tech-1"],
+        )
+
+        result = solve(
+            request(
+                visits=[movable],
+                existing=[existing],
+                reservations=[held],
+            )
+        )
+
+        assert result.assignments[0].start_minute == 10 * 60
+
+    def test_existing_start_time_does_not_make_an_unstaffable_visit_infeasible(self):
+        existing = ExistingAssignmentInput(
+            visit_id="visit-1",
+            start_minute=9 * 60,
+        )
+
+        result = solve(request(existing=[existing], employees=[]))
+
+        assert result.status == "OPTIMAL"
+        assert result.assignments == []
+        assert [entry.visit_id for entry in result.unassigned] == ["visit-1"]
+
     def test_keeps_an_existing_crew_when_the_alternatives_are_equal(self):
         pool = [
             SUPERVISOR,

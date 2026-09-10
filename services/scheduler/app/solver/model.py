@@ -42,6 +42,7 @@ WEIGHT_VISIT_STAFFED = 10_000
 WEIGHT_PREFERRED_DAY = 30
 WEIGHT_KEEP_EXISTING_CREW = 20
 WEIGHT_KEEP_EXISTING_VEHICLE = 10
+WEIGHT_KEEP_EXISTING_TIME = 15
 WEIGHT_WORKLOAD_SPREAD = 5
 # A crew that can take a van should. Without a reward the solver has no reason
 # to assign one at all, since a vehicle is optional — and a pest control crew
@@ -430,6 +431,13 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         integer carries both the date and the time and two visits on different
         days can never be found to overlap.
         """
+        lock = locks_by_visit.get(v.id)
+        if (
+            lock is not None
+            and lock.scope in ("FULL", "TIME")
+            and lock.start_minute is not None
+        ):
+            return [day_index[v.visit_date] * 1440 + lock.start_minute]
         if not v.candidate_slots:
             base = day_index[v.visit_date] * 1440 + v.window_start_minute
             return [base]
@@ -740,6 +748,22 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                 var = uses_vehicle.get((visit.id, vehicle_id))
                 if var is not None:
                     terms.append((WEIGHT_KEEP_EXISTING_VEHICLE, var))
+
+            # Keeping the published/draft start makes a correction easier for
+            # dispatch to understand. It remains a preference: an occupied or
+            # otherwise illegal time is absent from the variable's domain and
+            # receives no term, so reservations and every hard rule still win.
+            if existing.start_minute is not None:
+                wanted_start = (
+                    day_index[visit.visit_date] * 1440 + existing.start_minute
+                )
+                if wanted_start in slot_starts(visit):
+                    kept_time = model.NewBoolVar(f"keep_time_{visit.id}")
+                    model.Add(start_of[visit.id] == wanted_start).OnlyEnforceIf(
+                        kept_time
+                    )
+                    model.AddImplication(kept_time, staffed[visit.id])
+                    terms.append((WEIGHT_KEEP_EXISTING_TIME, kept_time))
 
     # Balanced utilisation, expressed as "flatten the busiest person". Without
     # it the solver happily gives one supervisor every job on a Wednesday.

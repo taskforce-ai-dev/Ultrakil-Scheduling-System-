@@ -5,7 +5,12 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
-import { assertScheduleSnapshot, assertUnpublishedVisit, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import {
+  assertScheduleSnapshot,
+  assertUnpublishedVisit,
+  lockScheduleResources,
+  lockScheduleVisits,
+} from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
 import {
   AssignCrewDto,
@@ -122,6 +127,11 @@ export class AssignmentsService {
     const saved = await this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [visitId]);
       await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      await lockScheduleResources(
+        tx,
+        proposal.crew.map((member) => member.employeeId),
+        proposal.vehicles.map((vehicle) => vehicle.vehicleId),
+      );
       const existing = await tx.assignment.findFirst({
         where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
         include: ASSIGNMENT_INCLUDE,

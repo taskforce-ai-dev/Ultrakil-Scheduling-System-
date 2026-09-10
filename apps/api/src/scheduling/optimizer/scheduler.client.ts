@@ -55,6 +55,8 @@ export interface SolveRequest {
     visit_id: string;
     employee_ids: string[];
     vehicle_ids: string[];
+    /** Previous minute-of-day, retained as a soft preference when still legal. */
+    start_minute?: number | null;
   }[];
   /** Published work outside this solve which must retain its resources. */
   reservations?: {

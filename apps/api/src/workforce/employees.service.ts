@@ -9,6 +9,7 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { AuditService } from '../audit/audit.service';
 import { AppException } from '../common/errors/app.exception';
 import { PrismaService } from '../prisma/prisma.service';
+import { lockScheduleResources } from '../scheduling/optimizer/schedule-visit-lock';
 import { isPmsGradeLabel } from './pms-grade';
 import { buildSourceKey } from './matrix-import/parser';
 import {
@@ -299,6 +300,7 @@ export class EmployeesService {
     const before = await this.findOne(id);
 
     return this.prisma.$transaction(async (tx) => {
+      await lockScheduleResources(tx, [id], []);
       await tx.employeeSkill.deleteMany({ where: { employeeId: id } });
       if (skills.length) {
         await tx.employeeSkill.createMany({
@@ -362,6 +364,38 @@ export class EmployeesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await lockScheduleResources(tx, [id], [vehicleId]);
+      const [currentEmployee, currentVehicle, currentAuthorization] = await Promise.all([
+        tx.employee.findUniqueOrThrow({ where: { id } }),
+        tx.vehicle.findUniqueOrThrow({ where: { id: vehicleId } }),
+        tx.vehicleAuthorization.findUnique({
+          where: { employeeId_vehicleId: { employeeId: id, vehicleId } },
+        }),
+      ]);
+      if (!currentEmployee.isActive) {
+        throw new AppException(
+          'EMPLOYEE_INACTIVE',
+          `${currentEmployee.fullName} is deactivated and cannot be given new driving authorizations. Reactivate them first.`,
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          { employeeId: id },
+        );
+      }
+      if (!currentVehicle.isActive) {
+        throw new AppException(
+          'VEHICLE_INACTIVE',
+          `Vehicle ${currentVehicle.code} is deactivated and cannot have new drivers authorised.`,
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          { vehicleId },
+        );
+      }
+      if (currentAuthorization) {
+        throw new AppException(
+          'AUTHORIZATION_ALREADY_EXISTS',
+          `${currentEmployee.fullName} is already authorised to drive ${currentVehicle.code}.`,
+          HttpStatus.CONFLICT,
+          { employeeId: id, vehicleId },
+        );
+      }
       const created = await tx.vehicleAuthorization.create({
         data: { employeeId: id, vehicleId },
       });
@@ -402,18 +436,31 @@ export class EmployeesService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.vehicleAuthorization.delete({ where: { id: existing.id } });
+      await lockScheduleResources(tx, [id], [vehicleId]);
+      const current = await tx.vehicleAuthorization.findUnique({
+        where: { employeeId_vehicleId: { employeeId: id, vehicleId } },
+        include: { employee: true, vehicle: true },
+      });
+      if (!current) {
+        throw new AppException(
+          'AUTHORIZATION_NOT_FOUND',
+          'That driving authorization does not exist, so there is nothing to remove.',
+          HttpStatus.NOT_FOUND,
+          { employeeId: id, vehicleId },
+        );
+      }
+      await tx.vehicleAuthorization.delete({ where: { id: current.id } });
       await this.audit.record(
         {
           entityType: 'VehicleAuthorization',
-          entityId: existing.id,
+          entityId: current.id,
           action: 'vehicle_authorization.revoked',
           actor,
           before: {
             employeeId: id,
-            employee: existing.employee.fullName,
+            employee: current.employee.fullName,
             vehicleId,
-            vehicle: existing.vehicle.code,
+            vehicle: current.vehicle.code,
           },
         },
         tx,
@@ -444,25 +491,25 @@ export class EmployeesService {
       );
     }
 
-    // Two absences covering the same day would double-count, and the scheduler
-    // would have to guess which reason applies.
-    const clash = await this.prisma.employeeAvailability.findFirst({
-      where: { employeeId: id, startDate: { lte: endDate }, endDate: { gte: startDate } },
-    });
-    if (clash) {
-      throw new AppException(
-        'AVAILABILITY_OVERLAPS',
-        `This overlaps an absence already recorded from ${iso(clash.startDate)} to ${iso(clash.endDate)}. Edit that one instead of adding a second.`,
-        HttpStatus.CONFLICT,
-        {
-          conflictingId: clash.id,
-          conflictingStart: iso(clash.startDate),
-          conflictingEnd: iso(clash.endDate),
-        },
-      );
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      await lockScheduleResources(tx, [id], []);
+      // Recheck only after taking the same employee lock used by assignment
+      // writers. Otherwise two concurrent requests can both observe no clash.
+      const clash = await tx.employeeAvailability.findFirst({
+        where: { employeeId: id, startDate: { lte: endDate }, endDate: { gte: startDate } },
+      });
+      if (clash) {
+        throw new AppException(
+          'AVAILABILITY_OVERLAPS',
+          `This overlaps an absence already recorded from ${iso(clash.startDate)} to ${iso(clash.endDate)}. Edit that one instead of adding a second.`,
+          HttpStatus.CONFLICT,
+          {
+            conflictingId: clash.id,
+            conflictingStart: iso(clash.startDate),
+            conflictingEnd: iso(clash.endDate),
+          },
+        );
+      }
       const created = await tx.employeeAvailability.create({
         data: {
           employeeId: id,
@@ -498,6 +545,11 @@ export class EmployeesService {
     if (!existing) throw notFound('Availability record', availabilityId);
 
     await this.prisma.$transaction(async (tx) => {
+      await lockScheduleResources(tx, [id], []);
+      const current = await tx.employeeAvailability.findFirst({
+        where: { id: availabilityId, employeeId: id },
+      });
+      if (!current) throw notFound('Availability record', availabilityId);
       await tx.employeeAvailability.delete({ where: { id: availabilityId } });
       await this.audit.record(
         {
@@ -505,7 +557,7 @@ export class EmployeesService {
           entityId: availabilityId,
           action: 'availability.deleted',
           actor,
-          before: existing,
+          before: current,
         },
         tx,
       );

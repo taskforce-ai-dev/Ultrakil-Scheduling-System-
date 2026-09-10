@@ -20,6 +20,7 @@ import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
   lockScheduleAgreements,
+  lockScheduleResources,
   assertScheduleSnapshot,
   assertVisitRevision,
   lockScheduleVisits,
@@ -694,7 +695,10 @@ export class ScheduleRunService {
                   .map((m) => m.employeeId)
               : live.crewMembers.map((m) => m.employeeId),
           vehicle_ids: live.vehicles.map((v) => v.vehicleId),
-          start_minute: null,
+          start_minute:
+            lock.scope === LockScope.FULL || lock.scope === LockScope.TIME
+              ? minuteOfDay(live.plannedStart)
+              : null,
         });
       }
 
@@ -702,6 +706,7 @@ export class ScheduleRunService {
         visit_id: visit.id,
         employee_ids: live.crewMembers.map((m) => m.employeeId),
         vehicle_ids: live.vehicles.map((v) => v.vehicleId),
+        start_minute: minuteOfDay(live.plannedStart),
       });
       return true;
     });
@@ -837,19 +842,6 @@ export class ScheduleRunService {
         { runId },
       );
     }
-    const employeeIds = [
-      ...new Set(
-        proposals.flatMap((entry) =>
-          entry.dto.crew.map((member) => member.employeeId),
-        ),
-      ),
-    ];
-    const pms = await this.prisma.employee.findMany({
-      where: { id: { in: employeeIds } },
-      select: { id: true, isPmsGrade: true },
-    });
-    const pmsById = new Map(pms.map((row) => [row.id, row.isPmsGrade]));
-
     return this.prisma.$transaction(
       async (tx) => {
         // One solver response is one atomic change. Lock the entire affected set
@@ -862,6 +854,32 @@ export class ScheduleRunService {
         await lockScheduleVisits(
           tx,
           entries.map((entry) => entry.visitId),
+        );
+        await lockScheduleResources(
+          tx,
+          proposals.flatMap((entry) =>
+            entry.dto.crew.map((member) => member.employeeId),
+          ),
+          proposals.flatMap((entry) =>
+            entry.dto.vehicles.map((vehicle) => vehicle.vehicleId),
+          ),
+        );
+        // Read denormalised history facts only after the resource lock. A
+        // concurrent grade change must not leave an assignment recording a
+        // supervisor qualification that was already stale when it committed.
+        const employeeIds = [
+          ...new Set(
+            proposals.flatMap((entry) =>
+              entry.dto.crew.map((member) => member.employeeId),
+            ),
+          ),
+        ];
+        const pms = await this.prisma.employee.findMany({
+          where: { id: { in: employeeIds } },
+          select: { id: true, isPmsGrade: true },
+        });
+        const pmsById = new Map(
+          pms.map((row) => [row.id, row.isPmsGrade]),
         );
         for (const entry of entries) {
           await assertScheduleSnapshot(

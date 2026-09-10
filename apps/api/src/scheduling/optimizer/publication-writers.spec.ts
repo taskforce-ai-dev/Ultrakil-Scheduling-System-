@@ -238,7 +238,13 @@ function fixture() {
       findUniqueOrThrow: jest.fn(async () => run),
       updateMany: jest.fn(async () => ({ count: 1 })),
     },
-    $queryRaw: jest.fn(async (_query: Prisma.Sql) => [{ id: visit.id }]),
+    $queryRaw: jest.fn(async (query: Prisma.Sql) =>
+      query.sql.includes('employees')
+        ? query.values.map((id) => ({ id }))
+        : query.sql.includes('vehicles')
+          ? query.values.map((id) => ({ id }))
+          : [{ id: visit.id }],
+    ),
     $transaction: jest.fn(
       async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => {
         await beforeTransaction();
@@ -299,6 +305,20 @@ function fixture() {
 }
 
 describe('standard writers preserve publication', () => {
+  it('locks manual assignment resources before eligibility is evaluated', async () => {
+    const f = fixture();
+
+    await f.manual.assign('visit', proposal, actor);
+
+    const resourceLockCall = f.prisma.$queryRaw.mock.calls.findIndex(
+      ([query]: [Prisma.Sql]) => query.sql.includes('employees'),
+    );
+    expect(resourceLockCall).toBeGreaterThanOrEqual(0);
+    expect(
+      f.prisma.$queryRaw.mock.invocationCallOrder[resourceLockCall],
+    ).toBeLessThan(f.eligibility.evaluate.mock.invocationCallOrder[0]);
+  });
+
   it.each(['assign', 'unassign'])(
     'fences %s when publication wins after the draft read',
     async (operation) => {
@@ -417,6 +437,13 @@ describe('standard writers preserve publication', () => {
       expect.objectContaining({ excludeAssignmentId: 'draft' }),
       f.prisma,
     );
+    const resourceLockCall = f.prisma.$queryRaw.mock.calls.findIndex(
+      ([query]: [Prisma.Sql]) => query.sql.includes('employees'),
+    );
+    expect(resourceLockCall).toBeGreaterThanOrEqual(0);
+    expect(
+      f.prisma.$queryRaw.mock.invocationCallOrder[resourceLockCall],
+    ).toBeLessThan(f.eligibility.evaluate.mock.invocationCallOrder[0]);
   });
 
   it('rejects an adjustment that makes the draft crew ineligible before any write', async () => {
@@ -476,6 +503,13 @@ describe('standard writers preserve publication', () => {
     expect(f.prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       timeout: 30_000,
     });
+    const resourceLockCall = f.prisma.$queryRaw.mock.calls.findIndex(
+      ([query]: [Prisma.Sql]) => query.sql.includes('employees'),
+    );
+    expect(resourceLockCall).toBeGreaterThanOrEqual(0);
+    expect(
+      f.prisma.$queryRaw.mock.invocationCallOrder[resourceLockCall],
+    ).toBeLessThan(f.eligibility.evaluate.mock.invocationCallOrder[0]);
   });
 
   const publicationHistoryCases = [

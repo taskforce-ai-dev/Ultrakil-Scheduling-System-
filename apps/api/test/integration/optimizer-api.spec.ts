@@ -15,7 +15,7 @@
  */
 import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AssignmentStatus, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, AvailabilityKind, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import { Job } from 'bullmq';
 import request from 'supertest';
 
@@ -32,6 +32,7 @@ import { PublishingService } from '../../src/scheduling/optimizer/publishing.ser
 import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 import { SchedulerClient, SolveResponse } from '../../src/scheduling/optimizer/scheduler.client';
+import { EmployeesService } from '../../src/workforce/employees.service';
 
 const prisma = new PrismaClient();
 
@@ -66,7 +67,11 @@ function deferred<T>() {
 }
 
 /** Exposes the real connection/lock boundary without replacing any SQL. */
-function transactionProbe(holdLock: boolean, beforeTransaction?: () => Promise<void>) {
+function transactionProbe(
+  holdLock: boolean,
+  beforeTransaction?: () => Promise<void>,
+  lockTable = 'generated_visits',
+) {
   const pid = deferred<number>();
   const locked = deferred<void>();
   const release = deferred<void>();
@@ -83,7 +88,7 @@ function transactionProbe(holdLock: boolean, beforeTransaction?: () => Promise<v
                 if (key === '$queryRaw') {
                   return async (query: Prisma.Sql) => {
                     const result = await transaction.$queryRaw(query);
-                    if (query.sql.includes('generated_visits') && query.sql.includes('FOR UPDATE')) {
+                    if (query.sql.includes(lockTable) && query.sql.includes('FOR UPDATE')) {
                       locked.resolve();
                       if (holdLock) await release.promise;
                     }
@@ -1463,6 +1468,203 @@ describe('standard writer publication protocol', () => {
       ).toEqual(notices);
     },
   );
+});
+
+describe('resource lock concurrency', () => {
+  async function raceManualAssignments(
+    first: ReturnType<typeof transactionProbe>,
+    second: ReturnType<typeof transactionProbe>,
+    firstVisit: Awaited<ReturnType<typeof manualPublicationFixture>>,
+    secondVisit: Awaited<ReturnType<typeof manualPublicationFixture>>,
+    firstProposal: typeof firstVisit.proposal,
+    secondProposal: typeof secondVisit.proposal,
+  ) {
+    const firstWriter = new AssignmentsService(
+      first.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const secondWriter = new AssignmentsService(
+      second.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const firstResult = firstWriter.assign(firstVisit.visitId, firstProposal, firstVisit.actor)
+      .then((value) => ({ value }), (error: unknown) => ({ error }));
+    let secondResult: Promise<{ value: unknown } | { error: unknown }> | undefined;
+    try {
+      await first.locked.promise;
+      secondResult = secondWriter.assign(secondVisit.visitId, secondProposal, secondVisit.actor)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      const [firstPid, secondPid] = await Promise.all([first.pid.promise, second.pid.promise]);
+      await waitForBlocked(secondPid, firstPid);
+      first.release.resolve();
+      return await Promise.all([firstResult, secondResult]);
+    } finally {
+      first.release.resolve();
+      second.release.resolve();
+      await Promise.all([firstResult, secondResult]);
+    }
+  }
+
+  it('allows exactly one overlapping manual assignment on disjoint visits sharing employees', async () => {
+    const [firstVisit, secondVisit] = await Promise.all([
+      manualPublicationFixture(false),
+      manualPublicationFixture(false),
+    ]);
+    const results = await raceManualAssignments(
+      transactionProbe(true, undefined, 'employees'),
+      transactionProbe(false, undefined, 'employees'),
+      firstVisit,
+      secondVisit,
+      firstVisit.proposal,
+      secondVisit.proposal,
+    );
+
+    expect(results[0]).toHaveProperty('value');
+    expect(results[1]).toMatchObject({ error: { code: 'ASSIGNMENT_NOT_ELIGIBLE' } });
+    expect(await prisma.assignment.count({
+      where: { generatedVisitId: { in: [firstVisit.visitId, secondVisit.visitId] } },
+    })).toBe(1);
+  });
+
+  it('allows exactly one overlapping manual assignment on disjoint visits sharing a vehicle', async () => {
+    const [firstVisit, secondVisit] = await Promise.all([
+      manualPublicationFixture(false),
+      manualPublicationFixture(false),
+    ]);
+    const vehicle = await prisma.vehicle.create({
+      data: {
+        code: `C06-RACE-${suffix}-${batchVehicleIds.length}`,
+        label: 'C06 concurrency vehicle',
+        seatCapacity: 2,
+        authorizations: {
+          create: [
+            { employeeId: supervisorIds[0] },
+            { employeeId: supervisorIds[1] },
+          ],
+        },
+      },
+    });
+    batchVehicleIds.push(vehicle.id);
+    const proposals = [0, 1].map((index) => ({
+      ...firstVisit.proposal,
+      crew: [
+        { employeeId: supervisorIds[index], role: CrewRole.SUPERVISOR },
+        { employeeId: technicianIds[index], role: CrewRole.TECHNICIAN },
+      ],
+      vehicles: [{ vehicleId: vehicle.id, driverEmployeeId: supervisorIds[index] }],
+    }));
+    const results = await raceManualAssignments(
+      transactionProbe(true, undefined, 'vehicles'),
+      transactionProbe(false, undefined, 'vehicles'),
+      firstVisit,
+      secondVisit,
+      proposals[0],
+      proposals[1],
+    );
+
+    expect(results[0]).toHaveProperty('value');
+    expect(results[1]).toMatchObject({ error: { code: 'ASSIGNMENT_NOT_ELIGIBLE' } });
+    expect(await prisma.assignmentVehicle.count({
+      where: { vehicleId: vehicle.id },
+    })).toBe(1);
+  });
+
+  it('makes an assignment wait for a concurrent availability rule change and then reject it', async () => {
+    const visit = await manualPublicationFixture(false);
+    const ruleProbe = transactionProbe(true, undefined, 'employees');
+    const assignmentProbe = transactionProbe(false, undefined, 'employees');
+    const workforce = new EmployeesService(ruleProbe.client, app.get(AuditService));
+    const assignments = new AssignmentsService(
+      assignmentProbe.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const ruleChange = workforce.addAvailability(
+      supervisorIds[0],
+      {
+        startDate: '2027-03-03',
+        endDate: '2027-03-03',
+        kind: AvailabilityKind.LEAVE,
+        reason: 'Concurrency proof',
+      },
+      visit.actor,
+    ).then((value) => ({ value }), (error: unknown) => ({ error }));
+    let assignment: Promise<{ value: unknown } | { error: unknown }> | undefined;
+    try {
+      await ruleProbe.locked.promise;
+      assignment = assignments.assign(visit.visitId, visit.proposal, visit.actor)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      const [rulePid, assignmentPid] = await Promise.all([
+        ruleProbe.pid.promise,
+        assignmentProbe.pid.promise,
+      ]);
+      await waitForBlocked(assignmentPid, rulePid);
+      ruleProbe.release.resolve();
+      const [changed, rejected] = await Promise.all([ruleChange, assignment]);
+      expect(changed).toHaveProperty('value');
+      expect(rejected).toMatchObject({ error: { code: 'ASSIGNMENT_NOT_ELIGIBLE' } });
+      expect(await prisma.assignment.count({ where: { generatedVisitId: visit.visitId } })).toBe(0);
+    } finally {
+      ruleProbe.release.resolve();
+      assignmentProbe.release.resolve();
+      await Promise.all([ruleChange, assignment]);
+      await prisma.employeeAvailability.deleteMany({
+        where: { employeeId: supervisorIds[0], reason: 'Concurrency proof' },
+      });
+    }
+  });
+
+  it('makes an assignment wait for a concurrent authorization revocation and then reject it', async () => {
+    const visit = await manualPublicationFixture(false);
+    const vehicle = await prisma.vehicle.create({
+      data: {
+        code: `C06-RULE-${suffix}-${batchVehicleIds.length}`,
+        label: 'C06 authorization race vehicle',
+        seatCapacity: 2,
+        authorizations: { create: { employeeId: supervisorIds[0] } },
+      },
+    });
+    batchVehicleIds.push(vehicle.id);
+    const proposal = {
+      ...visit.proposal,
+      vehicles: [{ vehicleId: vehicle.id, driverEmployeeId: supervisorIds[0] }],
+    };
+    const ruleProbe = transactionProbe(true, undefined, 'employees');
+    const assignmentProbe = transactionProbe(false, undefined, 'employees');
+    const workforce = new EmployeesService(ruleProbe.client, app.get(AuditService));
+    const assignments = new AssignmentsService(
+      assignmentProbe.client,
+      app.get(EligibilityService),
+      app.get(AuditService),
+    );
+    const ruleChange = workforce.revokeVehicle(
+      supervisorIds[0],
+      vehicle.id,
+      visit.actor,
+    ).then((value) => ({ value }), (error: unknown) => ({ error }));
+    let assignment: Promise<{ value: unknown } | { error: unknown }> | undefined;
+    try {
+      await ruleProbe.locked.promise;
+      assignment = assignments.assign(visit.visitId, proposal, visit.actor)
+        .then((value) => ({ value }), (error: unknown) => ({ error }));
+      const [rulePid, assignmentPid] = await Promise.all([
+        ruleProbe.pid.promise,
+        assignmentProbe.pid.promise,
+      ]);
+      await waitForBlocked(assignmentPid, rulePid);
+      ruleProbe.release.resolve();
+      const [changed, rejected] = await Promise.all([ruleChange, assignment]);
+      expect(changed).toHaveProperty('value');
+      expect(rejected).toMatchObject({ error: { code: 'ASSIGNMENT_NOT_ELIGIBLE' } });
+      expect(await prisma.assignment.count({ where: { generatedVisitId: visit.visitId } })).toBe(0);
+    } finally {
+      ruleProbe.release.resolve();
+      assignmentProbe.release.resolve();
+      await Promise.all([ruleChange, assignment]);
+    }
+  });
 });
 
 describe('publishing', () => {

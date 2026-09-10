@@ -69,6 +69,59 @@ export async function lockScheduleAgreements(
   }
 }
 
+/**
+ * Serialize schedule eligibility and persistence across different visits.
+ *
+ * A visit row lock only fences writers targeting that one visit. Two writers
+ * targeting different visits could therefore both observe an employee or
+ * vehicle as free and then double-book it. Every schedule writer takes the
+ * same table order (employees, then vehicles) and sorted row order so a shared
+ * resource becomes the serialization point without introducing lock-order
+ * deadlocks.
+ */
+export async function lockScheduleResources(
+  tx: Prisma.TransactionClient,
+  employeeIds: string[],
+  vehicleIds: string[],
+) {
+  const employees = [...new Set(employeeIds)].sort();
+  const vehicles = [...new Set(vehicleIds)].sort();
+
+  if (employees.length > 0) {
+    const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM employees
+      WHERE id IN (${Prisma.join(employees.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id
+      FOR UPDATE
+    `);
+    if (locked.length !== employees.length) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'One or more employees changed while this schedule was being prepared. Refresh and try again.',
+        HttpStatus.CONFLICT,
+        { employeeIds: employees },
+      );
+    }
+  }
+
+  if (vehicles.length > 0) {
+    const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM vehicles
+      WHERE id IN (${Prisma.join(vehicles.map((id) => Prisma.sql`${id}::uuid`))})
+      ORDER BY id
+      FOR UPDATE
+    `);
+    if (locked.length !== vehicles.length) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'One or more vehicles changed while this schedule was being prepared. Refresh and try again.',
+        HttpStatus.CONFLICT,
+        { vehicleIds: vehicles },
+      );
+    }
+  }
+}
+
 const PUBLISHED_HISTORY: AssignmentStatus[] = [
   AssignmentStatus.PUBLISHED,
   AssignmentStatus.ACKNOWLEDGED,

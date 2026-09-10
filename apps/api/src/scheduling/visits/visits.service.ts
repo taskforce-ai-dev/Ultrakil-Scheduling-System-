@@ -8,7 +8,11 @@ import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
-import { assertUnpublishedVisit, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import {
+  assertUnpublishedVisit,
+  lockScheduleResources,
+  lockScheduleVisits,
+} from '../optimizer/schedule-visit-lock';
 import { protectionReasonFor } from '../visit-generation/plan';
 import {
   AdjustVisitDto,
@@ -211,6 +215,15 @@ export class VisitsService {
         },
         include: { crewMembers: true, vehicles: true },
       });
+      await lockScheduleResources(
+        tx,
+        drafts.flatMap((draft) =>
+          draft.crewMembers.map((member) => member.employeeId),
+        ),
+        drafts.flatMap((draft) =>
+          draft.vehicles.map((vehicle) => vehicle.vehicleId),
+        ),
+      );
       for (const draft of drafts) {
         const start =
           draft.plannedStart.getUTCHours() * 60 +

@@ -114,6 +114,8 @@ class ExistingAssignmentInput(BaseModel):
     visit_id: str
     employee_ids: list[str] = Field(default_factory=list)
     vehicle_ids: list[str] = Field(default_factory=list)
+    start_minute: int | None = None
+    """Previous minute-of-day. A soft preference only, never a time lock."""
 
 
 class ReservationInput(BaseModel):
