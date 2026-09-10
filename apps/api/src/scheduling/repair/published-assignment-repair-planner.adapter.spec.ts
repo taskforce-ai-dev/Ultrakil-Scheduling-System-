@@ -19,7 +19,7 @@ function target(id: string, visitId: string): PlannerSourceAssignment {
   return {
     id,
     generatedVisitId: visitId,
-    branchCode: BranchCode.COLOMBO,
+    branchCode: BranchCode.KANDY,
     status: AssignmentStatus.PUBLISHED,
     plannedStart: new Date('2027-03-03T09:00:00.000Z'),
     plannedEnd: new Date('2027-03-03T10:00:00.000Z'),
@@ -87,7 +87,12 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
         ]),
       },
     };
-    const scheduler = { solve: jest.fn(async (request) => ({ ...answer, run_id: request.run_id })) };
+    const scheduler = {
+      solve: jest.fn(async (request) => ({
+        ...answer,
+        run_id: request.run_id,
+      })),
+    };
     const adapter = new PublishedAssignmentRepairPlannerAdapter(
       prisma as unknown as PrismaService,
       scheduler as unknown as SchedulerClient,
@@ -102,8 +107,16 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
     expect(scheduler.solve).toHaveBeenCalledWith(
       expect.objectContaining({
         visits: [
-          expect.objectContaining({ id: 'visit-1', candidate_slots: [] }),
-          expect.objectContaining({ id: 'visit-2', candidate_slots: [] }),
+          expect.objectContaining({
+            id: 'visit-1',
+            branch_code: BranchCode.COLOMBO,
+            candidate_slots: [],
+          }),
+          expect.objectContaining({
+            id: 'visit-2',
+            branch_code: BranchCode.COLOMBO,
+            candidate_slots: [],
+          }),
         ],
         reservations: [
           {
@@ -129,6 +142,8 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
           id: { notIn: [firstSourceId, secondSourceId] },
           status: {
             in: [
+              AssignmentStatus.DRAFT,
+              AssignmentStatus.PROPOSED,
               AssignmentStatus.PUBLISHED,
               AssignmentStatus.ACKNOWLEDGED,
               AssignmentStatus.IN_PROGRESS,

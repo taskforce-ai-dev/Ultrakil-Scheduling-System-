@@ -18,8 +18,10 @@ import {
 } from '../optimizer/scheduler.client';
 
 const REPAIR_SOLVER_SECONDS = 20;
-const REPAIR_SOLVER_TIMEOUT_MS = 25_000;
+const REPAIR_SOLVER_TRANSPORT_SECONDS = 5;
 const RESERVATION_STATUSES = [
+  AssignmentStatus.DRAFT,
+  AssignmentStatus.PROPOSED,
   AssignmentStatus.PUBLISHED,
   AssignmentStatus.ACKNOWLEDGED,
   AssignmentStatus.IN_PROGRESS,
@@ -77,13 +79,23 @@ export class PublishedAssignmentRepairPlannerAdapter {
     );
     const excludedIds = [...allSourceAssignmentIds].sort();
     const branches = [
-      ...new Set(orderedTargets.map((target) => target.generatedVisit.branchCode)),
+      ...new Set(
+        orderedTargets.map((target) => target.generatedVisit.branchCode),
+      ),
     ].sort();
     const rangeStart = new Date(
-      Math.min(...orderedTargets.map((target) => target.generatedVisit.visitDate.getTime())),
+      Math.min(
+        ...orderedTargets.map((target) =>
+          target.generatedVisit.visitDate.getTime(),
+        ),
+      ),
     );
     const lastDate = new Date(
-      Math.max(...orderedTargets.map((target) => target.generatedVisit.visitDate.getTime())),
+      Math.max(
+        ...orderedTargets.map((target) =>
+          target.generatedVisit.visitDate.getTime(),
+        ),
+      ),
     );
     const rangeEndExclusive = new Date(lastDate);
     rangeEndExclusive.setUTCDate(rangeEndExclusive.getUTCDate() + 1);
@@ -133,9 +145,10 @@ export class PublishedAssignmentRepairPlannerAdapter {
         window_end_minute: source.generatedVisit.windowEndMinute,
         duration_minutes: source.generatedVisit.durationMinutes,
         required_crew_size: source.generatedVisit.requiredCrewSize,
-        required_skill_codes: source.generatedVisit.serviceAgreement.requiredSkills
-          .map((entry) => entry.skillCode)
-          .sort(),
+        required_skill_codes:
+          source.generatedVisit.serviceAgreement.requiredSkills
+            .map((entry) => entry.skillCode)
+            .sort(),
         service_site_id: source.generatedVisit.serviceAgreement.serviceSiteId,
         service_agreement_id: source.generatedVisit.serviceAgreementId,
         is_preferred_day: false,
@@ -166,7 +179,9 @@ export class PublishedAssignmentRepairPlannerAdapter {
       locks: [],
       existing: orderedTargets.map((source) => ({
         visit_id: source.generatedVisitId,
-        employee_ids: source.crewMembers.map((entry) => entry.employeeId).sort(),
+        employee_ids: source.crewMembers
+          .map((entry) => entry.employeeId)
+          .sort(),
         vehicle_ids: source.vehicles.map((entry) => entry.vehicleId).sort(),
       })),
       reservations: reservations.map((assignment) => ({
@@ -174,16 +189,24 @@ export class PublishedAssignmentRepairPlannerAdapter {
         scheduled_date: dateOnly(assignment.plannedStart),
         start_minute: minuteOfDay(assignment.plannedStart),
         end_minute: minuteOfDay(assignment.plannedEnd),
-        employee_ids: assignment.crewMembers.map((entry) => entry.employeeId).sort(),
+        employee_ids: assignment.crewMembers
+          .map((entry) => entry.employeeId)
+          .sort(),
         vehicle_ids: assignment.vehicles.map((entry) => entry.vehicleId).sort(),
       })),
       excluded_reservation_assignment_ids: excludedIds,
       time_limit_seconds: REPAIR_SOLVER_SECONDS,
     };
 
+    const solveDays = new Set(
+      orderedTargets.map((target) => dateOnly(target.generatedVisit.visitDate)),
+    ).size;
+    const timeoutMs =
+      (REPAIR_SOLVER_SECONDS * solveDays + REPAIR_SOLVER_TRANSPORT_SECONDS) *
+      1000;
     let response: SolveResponse;
     try {
-      response = await this.scheduler.solve(request, REPAIR_SOLVER_TIMEOUT_MS);
+      response = await this.scheduler.solve(request, timeoutMs);
     } catch {
       throw new AppException(
         'REPAIR_PLANNER_UNAVAILABLE',
@@ -192,12 +215,16 @@ export class PublishedAssignmentRepairPlannerAdapter {
       );
     }
     if (response.run_id !== runId) {
-      throw invalidSolverResponse('The scheduler returned a result for a different repair plan.');
+      throw invalidSolverResponse(
+        'The scheduler returned a result for a different repair plan.',
+      );
     }
     return {
       response,
       pmsEmployeeIds: new Set(
-        employees.filter((employee) => employee.isPmsGrade).map((employee) => employee.id),
+        employees
+          .filter((employee) => employee.isPmsGrade)
+          .map((employee) => employee.id),
       ),
     };
   }

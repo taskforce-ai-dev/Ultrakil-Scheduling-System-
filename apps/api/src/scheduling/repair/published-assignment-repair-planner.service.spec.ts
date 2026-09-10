@@ -80,7 +80,10 @@ function fixture(row = source()) {
     assignment: { findMany: jest.fn(async () => [row]), ...writes },
   };
   const eligibility = {
-    evaluate: jest.fn(async () => ({ isEligible: false, conflicts: [originalConflict] })),
+    evaluate: jest.fn(async () => ({
+      isEligible: false,
+      conflicts: [originalConflict],
+    })),
   };
   const solveResult: RepairPlannerSolveResult = {
     response: {
@@ -132,7 +135,9 @@ describe('PublishedAssignmentRepairPlannerService', () => {
   it('plans one replacement, returns apply-ready hashes, and performs zero writes', async () => {
     const f = fixture();
 
-    await expect(f.service.plan({ sourceAssignmentIds: [sourceId] })).resolves.toEqual({
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).resolves.toEqual({
       operations: [
         {
           sourceAssignmentId: sourceId,
@@ -161,7 +166,9 @@ describe('PublishedAssignmentRepairPlannerService', () => {
 
   it('turns a locked invalid source into a structured withdrawal without solving', async () => {
     const f = fixture(
-      source({ locks: [{ scope: LockScope.FULL, reason: 'Manager decision' }] }),
+      source({
+        locks: [{ scope: LockScope.FULL, reason: 'Manager decision' }],
+      }),
     );
     f.repairs.preview.mockResolvedValue({
       ...f.preview,
@@ -188,9 +195,14 @@ describe('PublishedAssignmentRepairPlannerService', () => {
 
   it('rejects an assignment that already passes current hard rules', async () => {
     const f = fixture();
-    f.eligibility.evaluate.mockResolvedValue({ isEligible: true, conflicts: [] });
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: true,
+      conflicts: [],
+    });
 
-    await expect(f.service.plan({ sourceAssignmentIds: [sourceId] })).rejects.toMatchObject({
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({
       code: 'REPAIR_TARGET_ALREADY_VALID',
     });
     expect(f.adapter.solve).not.toHaveBeenCalled();
@@ -237,7 +249,9 @@ describe('PublishedAssignmentRepairPlannerService', () => {
       }),
     );
 
-    await expect(f.service.plan({ sourceAssignmentIds: [sourceId] })).rejects.toMatchObject({
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({
       code: 'VALIDATION_FAILED',
     });
     expect(f.adapter.solve).not.toHaveBeenCalled();
@@ -252,7 +266,9 @@ describe('PublishedAssignmentRepairPlannerService', () => {
         source({ id: '66666666-6666-4666-8666-666666666666' }),
       ]);
 
-    await expect(f.service.plan({ sourceAssignmentIds: [sourceId] })).rejects.toMatchObject({
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({
       code: 'RESOURCE_CONFLICT',
     });
     expect(f.adapter.solve).not.toHaveBeenCalled();
@@ -287,7 +303,7 @@ describe('PublishedAssignmentRepairPlannerService', () => {
           sourceAssignmentId: sourceId,
           action: AssignmentRepairAction.WITHDRAWN,
           unassignedReasons: expect.arrayContaining([
-            expect.objectContaining({ code: 'MULTIPLE_PUBLISHED_ASSIGNMENTS' }),
+            expect.objectContaining({ code: 'MULTIPLE_LIVE_ASSIGNMENTS' }),
           ]),
         }),
         expect.objectContaining({
@@ -383,8 +399,42 @@ describe('PublishedAssignmentRepairPlannerService', () => {
       })),
     });
 
-    await expect(f.service.plan({ sourceAssignmentIds: [sourceId] })).rejects.toMatchObject({
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({
       code: 'ASSIGNMENT_NOT_ELIGIBLE',
     });
+  });
+
+  it('rejects an oversized untrusted scheduler reason list', async () => {
+    const f = fixture();
+    f.adapter.solve.mockResolvedValue({
+      response: {
+        run_id: 'repair-plan-run',
+        status: 'INFEASIBLE',
+        assignments: [],
+        unassigned: [
+          {
+            visit_id: visitId,
+            reason_codes: Array.from(
+              { length: 21 },
+              (_, index) => `REASON_${index}`,
+            ),
+            message: 'No feasible plan.',
+          },
+        ],
+        solve_seconds: 0.1,
+        objective_value: 0,
+        visits_considered: 1,
+      },
+      pmsEmployeeIds: new Set(),
+    });
+
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+    });
+    expect(f.repairs.preview).not.toHaveBeenCalled();
   });
 });

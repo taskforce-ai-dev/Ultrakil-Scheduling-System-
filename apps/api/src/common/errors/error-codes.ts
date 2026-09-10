@@ -63,6 +63,9 @@ export const ErrorCode = {
   JOB_TYPE_INACTIVE: 'JOB_TYPE_INACTIVE',
   CUSTOMER_INACTIVE: 'CUSTOMER_INACTIVE',
 
+  // --- Published assignment repair ------------------------------------------
+  REPAIR_TARGET_ALREADY_VALID: 'REPAIR_TARGET_ALREADY_VALID',
+
   // --- Scheduling hard rules (ULK-C05) ---------------------------------------
   //
   // These are the eligibility engine's conflict codes as well as error codes:
@@ -70,7 +73,6 @@ export const ErrorCode = {
   // list rather than keeping a second one. Two vocabularies for the same rule
   // is how a dispatch board ends up filtering on a code the API stopped using.
   ASSIGNMENT_NOT_ELIGIBLE: 'ASSIGNMENT_NOT_ELIGIBLE',
-  REPAIR_TARGET_ALREADY_VALID: 'REPAIR_TARGET_ALREADY_VALID',
   BRANCH_MISMATCH: 'BRANCH_MISMATCH',
   EMPLOYEE_PERMANENTLY_STATIONED: 'EMPLOYEE_PERMANENTLY_STATIONED',
   NO_PMS_SUPERVISOR_AVAILABLE: 'NO_PMS_SUPERVISOR_AVAILABLE',

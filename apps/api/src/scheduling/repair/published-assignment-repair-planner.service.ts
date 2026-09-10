@@ -72,13 +72,19 @@ export class PublishedAssignmentRepairPlannerService {
     private readonly repairs: PublishedAssignmentRepairService,
   ) {}
 
-  async plan(input: PublishedAssignmentRepairPlanInput): Promise<PublishedAssignmentRepairPlan> {
+  async plan(
+    input: PublishedAssignmentRepairPlanInput,
+  ): Promise<PublishedAssignmentRepairPlan> {
     const sourceIds = [...(input.sourceAssignmentIds ?? [])].sort();
     if (sourceIds.length < 1 || sourceIds.length > 100) {
-      throw validationFailed('A repair plan must contain between 1 and 100 source assignments.');
+      throw validationFailed(
+        'A repair plan must contain between 1 and 100 source assignments.',
+      );
     }
     if (new Set(sourceIds).size !== sourceIds.length) {
-      throw validationFailed('A source assignment may appear only once in a repair plan.');
+      throw validationFailed(
+        'A source assignment may appear only once in a repair plan.',
+      );
     }
 
     const rows = (await this.prisma.assignment.findMany({
@@ -105,7 +111,9 @@ export class PublishedAssignmentRepairPlannerService {
       orderBy: { id: 'asc' },
     });
     const selected = new Set(sourceIds);
-    const omittedSibling = publishedSiblings.find((sibling) => !selected.has(sibling.id));
+    const omittedSibling = publishedSiblings.find(
+      (sibling) => !selected.has(sibling.id),
+    );
     if (omittedSibling) {
       throw new AppException(
         'RESOURCE_CONFLICT',
@@ -176,7 +184,8 @@ export class PublishedAssignmentRepairPlannerService {
     }
     const lockedOrAmbiguous = evaluated.filter(
       ({ source }) =>
-        source.locks.length > 0 || (sourcesPerVisit.get(source.generatedVisitId) ?? 0) > 1,
+        source.locks.length > 0 ||
+        (sourcesPerVisit.get(source.generatedVisitId) ?? 0) > 1,
     );
     const solvable = evaluated
       .filter(
@@ -185,9 +194,10 @@ export class PublishedAssignmentRepairPlannerService {
           (sourcesPerVisit.get(source.generatedVisitId) ?? 0) === 1,
       )
       .map(({ source }) => source);
-    const solved = solvable.length > 0
-      ? await this.adapter.solve(solvable, sourceIds)
-      : undefined;
+    const solved =
+      solvable.length > 0
+        ? await this.adapter.solve(solvable, sourceIds)
+        : undefined;
     const operations = [
       ...lockedOrAmbiguous.map(({ source, conflicts }) =>
         protectedWithdrawal(
@@ -197,7 +207,9 @@ export class PublishedAssignmentRepairPlannerService {
         ),
       ),
       ...mapSolverOperations(solvable, solved),
-    ].sort((left, right) => left.sourceAssignmentId.localeCompare(right.sourceAssignmentId));
+    ].sort((left, right) =>
+      left.sourceAssignmentId.localeCompare(right.sourceAssignmentId),
+    );
 
     const preview = await this.repairs.preview({ operations });
     if (!preview.isValid) {
@@ -224,21 +236,47 @@ function mapSolverOperations(
   solved: RepairPlannerSolveResult | undefined,
 ): PublishedAssignmentRepairOperation[] {
   if (sources.length === 0) return [];
-  if (!solved) throw invalidSolverResponse('The scheduler returned no repair result.');
-  const byVisit = new Map(sources.map((source) => [source.generatedVisitId, source]));
+  if (!solved)
+    throw invalidSolverResponse('The scheduler returned no repair result.');
+  const byVisit = new Map(
+    sources.map((source) => [source.generatedVisitId, source]),
+  );
   const operations = new Map<string, PublishedAssignmentRepairOperation>();
 
   for (const assignment of solved.response.assignments) {
     const source = byVisit.get(assignment.visit_id);
-    if (!source) throw invalidSolverResponse('The scheduler returned an unknown repair visit.');
+    if (!source)
+      throw invalidSolverResponse(
+        'The scheduler returned an unknown repair visit.',
+      );
     if (operations.has(source.id)) {
-      throw invalidSolverResponse('The scheduler returned multiple outcomes for one repair visit.');
+      throw invalidSolverResponse(
+        'The scheduler returned multiple outcomes for one repair visit.',
+      );
     }
-    if (assignment.scheduled_date !== dateOnly(source.generatedVisit.visitDate)) {
-      throw invalidSolverResponse('A published repair cannot move its generated visit to another day.');
+    if (
+      assignment.scheduled_date !== dateOnly(source.generatedVisit.visitDate)
+    ) {
+      throw invalidSolverResponse(
+        'A published repair cannot move its generated visit to another day.',
+      );
+    }
+    if (
+      !Number.isInteger(assignment.start_minute) ||
+      assignment.start_minute < 0 ||
+      assignment.start_minute + source.generatedVisit.durationMinutes > 1440 ||
+      assignment.employee_ids.length < 1 ||
+      assignment.employee_ids.length > 20 ||
+      assignment.vehicles.length > 1
+    ) {
+      throw invalidSolverResponse(
+        'The scheduler returned an invalid repair assignment.',
+      );
     }
     const employeeIds = [...assignment.employee_ids].sort((left, right) => {
-      const pmsDifference = Number(solved.pmsEmployeeIds.has(right)) - Number(solved.pmsEmployeeIds.has(left));
+      const pmsDifference =
+        Number(solved.pmsEmployeeIds.has(right)) -
+        Number(solved.pmsEmployeeIds.has(left));
       return pmsDifference || left.localeCompare(right);
     });
     operations.set(source.id, {
@@ -246,13 +284,16 @@ function mapSolverOperations(
       action: AssignmentRepairAction.REPLACED,
       replacement: {
         plannedStartMinute: assignment.start_minute,
-        plannedEndMinute: assignment.start_minute + source.generatedVisit.durationMinutes,
+        plannedEndMinute:
+          assignment.start_minute + source.generatedVisit.durationMinutes,
         crew: employeeIds.map((employeeId, index) => ({
           employeeId,
           role: index === 0 ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
         })),
         vehicles: [...assignment.vehicles]
-          .sort((left, right) => left.vehicle_id.localeCompare(right.vehicle_id))
+          .sort((left, right) =>
+            left.vehicle_id.localeCompare(right.vehicle_id),
+          )
           .map((entry) => ({
             vehicleId: entry.vehicle_id,
             driverEmployeeId: entry.driver_employee_id,
@@ -263,23 +304,45 @@ function mapSolverOperations(
 
   for (const unassigned of solved.response.unassigned) {
     const source = byVisit.get(unassigned.visit_id);
-    if (!source) throw invalidSolverResponse('The scheduler returned an unknown repair visit.');
+    if (!source)
+      throw invalidSolverResponse(
+        'The scheduler returned an unknown repair visit.',
+      );
     if (operations.has(source.id)) {
-      throw invalidSolverResponse('The scheduler returned multiple outcomes for one repair visit.');
+      throw invalidSolverResponse(
+        'The scheduler returned multiple outcomes for one repair visit.',
+      );
     }
-    const codes = unassigned.reason_codes.length > 0
-      ? [...unassigned.reason_codes].sort()
-      : ['NO_FEASIBLE_CREW'];
+    if (unassigned.reason_codes.length > 20) {
+      throw invalidSolverResponse(
+        'The scheduler returned too many repair reasons.',
+      );
+    }
+    const codes =
+      unassigned.reason_codes.length > 0
+        ? [...unassigned.reason_codes].sort()
+        : ['NO_FEASIBLE_CREW'];
+    const reasons = codes.map((code) => {
+      if (!code.trim() || code.length > 100) {
+        throw invalidSolverResponse(
+          'The scheduler returned an invalid repair reason code.',
+        );
+      }
+      const message =
+        unassigned.reason_messages?.[code]?.trim() ||
+        unassigned.message.trim() ||
+        'No feasible crew and vehicle combination was found.';
+      if (message.length > 500) {
+        throw invalidSolverResponse(
+          'The scheduler returned an invalid repair reason message.',
+        );
+      }
+      return { code, message };
+    });
     operations.set(source.id, {
       sourceAssignmentId: source.id,
       action: AssignmentRepairAction.WITHDRAWN,
-      unassignedReasons: codes.map((code) => ({
-        code,
-        message:
-          unassigned.reason_messages?.[code] ??
-          unassigned.message ??
-          'No feasible crew and vehicle combination was found.',
-      })),
+      unassignedReasons: reasons,
     });
   }
 
@@ -320,7 +383,7 @@ function protectedWithdrawal(
     ...(hasPublishedSiblings
       ? [
           {
-            code: 'MULTIPLE_PUBLISHED_ASSIGNMENTS',
+            code: 'MULTIPLE_LIVE_ASSIGNMENTS',
             message:
               'This visit has multiple current published assignments; each predecessor is withdrawn explicitly.',
           },
@@ -347,8 +410,12 @@ function protectedWithdrawal(
 function sourceProposal(source: PlannerSourceAssignment) {
   const visitStart = source.generatedVisit.visitDate.getTime();
   return {
-    plannedStartMinute: Math.round((source.plannedStart.getTime() - visitStart) / 60_000),
-    plannedEndMinute: Math.round((source.plannedEnd.getTime() - visitStart) / 60_000),
+    plannedStartMinute: Math.round(
+      (source.plannedStart.getTime() - visitStart) / 60_000,
+    ),
+    plannedEndMinute: Math.round(
+      (source.plannedEnd.getTime() - visitStart) / 60_000,
+    ),
     crew: source.crewMembers.map((member) => ({
       employeeId: member.employeeId,
       role: member.role,
@@ -365,7 +432,11 @@ function dateOnly(value: Date): string {
 }
 
 function validationFailed(message: string): AppException {
-  return new AppException('VALIDATION_FAILED', message, HttpStatus.UNPROCESSABLE_ENTITY);
+  return new AppException(
+    'VALIDATION_FAILED',
+    message,
+    HttpStatus.UNPROCESSABLE_ENTITY,
+  );
 }
 
 function invalidSolverResponse(message: string): AppException {

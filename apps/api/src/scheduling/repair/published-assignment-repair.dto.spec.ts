@@ -26,10 +26,24 @@ describe('PublishedAssignmentRepairApplyDto', () => {
 });
 
 describe('PublishedAssignmentRepairPlanDto', () => {
-  it('requires one to 100 unique source assignment IDs', async () => {
-    const duplicateId = '11111111-1111-4111-8111-111111111111';
+  it.each([
+    { sourceAssignmentIds: [] },
+    {
+      sourceAssignmentIds: Array.from(
+        { length: 101 },
+        (_, index) =>
+          `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+      ),
+    },
+    {
+      sourceAssignmentIds: [
+        '11111111-1111-4111-8111-111111111111',
+        '11111111-1111-4111-8111-111111111111',
+      ],
+    },
+  ])('requires one to 100 unique source assignment IDs', async ({ sourceAssignmentIds }) => {
     const dto = plainToInstance(PublishedAssignmentRepairPlanDto, {
-      sourceAssignmentIds: [duplicateId, duplicateId],
+      sourceAssignmentIds,
     });
 
     const errors = await validate(dto);

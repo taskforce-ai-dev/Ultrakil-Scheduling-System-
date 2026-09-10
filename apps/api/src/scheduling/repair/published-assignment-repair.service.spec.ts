@@ -353,6 +353,57 @@ describe('PublishedAssignmentRepairService', () => {
     expect(tx.assignment.updateMany).not.toHaveBeenCalled();
   });
 
+  it('audits the lock snapshot when an administrator explicitly withdraws a locked source', async () => {
+    const { service, row, audit } = fixture();
+    row.locks = [
+      { assignmentId: sourceId, scope: 'FULL', reason: 'Manager decision' },
+    ];
+    const operation = {
+      sourceAssignmentId: sourceId,
+      action: AssignmentRepairAction.WITHDRAWN,
+      unassignedReasons: [
+        { code: 'ASSIGNMENT_LOCKED', message: 'Manager lock retained in history.' },
+        { code: 'CREW_CANNOT_TRAVEL', message: 'Unsafe.' },
+      ],
+    };
+    const preview = await service.preview({ operations: [operation] });
+
+    await service.apply(
+      {
+        operations: [operation],
+        planHash: preview.planHash,
+        sourceFingerprints: preview.items.map((item) => ({
+          sourceAssignmentId: item.sourceAssignmentId,
+          fingerprint: item.sourceFingerprint,
+        })),
+        confirmation: true,
+        reason: 'Explicitly withdraw locked invalid work',
+        idempotencyKey: 'locked-withdrawal',
+      },
+      actor,
+    );
+
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'assignment.repair_withdrawn',
+        before: expect.objectContaining({
+          locks: [
+            expect.objectContaining({
+              scope: 'FULL',
+              reason: 'Manager decision',
+            }),
+          ],
+        }),
+        after: expect.objectContaining({
+          withdrawal: expect.objectContaining({
+            reasons: operation.unassignedReasons,
+          }),
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('paginates invalid findings and reports the invalid total, not every published row', async () => {
     const { service, tx, eligibility, row } = fixture();
     const invalid = {
