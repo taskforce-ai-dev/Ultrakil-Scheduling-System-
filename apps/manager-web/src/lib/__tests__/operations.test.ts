@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { parseOperationsDay, type OperationsDayResponse } from "@/lib/api-client";
+import {
+  isDispatchableOperation,
+  parseOperationsDay,
+  type OperationsDayResponse,
+} from "@/lib/api-client";
 
 describe("operations day contract parser", () => {
   it("keeps authoritative state separate from draft proposals", () => {
@@ -22,8 +26,11 @@ describe("operations day contract parser", () => {
           },
           state: "PROPOSED",
           dispatchAssignment: null,
-          proposedAssignment: { crew: [{ fullName: "A Perera" }], vehicles: [] },
+          proposedAssignment: { id: "draft-1", status: "DRAFT", crew: [{ fullName: "A Perera" }], vehicles: [] },
           violations: [],
+          warnings: [
+            { code: "HOURS_UNCONFIRMED", message: "Opening hours are unconfirmed." },
+          ],
           nextAction: "Review and publish",
           scheduleVersion: { id: "v2", status: "DRAFT" },
         },
@@ -34,6 +41,7 @@ describe("operations day contract parser", () => {
     expect(parsed.items[0].dispatchAssignment).toBeNull();
     expect(parsed.items[0].proposedAssignment?.crew).toHaveLength(1);
     expect(parsed.items[0].visit.hoursUnconfirmed).toBe(true);
+    expect(parsed.items[0].warnings[0].code).toBe("HOURS_UNCONFIRMED");
   });
 
   it("defensively normalizes malformed responses without inventing a dispatch assignment", () => {
@@ -71,8 +79,8 @@ describe("operations day contract parser", () => {
         {
           visit: { id: "visit-proposed" },
           state: "PROPOSED",
-          dispatchAssignment: { crew: [{ fullName: "Draft crew" }] },
-          proposedAssignment: { crew: [{ fullName: "Draft crew" }] },
+          dispatchAssignment: { id: "wrong-dispatch", status: "DRAFT", crew: [{ fullName: "Draft crew" }] },
+          proposedAssignment: { id: "proposal", status: "DRAFT", crew: [{ fullName: "Draft crew" }] },
         },
       ],
     });
@@ -81,15 +89,15 @@ describe("operations day contract parser", () => {
     expect(parsed.items[0].proposedAssignment?.crew[0].fullName).toBe("Draft crew");
   });
 
-  it("retains warnings and lineage fields when present", () => {
+  it("retains structured warnings and lineage fields when present", () => {
     const parsed: OperationsDayResponse = parseOperationsDay({
       date: "2026-09-10",
       items: [{
         visit: { id: "v", hoursUnconfirmed: false },
         state: "EXCEPTION",
         violations: [{ code: "UNKNOWN_BRANCH", message: "Branch needs confirmation" }],
-        sourceDataWarnings: [
-          { code: "ASSUMED_HOURS", message: "Opening hours are assumed", source: "Master Schedule" },
+        warnings: [
+          { code: "HOURS_UNCONFIRMED", message: "Opening hours are assumed" },
         ],
         nextAction: "Confirm branch",
         scheduleVersion: { id: "v1", status: "PUBLISHED", predecessorId: "v0" },
@@ -99,6 +107,38 @@ describe("operations day contract parser", () => {
     expect(parsed.items[0].violations[0].code).toBe("UNKNOWN_BRANCH");
     expect(parsed.items[0].nextAction).toBe("Confirm branch");
     expect(parsed.items[0].scheduleVersion?.predecessorId).toBe("v0");
-    expect(parsed.items[0].warnings).toContain("Opening hours are assumed (source: Master Schedule)");
+    expect(parsed.items[0].warnings).toContainEqual({
+      code: "HOURS_UNCONFIRMED",
+      message: "Opening hours are assumed",
+    });
+  });
+
+  it("retains a published exception snapshot for inspection but never marks it dispatchable", () => {
+    const parsed = parseOperationsDay({
+      date: "2026-09-10",
+      summary: { total: 1, ready: 0, proposed: 0, unassigned: 0, exceptions: 1, hoursUnconfirmed: 0 },
+      items: [{
+        visit: { id: "exception", customerName: "Customer" },
+        state: "EXCEPTION",
+        dispatchAssignment: {
+          id: "published-invalid",
+          status: "PUBLISHED",
+          crew: [{ employeeId: "employee", fullName: "Published technician" }],
+          vehicles: [],
+        },
+        proposedAssignment: null,
+        violations: [{ code: "NO_PMS_SUPERVISOR", message: "A PMS supervisor is required." }],
+        warnings: [],
+        nextAction: "Choose a supervisor before dispatching.",
+      }],
+    });
+
+    expect(parsed.items[0].dispatchAssignment).toMatchObject({
+      id: "published-invalid",
+      status: "PUBLISHED",
+      crew: [{ fullName: "Published technician" }],
+    });
+    expect(parsed.items[0].state).toBe("EXCEPTION");
+    expect(isDispatchableOperation(parsed.items[0])).toBe(false);
   });
 });

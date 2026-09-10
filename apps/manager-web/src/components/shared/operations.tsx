@@ -56,9 +56,9 @@ function assignmentLabel(item: OperationsDayItem): string {
 
 function AssignmentSummary({ item }: { item: OperationsDayItem }) {
   const assignment =
-    item.state === "PROPOSED" || item.state === "EXCEPTION"
+    item.state === "PROPOSED"
       ? item.proposedAssignment
-      : item.dispatchAssignment;
+      : item.dispatchAssignment ?? item.proposedAssignment;
   const names = assignment?.crew.map((member) => member.fullName).filter(Boolean).join(", ");
   const vehicles = assignment?.vehicles.map((vehicle) => vehicle.label).filter(Boolean).join(", ");
 
@@ -74,18 +74,13 @@ function AssignmentSummary({ item }: { item: OperationsDayItem }) {
 }
 
 function WarningList({ item }: { item: OperationsDayItem }) {
-  const warnings = [...item.warnings];
-  if (item.visit.hoursUnconfirmed) warnings.push("Hours are assumed or unconfirmed");
-  if (!item.visit.branchCode) warnings.push("Branch is unknown — confirm before publishing");
-  if (item.visit.requiredCrewSize === null) warnings.push("Crew size is not confirmed");
-  const unique = [...new Set(warnings)];
-  if (unique.length === 0) return null;
+  if (item.warnings.length === 0) return null;
   return (
     <div className="mt-3 space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-foreground" role="note">
-      {unique.map((warning) => (
-        <p key={warning} className="flex items-start gap-1.5">
+      {item.warnings.map((warning) => (
+        <p key={`${warning.code}-${warning.message}`} className="flex items-start gap-1.5">
           <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span>{warning}</span>
+          <span>{warning.message}</span>
         </p>
       ))}
     </div>
@@ -97,7 +92,7 @@ function ScheduleLineage({ item }: { item: OperationsDayItem }) {
   if (!version) return null;
   const versionName = version.version != null ? `v${version.version}` : version.id ?? "recorded";
   const status = version.status?.toUpperCase();
-  if (status === "PUBLISHED") {
+  if (["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
     return <p className="mt-2 text-xs text-muted-foreground">Published schedule version {versionName}</p>;
   }
   return (

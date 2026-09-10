@@ -5,9 +5,9 @@ import { clearToken, readToken } from "./session-token";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
 
 /* -------------------------------------------------------------------------
- * Types, all taken from the generated contract. Nothing here is hand-written:
- * if the backend changes a field, this file stops compiling, which is the
- * whole point of publishing the contract.
+ * Wire types come from the generated contract. Runtime-normalized view models
+ * below deliberately broaden malformed scalar fields to safe empty/null values
+ * while preserving the generated response's names and nesting.
  * ---------------------------------------------------------------------- */
 
 type Json<T> = T extends { content: { "application/json": infer B } } ? B : never;
@@ -80,39 +80,33 @@ export type CrewRole = Assignment["crew"][number]["role"];
 /* -------------------------------------------------------------------------
  * Manager operational read model
  *
- * This endpoint is intentionally parsed at the boundary. It is newer than
- * the generated contract on this branch and a manager screen must remain
- * readable when an older API omits an optional field. In particular, a
- * missing/invalid assignment is never turned into a positive dispatch claim.
+ * This endpoint is intentionally parsed at the boundary. The generated types
+ * keep its wire shape aligned with the API, while this parser keeps a manager
+ * screen readable when a malformed or older response omits a field. In
+ * particular, a missing/invalid assignment never becomes a positive dispatch
+ * claim.
  * ---------------------------------------------------------------------- */
 
-export type OperationState =
-  | "READY"
-  | "PROPOSED"
-  | "UNASSIGNED"
-  | "EXCEPTION"
-  | "COMPLETED"
-  | "CANCELLED";
-
-export interface OperationsDayQuery {
-  date: string;
-  branchCode?: "COLOMBO" | "KANDY";
-  status?: OperationState;
-  conflict?: string;
-  page?: number;
-  pageSize?: number;
-}
+type OperationsDayContract = components["schemas"]["OperationsDayResponseDto"];
+type OperationsDayContractItem = OperationsDayContract["items"][number];
+export type OperationState = OperationsDayContractItem["state"];
+export type OperationWarningCode = OperationsDayContractItem["warnings"][number]["code"];
+export type OperationsDayQuery = NonNullable<
+  paths["/api/operations/day"]["get"]["parameters"]["query"]
+>;
 
 export interface OperationsVisit {
   id: string;
+  visitDate: string;
   customerName: string;
   siteName: string;
   jobTypeName: string;
   requiredCrewSize: number | null;
+  durationMinutes: number | null;
   windowStartMinute: number | null;
   windowEndMinute: number | null;
   hoursUnconfirmed: boolean;
-  branchCode?: string;
+  branchCode: BranchCode | "";
 }
 
 export interface OperationsCrewMember {
@@ -132,8 +126,8 @@ export interface OperationsVehicle {
 }
 
 export interface OperationsAssignment {
-  id?: string;
-  status?: string;
+  id: string;
+  status: AssignmentStatus;
   crew: OperationsCrewMember[];
   vehicles: OperationsVehicle[];
   plannedStartMinute?: number | null;
@@ -147,11 +141,16 @@ export interface OperationViolation {
 }
 
 export interface OperationsScheduleVersion {
-  id?: string;
+  id: string | null;
   version?: number | null;
-  status?: string;
+  status: AssignmentStatus | "";
   predecessorId?: string | null;
-  publishedAt?: string | null;
+  publishedAt: string | null;
+}
+
+export interface OperationWarning {
+  code: OperationWarningCode;
+  message: string;
 }
 
 export interface OperationsDayItem {
@@ -162,7 +161,7 @@ export interface OperationsDayItem {
   violations: OperationViolation[];
   nextAction: string;
   scheduleVersion: OperationsScheduleVersion | null;
-  warnings: string[];
+  warnings: OperationWarning[];
 }
 
 export interface OperationsSummary {
@@ -176,7 +175,7 @@ export interface OperationsSummary {
 
 export interface OperationsDayResponse {
   date: string;
-  branchCode?: string;
+  branchCode: BranchCode | null;
   summary: OperationsSummary;
   items: OperationsDayItem[];
 }
@@ -188,6 +187,27 @@ const OPERATION_STATES = new Set<OperationState>([
   "EXCEPTION",
   "COMPLETED",
   "CANCELLED",
+]);
+
+const ASSIGNMENT_STATUSES = new Set<AssignmentStatus>([
+  "DRAFT",
+  "PROPOSED",
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
+
+const OPERATION_WARNING_CODES = new Set<OperationWarningCode>([
+  "CREW_SIZE_DEFAULTED",
+  "DAY_RULE_DERIVED",
+  "DAY_RULE_UNCONFIRMED",
+  "DURATION_DEFAULTED",
+  "HOURS_UNCONFIRMED",
+  "SITE_BRANCH_UNCONFIRMED",
+  "VEHICLE_BRANCH_UNCONFIRMED",
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -213,6 +233,9 @@ function asBoolean(value: unknown, fallback = false): boolean {
 function parseAssignment(value: unknown): OperationsAssignment | null {
   if (typeof value !== "object" || value === null) return null;
   const record = asRecord(value);
+  const id = asString(record.id);
+  const status = asString(record.status);
+  if (!id || !ASSIGNMENT_STATUSES.has(status as AssignmentStatus)) return null;
   const crew = Array.isArray(record.crew)
     ? record.crew.filter((member) => typeof member === "object" && member !== null).map((member) => {
         const row = asRecord(member);
@@ -238,8 +261,8 @@ function parseAssignment(value: unknown): OperationsAssignment | null {
       })
     : [];
   return {
-    id: typeof record.id === "string" ? record.id : undefined,
-    status: typeof record.status === "string" ? record.status : undefined,
+    id,
+    status: status as AssignmentStatus,
     crew,
     vehicles,
     plannedStartMinute: asNullableNumber(record.plannedStartMinute),
@@ -268,39 +291,38 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     : [];
   const version = asRecord(record.scheduleVersion);
   const hasVersion = Object.keys(version).length > 0;
-  const warningValues = [record.warnings, record.sourceDataWarnings];
-  const warnings = warningValues.flatMap((raw) =>
-    Array.isArray(raw)
-      ? raw.flatMap((warning) => {
-          if (typeof warning === "string") return [warning];
-          if (typeof warning !== "object" || warning === null) return [];
-          const warningRecord = asRecord(warning);
-          const message = asString(warningRecord.message || warningRecord.warning);
-          if (!message) return [];
-          const source = asString(
-            warningRecord.source || warningRecord.provenance || warningRecord.sourceField,
-          );
-          return [source ? `${message} (source: ${source})` : message];
-        })
-      : [],
-  );
+  const warnings = Array.isArray(record.warnings)
+    ? record.warnings.flatMap((warning) => {
+        if (typeof warning !== "object" || warning === null) return [];
+        const warningRecord = asRecord(warning);
+        const code = asString(warningRecord.code);
+        const message = asString(warningRecord.message);
+        return OPERATION_WARNING_CODES.has(code as OperationWarningCode) && message
+          ? [{ code: code as OperationWarningCode, message }]
+          : [];
+      })
+    : [];
   return {
     visit: {
       id: asString(visitRecord.id),
+      visitDate: asString(visitRecord.visitDate),
       customerName: asString(visitRecord.customerName, "Unknown customer"),
       siteName: asString(visitRecord.siteName, "Unknown site"),
       jobTypeName: asString(visitRecord.jobTypeName, "Visit"),
       requiredCrewSize: asNullableNumber(visitRecord.requiredCrewSize),
+      durationMinutes: asNullableNumber(visitRecord.durationMinutes),
       windowStartMinute: asNullableNumber(visitRecord.windowStartMinute),
       windowEndMinute: asNullableNumber(visitRecord.windowEndMinute),
       hoursUnconfirmed: asBoolean(visitRecord.hoursUnconfirmed),
-      branchCode: typeof visitRecord.branchCode === "string" ? visitRecord.branchCode : undefined,
+      branchCode: ["COLOMBO", "KANDY"].includes(asString(visitRecord.branchCode))
+        ? (visitRecord.branchCode as BranchCode)
+        : "",
     },
     state,
     // An unknown state cannot safely be treated as dispatch truth, even when
     // an older server happened to include an assignment-shaped object.
     dispatchAssignment:
-      state === "READY" || state === "COMPLETED" || state === "CANCELLED"
+      state === "READY" || state === "EXCEPTION" || state === "COMPLETED" || state === "CANCELLED"
         ? parseAssignment(record.dispatchAssignment)
         : null,
     proposedAssignment: parseAssignment(record.proposedAssignment),
@@ -308,14 +330,20 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     nextAction: asString(record.nextAction, state === "READY" ? "No action needed" : "Review visit"),
     scheduleVersion: hasVersion
       ? {
-          id: typeof version.id === "string" ? version.id : undefined,
+          id: typeof version.id === "string" ? version.id : null,
           version: typeof version.version === "number" ? version.version : null,
-          status: typeof version.status === "string" ? version.status : undefined,
+          status: ASSIGNMENT_STATUSES.has(asString(version.status) as AssignmentStatus)
+            ? (version.status as AssignmentStatus)
+            : "",
           predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
           publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
         }
       : null,
-    warnings: [...new Set(warnings)],
+    warnings: warnings.filter(
+      (warning, index) => warnings.findIndex(
+        (candidate) => candidate.code === warning.code && candidate.message === warning.message,
+      ) === index,
+    ),
   };
 }
 
@@ -327,7 +355,9 @@ export function parseOperationsDay(payload: unknown): OperationsDayResponse {
     : [];
   return {
     date: asString(record.date),
-    branchCode: typeof record.branchCode === "string" ? record.branchCode : undefined,
+    branchCode: ["COLOMBO", "KANDY"].includes(asString(record.branchCode))
+      ? (record.branchCode as BranchCode)
+      : null,
     summary: {
       total: asNumber(summary.total),
       ready: asNumber(summary.ready),
@@ -341,7 +371,12 @@ export function parseOperationsDay(payload: unknown): OperationsDayResponse {
 }
 
 export function isDispatchableOperation(item: OperationsDayItem): boolean {
-  return item.state === "READY" && item.dispatchAssignment !== null && item.violations.length === 0;
+  return item.state === "READY"
+    && item.dispatchAssignment !== null
+    && ["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(
+      item.dispatchAssignment.status,
+    )
+    && item.violations.length === 0;
 }
 
 /**

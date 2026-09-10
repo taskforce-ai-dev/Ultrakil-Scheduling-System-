@@ -80,7 +80,7 @@ describe("api-client", () => {
     await expect(fetchVisitAssignment("visit-1")).resolves.toBeNull();
   });
 
-  it("sends every operational day filter and parses the server read model", async () => {
+  it("sends the operational day contract query and parses the server read model", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -98,15 +98,11 @@ describe("api-client", () => {
       fetchOperationsDay({
         date: "2026-09-10",
         branchCode: "KANDY",
-        status: "EXCEPTION",
-        conflict: "UNKNOWN_BRANCH",
-        page: 2,
-        pageSize: 25,
       }),
     ).resolves.toMatchObject({ date: "2026-09-10" });
 
     expect(global.fetch).toHaveBeenCalledWith(
-      "http://localhost:3001/api/operations/day?date=2026-09-10&branchCode=KANDY&status=EXCEPTION&conflict=UNKNOWN_BRANCH&page=2&pageSize=25",
+      "http://localhost:3001/api/operations/day?date=2026-09-10&branchCode=KANDY",
       expect.objectContaining({ method: "GET" }),
     );
   });

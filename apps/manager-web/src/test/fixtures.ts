@@ -341,6 +341,7 @@ export function buildScheduleRun(overrides: Partial<ScheduleRun> = {}): Schedule
     visitsConsidered: 40,
     visitsScheduled: 38,
     visitsUnassigned: 2,
+    publishReadiness: { state: "ACKNOWLEDGEMENT_REQUIRED", code: "PARTIAL_RESULTS", message: "2 visits remain unassigned." },
     isPublished: false,
     publishedAt: null,
     supersededByRunId: null,

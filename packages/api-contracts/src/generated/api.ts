@@ -1109,6 +1109,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/operations/day": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Authoritative operational view for one day
+         * @description Server-calculated dispatch state. Published work is dispatch truth; draft proposals remain separate.
+         */
+        get: operations["OperationsController_day"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations/published-assignment-repairs/findings": {
         parameters: {
             query?: never;
@@ -1940,6 +1960,10 @@ export interface components {
             total: number;
             page: number;
             pageSize: number;
+            hasNextPage: boolean;
+            conflictFacets: {
+                [key: string]: number;
+            };
         };
         EmployeeAssignmentDto: {
             /** Format: uuid */
@@ -1987,6 +2011,13 @@ export interface components {
             page: number;
             pageSize: number;
         };
+        PublishReadinessDto: {
+            /** @enum {string} */
+            state: "READY" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED";
+            /** @enum {string|null} */
+            code: "ZERO_RESULTS" | "PARTIAL_RESULTS" | null;
+            message: string | null;
+        };
         ScheduleRunDto: {
             /** Format: uuid */
             id: string;
@@ -2002,6 +2033,7 @@ export interface components {
             visitsConsidered: number;
             visitsScheduled: number;
             visitsUnassigned: number;
+            publishReadiness: components["schemas"]["PublishReadinessDto"];
             /** @description True once published and frozen. */
             isPublished: boolean;
             /** Format: date-time */
@@ -2103,6 +2135,89 @@ export interface components {
         CalendarResponseDto: {
             items: components["schemas"]["CalendarEntryDto"][];
             total: number;
+        };
+        OperationsSummaryDto: {
+            total: number;
+            ready: number;
+            proposed: number;
+            unassigned: number;
+            exceptions: number;
+            hoursUnconfirmed: number;
+        };
+        OperationsVisitDto: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date */
+            visitDate: string;
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            customerName: string;
+            siteName: string;
+            jobTypeName: string;
+            requiredCrewSize: number;
+            durationMinutes: number;
+            windowStartMinute: number;
+            windowEndMinute: number;
+            hoursUnconfirmed: boolean;
+        };
+        OperationsCrewMemberDto: {
+            /** Format: uuid */
+            employeeId: string;
+            fullName: string;
+            role: string;
+            isPmsSupervisor: boolean;
+        };
+        OperationsVehicleDto: {
+            /** Format: uuid */
+            vehicleId: string;
+            label: string;
+            /** Format: uuid */
+            driverEmployeeId: string | null;
+            driverName: string | null;
+        };
+        OperationsAssignmentSnapshotDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            plannedStartMinute: number;
+            plannedEndMinute: number;
+            crew: components["schemas"]["OperationsCrewMemberDto"][];
+            vehicles: components["schemas"]["OperationsVehicleDto"][];
+        };
+        OperationsWarningDto: {
+            /** @enum {string} */
+            code: "CREW_SIZE_DEFAULTED" | "DAY_RULE_DERIVED" | "DAY_RULE_UNCONFIRMED" | "DURATION_DEFAULTED" | "HOURS_UNCONFIRMED" | "SITE_BRANCH_UNCONFIRMED" | "VEHICLE_BRANCH_UNCONFIRMED";
+            message: string;
+        };
+        OperationsScheduleVersionDto: {
+            /** Format: uuid */
+            id: string | null;
+            /** @enum {string} */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /** Format: date-time */
+            publishedAt: string | null;
+        };
+        OperationsDayItemDto: {
+            visit: components["schemas"]["OperationsVisitDto"];
+            /** @enum {string} */
+            state: "READY" | "PROPOSED" | "UNASSIGNED" | "EXCEPTION" | "COMPLETED" | "CANCELLED";
+            /** @description Published dispatch snapshot. An EXCEPTION retains it for inspection but is never dispatchable. */
+            dispatchAssignment: components["schemas"]["OperationsAssignmentSnapshotDto"] | null;
+            /** @description Newest draft/proposed snapshot; never dispatch truth. */
+            proposedAssignment: components["schemas"]["OperationsAssignmentSnapshotDto"] | null;
+            violations: components["schemas"]["ConflictDto"][];
+            warnings: components["schemas"]["OperationsWarningDto"][];
+            nextAction: string;
+            scheduleVersion: components["schemas"]["OperationsScheduleVersionDto"] | null;
+        };
+        OperationsDayResponseDto: {
+            /** Format: date */
+            date: string;
+            /** @enum {string|null} */
+            branchCode: "COLOMBO" | "KANDY" | null;
+            summary: components["schemas"]["OperationsSummaryDto"];
+            items: components["schemas"]["OperationsDayItemDto"][];
         };
         PublishedAssignmentFindingDto: {
             /** Format: uuid */
@@ -4142,8 +4257,15 @@ export interface operations {
     AssignmentsController_queue: {
         parameters: {
             query?: {
-                /** @description Only visits already found to be unstaffable, rather than all unstaffed work. */
+                /**
+                 * @deprecated
+                 * @description Deprecated alias for checked=true.
+                 */
                 withConflictsOnly?: boolean;
+                /** @description Only visits with this recorded conflict code. Facets remain scoped to the other filters. */
+                conflictCode?: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW";
+                /** @description true returns visits with recorded conflict checks; false returns unchecked visits. */
+                checked?: boolean;
                 /** @description Only unstaffed visits generated from this agreement. */
                 serviceAgreementId?: string;
                 to?: string;
@@ -4455,6 +4577,28 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    OperationsController_day: {
+        parameters: {
+            query: {
+                branchCode?: "COLOMBO" | "KANDY";
+                date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsDayResponseDto"];
+                };
             };
         };
     };

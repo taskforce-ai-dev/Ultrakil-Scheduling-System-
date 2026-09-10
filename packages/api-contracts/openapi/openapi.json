@@ -6043,6 +6043,94 @@
           "total"
         ]
       },
+      "OperationsSummaryDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "ready": {
+            "type": "number"
+          },
+          "proposed": {
+            "type": "number"
+          },
+          "unassigned": {
+            "type": "number"
+          },
+          "exceptions": {
+            "type": "number"
+          },
+          "hoursUnconfirmed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "ready",
+          "proposed",
+          "unassigned",
+          "exceptions",
+          "hoursUnconfirmed"
+        ]
+      },
+      "OperationsVisitDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "hoursUnconfirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "visitDate",
+          "branchCode",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "requiredCrewSize",
+          "durationMinutes",
+          "windowStartMinute",
+          "windowEndMinute",
+          "hoursUnconfirmed"
+        ]
+      },
       "OperationsCrewMemberDto": {
         "type": "object",
         "properties": {
@@ -6097,7 +6185,7 @@
       "OperationsAssignmentSnapshotDto": {
         "type": "object",
         "properties": {
-          "assignmentId": {
+          "id": {
             "type": "string",
             "format": "uuid"
           },
@@ -6131,27 +6219,15 @@
             "items": {
               "$ref": "#/components/schemas/OperationsVehicleDto"
             }
-          },
-          "scheduleRunId": {
-            "type": "string",
-            "nullable": true,
-            "format": "uuid"
-          },
-          "publishedAt": {
-            "type": "string",
-            "nullable": true,
-            "format": "date-time"
           }
         },
         "required": [
-          "assignmentId",
+          "id",
           "status",
           "plannedStartMinute",
           "plannedEndMinute",
           "crew",
-          "vehicles",
-          "scheduleRunId",
-          "publishedAt"
+          "vehicles"
         ]
       },
       "OperationsWarningDto": {
@@ -6160,9 +6236,13 @@
           "code": {
             "type": "string",
             "enum": [
+              "CREW_SIZE_DEFAULTED",
+              "DAY_RULE_DERIVED",
+              "DAY_RULE_UNCONFIRMED",
+              "DURATION_DEFAULTED",
               "HOURS_UNCONFIRMED",
-              "VEHICLE_BRANCH_UNCONFIRMED",
-              "SOURCE_PROVENANCE_UNKNOWN"
+              "SITE_BRANCH_UNCONFIRMED",
+              "VEHICLE_BRANCH_UNCONFIRMED"
             ]
           },
           "message": {
@@ -6174,13 +6254,26 @@
           "message"
         ]
       },
-      "ScheduleVersionDto": {
+      "OperationsScheduleVersionDto": {
         "type": "object",
         "properties": {
-          "scheduleRunId": {
+          "id": {
             "type": "string",
             "nullable": true,
             "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
           },
           "publishedAt": {
             "type": "string",
@@ -6189,36 +6282,16 @@
           }
         },
         "required": [
-          "scheduleRunId",
+          "id",
+          "status",
           "publishedAt"
         ]
       },
       "OperationsDayItemDto": {
         "type": "object",
         "properties": {
-          "visitId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "visitDate": {
-            "type": "string",
-            "format": "date"
-          },
-          "branchCode": {
-            "type": "string",
-            "enum": [
-              "COLOMBO",
-              "KANDY"
-            ]
-          },
-          "customerName": {
-            "type": "string"
-          },
-          "siteName": {
-            "type": "string"
-          },
-          "jobTypeName": {
-            "type": "string"
+          "visit": {
+            "$ref": "#/components/schemas/OperationsVisitDto"
           },
           "state": {
             "type": "string",
@@ -6231,9 +6304,9 @@
               "CANCELLED"
             ]
           },
-          "dispatch": {
+          "dispatchAssignment": {
             "nullable": true,
-            "description": "Published dispatch truth only.",
+            "description": "Published dispatch snapshot. An EXCEPTION retains it for inspection but is never dispatchable.",
             "type": "object",
             "allOf": [
               {
@@ -6241,7 +6314,7 @@
               }
             ]
           },
-          "proposed": {
+          "proposedAssignment": {
             "nullable": true,
             "description": "Newest draft/proposed snapshot; never dispatch truth.",
             "type": "object",
@@ -6257,7 +6330,7 @@
               "$ref": "#/components/schemas/ConflictDto"
             }
           },
-          "sourceWarnings": {
+          "warnings": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OperationsWarningDto"
@@ -6267,21 +6340,22 @@
             "type": "string"
           },
           "scheduleVersion": {
-            "$ref": "#/components/schemas/ScheduleVersionDto"
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsScheduleVersionDto"
+              }
+            ]
           }
         },
         "required": [
-          "visitId",
-          "visitDate",
-          "branchCode",
-          "customerName",
-          "siteName",
-          "jobTypeName",
+          "visit",
           "state",
-          "dispatch",
-          "proposed",
+          "dispatchAssignment",
+          "proposedAssignment",
           "violations",
-          "sourceWarnings",
+          "warnings",
           "nextAction",
           "scheduleVersion"
         ]
@@ -6289,19 +6363,33 @@
       "OperationsDayResponseDto": {
         "type": "object",
         "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "nullable": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/OperationsSummaryDto"
+          },
           "items": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/OperationsDayItemDto"
             }
-          },
-          "total": {
-            "type": "number"
           }
         },
         "required": [
-          "items",
-          "total"
+          "date",
+          "branchCode",
+          "summary",
+          "items"
         ]
       },
       "PublishedAssignmentFindingDto": {

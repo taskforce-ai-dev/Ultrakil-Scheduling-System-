@@ -77,7 +77,14 @@ const colomboCrewTooSmall = buildUnassignedVisit({
 });
 
 function mockUnassigned(items: UnassignedVisit[], total = items.length) {
-  vi.mocked(fetchUnassignedVisits).mockResolvedValue({ items, total, page: 1, pageSize: 200 });
+  vi.mocked(fetchUnassignedVisits).mockResolvedValue({
+    items,
+    total,
+    page: 1,
+    pageSize: 200,
+    hasNextPage: false,
+    conflictFacets: {},
+  });
 }
 
 beforeEach(() => {

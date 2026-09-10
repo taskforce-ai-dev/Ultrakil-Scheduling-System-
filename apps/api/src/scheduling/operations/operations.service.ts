@@ -1,5 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { AssignmentStatus, Prisma, VisitStatus } from '@prisma/client';
+import {
+  AssignmentStatus,
+  DataProvenance,
+  Prisma,
+  SiteBranchConfidence,
+  SiteBranchSource,
+  VisitStatus,
+} from '@prisma/client';
 
 import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -14,14 +21,14 @@ const LIVE_STATUSES = [...DISPATCH_STATUSES, ...PROPOSED_STATUSES];
 const OPERATIONS_INCLUDE = {
   serviceAgreement: { include: {
     customer: { select: { name: true } },
-    serviceSite: { select: { name: true, _count: { select: { operatingHours: true } } } },
+    serviceSite: { select: { name: true, branchConfidence: true, branchSource: true } },
     jobType: { select: { name: true } },
   } },
   unassignedReasons: { orderBy: { code: 'asc' } },
   assignments: { where: { status: { in: LIVE_STATUSES } }, include: {
     crewMembers: { include: { employee: { select: { fullName: true } } } },
     vehicles: { include: {
-      vehicle: { select: { label: true } },
+      vehicle: { select: { label: true, branchId: true } },
       driverEmployee: { select: { fullName: true } },
     } },
   } },
@@ -41,7 +48,19 @@ export class OperationsService {
       orderBy: [{ windowStartMinute: 'asc' }, { id: 'asc' }],
     });
     const items = await Promise.all(visits.map((visit) => this.toItem(visit)));
-    return { items, total: items.length };
+    return {
+      date: query.date,
+      branchCode: query.branchCode ?? null,
+      summary: {
+        total: items.length,
+        ready: countState(items, 'READY'),
+        proposed: countState(items, 'PROPOSED'),
+        unassigned: countState(items, 'UNASSIGNED'),
+        exceptions: countState(items, 'EXCEPTION'),
+        hoursUnconfirmed: items.filter((item) => item.visit.hoursUnconfirmed).length,
+      },
+      items,
+    };
   }
 
   private async toItem(visit: VisitRow): Promise<OperationsDayItemDto> {
@@ -54,22 +73,36 @@ export class OperationsService {
       violations.push({ code: 'MULTIPLE_LIVE_ASSIGNMENTS', message: 'More than one live assignment exists for this visit.', remediation: 'Keep the published assignment as dispatch truth and resolve the competing proposal.', resources: resources({ visitId: visit.id }) });
     }
     violations.sort((a, b) => a.code.localeCompare(b.code) || a.message.localeCompare(b.message));
-    const sourceWarnings = warnings(visit, dispatch ?? proposed);
+    const operationWarnings = warnings(visit, dispatch, proposed);
     const state = operationState(visit.status, dispatch, proposed, violations);
+    const lineage = dispatch ?? proposed;
     return {
-      visitId: visit.id,
-      visitDate: toDateOnly(visit.visitDate),
-      branchCode: visit.branchCode,
-      customerName: visit.serviceAgreement.customer.name,
-      siteName: visit.serviceAgreement.serviceSite.name,
-      jobTypeName: visit.serviceAgreement.jobType.name,
+      visit: {
+        id: visit.id,
+        visitDate: toDateOnly(visit.visitDate),
+        branchCode: visit.branchCode,
+        customerName: visit.serviceAgreement.customer.name,
+        siteName: visit.serviceAgreement.serviceSite.name,
+        jobTypeName: visit.serviceAgreement.jobType.name,
+        requiredCrewSize: visit.requiredCrewSize,
+        durationMinutes: visit.durationMinutes,
+        windowStartMinute: visit.windowStartMinute,
+        windowEndMinute: visit.windowEndMinute,
+        hoursUnconfirmed: operationWarnings.some((warning) => warning.code === 'HOURS_UNCONFIRMED'),
+      },
       state,
-      dispatch: dispatch ? snapshot(dispatch, visit) : null,
-      proposed: proposed ? snapshot(proposed, visit) : null,
+      dispatchAssignment: dispatch ? snapshot(dispatch, visit) : null,
+      proposedAssignment: proposed ? snapshot(proposed, visit) : null,
       violations,
-      sourceWarnings,
+      warnings: operationWarnings,
       nextAction: nextAction(state, violations),
-      scheduleVersion: { scheduleRunId: dispatch?.scheduleRunId ?? null, publishedAt: dispatch?.publishedAt?.toISOString() ?? null },
+      scheduleVersion: lineage
+        ? {
+            id: lineage.scheduleRunId,
+            status: lineage.status,
+            publishedAt: lineage.publishedAt?.toISOString() ?? null,
+          }
+        : null,
     };
   }
 
@@ -92,12 +125,11 @@ function selectNewest<T extends { updatedAt: Date; id: string }>(rows: T[]): T |
 }
 function snapshot(row: VisitRow['assignments'][number], visit: VisitRow): OperationsAssignmentSnapshotDto {
   return {
-    assignmentId: row.id, status: row.status,
+    id: row.id, status: row.status,
     plannedStartMinute: Math.round((row.plannedStart.getTime() - visit.visitDate.getTime()) / 60_000),
     plannedEndMinute: Math.round((row.plannedEnd.getTime() - visit.visitDate.getTime()) / 60_000),
     crew: row.crewMembers.map((member) => ({ employeeId: member.employeeId, fullName: member.employee.fullName, role: member.role, isPmsSupervisor: member.isPmsSupervisor })).sort((a, b) => a.fullName.localeCompare(b.fullName) || a.employeeId.localeCompare(b.employeeId)),
     vehicles: row.vehicles.map((vehicle) => ({ vehicleId: vehicle.vehicleId, label: vehicle.vehicle.label, driverEmployeeId: vehicle.driverEmployeeId, driverName: vehicle.driverEmployee?.fullName ?? null })).sort((a, b) => a.label.localeCompare(b.label) || a.vehicleId.localeCompare(b.vehicleId)),
-    scheduleRunId: row.scheduleRunId, publishedAt: row.publishedAt?.toISOString() ?? null,
   };
 }
 function storedViolations(visit: VisitRow): ConflictDto[] {
@@ -106,11 +138,70 @@ function storedViolations(visit: VisitRow): ConflictDto[] {
     return { code: reason.code, message: reason.message, remediation: details.remediation ?? 'Resolve the reported conflict before dispatching.', resources: resources(details.resources) };
   });
 }
-function warnings(visit: VisitRow, row: VisitRow['assignments'][number] | null): OperationsWarningDto[] {
-  const warnings: OperationsWarningDto[] = [];
-  if (visit.serviceAgreement.serviceSite._count.operatingHours === 0) warnings.push({ code: 'HOURS_UNCONFIRMED', message: 'No source opening hours are recorded; the visible 08:00–17:00 assumption remains unconfirmed.' });
-  if (row?.vehicles.length) warnings.push({ code: 'VEHICLE_BRANCH_UNCONFIRMED', message: 'Vehicle branch provenance is not available in the current data model and remains unconfirmed.' });
-  return warnings;
+function warnings(
+  visit: VisitRow,
+  dispatch: VisitRow['assignments'][number] | null,
+  proposed: VisitRow['assignments'][number] | null,
+): OperationsWarningDto[] {
+  const result: OperationsWarningDto[] = [];
+  const agreement = visit.serviceAgreement;
+
+  if (
+    visit.windowProvenance === DataProvenance.DEFAULTED
+    || visit.windowProvenance === DataProvenance.UNKNOWN
+  ) {
+    result.push({
+      code: 'HOURS_UNCONFIRMED',
+      message: 'Opening hours were not confirmed; the visible 08:00–17:00 fallback is in use.',
+    });
+  }
+  if (
+    agreement.serviceSite.branchConfidence !== SiteBranchConfidence.CONFIRMED
+    || agreement.serviceSite.branchSource !== SiteBranchSource.MANAGER_CONFIRMED
+  ) {
+    result.push({
+      code: 'SITE_BRANCH_UNCONFIRMED',
+      message: 'The service site branch is inferred from source data and needs manager confirmation.',
+    });
+  }
+  if (agreement.crewSizeProvenance === DataProvenance.DEFAULTED) {
+    result.push({
+      code: 'CREW_SIZE_DEFAULTED',
+      message: 'Crew size was defaulted because the source did not state one.',
+    });
+  }
+  if (agreement.durationProvenance === DataProvenance.DEFAULTED) {
+    result.push({
+      code: 'DURATION_DEFAULTED',
+      message: 'Visit duration was defaulted because the source did not state one.',
+    });
+  }
+  if (agreement.dayRuleProvenance === DataProvenance.DERIVED) {
+    result.push({
+      code: 'DAY_RULE_DERIVED',
+      message: 'Allowed service days were derived from historical bookings and need confirmation.',
+    });
+  } else if (
+    agreement.dayRuleProvenance === DataProvenance.UNKNOWN
+    || agreement.dayRuleProvenance === DataProvenance.DEFAULTED
+  ) {
+    result.push({
+      code: 'DAY_RULE_UNCONFIRMED',
+      message: 'The source of the allowed service days is not confirmed.',
+    });
+  }
+  if ([dispatch, proposed].some((row) => row?.vehicles.some(({ vehicle }) => vehicle.branchId === null))) {
+    result.push({
+      code: 'VEHICLE_BRANCH_UNCONFIRMED',
+      message: 'An assigned vehicle has no confirmed branch.',
+    });
+  }
+
+  return result.sort((a, b) => a.code.localeCompare(b.code));
+}
+
+function countState(items: OperationsDayItemDto[], state: OperationsDayItemDto['state']): number {
+  return items.filter((item) => item.state === state).length;
 }
 function resources(raw: object | undefined = {}): ConflictDto['resources'] {
   const value = raw as Record<string, unknown>;
