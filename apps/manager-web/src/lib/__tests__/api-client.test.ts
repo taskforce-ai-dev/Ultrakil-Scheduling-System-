@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, fetchMeta, fetchHealth } from "../api-client";
+import { ApiError, fetchMeta, fetchHealth, fetchVisitAssignment } from "../api-client";
 
 describe("api-client", () => {
   const originalFetch = global.fetch;
@@ -57,5 +57,20 @@ describe("api-client", () => {
     }) as unknown as typeof fetch;
 
     await expect(fetchMeta()).resolves.toBeUndefined();
+  });
+
+  it("fetchVisitAssignment resolves to null, not undefined, when a visit has no assignment", async () => {
+    // A visit with no assignment yet gets a 204, which `request` resolves to
+    // `undefined` (see the test above). Every caller of fetchVisitAssignment
+    // compares the result against `null` (e.g. the crew editor's
+    // `assignment !== null` publication-history check), and `undefined !==
+    // null` is true in JS — an unnormalised `undefined` here slipped past
+    // that guard and crashed the drawer on any visit with no assignment.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+    }) as unknown as typeof fetch;
+
+    await expect(fetchVisitAssignment("visit-1")).resolves.toBeNull();
   });
 });
