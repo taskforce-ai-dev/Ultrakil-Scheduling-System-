@@ -624,6 +624,39 @@ describe('PublishedAssignmentRepairService', () => {
     );
   });
 
+  it('locks replacement employees and vehicles before transactional revalidation', async () => {
+    const { service, tx, eligibility } = fixture();
+    const vehicleId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const operation = {
+      ...replacement,
+      replacement: {
+        ...replacement.replacement,
+        vehicles: [{ vehicleId, driverEmployeeId: employeeId }],
+      },
+    };
+    const preview = await service.preview({ operations: [operation] });
+
+    await service.apply(
+      {
+        operations: [operation],
+        planHash: preview.planHash,
+        sourceFingerprints: preview.items.map((item) => ({
+          sourceAssignmentId: item.sourceAssignmentId,
+          fingerprint: item.sourceFingerprint,
+        })),
+        confirmation: true,
+        reason: 'Fence replacement resources',
+        idempotencyKey: 'repair-resource-lock-order',
+      },
+      actor,
+    );
+
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(tx.$queryRaw.mock.invocationCallOrder[2]).toBeLessThan(
+      eligibility.evaluate.mock.invocationCallOrder[2],
+    );
+  });
+
   it('withdraws the predecessor into the unassigned queue with structured reasons', async () => {
     const { service, tx } = fixture();
     const operation = {

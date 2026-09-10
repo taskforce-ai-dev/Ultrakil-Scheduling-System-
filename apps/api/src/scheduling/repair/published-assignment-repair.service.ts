@@ -18,7 +18,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict, sortConflicts } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { AssignmentProposal } from '../eligibility/rules';
-import { lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import {
+  lockScheduleResources,
+  lockScheduleVisits,
+} from '../optimizer/schedule-visit-lock';
 
 const SOURCE_INCLUDE = {
   crewMembers: {
@@ -246,11 +249,22 @@ export class PublishedAssignmentRepairService {
     // after the locks are acquired; buildPreview is repeated in the transaction.
     const preflight = await this.buildPreview(input, this.prisma);
     const visitIds = preflight.items.map((item) => item.visitId);
+    const replacements = preflight.operations.filter(
+      (operation) => operation.action === AssignmentRepairAction.REPLACED,
+    );
+    const employeeIds = replacements.flatMap(
+      (operation) => operation.replacement?.crew.map((member) => member.employeeId) ?? [],
+    );
+    const vehicleIds = replacements.flatMap(
+      (operation) =>
+        operation.replacement?.vehicles?.map((vehicle) => vehicle.vehicleId) ?? [],
+    );
 
     try {
       return await this.prisma.$transaction(
         async (tx) => {
           await lockScheduleVisits(tx, visitIds);
+          await lockScheduleResources(tx, employeeIds, vehicleIds);
 
           // A concurrent identical request may have committed while this one
           // waited for a visit lock. Replay it before inspecting predecessors.
