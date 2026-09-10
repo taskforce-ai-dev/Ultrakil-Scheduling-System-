@@ -354,7 +354,13 @@ export class PublishedAssignmentRepairService {
       const raced = await this.prisma.publishedAssignmentRepair.findUnique({
         where: { idempotencyKey: input.idempotencyKey },
       });
-      if (!raced) throw error;
+      if (!raced) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'One or more published assignments were repaired concurrently. Nothing from this request was applied; refresh and preview again.',
+          HttpStatus.CONFLICT,
+        );
+      }
       return this.replayOrReject(raced, requestHash);
     }
   }

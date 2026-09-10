@@ -3,6 +3,7 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  Prisma,
   VisitStatus,
 } from '@prisma/client';
 
@@ -588,5 +589,40 @@ describe('PublishedAssignmentRepairService', () => {
         actor,
       ),
     ).rejects.toThrow('injected failure');
+  });
+
+  it('sanitizes a concurrent source-repair uniqueness conflict', async () => {
+    const { service, prisma } = fixture();
+    const preview = await service.preview({ operations: [replacement] });
+    prisma.$transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: '6.19.3',
+        meta: {
+          modelName: 'PublishedAssignmentRepairItem',
+          target: ['sourceAssignmentId'],
+        },
+      }),
+    );
+
+    await expect(
+      service.apply(
+        {
+          operations: [replacement],
+          planHash: preview.planHash,
+          sourceFingerprints: preview.items.map((item) => ({
+            sourceAssignmentId: item.sourceAssignmentId,
+            fingerprint: item.sourceFingerprint,
+          })),
+          confirmation: true,
+          reason: 'Repair',
+          idempotencyKey: 'concurrent-source-repair',
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      status: 409,
+    });
   });
 });
