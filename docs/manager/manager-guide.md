@@ -160,7 +160,7 @@ You never have to guess.
 | **Missing skill** `SKILL_NOT_HELD` | The job needs a specific skill nobody in the crew holds. | Add someone qualified, or fix the required skills on the agreement. |
 | **No authorized driver** `NO_AUTHORIZED_DRIVER` | A vehicle is assigned but nobody in the crew is checked to drive it. | Name one of the checked drivers already in the crew, or add one who is checked. |
 | **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Replace it with one vehicle large enough for the full crew. |
-| **Too many vehicles** `TOO_MANY_VEHICLES` | More than one vehicle is assigned to the visit. | Keep exactly one suitable vehicle and release the others. The current release does not split a crew across multiple vehicles. |
+| **Unavailable vehicle** `TOO_MANY_VEHICLES` | More than one vehicle is assigned to the visit. | Keep exactly one suitable vehicle and release the others. The current release does not split a crew across multiple vehicles. |
 | **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. |
 
 None of these are colour-only — every one carries text, so they read
