@@ -30,7 +30,7 @@ function source(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
     id: sourceId,
     generatedVisitId: visitId,
     branchId: '44444444-4444-4444-8444-444444444444',
-    branchCode: BranchCode.COLOMBO,
+    branchCode: BranchCode.COLOMBO as BranchCode,
     status,
     plannedStart: new Date('2027-03-03T09:00:00.000Z'),
     plannedEnd: new Date('2027-03-03T10:00:00.000Z'),
@@ -57,9 +57,12 @@ function source(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
     }>,
     generatedVisit: {
       id: visitId,
+      branchId: '44444444-4444-4444-8444-444444444444',
+      branchCode: BranchCode.COLOMBO as BranchCode,
       visitDate: new Date('2027-03-03T00:00:00.000Z'),
       status: VisitStatus.SCHEDULED,
       updatedAt: new Date('2027-02-28T09:00:00.000Z'),
+      assignments: [{ id: sourceId }],
       serviceAgreement: {
         customer: { name: 'Customer' },
         serviceSite: { name: 'Site' },
@@ -171,7 +174,11 @@ describe('PublishedAssignmentRepairService', () => {
         ...row,
         id: secondSourceId,
         generatedVisitId: secondVisitId,
-        generatedVisit: { ...row.generatedVisit, id: secondVisitId },
+        generatedVisit: {
+          ...row.generatedVisit,
+          id: secondVisitId,
+          assignments: [{ id: secondSourceId }],
+        },
       },
     ]);
 
@@ -376,6 +383,7 @@ describe('PublishedAssignmentRepairService', () => {
     expect(tx.assignmentNotificationOutbox.updateMany).toHaveBeenCalledWith({
       where: {
         assignmentId: sourceId,
+        eventType: 'assignment.published',
         processedAt: null,
         cancelledAt: null,
       },
@@ -431,7 +439,11 @@ describe('PublishedAssignmentRepairService', () => {
           employeeId: secondEmployeeId,
         },
       ],
-      generatedVisit: { ...row.generatedVisit, id: secondVisitId },
+      generatedVisit: {
+        ...row.generatedVisit,
+        id: secondVisitId,
+        assignments: [{ id: secondSourceId }],
+      },
     };
     tx.assignment.findMany.mockResolvedValue([row, second]);
     tx.$queryRaw.mockResolvedValue([{ id: visitId }, { id: secondVisitId }]);
@@ -472,6 +484,144 @@ describe('PublishedAssignmentRepairService', () => {
     );
     expect(timestamps).toHaveLength(2);
     expect(timestamps[1]).toBe(timestamps[0]);
+  });
+
+  it('refuses a partial repair when another published sibling for the visit is omitted', async () => {
+    const { service, row } = fixture();
+    row.generatedVisit.assignments = [
+      { id: sourceId },
+      { id: '88888888-8888-4888-8888-888888888888' },
+    ];
+
+    await expect(service.preview({ operations: [replacement] })).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+    });
+  });
+
+  it('refuses two replacement successors for the same visit', async () => {
+    const { service, tx, row } = fixture();
+    const secondSourceId = '88888888-8888-4888-8888-888888888888';
+    const second = {
+      ...row,
+      id: secondSourceId,
+      crewMembers: [
+        {
+          ...row.crewMembers[0],
+          employeeId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        },
+      ],
+      generatedVisit: {
+        ...row.generatedVisit,
+        assignments: [{ id: sourceId }, { id: secondSourceId }],
+      },
+    };
+    row.generatedVisit.assignments = [{ id: sourceId }, { id: secondSourceId }];
+    tx.assignment.findMany.mockResolvedValue([row, second]);
+
+    await expect(
+      service.preview({
+        operations: [
+          replacement,
+          {
+            ...replacement,
+            sourceAssignmentId: secondSourceId,
+            replacement: {
+              ...replacement.replacement,
+              plannedStartMinute: 720,
+              plannedEndMinute: 780,
+              crew: [
+                {
+                  employeeId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+                  role: CrewRole.SUPERVISOR,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
+  it('applies sibling withdrawals before the single replacement successor', async () => {
+    const { service, tx, row } = fixture();
+    const secondSourceId = '88888888-8888-4888-8888-888888888888';
+    const second = {
+      ...row,
+      id: secondSourceId,
+      generatedVisit: {
+        ...row.generatedVisit,
+        assignments: [{ id: sourceId }, { id: secondSourceId }],
+      },
+    };
+    row.generatedVisit.assignments = [{ id: sourceId }, { id: secondSourceId }];
+    tx.assignment.findMany.mockResolvedValue([row, second]);
+    const operations = [
+      replacement,
+      {
+        sourceAssignmentId: secondSourceId,
+        action: AssignmentRepairAction.WITHDRAWN,
+        unassignedReasons: [
+          {
+            code: 'DUPLICATE_PUBLISHED_ASSIGNMENT',
+            message: 'This duplicate publication is superseded by the reviewed successor.',
+          },
+        ],
+      },
+    ];
+    const preview = await service.preview({ operations });
+
+    await service.apply(
+      {
+        operations,
+        planHash: preview.planHash,
+        sourceFingerprints: preview.items.map((item) => ({
+          sourceAssignmentId: item.sourceAssignmentId,
+          fingerprint: item.sourceFingerprint,
+        })),
+        confirmation: true,
+        reason: 'Collapse duplicate published siblings',
+        idempotencyKey: 'repair-sibling-order',
+      },
+      actor,
+    );
+
+    expect(tx.generatedVisit.update.mock.calls.map(([call]) => call.data.status)).toEqual([
+      VisitStatus.UNASSIGNED,
+      VisitStatus.SCHEDULED,
+    ]);
+  });
+
+  it('uses the generated visit branch for the replacement successor', async () => {
+    const { service, tx, row } = fixture();
+    row.branchId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    row.branchCode = BranchCode.KANDY;
+    row.generatedVisit.branchId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    row.generatedVisit.branchCode = BranchCode.COLOMBO;
+    const preview = await service.preview({ operations: [replacement] });
+
+    await service.apply(
+      {
+        operations: [replacement],
+        planHash: preview.planHash,
+        sourceFingerprints: preview.items.map((item) => ({
+          sourceAssignmentId: item.sourceAssignmentId,
+          fingerprint: item.sourceFingerprint,
+        })),
+        confirmation: true,
+        reason: 'Repair stale branch lineage',
+        idempotencyKey: 'repair-stale-branch',
+      },
+      actor,
+    );
+
+    expect(tx.assignment.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          branchId: row.generatedVisit.branchId,
+          branchCode: row.generatedVisit.branchCode,
+        }),
+      }),
+    );
   });
 
   it('withdraws the predecessor into the unassigned queue with structured reasons', async () => {

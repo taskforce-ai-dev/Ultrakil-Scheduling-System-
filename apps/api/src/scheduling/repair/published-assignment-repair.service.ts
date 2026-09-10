@@ -33,6 +33,10 @@ const SOURCE_INCLUDE = {
   },
   generatedVisit: {
     include: {
+      assignments: {
+        where: { status: AssignmentStatus.PUBLISHED },
+        select: { id: true },
+      },
       serviceAgreement: {
         include: {
           customer: { select: { name: true } },
@@ -294,13 +298,20 @@ export class PublishedAssignmentRepairService {
             },
           });
 
-          for (const operation of locked.operations) {
+          const writeOrder = [...locked.operations].sort((left, right) => {
+            const actionOrder =
+              Number(left.action === AssignmentRepairAction.REPLACED) -
+              Number(right.action === AssignmentRepairAction.REPLACED);
+            return actionOrder || left.sourceAssignmentId.localeCompare(right.sourceAssignmentId);
+          });
+          for (const operation of writeOrder) {
             const source = locked.sources.get(operation.sourceAssignmentId)!;
             const previewItem = locked.items.find((item) => item.sourceAssignmentId === source.id)!;
             const before = snapshotSource(source);
             await tx.assignmentNotificationOutbox.updateMany({
               where: {
                 assignmentId: source.id,
+                eventType: 'assignment.published',
                 processedAt: null,
                 cancelledAt: null,
               },
@@ -386,6 +397,7 @@ export class PublishedAssignmentRepairService {
     }
 
     const sources = new Map(rows.map((row) => [row.id, row]));
+    const sourceIdSet = new Set(sourceIds);
     for (const source of rows) {
       if (source.status !== AssignmentStatus.PUBLISHED) {
         throw new AppException(
@@ -403,6 +415,31 @@ export class PublishedAssignmentRepairService {
           { assignmentId: source.id, timeScope: 'HISTORICAL' },
         );
       }
+      const omittedPublishedSiblings = source.generatedVisit.assignments
+        .map((assignment) => assignment.id)
+        .filter((assignmentId) => !sourceIdSet.has(assignmentId))
+        .sort();
+      if (omittedPublishedSiblings.length > 0) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'Every published assignment for an affected visit must be included in one repair plan.',
+          HttpStatus.CONFLICT,
+          {
+            visitId: source.generatedVisitId,
+            omittedPublishedAssignmentIds: omittedPublishedSiblings,
+          },
+        );
+      }
+    }
+
+    const replacementCountByVisit = new Map<string, number>();
+    for (const operation of operations) {
+      if (operation.action !== AssignmentRepairAction.REPLACED) continue;
+      const visitId = sources.get(operation.sourceAssignmentId)!.generatedVisitId;
+      replacementCountByVisit.set(visitId, (replacementCountByVisit.get(visitId) ?? 0) + 1);
+    }
+    if ([...replacementCountByVisit.values()].some((count) => count > 1)) {
+      throw validationFailed('A repair may publish at most one replacement for each visit.');
     }
 
     const items: PublishedAssignmentRepairPreviewItem[] = [];
@@ -654,8 +691,8 @@ export class PublishedAssignmentRepairService {
       data: {
         id: replacementId,
         generatedVisitId: source.generatedVisitId,
-        branchId: source.branchId,
-        branchCode: source.branchCode,
+        branchId: source.generatedVisit.branchId,
+        branchCode: source.generatedVisit.branchCode,
         status: AssignmentStatus.PUBLISHED,
         plannedStart,
         plannedEnd,
@@ -694,8 +731,8 @@ export class PublishedAssignmentRepairService {
       visitDate: source.generatedVisit.visitDate.toISOString().slice(0, 10),
       customerName: source.generatedVisit.serviceAgreement.customer.name,
       siteName: source.generatedVisit.serviceAgreement.serviceSite.name,
-      branchId: source.branchId,
-      branchCode: source.branchCode,
+      branchId: source.generatedVisit.branchId,
+      branchCode: source.generatedVisit.branchCode,
       status: AssignmentStatus.PUBLISHED,
       plannedStart: plannedStart.toISOString(),
       plannedEnd: plannedEnd.toISOString(),
