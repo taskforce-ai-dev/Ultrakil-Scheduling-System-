@@ -2432,7 +2432,49 @@
             "name": "withConflictsOnly",
             "required": false,
             "in": "query",
-            "description": "Only visits already found to be unstaffable, rather than all unstaffed work.",
+            "deprecated": true,
+            "description": "Deprecated alias for checked=true.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "conflictCode",
+            "required": false,
+            "in": "query",
+            "description": "Only visits with this recorded conflict code. Facets remain scoped to the other filters.",
+            "schema": {
+              "enum": [
+                "BRANCH_MISMATCH",
+                "EMPLOYEE_INACTIVE",
+                "EMPLOYEE_UNAVAILABLE",
+                "EMPLOYEE_DOUBLE_BOOKED",
+                "EMPLOYEE_PERMANENTLY_STATIONED",
+                "NO_PMS_SUPERVISOR_AVAILABLE",
+                "BRANCH_HAS_NO_PMS_SUPERVISOR",
+                "CREW_TOO_SMALL",
+                "SKILL_NOT_HELD",
+                "DUPLICATE_CREW_MEMBER",
+                "VEHICLE_INACTIVE",
+                "VEHICLE_BRANCH_MISMATCH",
+                "VEHICLE_DOUBLE_BOOKED",
+                "NO_AUTHORIZED_DRIVER",
+                "VEHICLE_CAPACITY_EXCEEDED",
+                "OUTSIDE_SERVICE_HOURS",
+                "WINDOW_TOO_SHORT",
+                "VISIT_NOT_SCHEDULABLE",
+                "ASSIGNMENT_LOCKED",
+                "CREW_CANNOT_TRAVEL",
+                "TOO_MANY_VEHICLES"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "checked",
+            "required": false,
+            "in": "query",
+            "description": "true returns visits with recorded conflict checks; false returns unchecked visits.",
             "schema": {
               "type": "boolean"
             }
@@ -2866,6 +2908,56 @@
         "summary": "The unified schedule, one row per visit",
         "tags": [
           "calendar"
+        ]
+      }
+    },
+    "/api/operations/day": {
+      "get": {
+        "description": "Server-calculated dispatch state. Published work is dispatch truth; draft proposals remain separate.",
+        "operationId": "OperationsController_day",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsDayResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Authoritative operational view for one day",
+        "tags": [
+          "operations"
         ]
       }
     }
@@ -5195,13 +5287,24 @@
           },
           "pageSize": {
             "type": "number"
+          },
+          "hasNextPage": {
+            "type": "boolean"
+          },
+          "conflictFacets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
           }
         },
         "required": [
           "items",
           "total",
           "page",
-          "pageSize"
+          "pageSize",
+          "hasNextPage",
+          "conflictFacets"
         ]
       },
       "EmployeeAssignmentDto": {
@@ -5363,6 +5466,36 @@
           "pageSize"
         ]
       },
+      "PublishReadinessDto": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "BLOCKED",
+              "ACKNOWLEDGEMENT_REQUIRED"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "ZERO_RESULTS",
+              "PARTIAL_RESULTS"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "code",
+          "message"
+        ]
+      },
       "ScheduleRunDto": {
         "type": "object",
         "properties": {
@@ -5405,6 +5538,9 @@
           },
           "visitsUnassigned": {
             "type": "number"
+          },
+          "publishReadiness": {
+            "$ref": "#/components/schemas/PublishReadinessDto"
           },
           "isPublished": {
             "type": "boolean",
@@ -5457,6 +5593,7 @@
           "visitsConsidered",
           "visitsScheduled",
           "visitsUnassigned",
+          "publishReadiness",
           "isPublished",
           "publishedAt",
           "supersededByRunId",
@@ -5733,6 +5870,267 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CalendarEntryDto"
+            }
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ]
+      },
+      "OperationsCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "isPmsSupervisor": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName",
+          "role",
+          "isPmsSupervisor"
+        ]
+      },
+      "OperationsVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "driverName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label",
+          "driverEmployeeId",
+          "driverName"
+        ]
+      },
+      "OperationsAssignmentSnapshotDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "plannedStartMinute": {
+            "type": "number"
+          },
+          "plannedEndMinute": {
+            "type": "number"
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsVehicleDto"
+            }
+          },
+          "scheduleRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "status",
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "crew",
+          "vehicles",
+          "scheduleRunId",
+          "publishedAt"
+        ]
+      },
+      "OperationsWarningDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "HOURS_UNCONFIRMED",
+              "VEHICLE_BRANCH_UNCONFIRMED",
+              "SOURCE_PROVENANCE_UNKNOWN"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "ScheduleVersionDto": {
+        "type": "object",
+        "properties": {
+          "scheduleRunId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "scheduleRunId",
+          "publishedAt"
+        ]
+      },
+      "OperationsDayItemDto": {
+        "type": "object",
+        "properties": {
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "PROPOSED",
+              "UNASSIGNED",
+              "EXCEPTION",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "dispatch": {
+            "nullable": true,
+            "description": "Published dispatch truth only.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsAssignmentSnapshotDto"
+              }
+            ]
+          },
+          "proposed": {
+            "nullable": true,
+            "description": "Newest draft/proposed snapshot; never dispatch truth.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsAssignmentSnapshotDto"
+              }
+            ]
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "sourceWarnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsWarningDto"
+            }
+          },
+          "nextAction": {
+            "type": "string"
+          },
+          "scheduleVersion": {
+            "$ref": "#/components/schemas/ScheduleVersionDto"
+          }
+        },
+        "required": [
+          "visitId",
+          "visitDate",
+          "branchCode",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "state",
+          "dispatch",
+          "proposed",
+          "violations",
+          "sourceWarnings",
+          "nextAction",
+          "scheduleVersion"
+        ]
+      },
+      "OperationsDayResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsDayItemDto"
             }
           },
           "total": {

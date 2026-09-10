@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -14,6 +15,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { PublishReadiness } from './publish-readiness';
 
 export class StartScheduleRunDto {
   @ApiProperty({ format: 'date', example: '2026-09-07' })
@@ -60,6 +62,22 @@ export class PublishScheduleDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+
+  @ApiPropertyOptional({
+    description: 'Required with a non-empty reason when the completed run left any visits unassigned.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acknowledgePartial?: boolean;
+}
+
+export class PublishReadinessDto implements PublishReadiness {
+  @ApiProperty({ enum: ['READY', 'BLOCKED', 'ACKNOWLEDGEMENT_REQUIRED'] })
+  state!: PublishReadiness['state'];
+  @ApiProperty({ nullable: true, enum: ['ZERO_RESULTS', 'PARTIAL_RESULTS'] })
+  code!: PublishReadiness['code'];
+  @ApiProperty({ nullable: true, type: String })
+  message!: string | null;
 }
 
 export class ScheduleRunQueryDto {
@@ -103,6 +121,7 @@ export class ScheduleRunDto {
   @ApiProperty({ type: Number }) visitsConsidered!: number;
   @ApiProperty({ type: Number }) visitsScheduled!: number;
   @ApiProperty({ type: Number }) visitsUnassigned!: number;
+  @ApiProperty({ type: PublishReadinessDto }) publishReadiness!: PublishReadinessDto;
 
   @ApiProperty({ type: Boolean, description: 'True once published and frozen.' })
   isPublished!: boolean;

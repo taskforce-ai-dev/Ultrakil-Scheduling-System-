@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
+import { OperationsController } from './operations/operations.controller';
+import { OperationsService } from './operations/operations.service';
 import { PublishingService } from './optimizer/publishing.service';
 import {
   ScheduleRunProcessor,
@@ -51,6 +53,7 @@ export class SchedulingModule {
         AssignmentsController,
         ScheduleRunsController,
         CalendarController,
+        OperationsController,
         ...(qstash ? [ScheduleRunQStashController] : []),
       ],
       providers: [
@@ -63,6 +66,7 @@ export class SchedulingModule {
         ScheduleRunDispatchService,
         PublishingService,
         CalendarService,
+        OperationsService,
         ...(qstash
           ? [
               {

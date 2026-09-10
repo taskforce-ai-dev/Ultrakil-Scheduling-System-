@@ -4,10 +4,16 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ScheduleRunDispatcher } from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
 import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
-import { ScheduleRunsController } from './schedule-runs.controller';
+import { managerSafeError, ScheduleRunsController } from './schedule-runs.controller';
 import { PublishingService } from './publishing.service';
 
 describe('ScheduleRunsController QStash bounds', () => {
+  it('never exposes a raw scheduler failure to a manager', () => {
+    expect(managerSafeError('fetch https://scheduler.internal/runs failed: Prisma P2025'))
+      .toBe('The schedule run could not finish. Retry it, and contact support with the run ID if it persists.');
+    expect(managerSafeError(null)).toBeNull();
+  });
+
   it('rejects a QStash range that cannot fit the configured per-day solver budget before creating a run', async () => {
     const runs = { create: jest.fn() };
     const dispatcher = {

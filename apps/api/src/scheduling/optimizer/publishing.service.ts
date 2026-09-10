@@ -10,6 +10,7 @@ import {
   assertUnpublishedAssignment,
   lockScheduleVisits,
 } from './schedule-visit-lock';
+import { publishReadiness } from './publish-readiness';
 
 const PUBLISH_ASSIGNMENT_INCLUDE = {
   crewMembers: { include: { employee: { select: { fullName: true } } } },
@@ -52,6 +53,7 @@ export class PublishingService {
     runId: string,
     reason: string | null,
     actor: AuthenticatedUser,
+    acknowledgePartial = false,
   ) {
     const run = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
@@ -93,12 +95,21 @@ export class PublishingService {
       (assignment) => assignment.status === AssignmentStatus.DRAFT,
     );
 
-    if (expected.length === 0) {
+    const readiness = publishReadiness(run);
+    if (readiness.state === 'BLOCKED' || expected.length === 0) {
       throw new AppException(
         'RESOURCE_CONFLICT',
         'This run produced no assignments to publish.',
         HttpStatus.CONFLICT,
         { runId },
+      );
+    }
+    if (readiness.state === 'ACKNOWLEDGEMENT_REQUIRED' && (!acknowledgePartial || !reason?.trim())) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        readiness.message!,
+        HttpStatus.CONFLICT,
+        { runId, publishReadiness: readiness },
       );
     }
 

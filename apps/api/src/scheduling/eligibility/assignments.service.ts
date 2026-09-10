@@ -14,6 +14,7 @@ import {
   EligibilityResultDto,
   EmployeeAssignmentDto,
   EmployeeAssignmentQueryDto,
+  UnassignedVisitQueryDto,
   UnassignedVisitDto,
 } from './dto';
 import { EligibilityService } from './eligibility.service';
@@ -299,23 +300,30 @@ export class AssignmentsService {
    * health. Pass `withConflictsOnly` to narrow to work already found to be
    * impossible.
    */
-  async unassignedQueue(query: {
-    page?: number;
-    pageSize?: number;
-    branchCode?: string;
-    from?: string;
-    to?: string;
-    withConflictsOnly?: boolean;
-    serviceAgreementId?: string;
-  }) {
+  async unassignedQueue(query: UnassignedVisitQueryDto) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
-    const where: Prisma.GeneratedVisitWhereInput = {
+    const reasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
+    const facetReasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
+    if (query.checked === true || query.withConflictsOnly) {
+      const filter = { unassignedReasons: { some: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
+    if (query.checked === false) {
+      const filter = { unassignedReasons: { none: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
+    if (query.conflictCode) {
+      reasonFilters.push({ unassignedReasons: { some: { code: query.conflictCode } } });
+    }
+
+    const baseWhere: Prisma.GeneratedVisitWhereInput = {
       assignments: { none: { status: { in: LIVE_STATUSES } } },
       // Finished and cancelled work is history; it needs nobody.
       status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
-      ...(query.withConflictsOnly ? { unassignedReasons: { some: {} } } : {}),
       ...(query.serviceAgreementId
         ? { serviceAgreementId: query.serviceAgreementId }
         : {}),
@@ -338,8 +346,16 @@ export class AssignmentsService {
           }
         : {}),
     };
+    const where: Prisma.GeneratedVisitWhereInput = {
+      ...baseWhere,
+      ...(reasonFilters.length ? { AND: reasonFilters } : {}),
+    };
 
-    const [total, visits] = await Promise.all([
+    const facetWhere: Prisma.GeneratedVisitWhereInput = {
+      ...baseWhere,
+      ...(facetReasonFilters.length ? { AND: facetReasonFilters } : {}),
+    };
+    const [total, visits, facetRows] = await Promise.all([
       this.prisma.generatedVisit.count({ where }),
       this.prisma.generatedVisit.findMany({
         where,
@@ -356,6 +372,7 @@ export class AssignmentsService {
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
+      this.prisma.visitUnassignedReason.groupBy({ by: ['code'], where: { generatedVisit: facetWhere }, _count: { code: true }, orderBy: { code: 'asc' } }),
     ]);
 
     const items: UnassignedVisitDto[] = visits.map((visit) => ({
@@ -382,7 +399,7 @@ export class AssignmentsService {
         visit.updatedAt.toISOString(),
     }));
 
-    return { items, total, page, pageSize };
+    return { items, total, page, pageSize, hasNextPage: page * pageSize < total, conflictFacets: Object.fromEntries(facetRows.map((row) => [row.code, row._count.code])) };
   }
 
   /**

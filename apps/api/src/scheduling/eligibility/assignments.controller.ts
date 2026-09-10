@@ -18,6 +18,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { AssignmentsService } from './assignments.service';
+import { CONFLICT_CODES } from './conflict-codes';
 import {
   AssignCrewDto,
   AssignmentDto,
@@ -25,6 +26,7 @@ import {
   EmployeeAssignmentQueryDto,
   PaginatedEmployeeAssignmentsDto,
   PaginatedUnassignedVisitsDto,
+  UnassignedVisitQueryDto,
 } from './dto';
 
 @ApiTags('assignments')
@@ -129,30 +131,27 @@ export class AssignmentsController {
     description: 'Only unstaffed visits generated from this agreement.',
   })
   @ApiQuery({
+    name: 'checked',
+    required: false,
+    type: Boolean,
+    description: 'true returns visits with recorded conflict checks; false returns unchecked visits.',
+  })
+  @ApiQuery({
+    name: 'conflictCode',
+    required: false,
+    enum: CONFLICT_CODES,
+    description: 'Only visits with this recorded conflict code. Facets remain scoped to the other filters.',
+  })
+  @ApiQuery({
     name: 'withConflictsOnly',
     required: false,
     type: Boolean,
-    description: 'Only visits already found to be unstaffable, rather than all unstaffed work.',
+    deprecated: true,
+    description: 'Deprecated alias for checked=true.',
   })
   @ApiResponse({ status: 200, type: PaginatedUnassignedVisitsDto })
-  queue(
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-    @Query('branchCode') branchCode?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('withConflictsOnly') withConflictsOnly?: string,
-    @Query('serviceAgreementId') serviceAgreementId?: string,
-  ): Promise<PaginatedUnassignedVisitsDto> {
-    return this.assignments.unassignedQueue({
-      page: page ? Number(page) : undefined,
-      pageSize: pageSize ? Number(pageSize) : undefined,
-      branchCode,
-      from,
-      to,
-      withConflictsOnly: withConflictsOnly === 'true' || withConflictsOnly === '1',
-      serviceAgreementId,
-    });
+  queue(@Query() query: UnassignedVisitQueryDto): Promise<PaginatedUnassignedVisitsDto> {
+    return this.assignments.unassignedQueue(query);
   }
 
   @Get('employees/:employeeId/assignments')

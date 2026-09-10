@@ -38,6 +38,7 @@ import {
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
+import { publishReadiness } from './publish-readiness';
 
 function toDto(run: ScheduleRun): ScheduleRunDto {
   return {
@@ -50,16 +51,23 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
     visitsConsidered: run.visitsConsidered,
     visitsScheduled: run.visitsScheduled,
     visitsUnassigned: run.visitsUnassigned,
+    publishReadiness: publishReadiness(run),
     isPublished: run.publishedAt !== null,
     publishedAt: run.publishedAt?.toISOString() ?? null,
     supersededByRunId: run.supersededByRunId,
     cancelRequested: run.cancelRequestedAt !== null,
     errorCode: run.errorCode,
-    errorMessage: run.errorMessage,
+    errorMessage: managerSafeError(run.errorMessage),
     startedAt: run.startedAt?.toISOString() ?? null,
     finishedAt: run.finishedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
   };
+}
+
+/** Scheduler/provider diagnostics belong in logs, never in a manager response. */
+export function managerSafeError(message: string | null): string | null {
+  if (!message) return null;
+  return 'The schedule run could not finish. Retry it, and contact support with the run ID if it persists.';
 }
 
 @ApiTags('schedule-runs')
@@ -214,6 +222,7 @@ export class ScheduleRunsController {
       id,
       dto.reason ?? null,
       actor,
+      dto.acknowledgePartial === true,
     );
     return toDto(run);
   }

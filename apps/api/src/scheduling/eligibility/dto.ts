@@ -4,6 +4,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -171,6 +172,26 @@ export class PaginatedUnassignedVisitsDto {
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) page!: number;
   @ApiProperty({ type: Number }) pageSize!: number;
+  @ApiProperty({ type: Boolean }) hasNextPage!: boolean;
+  @ApiProperty({ type: Object, additionalProperties: { type: 'number' } })
+  conflictFacets!: Record<string, number>;
+}
+
+export class UnassignedVisitQueryDto {
+  @ApiPropertyOptional({ minimum: 1, default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1)
+  page?: number = 1;
+  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200)
+  pageSize?: number = 50;
+  @ApiPropertyOptional() @IsOptional() @IsString() branchCode?: string;
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() from?: string;
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() to?: string;
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() serviceAgreementId?: string;
+  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit.' }) @IsOptional() @Type(() => Boolean) @IsBoolean()
+  checked?: boolean;
+  @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
+  conflictCode?: string;
+  @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Type(() => Boolean) @IsBoolean()
+  withConflictsOnly?: boolean;
 }
 
 export class EmployeeAssignmentQueryDto {
