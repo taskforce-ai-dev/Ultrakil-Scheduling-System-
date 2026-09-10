@@ -15,11 +15,17 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import {
   PublishedAssignmentFindingQueryDto,
   PublishedAssignmentFindingsResponseDto,
+  PublishedAssignmentRepairPlanDto,
+  PublishedAssignmentRepairPlanResponseDto,
   PublishedAssignmentRepairApplyDto,
   PublishedAssignmentRepairPreviewDto,
   PublishedAssignmentRepairPreviewResponseDto,
   PublishedAssignmentRepairResultDto,
 } from './published-assignment-repair.dto';
+import {
+  PublishedAssignmentRepairPlan,
+  PublishedAssignmentRepairPlannerService,
+} from './published-assignment-repair-planner.service';
 import {
   PublishedAssignmentRepairPreview,
   PublishedAssignmentRepairResult,
@@ -31,7 +37,10 @@ import {
 @ApiResponse({ status: 401, description: 'Missing or invalid token.' })
 @Controller('operations/published-assignment-repairs')
 export class PublishedAssignmentRepairController {
-  constructor(private readonly repairs: PublishedAssignmentRepairService) {}
+  constructor(
+    private readonly repairs: PublishedAssignmentRepairService,
+    private readonly planner: PublishedAssignmentRepairPlannerService,
+  ) {}
 
   @Get('findings')
   @Roles(UserRole.ADMIN, UserRole.MANAGER)
@@ -45,6 +54,22 @@ export class PublishedAssignmentRepairController {
   @ApiResponse({ status: 200, type: PublishedAssignmentFindingsResponseDto })
   findings(@Query() query: PublishedAssignmentFindingQueryDto) {
     return this.repairs.validateCurrent(query);
+  }
+
+  @Post('plans')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Build an automatic write-free repair plan for exact published sources',
+    description:
+      'Runs one joint solve, preserves non-target live reservations, and returns apply-ready operations, source fingerprints, and a canonical plan hash without writing state.',
+  })
+  @ApiBody({ type: PublishedAssignmentRepairPlanDto })
+  @ApiResponse({ status: 200, type: PublishedAssignmentRepairPlanResponseDto })
+  plan(
+    @Body() dto: PublishedAssignmentRepairPlanDto,
+  ): Promise<PublishedAssignmentRepairPlan> {
+    return this.planner.plan(dto);
   }
 
   @Post('preview')

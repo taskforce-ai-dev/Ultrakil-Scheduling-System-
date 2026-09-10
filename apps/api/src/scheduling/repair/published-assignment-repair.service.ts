@@ -460,7 +460,10 @@ export class PublishedAssignmentRepairService {
     for (const operation of operations) {
       const source = sources.get(operation.sourceAssignmentId)!;
       const conflicts: Conflict[] = [];
-      if (source.locks.length > 0) {
+      if (
+        source.locks.length > 0 &&
+        operation.action === AssignmentRepairAction.REPLACED
+      ) {
         const lock = source.locks[0];
         conflicts.push({
           code: 'ASSIGNMENT_LOCKED',
@@ -1066,7 +1069,7 @@ function isUniqueConflict(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
-function repairTimeScope(visitDate: Date, now: Date = new Date()): RepairTimeScope {
+export function repairTimeScope(visitDate: Date, now: Date = new Date()): RepairTimeScope {
   const visit = visitDate.toISOString().slice(0, 10);
   const today = colomboDate(now);
   if (visit < today) return 'HISTORICAL';

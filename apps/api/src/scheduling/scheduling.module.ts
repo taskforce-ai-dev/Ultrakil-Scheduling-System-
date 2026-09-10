@@ -33,6 +33,8 @@ import { VisitGenerationService } from './visit-generation/visit-generation.serv
 import { VisitsController } from './visits/visits.controller';
 import { VisitsService } from './visits/visits.service';
 import { PublishedAssignmentRepairController } from './repair/published-assignment-repair.controller';
+import { PublishedAssignmentRepairPlannerAdapter } from './repair/published-assignment-repair-planner.adapter';
+import { PublishedAssignmentRepairPlannerService } from './repair/published-assignment-repair-planner.service';
 import { PublishedAssignmentRepairService } from './repair/published-assignment-repair.service';
 
 /**
@@ -71,6 +73,8 @@ export class SchedulingModule {
         CalendarService,
         OperationsService,
         PublishedAssignmentRepairService,
+        PublishedAssignmentRepairPlannerAdapter,
+        PublishedAssignmentRepairPlannerService,
         ...(qstash
           ? [
               {

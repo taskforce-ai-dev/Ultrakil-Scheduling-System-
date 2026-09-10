@@ -8,6 +8,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  ArrayUnique,
   Equals,
   IsArray,
   IsBoolean,
@@ -129,6 +130,30 @@ export class PublishedAssignmentRepairPreviewDto {
   operations!: PublishedAssignmentRepairOperationDto[];
 }
 
+export class PublishedAssignmentRepairPlanDto {
+  @ApiProperty({
+    type: [String],
+    format: 'uuid',
+    minItems: 1,
+    maxItems: 100,
+    uniqueItems: true,
+  })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  sourceAssignmentIds!: string[];
+
+  @ApiPropertyOptional({
+    type: Boolean,
+    description: 'Must be true when any target visit is on the current Colombo day.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acknowledgeCurrentDay?: boolean;
+}
+
 export class RepairSourceFingerprintDto {
   @ApiProperty({ type: String, format: 'uuid' })
   @IsUUID()
@@ -241,6 +266,14 @@ export class PublishedAssignmentRepairResultDto {
   communicationState!: PublishedAssignmentRepairCommunicationState;
   @ApiProperty({ type: [PublishedAssignmentRepairResultItemDto] })
   items!: PublishedAssignmentRepairResultItemDto[];
+}
+
+export class PublishedAssignmentRepairPlanResponseDto extends PublishedAssignmentRepairPreviewResponseDto {
+  @ApiProperty({ type: [PublishedAssignmentRepairOperationDto] })
+  operations!: PublishedAssignmentRepairOperationDto[];
+
+  @ApiProperty({ type: [RepairSourceFingerprintDto] })
+  sourceFingerprints!: RepairSourceFingerprintDto[];
 }
 
 export class PublishedAssignmentFindingsResponseDto {

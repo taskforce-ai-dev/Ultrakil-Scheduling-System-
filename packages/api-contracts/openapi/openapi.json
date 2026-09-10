@@ -3012,6 +3012,47 @@
         ]
       }
     },
+    "/api/operations/published-assignment-repairs/plans": {
+      "post": {
+        "description": "Runs one joint solve, preserves non-target live reservations, and returns apply-ready operations, source fingerprints, and a canonical plan hash without writing state.",
+        "operationId": "PublishedAssignmentRepairController_plan",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairPlanDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairPlanResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Build an automatic write-free repair plan for exact published sources",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
     "/api/operations/published-assignment-repairs/preview": {
       "post": {
         "description": "Returns a canonical plan hash and exact source fingerprints. Apply rejects them if any source or rule result changes.",
@@ -6472,6 +6513,76 @@
           "pageSize"
         ]
       },
+      "PublishedAssignmentRepairPlanDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentIds": {
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "acknowledgeCurrentDay": {
+            "type": "boolean",
+            "description": "Must be true when any target visit is on the current Colombo day."
+          }
+        },
+        "required": [
+          "sourceAssignmentIds"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewItemDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "sourceFingerprint": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "timeScope": {
+            "type": "string",
+            "enum": [
+              "CURRENT_DAY",
+              "FUTURE"
+            ]
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "visitId",
+          "action",
+          "sourceFingerprint",
+          "isValid",
+          "conflicts",
+          "timeScope"
+        ]
+      },
       "RepairCrewMemberDto": {
         "type": "object",
         "properties": {
@@ -6592,6 +6703,59 @@
           "action"
         ]
       },
+      "RepairSourceFingerprintDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 fingerprint returned by preview."
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "fingerprint"
+        ]
+      },
+      "PublishedAssignmentRepairPlanResponseDto": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewItemDto"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          },
+          "sourceFingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairSourceFingerprintDto"
+            }
+          }
+        },
+        "required": [
+          "planHash",
+          "isValid",
+          "items",
+          "operations",
+          "sourceFingerprints"
+        ]
+      },
       "PublishedAssignmentRepairPreviewDto": {
         "type": "object",
         "properties": {
@@ -6604,54 +6768,6 @@
         },
         "required": [
           "operations"
-        ]
-      },
-      "PublishedAssignmentRepairPreviewItemDto": {
-        "type": "object",
-        "properties": {
-          "sourceAssignmentId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "visitId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "REPLACED",
-              "WITHDRAWN"
-            ]
-          },
-          "sourceFingerprint": {
-            "type": "string"
-          },
-          "isValid": {
-            "type": "boolean"
-          },
-          "conflicts": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ConflictDto"
-            }
-          },
-          "timeScope": {
-            "type": "string",
-            "enum": [
-              "CURRENT_DAY",
-              "FUTURE"
-            ]
-          }
-        },
-        "required": [
-          "sourceAssignmentId",
-          "visitId",
-          "action",
-          "sourceFingerprint",
-          "isValid",
-          "conflicts",
-          "timeScope"
         ]
       },
       "PublishedAssignmentRepairPreviewResponseDto": {
@@ -6674,23 +6790,6 @@
           "planHash",
           "isValid",
           "items"
-        ]
-      },
-      "RepairSourceFingerprintDto": {
-        "type": "object",
-        "properties": {
-          "sourceAssignmentId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "fingerprint": {
-            "type": "string",
-            "description": "SHA-256 fingerprint returned by preview."
-          }
-        },
-        "required": [
-          "sourceAssignmentId",
-          "fingerprint"
         ]
       },
       "PublishedAssignmentRepairApplyDto": {

@@ -18,6 +18,7 @@ export const ErrorCode = {
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
   QUEUE_UNAVAILABLE: 'QUEUE_UNAVAILABLE',
   SCHEDULER_UNAVAILABLE: 'SCHEDULER_UNAVAILABLE',
+  REPAIR_PLANNER_UNAVAILABLE: 'REPAIR_PLANNER_UNAVAILABLE',
 
   // --- Workforce import ------------------------------------------------------
   MATRIX_FILE_NOT_FOUND: 'MATRIX_FILE_NOT_FOUND',
@@ -69,6 +70,7 @@ export const ErrorCode = {
   // list rather than keeping a second one. Two vocabularies for the same rule
   // is how a dispatch board ends up filtering on a code the API stopped using.
   ASSIGNMENT_NOT_ELIGIBLE: 'ASSIGNMENT_NOT_ELIGIBLE',
+  REPAIR_TARGET_ALREADY_VALID: 'REPAIR_TARGET_ALREADY_VALID',
   BRANCH_MISMATCH: 'BRANCH_MISMATCH',
   EMPLOYEE_PERMANENTLY_STATIONED: 'EMPLOYEE_PERMANENTLY_STATIONED',
   NO_PMS_SUPERVISOR_AVAILABLE: 'NO_PMS_SUPERVISOR_AVAILABLE',

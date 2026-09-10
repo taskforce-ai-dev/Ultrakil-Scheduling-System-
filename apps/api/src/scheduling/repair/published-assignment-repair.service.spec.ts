@@ -304,6 +304,55 @@ describe('PublishedAssignmentRepairService', () => {
     });
   });
 
+  it('allows an explicit structured withdrawal to preserve a locked source as history', async () => {
+    const { service, row, eligibility } = fixture();
+    row.locks = [
+      { assignmentId: sourceId, scope: 'FULL', reason: 'Manager decision' },
+    ];
+
+    const preview = await service.preview({
+      operations: [
+        {
+          sourceAssignmentId: sourceId,
+          action: AssignmentRepairAction.WITHDRAWN,
+          unassignedReasons: [
+            { code: 'ASSIGNMENT_LOCKED', message: 'Manager lock retained.' },
+            { code: 'CREW_CANNOT_TRAVEL', message: 'Unsafe.' },
+          ],
+        },
+      ],
+    });
+
+    expect(preview).toMatchObject({ isValid: true });
+    expect(eligibility.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to apply a reassignment for a locked published source', async () => {
+    const { service, row, tx } = fixture();
+    row.locks = [
+      { assignmentId: sourceId, scope: 'FULL', reason: 'Manager decision' },
+    ];
+    const preview = await service.preview({ operations: [replacement] });
+
+    await expect(
+      service.apply(
+        {
+          operations: [replacement],
+          planHash: preview.planHash,
+          sourceFingerprints: preview.items.map((item) => ({
+            sourceAssignmentId: item.sourceAssignmentId,
+            fingerprint: item.sourceFingerprint,
+          })),
+          confirmation: true,
+          reason: 'Attempt locked repair',
+          idempotencyKey: 'locked-reassignment',
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: 'ASSIGNMENT_NOT_ELIGIBLE' });
+    expect(tx.assignment.updateMany).not.toHaveBeenCalled();
+  });
+
   it('paginates invalid findings and reports the invalid total, not every published row', async () => {
     const { service, tx, eligibility, row } = fixture();
     const invalid = {

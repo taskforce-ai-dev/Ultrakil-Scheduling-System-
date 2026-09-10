@@ -1149,6 +1149,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/operations/published-assignment-repairs/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Build an automatic write-free repair plan for exact published sources
+         * @description Runs one joint solve, preserves non-target live reservations, and returns apply-ready operations, source fingerprints, and a canonical plan hash without writing state.
+         */
+        post: operations["PublishedAssignmentRepairController_plan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations/published-assignment-repairs/preview": {
         parameters: {
             query?: never;
@@ -2240,6 +2260,24 @@ export interface components {
             page: number;
             pageSize: number;
         };
+        PublishedAssignmentRepairPlanDto: {
+            sourceAssignmentIds: string[];
+            /** @description Must be true when any target visit is on the current Colombo day. */
+            acknowledgeCurrentDay?: boolean;
+        };
+        PublishedAssignmentRepairPreviewItemDto: {
+            /** Format: uuid */
+            sourceAssignmentId: string;
+            /** Format: uuid */
+            visitId: string;
+            /** @enum {string} */
+            action: "REPLACED" | "WITHDRAWN";
+            sourceFingerprint: string;
+            isValid: boolean;
+            conflicts: components["schemas"]["ConflictDto"][];
+            /** @enum {string} */
+            timeScope: "CURRENT_DAY" | "FUTURE";
+        };
         RepairCrewMemberDto: {
             /** Format: uuid */
             employeeId: string;
@@ -2271,32 +2309,26 @@ export interface components {
             replacement?: components["schemas"]["RepairReplacementDto"];
             unassignedReasons?: components["schemas"]["RepairUnassignedReasonDto"][];
         };
-        PublishedAssignmentRepairPreviewDto: {
-            operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
-        };
-        PublishedAssignmentRepairPreviewItemDto: {
-            /** Format: uuid */
-            sourceAssignmentId: string;
-            /** Format: uuid */
-            visitId: string;
-            /** @enum {string} */
-            action: "REPLACED" | "WITHDRAWN";
-            sourceFingerprint: string;
-            isValid: boolean;
-            conflicts: components["schemas"]["ConflictDto"][];
-            /** @enum {string} */
-            timeScope: "CURRENT_DAY" | "FUTURE";
-        };
-        PublishedAssignmentRepairPreviewResponseDto: {
-            planHash: string;
-            isValid: boolean;
-            items: components["schemas"]["PublishedAssignmentRepairPreviewItemDto"][];
-        };
         RepairSourceFingerprintDto: {
             /** Format: uuid */
             sourceAssignmentId: string;
             /** @description SHA-256 fingerprint returned by preview. */
             fingerprint: string;
+        };
+        PublishedAssignmentRepairPlanResponseDto: {
+            planHash: string;
+            isValid: boolean;
+            items: components["schemas"]["PublishedAssignmentRepairPreviewItemDto"][];
+            operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
+            sourceFingerprints: components["schemas"]["RepairSourceFingerprintDto"][];
+        };
+        PublishedAssignmentRepairPreviewDto: {
+            operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
+        };
+        PublishedAssignmentRepairPreviewResponseDto: {
+            planHash: string;
+            isValid: boolean;
+            items: components["schemas"]["PublishedAssignmentRepairPreviewItemDto"][];
         };
         PublishedAssignmentRepairApplyDto: {
             operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
@@ -4620,6 +4652,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublishedAssignmentFindingsResponseDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    PublishedAssignmentRepairController_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishedAssignmentRepairPlanDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishedAssignmentRepairPlanResponseDto"];
                 };
             };
             /** @description Missing or invalid token. */
