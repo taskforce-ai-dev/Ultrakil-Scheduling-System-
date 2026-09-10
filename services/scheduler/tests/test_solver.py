@@ -17,6 +17,8 @@ from app.solver.schemas import (
     EmployeeInput,
     ExistingAssignmentInput,
     LockInput,
+    OccupiedStartKey,
+    ReservationInput,
     SolveRequest,
     VehicleInput,
     VisitInput,
@@ -182,6 +184,84 @@ class TestHardRules:
         result = solve(request(visits=[cramped]))
 
         assert "WINDOW_TOO_SHORT" in result.unassigned[0].reason_codes
+
+
+class TestPublishedReservations:
+    def test_reserves_published_employee_and_vehicle_but_allows_adjacent_reuse(self):
+        van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
+        driver = employee(
+            id="sup-1",
+            is_pms_grade=True,
+            authorized_vehicle_ids=["van-1"],
+            can_use_public_transport=False,
+        )
+        crew = employee(id="tech-1", can_use_public_transport=False)
+        movable = visit(
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=9 * 60,
+                    latest_start_minute=10 * 60,
+                )
+            ]
+        )
+
+        result = solve(
+            request(
+                visits=[movable],
+                employees=[driver, crew],
+                vehicles=[van],
+                reservations=[
+                    ReservationInput(
+                        scheduled_date="2026-09-09",
+                        start_minute=9 * 60,
+                        end_minute=10 * 60,
+                        employee_ids=["sup-1", "tech-1"],
+                        vehicle_ids=["van-1"],
+                    )
+                ],
+            )
+        )
+
+        assert result.assignments[0].start_minute == 10 * 60
+        assert result.assignments[0].vehicles[0].vehicle_id == "van-1"
+
+    def test_never_uses_a_sibling_generated_visit_unique_key(self):
+        movable = visit(
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=9 * 60,
+                    latest_start_minute=10 * 60,
+                )
+            ],
+            occupied_start_keys=[
+                OccupiedStartKey(date="2026-09-09", start_minute=9 * 60)
+            ],
+        )
+
+        result = solve(request(visits=[movable]))
+
+        assert result.assignments[0].scheduled_date == "2026-09-09"
+        assert result.assignments[0].start_minute != 9 * 60
+
+    def test_repair_omits_only_its_named_predecessor_reservation(self):
+        held = ReservationInput(
+            assignment_id="published-predecessor",
+            scheduled_date="2026-09-09",
+            start_minute=9 * 60,
+            end_minute=10 * 60,
+            employee_ids=["sup-1", "tech-1"],
+        )
+
+        result = solve(
+            request(
+                reservations=[held],
+                excluded_reservation_assignment_ids=["published-predecessor"],
+            )
+        )
+
+        assert result.assignments[0].start_minute == 9 * 60
 
 
 class TestVehicles:

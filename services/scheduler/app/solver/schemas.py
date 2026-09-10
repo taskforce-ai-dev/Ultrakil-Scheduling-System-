@@ -14,6 +14,18 @@ from pydantic import BaseModel, Field
 LockScope = Literal["FULL", "CREW", "VEHICLE", "TIME"]
 
 
+class OccupiedStartKey(BaseModel):
+    """A generated-visit unique key already owned by a sibling visit.
+
+    The API supplies every sibling key, including unassigned and otherwise
+    omitted visits.  A move may not overwrite one merely because that sibling
+    did not need a crew in this solve.
+    """
+
+    date: str
+    start_minute: int
+
+
 class VisitInput(BaseModel):
     id: str
     branch_code: str
@@ -40,6 +52,7 @@ class VisitInput(BaseModel):
     lands on whichever one produces the best schedule overall, and the date it
     was generated on carries no weight of its own."""
     candidate_slots: list[CandidateSlot] = Field(default_factory=list)
+    occupied_start_keys: list[OccupiedStartKey] = Field(default_factory=list)
 
 
 class CandidateSlot(BaseModel):
@@ -103,6 +116,17 @@ class ExistingAssignmentInput(BaseModel):
     vehicle_ids: list[str] = Field(default_factory=list)
 
 
+class ReservationInput(BaseModel):
+    """Resources fixed by a published assignment outside this solve."""
+
+    assignment_id: str | None = None
+    scheduled_date: str
+    start_minute: int
+    end_minute: int
+    employee_ids: list[str] = Field(default_factory=list)
+    vehicle_ids: list[str] = Field(default_factory=list)
+
+
 class SolveRequest(BaseModel):
     run_id: str
     visits: list[VisitInput]
@@ -110,6 +134,10 @@ class SolveRequest(BaseModel):
     vehicles: list[VehicleInput] = Field(default_factory=list)
     locks: list[LockInput] = Field(default_factory=list)
     existing: list[ExistingAssignmentInput] = Field(default_factory=list)
+    reservations: list[ReservationInput] = Field(default_factory=list)
+    """Published work held fixed while draft work is re-solved."""
+    excluded_reservation_assignment_ids: list[str] = Field(default_factory=list)
+    """Repair callers may omit only the exact predecessor they supersede."""
     time_limit_seconds: float = Field(default=20.0, ge=0.5, le=300.0)
     """Fixed seed and a single worker keep the same request reproducible.
     Managers rerun a schedule and compare; a different answer each time from

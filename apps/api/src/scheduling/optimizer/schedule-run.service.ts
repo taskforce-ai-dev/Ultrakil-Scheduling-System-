@@ -19,6 +19,7 @@ import { EligibilityService } from '../eligibility/eligibility.service';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
+  lockScheduleAgreements,
   assertScheduleSnapshot,
   assertVisitRevision,
   lockScheduleVisits,
@@ -139,6 +140,7 @@ type VehicleForSolve = Prisma.VehicleGetPayload<{
 
 interface SolveSnapshot {
   visitId: string;
+  serviceAgreementId: string;
   expectedUpdatedAt: Date;
   replaceAssignmentId?: string;
 }
@@ -186,6 +188,19 @@ function dateOnly(value: Date): string {
 
 function parseDate(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function minuteOfDay(value: Date): number {
+  return value.getUTCHours() * 60 + value.getUTCMinutes();
+}
+
+function isPrismaUniqueConstraint(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
 }
 
 /**
@@ -444,6 +459,26 @@ export class ScheduleRunService {
       }),
     ]);
 
+    // A sibling can be omitted from this solve because it is published,
+    // unassigned, completed, or otherwise outside the solver's remit.  Its
+    // generated-visit key nevertheless remains in the database, so include
+    // every sibling key that falls in the candidate horizon.
+    const siblingKeys = await this.prisma.generatedVisit.findMany({
+      where: {
+        serviceAgreementId: {
+          in: [...new Set(visits.map((visit) => visit.serviceAgreementId))],
+        },
+        visitDate: { gte: run.rangeStart, lte: run.rangeEnd },
+      },
+      select: {
+        id: true,
+        serviceAgreementId: true,
+        visitDate: true,
+        windowStartMinute: true,
+      },
+      orderBy: { id: 'asc' },
+    });
+
     const request = this.buildSolveRequest(
       run.id,
       visits,
@@ -458,6 +493,7 @@ export class ScheduleRunService {
         from: run.rangeStart,
         to: run.rangeEnd,
       },
+      siblingKeys,
     );
 
     await this.updateLeasedRun(runId, lease, {
@@ -557,6 +593,7 @@ export class ScheduleRunService {
       );
       proposals.push({
         visitId: visit.id,
+        serviceAgreementId: visit.serviceAgreementId,
         expectedUpdatedAt: visit.updatedAt,
         dto,
         replaceAssignmentId: existing?.id,
@@ -592,6 +629,7 @@ export class ScheduleRunService {
         }
         return {
           ...entry,
+          serviceAgreementId: visit.serviceAgreementId,
           expectedUpdatedAt: visit.updatedAt,
           replaceAssignmentId: visit.assignments.find((assignment) =>
             REPLACEABLE_STATUSES.includes(assignment.status),
@@ -607,12 +645,28 @@ export class ScheduleRunService {
     visits: VisitForSolve[],
     employees: EmployeeForSolve[],
     vehicles: VehicleForSolve[],
-    options: { timeLimitSeconds: number; from: Date; to: Date },
+    options: {
+      timeLimitSeconds: number;
+      from: Date;
+      to: Date;
+      /** Repair callers may omit their exact superseded predecessor only. */
+      excludeReservationAssignmentIds?: string[];
+    },
+    siblingKeys: {
+      id: string;
+      serviceAgreementId: string;
+      visitDate: Date;
+      windowStartMinute: number;
+    }[] = [],
   ): SolveRequest {
     const locks: SolveRequest['locks'] = [];
     const existing: SolveRequest['existing'] = [];
     /** Visits a manager has fixed in time. These are never offered new slots. */
     const pinned = new Set<string>();
+    const excludedReservations = new Set(
+      options.excludeReservationAssignmentIds ?? [],
+    );
+    const reservations: NonNullable<SolveRequest['reservations']> = [];
 
     const solvable = visits.filter((visit) => {
       const live = visit.assignments.find((a) =>
@@ -651,6 +705,25 @@ export class ScheduleRunService {
       });
       return true;
     });
+
+    for (const visit of visits) {
+      for (const assignment of visit.assignments) {
+        if (REPLACEABLE_STATUSES.includes(assignment.status)) continue;
+        if (excludedReservations.has(assignment.id)) continue;
+        reservations.push({
+          assignment_id: assignment.id,
+          scheduled_date: dateOnly(assignment.plannedStart),
+          start_minute: minuteOfDay(assignment.plannedStart),
+          end_minute: minuteOfDay(assignment.plannedEnd),
+          employee_ids: assignment.crewMembers
+            .map((member) => member.employeeId)
+            .sort(),
+          vehicle_ids: assignment.vehicles
+            .map((vehicle) => vehicle.vehicleId)
+            .sort(),
+        });
+      }
+    }
 
     return {
       run_id: runId,
@@ -700,6 +773,16 @@ export class ScheduleRunService {
           service_site_id: visit.serviceAgreement.serviceSiteId,
           service_agreement_id: visit.serviceAgreementId,
           is_preferred_day: false,
+          occupied_start_keys: siblingKeys
+            .filter(
+              (sibling) =>
+                sibling.serviceAgreementId === visit.serviceAgreementId &&
+                sibling.id !== visit.id,
+            )
+            .map((sibling) => ({
+              date: dateOnly(sibling.visitDate),
+              start_minute: sibling.windowStartMinute,
+            })),
           candidate_slots: candidates.map((slot) => ({
             date: slot.date,
             earliest_start_minute: slot.earliestStartMinute,
@@ -731,6 +814,8 @@ export class ScheduleRunService {
       })),
       locks,
       existing,
+      reservations,
+      excluded_reservation_assignment_ids: [...excludedReservations].sort(),
       time_limit_seconds: options.timeLimitSeconds,
     };
   }
@@ -770,6 +855,10 @@ export class ScheduleRunService {
         // One solver response is one atomic change. Lock the entire affected set
         // in the shared deterministic order, then validate every revision before
         // creating drafts, transferring locks, moving dates or changing reasons.
+        await lockScheduleAgreements(
+          tx,
+          entries.map((entry) => entry.serviceAgreementId),
+        );
         await lockScheduleVisits(
           tx,
           entries.map((entry) => entry.visitId),
@@ -842,7 +931,17 @@ export class ScheduleRunService {
         );
       },
       { timeout: 30_000 },
-    );
+    ).catch((error: unknown) => {
+      if (isPrismaUniqueConstraint(error)) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'This schedule changed while it was being saved. Refresh and run the scheduler again.',
+          HttpStatus.CONFLICT,
+          { runId },
+        );
+      }
+      throw error;
+    });
   }
 
   private async persist(

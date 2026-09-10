@@ -25,6 +25,8 @@ export interface SolveRequest {
       latest_start_minute: number;
       is_preferred: boolean;
     }[];
+    /** Unique generated-visit keys already owned by sibling rows. */
+    occupied_start_keys?: { date: string; start_minute: number }[];
   }[];
   employees: {
     id: string;
@@ -54,6 +56,17 @@ export interface SolveRequest {
     employee_ids: string[];
     vehicle_ids: string[];
   }[];
+  /** Published work outside this solve which must retain its resources. */
+  reservations?: {
+    assignment_id?: string;
+    scheduled_date: string;
+    start_minute: number;
+    end_minute: number;
+    employee_ids: string[];
+    vehicle_ids: string[];
+  }[];
+  /** A repair may omit only its exact published predecessor reservation. */
+  excluded_reservation_assignment_ids?: string[];
   time_limit_seconds: number;
 }
 

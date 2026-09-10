@@ -414,6 +414,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     all_dates = sorted(
         {v.visit_date for v in visits}
         | {slot.date for v in visits for slot in v.candidate_slots}
+        | {
+            reservation.scheduled_date
+            for reservation in request.reservations
+            if reservation.assignment_id
+            not in set(request.excluded_reservation_assignment_ids)
+        }
     )
     day_index = {date: index for index, date in enumerate(all_dates)}
 
@@ -429,6 +435,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             return [base]
 
         starts: list[int] = []
+        occupied = {(key.date, key.start_minute) for key in v.occupied_start_keys}
         for slot in v.candidate_slots:
             if slot.date not in day_index:
                 continue
@@ -436,7 +443,8 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             latest = min(slot.latest_start_minute, 1440 - v.duration_minutes)
             minute = slot.earliest_start_minute
             while minute <= latest:
-                starts.append(offset + minute)
+                if (slot.date, minute) not in occupied:
+                    starts.append(offset + minute)
                 minute += SLOT_GRANULARITY_MINUTES
         return sorted(set(starts))
 
@@ -528,8 +536,33 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         """The visit's start on the horizon timeline — now a variable."""
         return start_of[v.id]
 
+    reservations = [
+        reservation
+        for reservation in request.reservations
+        if reservation.assignment_id not in set(request.excluded_reservation_assignment_ids)
+    ]
+
+    def reservation_interval(reservation, resource_id: str, kind: str):
+        resource_ids = (
+            reservation.employee_ids if kind == "employee" else reservation.vehicle_ids
+        )
+        if resource_id not in resource_ids:
+            return None
+        duration = reservation.end_minute - reservation.start_minute
+        if duration <= 0:
+            return None
+        start = day_index[reservation.scheduled_date] * 1440 + reservation.start_minute
+        return model.NewFixedSizeIntervalVar(
+            start, duration, f"reserved_{kind}_{resource_id}_{reservation.assignment_id or start}"
+        )
+
     for employee in employees:
-        intervals = []
+        intervals = [
+            interval
+            for reservation in reservations
+            if (interval := reservation_interval(reservation, employee.id, "employee"))
+            is not None
+        ]
         for v in visits:
             var = assign.get((v.id, employee.id))
             if var is None:
@@ -548,7 +581,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             model.AddNoOverlap(intervals)
 
     for vehicle in vehicles:
-        intervals = []
+        intervals = [
+            interval
+            for reservation in reservations
+            if (interval := reservation_interval(reservation, vehicle.id, "vehicle"))
+            is not None
+        ]
         for v in visits:
             var = uses_vehicle.get((v.id, vehicle.id))
             if var is None:
