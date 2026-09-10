@@ -108,12 +108,12 @@ there is no UI for any of them today.
    intentional (deactivation is import-driven only), the manager guide
    already reflects that.
 
-7. **A crew can't currently be split across multiple vehicles.** Each
-   vehicle assigned to a visit is validated against the *entire* on-site
-   crew count, not a share of it — so assigning a second, smaller vehicle
-   to carry the overflow doesn't satisfy the capacity check the way you
-   might expect. Documented in the manager guide as a usage note; worth
-   confirming with the Project Lead whether this is the intended design.
+7. **Each visit currently supports exactly one vehicle.** Assigning more
+   than one is rejected as `TOO_MANY_VEHICLES`; the manager must keep one
+   vehicle large enough for the entire crew and release the others. The
+   current release does not split a crew across multiple vehicles. This is
+   documented in the manager guide and remains a possible Phase 2 workflow
+   enhancement if multi-vehicle transport is later required.
 
 8. **"Save assignment" silently stays disabled until "Reason for this
    change" is filled in**, even after every validation check passes and

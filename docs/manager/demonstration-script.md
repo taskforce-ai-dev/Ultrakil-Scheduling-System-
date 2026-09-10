@@ -113,6 +113,10 @@ placeholder, and the Validation panel immediately shows
 `NO_AUTHORIZED_DRIVER`, naming any other crew member who is still checked
 for that vehicle.
 
+This focused demo uses an intentionally ineligible fabricated visit that
+also shows crew-size and skill conflicts. It demonstrates immediate driver
+revalidation only; the valid end-to-end save is demonstrated in Part 1.
+
 *(Evidence: `uat/screenshots/o09-all-checked-drivers-lm3067.png`,
 `uat/screenshots/o09-unauthorized-driver-excluded.png`,
 `uat/screenshots/before-driver-removed-from-crew.png`,

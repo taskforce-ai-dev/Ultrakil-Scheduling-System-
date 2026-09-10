@@ -132,15 +132,15 @@ This carries through to assignment:
 
   ![Unauthorized driver excluded from the dropdown](uat/screenshots/o09-unauthorized-driver-excluded.png)
 
-- The same vehicle can be assigned to two different visits with two
-  different authorized drivers — nothing about assigning it once reserves
-  it to one person.
+- The same vehicle can be assigned to two different visits at
+  **non-overlapping times**, with a different authorized driver for each
+  visit. Overlapping use is blocked as `VEHICLE_DOUBLE_BOOKED`.
 - If you remove the assigned driver from the crew (not the vehicle), the
   vehicle's **Driver** field clears back to its placeholder and the
   Validation panel immediately re-checks, naming any other crew member who
   is still authorized for that vehicle:
 
-  ![Driver field before removal](uat/screenshots/before-driver-removed-from-crew.png)
+  ![Driver selected before crew removal; the demo visit has separate crew-size and skill conflicts](uat/screenshots/before-driver-removed-from-crew.png)
   ![Re-validated after the driver is removed from the crew](uat/screenshots/after-driver-removed-revalidated.png)
 
 ---
@@ -159,7 +159,8 @@ You never have to guess.
 | **Permanent-staff restriction** `EMPLOYEE_PERMANENTLY_STATIONED` | You've added someone who is permanently stationed at a different site. | Assign a mobile crew member instead. |
 | **Missing skill** `SKILL_NOT_HELD` | The job needs a specific skill nobody in the crew holds. | Add someone qualified, or fix the required skills on the agreement. |
 | **No authorized driver** `NO_AUTHORIZED_DRIVER` | A vehicle is assigned but nobody in the crew is checked to drive it. | Name one of the checked drivers already in the crew, or add one who is checked. |
-| **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Use a larger vehicle. **Note:** adding a second, smaller vehicle does not currently split the crew across both — each assigned vehicle is checked against the *full* crew, not a share of it. |
+| **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Replace it with one vehicle large enough for the full crew. |
+| **Too many vehicles** `TOO_MANY_VEHICLES` | More than one vehicle is assigned to the visit. | Keep exactly one suitable vehicle and release the others. The current release does not split a crew across multiple vehicles. |
 | **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. |
 
 None of these are colour-only — every one carries text, so they read

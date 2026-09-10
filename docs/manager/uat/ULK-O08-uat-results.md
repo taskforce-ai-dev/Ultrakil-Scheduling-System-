@@ -701,9 +701,14 @@ Screenshot: `screenshots/o09-unauthorized-driver-excluded.png`
 (driver), Sunil Abeykoon (PMS). Visit — Greenfield Brewery — Plant,
 2026-10-02.
 
+**Scope:** This focused check verifies driver-field revalidation. The
+fabricated visit already has separate `CREW_TOO_SMALL` and `SKILL_NOT_HELD`
+conflicts, so the screenshots do not claim that the whole assignment is
+otherwise valid.
+
 **Commands:**
 ```
-Build valid state: crew [Ruwan Gunasekara, Sunil Abeykoon (PMS)],
+Build driver-selection state: crew [Ruwan Gunasekara, Sunil Abeykoon (PMS)],
   vehicle PJ-5510, driver = Ruwan Gunasekara
 click "Remove crew member" on Ruwan Gunasekara's row (not the vehicle row)
 read Vehicles section driver field; read Validation panel text
@@ -722,7 +727,8 @@ Ruwan's crew row was removed. Validation immediately showed:
 > them as the driver.
 
 Matches expected exactly, including naming the correct remaining eligible
-crew member.
+crew member. The pre-existing crew-size and skill conflicts remain and are
+outside this focused scenario.
 
 Screenshots: `screenshots/before-driver-removed-from-crew.png`,
 `screenshots/after-driver-removed-revalidated.png`
@@ -820,14 +826,10 @@ section, since a manager will hit them in real use:
   MBr Fumigation.
 - **`VEHICLE_CAPACITY_EXCEEDED`** — "Bolero Truck LM-3067 seats 2 and the
   crew is 3." Observed live trying to assign LM-3067 (seats 2) to Hill
-  Country — Drying Floor (crew size 3). Capacity is checked per assigned
-  vehicle against the full onsite crew count; adding a second, smaller
-  vehicle to carry the overflow did **not** clear the error (tried: LM-3067
-  + Motor Bike BFT 9134 together for a 3-person crew — BFT 9134 alone was
-  then flagged "seats 1 and the crew is 3," i.e. each vehicle is validated
-  against the whole crew, not a portion of it) — worth a manager-guide
-  callout so managers don't assume they can split a crew across multiple
-  vehicles.
+  Country — Drying Floor (crew size 3). The current release also enforces
+  **`TOO_MANY_VEHICLES`** when more than one vehicle is proposed. A manager
+  must keep exactly one vehicle large enough for the full crew; the release
+  does not split a crew across multiple vehicles.
 
 Also worth noting for the guide: **"Save assignment" stays disabled until
 "Reason for this change" is filled in**, even once the Validation panel says
