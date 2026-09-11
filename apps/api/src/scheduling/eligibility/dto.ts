@@ -18,6 +18,12 @@ import {
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
 import { CONFLICT_CODES } from './conflict-codes';
+import {
+  CONFLICT_GROUPS,
+  ConflictGroup,
+  UNASSIGNED_OPERATION_STATES,
+  UnassignedOperationState,
+} from './conflict-groups';
 
 export class ProposedCrewMemberDto {
   @ApiProperty({ type: String, format: 'uuid' })
@@ -158,9 +164,15 @@ export class UnassignedVisitDto {
   @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ type: Number }) requiredCrewSize!: number;
   @ApiProperty({
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      "The server's own reading of this row: EXCEPTION when eligibility conflicts are recorded against the visit, UNASSIGNED when none are. The same meaning the operationState filter selects on, so a client is told the state rather than re-deriving it.",
+  })
+  operationState!: UnassignedOperationState;
+  @ApiProperty({
     type: Boolean,
     description:
-      'True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine.',
+      'True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. The boolean spelling of operationState === EXCEPTION.',
   })
   hasBeenChecked!: boolean;
   @ApiProperty({
@@ -181,6 +193,12 @@ export class PaginatedUnassignedVisitsDto {
   conflictFacets!: Record<string, number>;
 }
 
+/**
+ * The Unassigned queue's filters — and, because the global ValidationPipe runs
+ * with `whitelist` and `forbidNonWhitelisted`, the complete list of filters
+ * that exist. A parameter not named here is refused at the boundary by name,
+ * rather than being dropped and answered with a silently unfiltered page.
+ */
 export class UnassignedVisitQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number = 1;
@@ -190,9 +208,25 @@ export class UnassignedVisitQueryDto {
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() from?: string;
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() to?: string;
   @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() serviceAgreementId?: string;
-  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit.' }) @IsOptional() @Type(() => Boolean) @IsBoolean()
+  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit. The boolean spelling of operationState.' }) @IsOptional() @Type(() => Boolean) @IsBoolean()
   checked?: boolean;
-  @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
+  @ApiPropertyOptional({
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      'UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both.',
+  })
+  @IsOptional()
+  @IsEnum(UNASSIGNED_OPERATION_STATES)
+  operationState?: UnassignedOperationState;
+  @ApiPropertyOptional({
+    enum: CONFLICT_GROUPS,
+    description:
+      'Only visits carrying at least one conflict in this manager-facing group. Groups are the vocabulary the queue filter is offered in; each maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters.',
+  })
+  @IsOptional()
+  @IsEnum(CONFLICT_GROUPS)
+  conflictGroup?: ConflictGroup;
+  @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL is refused here and belongs in conflictGroup.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
   conflictCode?: string;
   @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Type(() => Boolean) @IsBoolean()
   withConflictsOnly?: boolean;

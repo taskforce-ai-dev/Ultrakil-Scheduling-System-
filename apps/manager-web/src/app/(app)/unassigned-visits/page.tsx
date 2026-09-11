@@ -19,12 +19,17 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { ConflictList } from "@/components/shared/conflict-list";
-import { ApiError, fetchUnassignedVisits, type UnassignedVisit } from "@/lib/api-client";
+import {
+  ApiError,
+  fetchUnassignedVisits,
+  type UnassignedOperationState,
+  type UnassignedVisit,
+  type UnassignedVisitsQuery,
+} from "@/lib/api-client";
 import { formatLongDate, todayIso } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
   CONFLICT_GROUP_LABEL,
-  conflictGroup,
   type ConflictGroup,
 } from "@/lib/conflict-groups";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
@@ -32,6 +37,13 @@ import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type GroupFilter = "ALL" | ConflictGroup;
+/**
+ * The server's two operation states, plus "no preference". Both names come
+ * from the API (`operationState` on every row and on the filter), so the page
+ * asks the same question the server answers rather than inventing a `status`
+ * of its own — which the API, validating with `forbidNonWhitelisted`, refused.
+ */
+type StateFilter = "ALL" | UnassignedOperationState;
 
 const KANDY_PMS_CODES = new Set(["NO_PMS_SUPERVISOR_AVAILABLE", "BRANCH_HAS_NO_PMS_SUPERVISOR"]);
 const PAGE_SIZE = 25;
@@ -51,8 +63,9 @@ const GROUP_LABELS: Record<GroupFilter, string> = {
 
 /**
  * Every visit that still needs a crew — not just ones the engine has already
- * refused. `hasBeenChecked` distinguishes the two: false means nobody has
- * proposed a crew yet, so an empty conflict list is silence, not a pass.
+ * refused. The server's `operationState` distinguishes the two: UNASSIGNED
+ * means nobody has proposed a crew yet, so an empty conflict list is silence,
+ * not a pass; EXCEPTION means a crew was judged and refused.
  * Every conflict a checked visit does have is shown in full (never
  * truncated), with a direct path from each one to the employee/vehicle/visit
  * record it's about — per ULK-O05.
@@ -70,7 +83,7 @@ export default function UnassignedVisitsPage() {
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [group, setGroup] = React.useState<GroupFilter>("ALL");
   const [date, setDate] = React.useState(todayIso());
-  const [status, setStatus] = React.useState<"ALL" | "UNASSIGNED" | "EXCEPTION">("ALL");
+  const [status, setStatus] = React.useState<StateFilter>("ALL");
   const [page, setPage] = React.useState(1);
   const [items, setItems] = React.useState<UnassignedVisit[]>([]);
   const [total, setTotal] = React.useState(0);
@@ -82,15 +95,19 @@ export default function UnassignedVisitsPage() {
   const load = React.useCallback(() => {
     setIsLoading(true);
     setError(null);
+    // Every filter goes to the server, which is the only place the list, the
+    // total and the paging can be made to agree. `satisfies` makes the API's
+    // own filter vocabulary a compile-time requirement, so a parameter it
+    // would refuse cannot be sent from here again.
     fetchUnassignedVisits({
       page,
       pageSize: PAGE_SIZE,
       from: date,
       to: date,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
-      ...(status === "ALL" ? {} : { status }),
-      ...(group === "ALL" ? {} : { conflictCode: group }),
-    })
+      ...(status === "ALL" ? {} : { operationState: status }),
+      ...(group === "ALL" ? {} : { conflictGroup: group }),
+    } satisfies UnassignedVisitsQuery)
       .then((page) => {
         setItems(page.items);
         setTotal(page.total);
@@ -115,13 +132,17 @@ export default function UnassignedVisitsPage() {
     // A visit asked for by name wins over every filter. Arriving from "Why?"
     // and being shown an empty list because the branch filter happened to
     // exclude it would answer the question with silence.
+    //
+    // This is the only narrowing the page does, and it is not a filter: it
+    // picks out one named row. The conflict-type and status filters are the
+    // server's, deliberately — re-filtering the page here left the list
+    // disagreeing with the total and the pager printed beside it.
     if (focusVisitId) {
       const asked = items.filter((visit) => visit.visitId === focusVisitId);
       if (asked.length > 0) return asked;
     }
-    if (group === "ALL") return items;
-    return items.filter((visit) => visit.conflicts.some((c) => conflictGroup(c.code) === group));
-  }, [items, group, focusVisitId]);
+    return items;
+  }, [items, focusVisitId]);
 
   const kandyPmsShortage = React.useMemo(
     () =>
@@ -291,12 +312,16 @@ export default function UnassignedVisitsPage() {
                   <div className="flex items-center gap-1.5">
                     <Badge variant="outline">{visit.branchCode}</Badge>
                     <Badge variant="outline">Needs {visit.requiredCrewSize} crew</Badge>
-                    {!visit.hasBeenChecked && <Badge variant="outline">Not yet checked</Badge>}
+                    {/* The server's own reading of the row, not a guess made
+                        from whichever conflicts happen to be in this page. */}
+                    {visit.operationState === "UNASSIGNED" && (
+                      <Badge variant="outline">Not yet checked</Badge>
+                    )}
                   </div>
                 </div>
 
                 <div className="mt-3">
-                  {visit.hasBeenChecked && visit.conflicts.length > 0 ? (
+                  {visit.operationState === "EXCEPTION" && visit.conflicts.length > 0 ? (
                     <ConflictList conflicts={visit.conflicts} />
                   ) : (
                     <p className="flex items-center gap-1.5 rounded-lg border border-dashed p-3 text-sm text-muted-foreground">

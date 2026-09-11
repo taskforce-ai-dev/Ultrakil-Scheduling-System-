@@ -940,7 +940,7 @@ export interface paths {
         };
         /**
          * Work that still needs a crew, and why it has none
-         * @description Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.
+         * @description Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed.
          */
         get: operations["AssignmentsController_queue"];
         put?: never;
@@ -1968,7 +1968,12 @@ export interface components {
             customerName: string;
             siteName: string;
             requiredCrewSize: number;
-            /** @description True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. */
+            /**
+             * @description The server's own reading of this row: EXCEPTION when eligibility conflicts are recorded against the visit, UNASSIGNED when none are. The same meaning the operationState filter selects on, so a client is told the state rather than re-deriving it.
+             * @enum {string}
+             */
+            operationState: "UNASSIGNED" | "EXCEPTION";
+            /** @description True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. The boolean spelling of operationState === EXCEPTION. */
             hasBeenChecked: boolean;
             /** @description Why it could not be staffed. Empty when nobody has proposed a crew. */
             conflicts: components["schemas"]["ConflictDto"][];
@@ -4382,8 +4387,12 @@ export interface operations {
                  * @description Deprecated alias for checked=true.
                  */
                 withConflictsOnly?: boolean;
-                /** @description Only visits with this recorded conflict code. Facets remain scoped to the other filters. */
+                /** @description Only visits with this recorded conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL belongs in conflictGroup. Facets remain scoped to the other filters. */
                 conflictCode?: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW";
+                /** @description Only visits carrying at least one conflict in this manager-facing group. Each group maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters. */
+                conflictGroup?: "MISSING_PMS" | "INSUFFICIENT_CREW" | "MISSING_SKILL" | "NO_AUTHORIZED_DRIVER" | "UNAVAILABLE_VEHICLE" | "BRANCH_RESTRICTION" | "PERMANENT_STAFF_RESTRICTION" | "SERVICE_WINDOW_CONFLICT" | "EMPLOYEE_OVERLAP" | "VEHICLE_OVERLAP" | "CREW_CANNOT_TRAVEL" | "OTHER";
+                /** @description UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both. */
+                operationState?: "UNASSIGNED" | "EXCEPTION";
                 /** @description true returns visits with recorded conflict checks; false returns unchecked visits. */
                 checked?: boolean;
                 /** @description Only unstaffed visits generated from this agreement. */
@@ -4407,6 +4416,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PaginatedUnassignedVisitsDto"];
                 };
+            };
+            /** @description VALIDATION_FAILED — an unknown filter, or a conflict-group label sent as conflictCode. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or invalid token. */
             401: {

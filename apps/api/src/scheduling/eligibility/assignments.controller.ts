@@ -20,6 +20,10 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { AssignmentsService } from './assignments.service';
 import { CONFLICT_CODES } from './conflict-codes';
 import {
+  CONFLICT_GROUPS,
+  UNASSIGNED_OPERATION_STATES,
+} from './conflict-groups';
+import {
   AssignCrewDto,
   AssignmentDto,
   EligibilityResultDto,
@@ -102,7 +106,12 @@ export class AssignmentsController {
   @ApiOperation({
     summary: 'Work that still needs a crew, and why it has none',
     description:
-      'Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.',
+      'Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'VALIDATION_FAILED — an unknown filter, or a conflict-group label sent as conflictCode.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
@@ -137,10 +146,24 @@ export class AssignmentsController {
     description: 'true returns visits with recorded conflict checks; false returns unchecked visits.',
   })
   @ApiQuery({
+    name: 'operationState',
+    required: false,
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      'UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both.',
+  })
+  @ApiQuery({
+    name: 'conflictGroup',
+    required: false,
+    enum: CONFLICT_GROUPS,
+    description:
+      'Only visits carrying at least one conflict in this manager-facing group. Each group maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters.',
+  })
+  @ApiQuery({
     name: 'conflictCode',
     required: false,
     enum: CONFLICT_CODES,
-    description: 'Only visits with this recorded conflict code. Facets remain scoped to the other filters.',
+    description: 'Only visits with this recorded conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL belongs in conflictGroup. Facets remain scoped to the other filters.',
   })
   @ApiQuery({
     name: 'withConflictsOnly',

@@ -13,6 +13,11 @@ import {
 } from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
 import {
+  CONFLICT_GROUP_CODES,
+  ConflictGroup,
+  NAMED_CONFLICT_GROUP_CODES,
+} from './conflict-groups';
+import {
   AssignCrewDto,
   AssignmentDto,
   ConflictDto,
@@ -305,10 +310,16 @@ export class AssignmentsService {
    * exact work the queue exists to surface. A visit belongs here when it has
    * no live assignment, whether or not anybody has tried yet.
    *
-   * `hasBeenChecked` keeps the two honest: false means nobody has proposed a
-   * crew, so the empty conflict list is silence rather than a clean bill of
-   * health. Pass `withConflictsOnly` to narrow to work already found to be
-   * impossible.
+   * `operationState` keeps the two honest and is the server's to decide:
+   * UNASSIGNED means no reasons are recorded, so the empty conflict list is
+   * silence rather than a clean bill of health; EXCEPTION means a crew was
+   * judged and refused. (`checked` and the deprecated `withConflictsOnly` are
+   * the boolean spellings of the same question.)
+   *
+   * `operationState` and `conflictGroup` are applied here, in the query,
+   * alongside branch and date. A client that instead re-filtered the page it
+   * was given would show a list that disagreed with the total and the paging
+   * beside it.
    */
   async unassignedQueue(query: UnassignedVisitQueryDto) {
     const page = query.page ?? 1;
@@ -316,15 +327,32 @@ export class AssignmentsService {
 
     const reasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
     const facetReasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
-    if (query.checked === true || query.withConflictsOnly) {
+    // The operation state, expressed against the stored reason rows that
+    // define it. The facets are narrowed by it too: "which conflicts are in
+    // this state?" is a question about the same set the list describes.
+    if (
+      query.checked === true ||
+      query.withConflictsOnly ||
+      query.operationState === 'EXCEPTION'
+    ) {
       const filter = { unassignedReasons: { some: {} } };
       reasonFilters.push(filter);
       facetReasonFilters.push(filter);
     }
-    if (query.checked === false) {
+    if (query.checked === false || query.operationState === 'UNASSIGNED') {
       const filter = { unassignedReasons: { none: {} } };
       reasonFilters.push(filter);
       facetReasonFilters.push(filter);
+    }
+    // Which conflicts a visit must carry. Deliberately kept out of the facet
+    // filters: the facets answer "what would the other conflict choices
+    // show?", which they cannot once they are narrowed to one of them.
+    if (query.conflictGroup) {
+      reasonFilters.push({
+        unassignedReasons: {
+          some: { code: groupCodeFilter(query.conflictGroup) },
+        },
+      });
     }
     if (query.conflictCode) {
       reasonFilters.push({ unassignedReasons: { some: { code: query.conflictCode } } });
@@ -392,6 +420,8 @@ export class AssignmentsService {
       customerName: visit.serviceAgreement.customer.name,
       siteName: visit.serviceAgreement.serviceSite.name,
       requiredCrewSize: visit.requiredCrewSize,
+      operationState:
+        visit.unassignedReasons.length > 0 ? 'EXCEPTION' : 'UNASSIGNED',
       hasBeenChecked: visit.unassignedReasons.length > 0,
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,
@@ -617,6 +647,21 @@ export class AssignmentsService {
       );
     }
   }
+}
+
+/**
+ * Which stored codes count as a conflict group.
+ *
+ * OTHER is the complement of the named groups rather than a list of its own
+ * five codes, which keeps the filter in step with how an unrecognised stored
+ * code is displayed: under Other. Asking for Other therefore finds it too.
+ * Every other group is an exact set derived from the catalogue, so a code
+ * added to the engine is filtered for the moment it is grouped.
+ */
+function groupCodeFilter(group: ConflictGroup): Prisma.StringFilter {
+  return group === 'OTHER'
+    ? { notIn: [...NAMED_CONFLICT_GROUP_CODES] }
+    : { in: [...CONFLICT_GROUP_CODES[group]] };
 }
 
 function toProposal(dto: AssignCrewDto): AssignmentProposal {

@@ -2,6 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// The queue reads ?visit=<id> to open on one visit. Kept switchable so the
+// "asked for by name" path can be exercised alongside the filter tests.
+const { searchParamsRef } = vi.hoisted(() => ({
+  searchParamsRef: { current: null as URLSearchParams | null },
+}));
+
+vi.mock("next/navigation", async () => {
+  const actual = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+  return { ...actual, useSearchParams: () => searchParamsRef.current };
+});
+
 vi.mock("@/lib/api-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
   return {
@@ -88,6 +99,7 @@ function mockUnassigned(items: UnassignedVisit[], total = items.length) {
 }
 
 beforeEach(() => {
+  searchParamsRef.current = null;
   mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall]);
 });
 
@@ -155,14 +167,64 @@ describe("unassigned visits queue", () => {
     });
   });
 
-  it("filters by conflict type on the client", async () => {
+  it("asks the server for a conflict group instead of filtering in the browser", async () => {
+    // The group goes to the server as `conflictGroup` — the filter it
+    // validates — and never as `conflictCode`, which is the engine's own
+    // vocabulary and rejects a group label outright.
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Conflict type"));
     await user.click(await screen.findByRole("option", { name: "Missing skill" }));
 
-    expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
-    expect(screen.queryByText("Grandview Hotel")).not.toBeInTheDocument();
+    const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(lastCall).toMatchObject({ conflictGroup: "MISSING_SKILL", page: 1 });
+    expect(lastCall).not.toHaveProperty("conflictCode");
+    expect(lastCall).not.toHaveProperty("status");
+  });
+
+  it("shows what the server returned for a conflict group, unfiltered", async () => {
+    // Whatever the server sends back is what the list shows: re-filtering it
+    // here would leave the rows disagreeing with the total beside them.
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Conflict type"));
+    await user.click(await screen.findByRole("option", { name: "Missing skill" }));
+
+    expect(await screen.findByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    expect(screen.getByText("Grandview Hotel")).toBeInTheDocument();
+  });
+
+  it("asks the server for an operation state rather than sending a status", async () => {
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Exceptions" }));
+
+    const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(lastCall).toMatchObject({ operationState: "EXCEPTION", page: 1 });
+    expect(lastCall).not.toHaveProperty("status");
+  });
+
+  it("asks the server for unchecked work by its operation state", async () => {
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      operationState: "UNASSIGNED",
+    });
+  });
+
+  it("still shows only the visit asked for by name", async () => {
+    // focusVisitId is not a filter — it picks out one named row — and it has
+    // to keep winning now that the filters themselves are the server's.
+    searchParamsRef.current = new URLSearchParams("visit=visit-kandy");
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.getByText(/Showing the one visit you asked about/)).toBeInTheDocument();
+    expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
   });
 
   it("shows an empty state when nothing is unassigned", async () => {
@@ -198,6 +260,7 @@ describe("unassigned visits queue", () => {
     const untried = buildUnassignedVisit({
       visitId: "visit-untried",
       customerName: "Arpico DC",
+      operationState: "UNASSIGNED",
       hasBeenChecked: false,
       conflicts: [],
     });

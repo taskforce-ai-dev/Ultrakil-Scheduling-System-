@@ -569,21 +569,25 @@ export interface PublishScheduleRequest {
   acknowledgePartial?: boolean;
 }
 /**
- * Hand-typed: the published contract has no `path`/`query` types for
- * `/api/unassigned-visits` (same gap as elsewhere — see the note above
- * `CreateCustomerRequest`), but the controller
- * (`apps/api/src/scheduling/eligibility/assignments.controller.ts`) does
- * accept these.
+ * Straight from the published contract, no longer hand-typed.
+ *
+ * The queue's filters are a validated DTO on the server
+ * (`UnassignedVisitQueryDto`, `apps/api/src/scheduling/eligibility/dto.ts`)
+ * documented with `@ApiQuery`, so the contract now carries them. Deriving the
+ * type from it means a filter the API does not define — a `status`, or a
+ * conflict *group* label passed as `conflictCode` — fails to compile here
+ * instead of being refused at runtime by the API's `forbidNonWhitelisted`
+ * validation, which is how the queue's filters came to send 400s.
  */
-export interface UnassignedVisitsQuery {
-  page?: number;
-  pageSize?: number;
-  branchCode?: "COLOMBO" | "KANDY";
-  from?: string;
-  to?: string;
-  status?: "UNASSIGNED" | "EXCEPTION";
-  conflictCode?: string;
-}
+export type UnassignedVisitsQuery = NonNullable<
+  paths["/api/unassigned-visits"]["get"]["parameters"]["query"]
+>;
+
+/** The queue's own reading of a row — and of the operation-state filter. */
+export type UnassignedOperationState = UnassignedVisit["operationState"];
+
+/** The manager-facing conflict groupings the queue can be filtered by. */
+export type ConflictGroupCode = NonNullable<UnassignedVisitsQuery["conflictGroup"]>;
 
 export type CustomerQuery = NonNullable<paths["/api/customers"]["get"]["parameters"]["query"]>;
 export type ServiceAgreementQuery = NonNullable<

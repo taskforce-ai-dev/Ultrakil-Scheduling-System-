@@ -315,6 +315,7 @@ export function buildUnassignedVisit(overrides: Partial<UnassignedVisit> = {}): 
     customerName: "Grandview Hotel",
     siteName: "Main Kitchen",
     requiredCrewSize: 2,
+    operationState: "EXCEPTION",
     hasBeenChecked: true,
     conflicts: [buildConflict()],
     recordedAt: "2026-08-31T00:00:00.000Z",

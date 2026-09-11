@@ -1,29 +1,25 @@
-import type { ConflictCode } from "@/lib/api-client";
+import type { ConflictCode, ConflictGroupCode } from "@/lib/api-client";
 
 /**
  * Every conflict code sorted into the groups ULK-O05 asks for, so the
  * Unassigned queue's "conflict type" filter has something to filter by.
- * This is a display grouping only — the engine (`apps/api/src/scheduling/
- * eligibility/conflict-codes.ts`) has no concept of it, and every individual
- * conflict is still shown in full regardless of which group it falls under.
+ *
+ * The groups themselves are no longer a private invention of this file: the
+ * server defines them (`apps/api/src/scheduling/eligibility/conflict-groups.ts`),
+ * validates the queue's `conflictGroup` filter against them, and publishes them
+ * in the contract — which is where the type below comes from. The queue used to
+ * send one of these labels as `conflictCode`, an engine code the server has
+ * never heard of, and every such request was rejected outright.
+ *
+ * What stays here is the mapping used to *label* a conflict a row already
+ * carries. Filtering is the server's job; this is display only, and every
+ * individual conflict is still shown in full whatever group it falls under.
  *
  * Five codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
  * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW) don't fit any of the eleven named groups, so they fall
  * under "Other" rather than being force-fit somewhere misleading.
  */
-export type ConflictGroup =
-  | "MISSING_PMS"
-  | "INSUFFICIENT_CREW"
-  | "MISSING_SKILL"
-  | "NO_AUTHORIZED_DRIVER"
-  | "UNAVAILABLE_VEHICLE"
-  | "BRANCH_RESTRICTION"
-  | "PERMANENT_STAFF_RESTRICTION"
-  | "SERVICE_WINDOW_CONFLICT"
-  | "EMPLOYEE_OVERLAP"
-  | "VEHICLE_OVERLAP"
-  | "CREW_CANNOT_TRAVEL"
-  | "OTHER";
+export type ConflictGroup = ConflictGroupCode;
 
 export const CONFLICT_GROUP_LABEL: Record<ConflictGroup, string> = {
   MISSING_PMS: "Missing PMS supervisor",
