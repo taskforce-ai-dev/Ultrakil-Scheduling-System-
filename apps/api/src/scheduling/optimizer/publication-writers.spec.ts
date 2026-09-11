@@ -2,9 +2,12 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  DataProvenance,
   LockScope,
   Prisma,
   ScheduleRunStatus,
+  SiteBranchConfidence,
+  SiteBranchSource,
   VisitStatus,
 } from '@prisma/client';
 
@@ -35,13 +38,22 @@ function fixture() {
     windowEndMinute: 1020,
     durationMinutes: 90,
     requiredCrewSize: 1,
+    windowProvenance: DataProvenance.SOURCE,
     createdAt: new Date(),
     updatedAt: new Date(),
     isManuallyAdjusted: false,
     lockedAt: null,
     serviceAgreement: {
       customer: { name: 'Customer' },
-      serviceSite: { name: 'Site', _count: { operatingHours: 1 } },
+      serviceSite: {
+        name: 'Site',
+        branchConfidence: SiteBranchConfidence.CONFIRMED,
+        branchSource: SiteBranchSource.MANAGER_CONFIRMED,
+        _count: { operatingHours: 1 },
+      },
+      crewSizeProvenance: DataProvenance.SOURCE,
+      durationProvenance: DataProvenance.SOURCE,
+      dayRuleProvenance: DataProvenance.SOURCE,
       jobType: { name: 'Job' },
     },
     _count: { assignments: 1 },
@@ -67,7 +79,7 @@ function fixture() {
     ],
     vehicles: [] as {
       vehicleId: string;
-      vehicle: { label: string };
+      vehicle: { label: string; branchId: string | null };
       driverEmployeeId: string | null;
     }[],
     locks: [],
@@ -512,6 +524,47 @@ describe('standard writers preserve publication', () => {
     ).toBeLessThan(f.eligibility.evaluate.mock.invocationCallOrder[0]);
   });
 
+  it('requires a provenance acknowledgement and reason from the locked assignment snapshot', async () => {
+    const f = fixture();
+    f.beforeTransaction(async () => {
+      f.visit.windowProvenance = DataProvenance.UNKNOWN;
+    });
+
+    const failure = await f.publishing
+      .publish('original-run', 'Manager reviewed it.', actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+    expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('publishes unconfirmed source data only after an acknowledgement and reason', async () => {
+    const f = fixture();
+    f.visit.windowProvenance = DataProvenance.UNKNOWN;
+
+    await f.publishing.publish(
+      'original-run',
+      'Manager reviewed the restored source data.',
+      actor,
+      false,
+      true,
+    );
+
+    expect(f.original.status).toBe(AssignmentStatus.PUBLISHED);
+    expect(f.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: expect.objectContaining({
+          provenanceWarnings: [expect.objectContaining({ code: 'HOURS_UNCONFIRMED' })],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   const publicationHistoryCases = [
     ...[
       AssignmentStatus.PUBLISHED,
@@ -616,12 +669,12 @@ describe('standard writers preserve publication', () => {
     f.original.vehicles.push(
       {
         vehicleId: 'vehicle-one',
-        vehicle: { label: 'Vehicle one' },
+        vehicle: { label: 'Vehicle one', branchId: 'branch' },
         driverEmployeeId: 'employee',
       },
       {
         vehicleId: 'vehicle-two',
-        vehicle: { label: 'Vehicle two' },
+        vehicle: { label: 'Vehicle two', branchId: 'branch' },
         driverEmployeeId: 'employee',
       },
     );

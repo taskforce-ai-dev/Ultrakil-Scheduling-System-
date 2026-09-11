@@ -19,4 +19,14 @@ describe('PublishScheduleDto', () => {
 
     expect(await validate(dto, { whitelist: true })).not.toEqual([]);
   });
+
+  it('retains and validates the provenance acknowledgement under whitelist validation', async () => {
+    const dto = plainToInstance(PublishScheduleDto, {
+      reason: 'Manager reviewed the restored agreement data.',
+      acknowledgeProvenance: true,
+    });
+
+    expect(await validate(dto, { whitelist: true })).toEqual([]);
+    expect(dto.acknowledgeProvenance).toBe(true);
+  });
 });

@@ -198,6 +198,7 @@ export default function ScheduleHistoryPage() {
   const [publishTarget, setPublishTarget] = React.useState<ScheduleRun | null>(null);
   const [publishReason, setPublishReason] = React.useState("");
   const [partialAcknowledged, setPartialAcknowledged] = React.useState(false);
+  const [provenanceAcknowledged, setProvenanceAcknowledged] = React.useState(false);
   const [isPublishing, setIsPublishing] = React.useState(false);
   const isPublishingRef = React.useRef(false);
 
@@ -281,16 +282,20 @@ export default function ScheduleHistoryPage() {
     setPublishTarget(run);
     setPublishReason("");
     setPartialAcknowledged(false);
+    setProvenanceAcknowledged(false);
   }
 
   async function confirmPublish() {
     if (!publishTarget) return;
     if (publishTarget.visitsUnassigned > 0 && !partialAcknowledged) return;
+    if (publishTarget.publishReadiness.requiresProvenanceAcknowledgement && !provenanceAcknowledged) return;
+    if (publishTarget.publishReadiness.requiresProvenanceAcknowledgement && !publishReason.trim()) return;
     if (isPublishingRef.current) return; // Collapses a double-click into one request.
     isPublishingRef.current = true;
     setIsPublishing(true);
     try {
       await publishScheduleRun(publishTarget.id, {
+        ...(provenanceAcknowledged ? { acknowledgeProvenance: true } : {}),
         ...(publishReason.trim() ? { reason: publishReason.trim() } : {}),
       });
       notify.success("Schedule published.");
@@ -558,8 +563,34 @@ export default function ScheduleHistoryPage() {
             </div>
           )}
 
+          {publishTarget?.publishReadiness.requiresProvenanceAcknowledgement && (
+            <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+              <div className="flex items-start gap-2 text-amber-950 dark:text-amber-100">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="font-medium">Unconfirmed source data affects this schedule.</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {publishTarget.publishReadiness.provenanceWarnings.map((warning) => (
+                      <li key={warning.code}>{warning.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <label htmlFor="provenance-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
+                <Checkbox
+                  id="provenance-publish-ack"
+                  checked={provenanceAcknowledged}
+                  onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
+                />
+                <span>I understand that unconfirmed source data will be published.</span>
+              </label>
+            </div>
+          )}
+
           <div className="space-y-1.5">
-            <Label htmlFor="publish-reason">Reason (optional)</Label>
+            <Label htmlFor="publish-reason">
+              Reason{publishTarget?.publishReadiness.requiresProvenanceAcknowledgement ? " (required)" : " (optional)"}
+            </Label>
             <Textarea
               id="publish-reason"
               value={publishReason}
@@ -576,7 +607,9 @@ export default function ScheduleHistoryPage() {
               onClick={confirmPublish}
               disabled={
                 isPublishing ||
-                ((publishTarget?.visitsUnassigned ?? 0) > 0 && !partialAcknowledged)
+                ((publishTarget?.visitsUnassigned ?? 0) > 0 && !partialAcknowledged) ||
+                (publishTarget?.publishReadiness.requiresProvenanceAcknowledgement === true &&
+                  (!provenanceAcknowledged || !publishReason.trim()))
               }
             >
               {isPublishing ? "Publishing…" : "Publish"}

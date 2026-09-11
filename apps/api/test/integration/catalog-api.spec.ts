@@ -210,6 +210,12 @@ describe('customers and sites', () => {
     const site = await createSite(customer.id);
 
     expect(site.branchCode).toBe(BranchCode.KANDY);
+    expect(
+      await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } }),
+    ).toMatchObject({
+      branchConfidence: 'CONFIRMED',
+      branchSource: 'MANAGER_CONFIRMED',
+    });
   });
 
   // A customer can span both branches. Union Bank has thirty-five branches
@@ -298,6 +304,13 @@ describe('opening hours', () => {
 
     expect(monday).toMatchObject({ opensAtMinute: 360, closesAtMinute: 480 });
     expect(saturday).toMatchObject({ opensAtMinute: 420, closesAtMinute: 660 });
+    expect(
+      await prisma.siteOperatingHours.findMany({ where: { serviceSiteId: site.id } }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provenance: 'MANAGER_CONFIRMED' }),
+      ]),
+    );
   });
 
   it('stores several windows on one weekday — a site that shuts for lunch', async () => {

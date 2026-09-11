@@ -393,6 +393,7 @@ describe('hand-editing a visit', () => {
     );
     const after = await prisma.generatedVisit.findUniqueOrThrow({ where: { id: visit.id } });
     expect(after.windowStartMinute).toBe(600);
+    expect(after.windowProvenance).toBe('MANAGER_CONFIRMED');
   });
 
   it('records who changed it and why', async () => {

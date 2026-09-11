@@ -8,16 +8,38 @@
  * but what it writes: duplicating customers on a re-run, or creating an
  * agreement from a row nobody could interpret.
  */
-import { AgreementStatus, FrequencyUnit, PrismaClient, Weekday } from '@prisma/client';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import {
+  AgreementStatus,
+  FrequencyUnit,
+  PrismaClient,
+  UserRole,
+  Weekday,
+} from '@prisma/client';
+import request from 'supertest';
 
+import { AppModule } from '../../src/app.module';
+import { AuthService } from '../../src/auth/auth.service';
 import { importSchedule } from '../../src/catalog/schedule-import/importer';
 import { ParsedSchedule } from '../../src/catalog/schedule-import/types';
+import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 
 const prisma = new PrismaClient();
 
 /** Unique per run: this database keeps its rows between runs. */
 const suffix = Math.random().toString(36).slice(2, 8);
 const CUSTOMER = `Import Test Co ${suffix}`;
+const ADMIN = {
+  email: `schedule-import-admin-${suffix}@ultrakil.test`,
+  password: 'schedule-import-admin-password',
+};
+
+let app: INestApplication;
+let http: string;
+let adminToken: string;
+
+const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule {
   return {
@@ -64,6 +86,22 @@ function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule 
 }
 
 beforeAll(async () => {
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  app = moduleRef.createNestApplication();
+  app.setGlobalPrefix('api');
+  app.useGlobalFilters(new AllExceptionsFilter());
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: true },
+    }),
+  );
+  await app.init();
+  await app.listen(0);
+  http = await app.getUrl().then((url) => url.replace('[::1]', '127.0.0.1'));
+
   await prisma.$connect();
   await Promise.all(['COLOMBO', 'KANDY'].map((code) =>
     prisma.branch.upsert({
@@ -72,10 +110,31 @@ beforeAll(async () => {
       update: {},
     }),
   ));
+  await prisma.user.upsert({
+    where: { email: ADMIN.email },
+    create: {
+      email: ADMIN.email,
+      fullName: 'Schedule Import Admin',
+      role: UserRole.ADMIN,
+      passwordHash: await AuthService.hashPassword(ADMIN.password),
+    },
+    update: {
+      role: UserRole.ADMIN,
+      isActive: true,
+      passwordHash: await AuthService.hashPassword(ADMIN.password),
+    },
+  });
+  const login = await request(http)
+    .post('/api/auth/login')
+    .send({ email: ADMIN.email, password: ADMIN.password });
+  expect(login.status).toBe(200);
+  adminToken = login.body.accessToken as string;
 });
 
 afterAll(async () => {
+  await prisma.user.deleteMany({ where: { email: ADMIN.email } });
   await prisma.$disconnect();
+  await app.close();
 });
 
 describe('master schedule import', () => {
@@ -241,7 +300,6 @@ describe('master schedule import', () => {
   it('does not overwrite a manager-confirmed branch or agreement values on re-import', async () => {
     await importSchedule(prisma, buildSchedule());
 
-    const kandy = await prisma.branch.findUniqueOrThrow({ where: { code: 'KANDY' } });
     const customer = await prisma.customer.findFirstOrThrow({
       where: { name: CUSTOMER },
       include: { serviceSites: true, serviceAgreements: true },
@@ -249,25 +307,20 @@ describe('master schedule import', () => {
     const site = customer.serviceSites[0];
     const agreement = customer.serviceAgreements[0];
 
-    await prisma.serviceSite.update({
-      where: { id: site.id },
-      data: {
-        branchId: kandy.id,
-        branchCode: 'KANDY',
-        branchConfidence: 'CONFIRMED',
-        branchSource: 'MANAGER_CONFIRMED',
-      },
-    });
-    await prisma.serviceAgreement.update({
-      where: { id: agreement.id },
-      data: {
+    const siteEdit = await request(http)
+      .patch(`/api/service-sites/${site.id}`)
+      .set(auth(adminToken))
+      .send({ branchCode: 'KANDY' });
+    expect(siteEdit.status).toBe(200);
+    const agreementEdit = await request(http)
+      .patch(`/api/service-agreements/${agreement.id}`)
+      .set(auth(adminToken))
+      .send({
         crewSize: 7,
         durationMinutes: 135,
-        crewSizeProvenance: 'MANAGER_CONFIRMED',
-        durationProvenance: 'MANAGER_CONFIRMED',
-        dayRuleProvenance: 'MANAGER_CONFIRMED',
-      },
-    });
+        allowedDays: [Weekday.MONDAY, Weekday.THURSDAY],
+      });
+    expect(agreementEdit.status).toBe(200);
 
     await importSchedule(prisma, buildSchedule());
 
@@ -352,23 +405,34 @@ describe('records the workbook marks red', () => {
     expect(customer.serviceSites.every((site) => !site.isActive)).toBe(true);
   });
 
-  it('reactivates once a person has cleared the import marking', async () => {
+  it('reactivates through manager APIs while preserving the imported inactive history', async () => {
     await importSchedule(prisma, unservicedSchedule());
 
-    // What a manager turning the client back on does: the decision is theirs,
-    // and clearing the marking is what records that they made it.
-    await prisma.customer.updateMany({
+    const imported = await prisma.customer.findFirstOrThrow({
       where: { name: CUSTOMER },
-      data: { isActive: true, importedInactiveAt: null },
+      include: { serviceSites: { include: { serviceAgreements: true } } },
     });
-    await prisma.serviceSite.updateMany({
-      where: { customer: { name: CUSTOMER } },
-      data: { isActive: true, importedInactiveAt: null },
-    });
-    await prisma.serviceAgreement.updateMany({
-      where: { customer: { name: CUSTOMER } },
-      data: { importedInactiveAt: null },
-    });
+    const site = imported.serviceSites[0];
+    const agreement = site.serviceAgreements[0];
+    const customerInactiveAt = imported.importedInactiveAt;
+    const siteInactiveAt = site.importedInactiveAt;
+    const agreementInactiveAt = agreement.importedInactiveAt;
+
+    expect(
+      await request(http)
+        .post(`/api/customers/${imported.id}/reactivate`)
+        .set(auth(adminToken)),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await request(http)
+        .post(`/api/service-sites/${site.id}/reactivate`)
+        .set(auth(adminToken)),
+    ).toMatchObject({ status: 200 });
+    expect(
+      await request(http)
+        .post(`/api/service-agreements/${agreement.id}/reactivate`)
+        .set(auth(adminToken)),
+    ).toMatchObject({ status: 200 });
 
     await importSchedule(prisma, buildSchedule());
 
@@ -377,6 +441,11 @@ describe('records the workbook marks red', () => {
       include: { serviceSites: { include: { serviceAgreements: true } } },
     });
     expect(customer.isActive).toBe(true);
+    expect(customer.importedInactiveAt).toEqual(customerInactiveAt);
+    expect(customer.serviceSites[0].importedInactiveAt).toEqual(siteInactiveAt);
+    expect(customer.serviceSites[0].serviceAgreements[0].importedInactiveAt).toEqual(
+      agreementInactiveAt,
+    );
     expect(
       customer.serviceSites
         .flatMap((site) => site.serviceAgreements)

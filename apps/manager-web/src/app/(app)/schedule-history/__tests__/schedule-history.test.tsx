@@ -188,6 +188,46 @@ describe("ScheduleHistoryPage", () => {
     expect(screen.queryByText(/could not be staffed/)).not.toBeInTheDocument();
   });
 
+  it("requires an acknowledgement and reason before publishing unconfirmed source data", async () => {
+    const run = buildScheduleRun({
+      id: "run-provenance",
+      visitsUnassigned: 0,
+      publishReadiness: {
+        state: "ACKNOWLEDGEMENT_REQUIRED",
+        code: "SOURCE_DATA_UNCONFIRMED",
+        message: "Source data needs manager confirmation.",
+        requiresProvenanceAcknowledgement: true,
+        provenanceWarnings: [
+          {
+            code: "HOURS_UNCONFIRMED",
+            message: "Opening hours were not confirmed.",
+            affectedVisitCount: 1,
+          },
+        ],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+
+    expect(await screen.findByText(/Opening hours were not confirmed/)).toBeInTheDocument();
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    expect(publishButton).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /I understand that unconfirmed source data/i }));
+    expect(publishButton).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/Reason/), "Reviewed the source data.");
+    vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
+    await user.click(publishButton);
+
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-provenance", {
+      acknowledgeProvenance: true,
+      reason: "Reviewed the source data.",
+    });
+  });
+
   it("blocks publication of a zero-result run and says why", async () => {
     const empty = buildScheduleRun({
       id: "run-empty",

@@ -69,15 +69,35 @@ export class PublishScheduleDto {
   @IsOptional()
   @IsBoolean()
   acknowledgePartial?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Required with a non-empty reason when source-data provenance warnings affect the assignments being published.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acknowledgeProvenance?: boolean;
+}
+
+export class MaterialProvenanceWarningDto {
+  @ApiProperty({ enum: ['CREW_SIZE_UNCONFIRMED', 'DAY_RULE_UNCONFIRMED', 'DURATION_UNCONFIRMED', 'HOURS_UNCONFIRMED', 'SITE_BRANCH_UNCONFIRMED', 'VEHICLE_BRANCH_UNCONFIRMED'] })
+  code!: PublishReadiness['provenanceWarnings'][number]['code'];
+  @ApiProperty({ type: String }) message!: string;
+  @ApiProperty({ type: Number, minimum: 1 }) affectedVisitCount!: number;
 }
 
 export class PublishReadinessDto implements PublishReadiness {
   @ApiProperty({ enum: ['READY', 'BLOCKED', 'ACKNOWLEDGEMENT_REQUIRED'] })
   state!: PublishReadiness['state'];
-  @ApiProperty({ nullable: true, enum: ['ZERO_RESULTS', 'PARTIAL_RESULTS'] })
+  @ApiProperty({ nullable: true, enum: ['ZERO_RESULTS', 'PARTIAL_RESULTS', 'SOURCE_DATA_UNCONFIRMED'] })
   code!: PublishReadiness['code'];
   @ApiProperty({ nullable: true, type: String })
   message!: string | null;
+  @ApiProperty({ type: Boolean })
+  requiresPartialAcknowledgement!: boolean;
+  @ApiProperty({ type: Boolean })
+  requiresProvenanceAcknowledgement!: boolean;
+  @ApiProperty({ type: [MaterialProvenanceWarningDto] })
+  provenanceWarnings!: MaterialProvenanceWarningDto[];
 }
 
 export class ScheduleRunQueryDto {

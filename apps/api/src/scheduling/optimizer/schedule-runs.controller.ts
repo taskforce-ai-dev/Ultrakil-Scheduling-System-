@@ -16,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { LockScope, ScheduleRun, UserRole } from '@prisma/client';
+import { AssignmentStatus, LockScope, Prisma, ScheduleRun, UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
@@ -38,9 +38,38 @@ import {
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
-import { publishReadiness } from './publish-readiness';
+import {
+  materialProvenanceWarnings,
+  MaterialProvenanceWarning,
+  publishReadiness,
+} from './publish-readiness';
 
-function toDto(run: ScheduleRun): ScheduleRunDto {
+const SCHEDULE_RUN_READINESS_INCLUDE = {
+  assignments: {
+    where: { status: { in: [AssignmentStatus.DRAFT, AssignmentStatus.PUBLISHED] } },
+    include: {
+      vehicles: { include: { vehicle: { select: { branchId: true } } } },
+      generatedVisit: {
+        include: {
+          serviceAgreement: {
+            include: {
+              serviceSite: { select: { branchConfidence: true, branchSource: true } },
+            },
+          },
+        },
+      },
+    },
+  },
+} satisfies Prisma.ScheduleRunInclude;
+
+type ScheduleRunWithReadiness = Prisma.ScheduleRunGetPayload<{
+  include: typeof SCHEDULE_RUN_READINESS_INCLUDE;
+}>;
+
+function toDto(
+  run: ScheduleRun,
+  provenanceWarnings: MaterialProvenanceWarning[] = [],
+): ScheduleRunDto {
   return {
     id: run.id,
     status: run.status,
@@ -51,7 +80,7 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
     visitsConsidered: run.visitsConsidered,
     visitsScheduled: run.visitsScheduled,
     visitsUnassigned: run.visitsUnassigned,
-    publishReadiness: publishReadiness(run),
+    publishReadiness: publishReadiness(run, provenanceWarnings),
     isPublished: run.publishedAt !== null,
     publishedAt: run.publishedAt?.toISOString() ?? null,
     supersededByRunId: run.supersededByRunId,
@@ -62,6 +91,10 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
     finishedAt: run.finishedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
   };
+}
+
+function toReadinessDto(run: ScheduleRunWithReadiness): ScheduleRunDto {
+  return toDto(run, materialProvenanceWarnings(run.assignments));
 }
 
 /** Scheduler/provider diagnostics belong in logs, never in a manager response. */
@@ -129,10 +162,11 @@ export class ScheduleRunsController {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
+        include: SCHEDULE_RUN_READINESS_INCLUDE,
       }),
     ]);
 
-    return { items: rows.map(toDto), total, page, pageSize };
+    return { items: rows.map(toReadinessDto), total, page, pageSize };
   }
 
   @Get('schedule-runs/:id')
@@ -147,8 +181,9 @@ export class ScheduleRunsController {
     await this.reconcileSelfHosted();
     const run = await this.prisma.scheduleRun.findUniqueOrThrow({
       where: { id },
+      include: SCHEDULE_RUN_READINESS_INCLUDE,
     });
-    return toDto(run);
+    return toReadinessDto(run);
   }
 
   private async reconcileSelfHosted(): Promise<void> {
@@ -218,13 +253,14 @@ export class ScheduleRunsController {
     @Body() dto: PublishScheduleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
-    const { run } = await this.publishing.publish(
+    const { run, provenanceWarnings } = await this.publishing.publish(
       id,
       dto.reason ?? null,
       actor,
       dto.acknowledgePartial === true,
+      dto.acknowledgeProvenance === true,
     );
-    return toDto(run);
+    return toDto(run, provenanceWarnings);
   }
 
   @Post('assignments/:id/lock')

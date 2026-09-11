@@ -11,17 +11,22 @@ import {
   lockScheduleResources,
   lockScheduleVisits,
 } from './schedule-visit-lock';
-import { publishReadiness } from './publish-readiness';
+import { materialProvenanceWarnings, publishReadiness } from './publish-readiness';
 
 const PUBLISH_ASSIGNMENT_INCLUDE = {
   crewMembers: { include: { employee: { select: { fullName: true } } } },
-  vehicles: { include: { vehicle: { select: { label: true } } } },
+  vehicles: { include: { vehicle: { select: { label: true, branchId: true } } } },
   generatedVisit: {
     include: {
       serviceAgreement: {
         include: {
           customer: { select: { name: true } },
-          serviceSite: { select: { name: true } },
+          serviceSite: {
+            select: { name: true, branchConfidence: true, branchSource: true },
+          },
+          crewSizeProvenance: true,
+          durationProvenance: true,
+          dayRuleProvenance: true,
         },
       },
     },
@@ -55,6 +60,7 @@ export class PublishingService {
     reason: string | null,
     actor: AuthenticatedUser,
     acknowledgePartial = false,
+    acknowledgeProvenance = false,
   ) {
     const run = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
@@ -136,6 +142,23 @@ export class PublishingService {
           'One or more assignments changed while the schedule was being published. Refresh and try again.',
           HttpStatus.CONFLICT,
           { runId },
+        );
+      }
+
+      // The pre-lock run snapshot is only advisory. The actual source-data
+      // gate is calculated from the assignments reloaded after visit locks,
+      // so a concurrent correction cannot publish a different warning set.
+      const provenanceWarnings = materialProvenanceWarnings(publishable);
+      const lockedReadiness = publishReadiness(run, provenanceWarnings);
+      if (
+        lockedReadiness.requiresProvenanceAcknowledgement
+        && (!acknowledgeProvenance || !reason?.trim())
+      ) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          lockedReadiness.message!,
+          HttpStatus.CONFLICT,
+          { runId, publishReadiness: lockedReadiness },
         );
       }
 
@@ -329,6 +352,7 @@ export class PublishingService {
             reason,
             assignmentCount: snapshot.length,
             supersededAssignments: previouslyPublished.length,
+            provenanceWarnings,
             snapshot,
           } as unknown as Prisma.InputJsonValue,
         },
@@ -338,6 +362,7 @@ export class PublishingService {
       return {
         run: await tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } }),
         publishedCount: publishable.length,
+        provenanceWarnings,
       };
     }, { timeout: 30_000 });
 
