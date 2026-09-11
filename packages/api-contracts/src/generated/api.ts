@@ -500,7 +500,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reactivate a customer */
+        /**
+         * Reactivate a customer
+         * @description A manager's own decision, and the only thing that clears an import's "no longer serviced" marking. The marking's previous value is kept in the audit trail, so the workbook once reading this customer as gone stays on record.
+         */
         post: operations["CustomersController_reactivate"];
         delete?: never;
         options?: never;
@@ -576,7 +579,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Reactivate a site */
+        /**
+         * Reactivate a site
+         * @description A manager's own decision, and the only thing that clears an import's "no longer serviced" marking.
+         */
         post: operations["ServiceSitesController_reactivate"];
         delete?: never;
         options?: never;
@@ -643,6 +649,26 @@ export interface paths {
          * @description PAUSED stops visit generation but expects it back. ARCHIVED is final — past visits are explained by it, so it can never be revived or edited.
          */
         post: operations["AgreementsController_changeStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/service-agreements/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reactivate an agreement an import archived
+         * @description A dedicated administrator action, not a way round the rule that archiving is final. It applies only to an agreement an import archived from a red cell: clearing that marking is what stops the next import archiving it again, and the marking's previous value is kept in the audit trail. An agreement archived by hand stays archived.
+         */
+        post: operations["AgreementsController_reactivateImported"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3784,6 +3810,39 @@ export interface operations {
                 content?: never;
             };
             /** @description AGREEMENT_ARCHIVED. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AgreementsController_reactivateImported: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAgreementDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description AGREEMENT_NOT_IMPORTER_ARCHIVED — no import archived this agreement. */
             409: {
                 headers: {
                     [name: string]: unknown;

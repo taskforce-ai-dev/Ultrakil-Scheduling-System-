@@ -1,5 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { AssignmentStatus, Prisma, VisitStatus } from '@prisma/client';
+import {
+  AssignmentStatus,
+  DataProvenance,
+  Prisma,
+  VisitStatus,
+} from '@prisma/client';
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -296,6 +301,15 @@ export class VisitsService {
           durationMinutes: duration,
           ...(dto.requiredCrewSize !== undefined
             ? { requiredCrewSize: dto.requiredCrewSize }
+            : {}),
+          // A window a manager set by hand is a fact, not the disclosed
+          // 08:00-17:00 assumption the generator falls back to when a site has
+          // no recorded hours. Recording that here is what stops the operations
+          // read model going on warning about unconfirmed hours for a window
+          // somebody has already corrected. Only an edit that actually carried
+          // a window says anything about it — changing the crew size does not.
+          ...(dto.windowStartMinute !== undefined || dto.windowEndMinute !== undefined
+            ? { windowProvenance: DataProvenance.MANAGER_CONFIRMED }
             : {}),
           isManuallyAdjusted: true,
           manuallyAdjustedAt: new Date(),

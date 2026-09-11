@@ -1180,6 +1180,7 @@
     },
     "/api/customers/{id}/reactivate": {
       "post": {
+        "description": "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking. The marking's previous value is kept in the audit trail, so the workbook once reading this customer as gone stays on record.",
         "operationId": "CustomersController_reactivate",
         "parameters": [],
         "responses": {
@@ -1373,6 +1374,7 @@
     },
     "/api/service-sites/{id}/reactivate": {
       "post": {
+        "description": "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking.",
         "operationId": "ServiceSitesController_reactivate",
         "parameters": [],
         "responses": {
@@ -1663,6 +1665,40 @@
           }
         ],
         "summary": "Pause, resume or archive an agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}/reactivate": {
+      "post": {
+        "description": "A dedicated administrator action, not a way round the rule that archiving is final. It applies only to an agreement an import archived from a red cell: clearing that marking is what stops the next import archiving it again, and the marking's previous value is kept in the audit trail. An agreement archived by hand stays archived.",
+        "operationId": "AgreementsController_reactivateImported",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "AGREEMENT_NOT_IMPORTER_ARCHIVED — no import archived this agreement."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate an agreement an import archived",
         "tags": [
           "service-agreements"
         ]

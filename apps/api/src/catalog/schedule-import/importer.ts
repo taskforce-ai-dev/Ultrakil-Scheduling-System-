@@ -39,10 +39,11 @@ export interface ScheduleImportSummary {
  *
  * A record reactivated by hand keeps that decision: clearing its
  * `importedInactiveAt` is what tells later imports to treat it normally again.
+ * Only the dedicated manager reactivation clears it — nothing below ever does.
  */
 function activation(isServiced: boolean): {
   isActive?: boolean;
-  importedInactiveAt?: Date | null;
+  importedInactiveAt?: Date;
 } {
   if (!isServiced) return { isActive: false, importedInactiveAt: new Date() };
   return {};
@@ -51,13 +52,17 @@ function activation(isServiced: boolean): {
 function agreementActivation(
   isServiced: boolean,
   existing: { importedInactiveAt: Date | null } | null,
-): { status?: AgreementStatus; importedInactiveAt?: Date | null } {
+): { status?: AgreementStatus; importedInactiveAt?: Date } {
   if (!isServiced) return { status: AgreementStatus.ARCHIVED, importedInactiveAt: new Date() };
   // A red cell is an explicit import fact. Its later disappearance is not a
   // reactivation instruction, so preserve the archive until a person clears
-  // the marker through the normal manager workflow.
+  // the marker through the dedicated manager reactivation.
   if (existing?.importedInactiveAt) return {};
-  return { status: AgreementStatus.ACTIVE, importedInactiveAt: null };
+  // Note what is absent: the importer never writes `importedInactiveAt: null`.
+  // Setting a marker is an import's job; clearing one is a person's, and a
+  // record whose marker the importer could erase would lose the evidence that
+  // the workbook once read it as gone.
+  return { status: AgreementStatus.ACTIVE };
 }
 
 function importedBranch(decision: ReturnType<typeof decideBranch>) {

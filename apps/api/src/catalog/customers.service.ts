@@ -1,5 +1,12 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { BranchCode, Prisma, Weekday } from '@prisma/client';
+import {
+  BranchCode,
+  DataProvenance,
+  Prisma,
+  SiteBranchConfidence,
+  SiteBranchSource,
+  Weekday,
+} from '@prisma/client';
 
 import { AuditService } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
@@ -29,6 +36,18 @@ const CUSTOMER_INCLUDE = {
     orderBy: { name: 'asc' },
   },
 } satisfies Prisma.CustomerInclude;
+
+/**
+ * What a manager supplying a site's branch establishes.
+ *
+ * Confidence and source are kept apart on purpose: a fallback branch also has
+ * a concrete `BranchCode`, so only the source distinguishes a value somebody
+ * vouched for from one the importer had to invent.
+ */
+const MANAGER_CONFIRMED_BRANCH = {
+  branchConfidence: SiteBranchConfidence.CONFIRMED,
+  branchSource: SiteBranchSource.MANAGER_CONFIRMED,
+} as const;
 
 const SITE_INCLUDE = {
   operatingHours: true,
@@ -180,14 +199,21 @@ export class CustomersService {
    *
    * Past visits and assignments reference this customer's agreements, and a
    * schedule that cannot explain itself is worse than a longer list.
+   *
+   * Deliberately one-directional. Turning a customer off is an ordinary edit;
+   * turning one back on may have to undo an import's judgement, which is a
+   * different act with different evidence — see `reactivate`.
    */
-  async setActive(id: string, isActive: boolean, actor: AuthenticatedUser) {
+  async deactivate(id: string, actor: AuthenticatedUser) {
     const before = await this.loadCustomer(id);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const customer = await tx.customer.update({
         where: { id },
-        data: { isActive },
+        // `importedInactiveAt` is untouched: this is a manager's decision, and
+        // overwriting the marker would erase which import first read the
+        // customer as gone.
+        data: { isActive: false },
         include: CUSTOMER_INCLUDE,
       });
 
@@ -195,10 +221,50 @@ export class CustomersService {
         {
           entityType: 'Customer',
           entityId: id,
-          action: isActive ? 'customer.reactivated' : 'customer.deactivated',
+          action: 'customer.deactivated',
           actor,
           before,
           after: customer,
+        },
+        tx,
+      );
+
+      return customer;
+    });
+
+    return toCustomerDto(updated as CustomerWithRelations);
+  }
+
+  /**
+   * A manager explicitly turning a customer back on.
+   *
+   * The importer can switch a customer off — a red row in the master schedule
+   * — but never back on, because a fill somebody removed is not evidence the
+   * client returned. Clearing `importedInactiveAt` is what says a person
+   * decided, so the next import treats the customer normally again. The
+   * marker's old value goes into the audit event, so the fact that a workbook
+   * once read this customer as gone survives as history rather than being
+   * erased by the reactivation.
+   */
+  async reactivate(id: string, actor: AuthenticatedUser) {
+    const before = await this.loadCustomer(id);
+    const clearedImportedInactiveAt = before.importedInactiveAt;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.update({
+        where: { id },
+        data: { isActive: true, importedInactiveAt: null },
+        include: CUSTOMER_INCLUDE,
+      });
+
+      await this.audit.record(
+        {
+          entityType: 'Customer',
+          entityId: id,
+          action: 'customer.reactivated',
+          actor,
+          before,
+          after: { ...customer, clearedImportedInactiveAt },
         },
         tx,
       );
@@ -255,6 +321,11 @@ export class CustomersService {
           city: dto.city?.trim() || null,
           branchId: branch.id,
           branchCode,
+          // A site a manager typed is evidence, not an import assumption. The
+          // branch here was either chosen outright or accepted from the
+          // customer by a person who could see it, so it is confirmed either
+          // way — never a fallback that a later import may quietly replace.
+          ...MANAGER_CONFIRMED_BRANCH,
           operatingHours: { create: hours },
         },
         include: SITE_INCLUDE,
@@ -307,7 +378,13 @@ export class CustomersService {
             ? { addressLine: dto.addressLine?.trim() || null }
             : {}),
           ...(dto.city !== undefined ? { city: dto.city?.trim() || null } : {}),
-          ...(branch ? { branchId: branch.id, branchCode } : {}),
+          // Only the values this edit actually carried become confirmed. An
+          // edit that renames a site says nothing about whether its imported
+          // branch guess was right, and marking it confirmed would turn an
+          // assumption into a fact nobody ever checked.
+          ...(branch
+            ? { branchId: branch.id, branchCode, ...MANAGER_CONFIRMED_BRANCH }
+            : {}),
           ...(hours ? { operatingHours: { create: hours } } : {}),
         },
         include: SITE_INCLUDE,
@@ -331,13 +408,14 @@ export class CustomersService {
     return toServiceSiteDto(updated as ServiceSiteWithRelations);
   }
 
-  async setSiteActive(siteId: string, isActive: boolean, actor: AuthenticatedUser) {
+  /** Turns a site off. The import marker, if any, is left as it stands. */
+  async deactivateSite(siteId: string, actor: AuthenticatedUser) {
     const before = await this.loadSite(siteId);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const site = await tx.serviceSite.update({
         where: { id: siteId },
-        data: { isActive },
+        data: { isActive: false },
         include: SITE_INCLUDE,
       });
 
@@ -345,10 +423,45 @@ export class CustomersService {
         {
           entityType: 'ServiceSite',
           entityId: siteId,
-          action: isActive ? 'service_site.reactivated' : 'service_site.deactivated',
+          action: 'service_site.deactivated',
           actor,
           before,
           after: site,
+        },
+        tx,
+      );
+
+      return site;
+    });
+
+    return toServiceSiteDto(updated as ServiceSiteWithRelations);
+  }
+
+  /**
+   * A manager explicitly turning a site back on.
+   *
+   * The same asymmetry as `reactivate`: only a person clears the importer's
+   * marking, and the marking's old value is kept in the audit event.
+   */
+  async reactivateSite(siteId: string, actor: AuthenticatedUser) {
+    const before = await this.loadSite(siteId);
+    const clearedImportedInactiveAt = before.importedInactiveAt;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const site = await tx.serviceSite.update({
+        where: { id: siteId },
+        data: { isActive: true, importedInactiveAt: null },
+        include: SITE_INCLUDE,
+      });
+
+      await this.audit.record(
+        {
+          entityType: 'ServiceSite',
+          entityId: siteId,
+          action: 'service_site.reactivated',
+          actor,
+          before,
+          after: { ...site, clearedImportedInactiveAt },
         },
         tx,
       );
@@ -446,7 +559,12 @@ export class CustomersService {
  */
 export function normaliseOperatingHours(
   hours: SiteOperatingHoursDto[],
-): { weekday: Weekday; opensAtMinute: number; closesAtMinute: number }[] {
+): {
+  weekday: Weekday;
+  opensAtMinute: number;
+  closesAtMinute: number;
+  provenance: DataProvenance;
+}[] {
   for (const window of hours) {
     if (window.closesAtMinute <= window.opensAtMinute) {
       throw new AppException(
@@ -481,10 +599,14 @@ export function normaliseOperatingHours(
     }
   }
 
+  // Hours only ever reach this function from a manager's own form. The import
+  // fabricates no hours at all — it records its 08:00-17:00 assumption on the
+  // generated visit instead — so a row written here is a confirmed fact.
   return hours.map((window) => ({
     weekday: window.weekday,
     opensAtMinute: window.opensAtMinute,
     closesAtMinute: window.closesAtMinute,
+    provenance: DataProvenance.MANAGER_CONFIRMED,
   }));
 }
 
