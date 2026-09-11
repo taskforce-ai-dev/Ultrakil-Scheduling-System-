@@ -279,7 +279,30 @@ export class PublishedAssignmentRepairPlanResponseDto extends PublishedAssignmen
 export class PublishedAssignmentFindingsResponseDto {
   @ApiProperty({ type: [PublishedAssignmentFindingDto] })
   items!: PublishedAssignmentFindingDto[];
-  @ApiProperty({ type: Number }) total!: number;
-  @ApiProperty({ type: Number }) page!: number;
-  @ApiProperty({ type: Number }) pageSize!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'Number of invalid findings in this response page. This is not a collection-wide count because eligibility is evaluated only for the bounded candidate page.',
+  })
+  total!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'Total published assignments available to be checked across all candidate pages.',
+  })
+  totalCandidates!: number;
+  @ApiProperty({
+    type: Boolean,
+    description: 'Whether another published-assignment candidate page remains to be checked.',
+  })
+  hasNextPage!: boolean;
+  @ApiProperty({
+    type: Number,
+    description: 'One-based page number in the published-assignment candidate set.',
+  })
+  page!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'Maximum published-assignment candidates evaluated in this request.',
+  })
+  pageSize!: number;
 }

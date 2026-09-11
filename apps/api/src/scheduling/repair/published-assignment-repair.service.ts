@@ -55,6 +55,8 @@ type SourceAssignment = Prisma.AssignmentGetPayload<{
 }>;
 type RepairClient = PrismaService | Prisma.TransactionClient;
 
+const FINDING_EVALUATION_BATCH_SIZE = 4;
+
 export interface RepairCrewMemberInput {
   employeeId: string;
   role: CrewRole;
@@ -167,28 +169,39 @@ export class PublishedAssignmentRepairService {
   async validateCurrent(query: { page?: number; pageSize?: number }): Promise<{
     items: PublishedAssignmentFinding[];
     total: number;
+    totalCandidates: number;
+    hasNextPage: boolean;
     page: number;
     pageSize: number;
   }> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where = { status: AssignmentStatus.PUBLISHED };
-    const rows = await this.prisma.assignment.findMany({
-      where,
-      include: SOURCE_INCLUDE,
-      orderBy: { id: 'asc' },
-    });
-
-    const evaluated = await Promise.all(
-      rows.map(async (assignment) => {
-        const verdict = await this.eligibility.evaluate(
-          assignment.generatedVisitId,
-          proposalFromSource(assignment),
-          { excludeAssignmentId: assignment.id },
-        );
-        return { assignment, conflicts: sortConflicts(verdict.conflicts) };
+    const [totalCandidates, rows] = await Promise.all([
+      this.prisma.assignment.count({ where }),
+      this.prisma.assignment.findMany({
+        where,
+        include: SOURCE_INCLUDE,
+        orderBy: { id: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
       }),
-    );
+    ]);
+
+    const evaluated: Array<{ assignment: SourceAssignment; conflicts: Conflict[] }> = [];
+    for (let offset = 0; offset < rows.length; offset += FINDING_EVALUATION_BATCH_SIZE) {
+      const batch = await Promise.all(
+        rows.slice(offset, offset + FINDING_EVALUATION_BATCH_SIZE).map(async (assignment) => {
+          const verdict = await this.eligibility.evaluate(
+            assignment.generatedVisitId,
+            proposalFromSource(assignment),
+            { excludeAssignmentId: assignment.id },
+          );
+          return { assignment, conflicts: sortConflicts(verdict.conflicts) };
+        }),
+      );
+      evaluated.push(...batch);
+    }
 
     const findings = evaluated
       .filter(({ conflicts }) => conflicts.length > 0)
@@ -205,8 +218,10 @@ export class PublishedAssignmentRepairService {
           repairTimeScope(assignment.generatedVisit.visitDate) !== 'HISTORICAL',
       }));
     return {
-      items: findings.slice((page - 1) * pageSize, page * pageSize),
+      items: findings,
       total: findings.length,
+      totalCandidates,
+      hasNextPage: page * pageSize < totalCandidates,
       page,
       pageSize,
     };

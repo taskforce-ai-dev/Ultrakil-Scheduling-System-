@@ -6497,18 +6497,31 @@
             }
           },
           "total": {
-            "type": "number"
+            "type": "number",
+            "description": "Number of invalid findings in this response page. This is not a collection-wide count because eligibility is evaluated only for the bounded candidate page."
+          },
+          "totalCandidates": {
+            "type": "number",
+            "description": "Total published assignments available to be checked across all candidate pages."
+          },
+          "hasNextPage": {
+            "type": "boolean",
+            "description": "Whether another published-assignment candidate page remains to be checked."
           },
           "page": {
-            "type": "number"
+            "type": "number",
+            "description": "One-based page number in the published-assignment candidate set."
           },
           "pageSize": {
-            "type": "number"
+            "type": "number",
+            "description": "Maximum published-assignment candidates evaluated in this request."
           }
         },
         "required": [
           "items",
           "total",
+          "totalCandidates",
+          "hasNextPage",
           "page",
           "pageSize"
         ]

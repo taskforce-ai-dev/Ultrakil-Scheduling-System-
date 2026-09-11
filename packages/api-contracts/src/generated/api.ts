@@ -2256,8 +2256,15 @@ export interface components {
         };
         PublishedAssignmentFindingsResponseDto: {
             items: components["schemas"]["PublishedAssignmentFindingDto"][];
+            /** @description Number of invalid findings in this response page. This is not a collection-wide count because eligibility is evaluated only for the bounded candidate page. */
             total: number;
+            /** @description Total published assignments available to be checked across all candidate pages. */
+            totalCandidates: number;
+            /** @description Whether another published-assignment candidate page remains to be checked. */
+            hasNextPage: boolean;
+            /** @description One-based page number in the published-assignment candidate set. */
             page: number;
+            /** @description Maximum published-assignment candidates evaluated in this request. */
             pageSize: number;
         };
         PublishedAssignmentRepairPlanDto: {

@@ -213,8 +213,13 @@ export interface PublishedAssignmentRepairFinding {
 
 export interface PublishedAssignmentRepairFindingsPage {
   items: PublishedAssignmentRepairFinding[];
+  /** Exact finding count for this bounded candidate page, not the full collection. */
   total: number;
+  /** Exact number of published assignments across all candidate pages. */
+  totalCandidates: number;
+  hasNextPage: boolean;
   page: number;
+  /** Maximum candidate assignments evaluated for this page. */
   pageSize: number;
 }
 

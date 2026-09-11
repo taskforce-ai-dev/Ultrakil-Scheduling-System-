@@ -77,6 +77,7 @@ function fixture(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
   const tx = {
     $queryRaw: jest.fn(async () => [{ id: visitId }]),
     assignment: {
+      count: jest.fn(async () => 1),
       findMany: jest.fn(async () => [row]),
       updateMany: jest.fn(async () => ({ count: 1 })),
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -404,7 +405,7 @@ describe('PublishedAssignmentRepairService', () => {
     );
   });
 
-  it('paginates invalid findings and reports the invalid total, not every published row', async () => {
+  it('evaluates only one bounded candidate page and reports pagination semantics explicitly', async () => {
     const { service, tx, eligibility, row } = fixture();
     const invalid = {
       ...row,
@@ -415,6 +416,7 @@ describe('PublishedAssignmentRepairService', () => {
         id: '99999999-9999-4999-8999-999999999999',
       },
     };
+    tx.assignment.count.mockResolvedValueOnce(41);
     tx.assignment.findMany.mockResolvedValueOnce([row, invalid]);
     eligibility.evaluate
       .mockResolvedValueOnce({ isEligible: true, conflicts: [] })
@@ -430,11 +432,53 @@ describe('PublishedAssignmentRepairService', () => {
         ],
       });
 
-    const result = await service.validateCurrent({ page: 1, pageSize: 1 });
+    const result = await service.validateCurrent({ page: 3, pageSize: 20 });
 
     expect(result.total).toBe(1);
+    expect(result.totalCandidates).toBe(41);
+    expect(result.hasNextPage).toBe(false);
+    expect(result.page).toBe(3);
+    expect(result.pageSize).toBe(20);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].assignmentId).toBe(invalid.id);
+    expect(tx.assignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skip: 40,
+        take: 20,
+        orderBy: { id: 'asc' },
+      }),
+    );
+    expect(eligibility.evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  it('limits concurrent eligibility evaluations within a candidate page', async () => {
+    const { service, tx, eligibility, row } = fixture();
+    const rows = Array.from({ length: 11 }, (_, index) => ({
+      ...row,
+      id: `assignment-${String(index).padStart(2, '0')}`,
+      generatedVisitId: `visit-${String(index).padStart(2, '0')}`,
+      generatedVisit: {
+        ...row.generatedVisit,
+        id: `visit-${String(index).padStart(2, '0')}`,
+      },
+    }));
+    tx.assignment.count.mockResolvedValueOnce(rows.length);
+    tx.assignment.findMany.mockResolvedValueOnce(rows);
+    let active = 0;
+    let maximumActive = 0;
+    eligibility.evaluate.mockImplementation(async () => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      active -= 1;
+      return { isEligible: true, conflicts: [] };
+    });
+
+    const result = await service.validateCurrent({ page: 1, pageSize: rows.length });
+
+    expect(result.items).toEqual([]);
+    expect(eligibility.evaluate).toHaveBeenCalledTimes(rows.length);
+    expect(maximumActive).toBeLessThanOrEqual(4);
   });
 
   it('atomically replaces the exact predecessor and emits audit and outbox intents', async () => {

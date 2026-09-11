@@ -44,6 +44,8 @@ vi.mock("@/lib/api-client", async () => {
     fetchPublishedAssignmentRepairFindings: vi.fn().mockResolvedValue({
       items: [],
       total: 0,
+      totalCandidates: 0,
+      hasNextPage: false,
       page: 1,
       pageSize: 100,
     }),

@@ -317,7 +317,14 @@ export default function PublishedAssignmentRepairsPage() {
   const isAdmin = user?.role === "ADMIN";
   const [findings, setFindings] = React.useState<PublishedAssignmentRepairFinding[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [isLoadingMore, setIsLoadingMore] = React.useState(false);
   const [loadError, setLoadError] = React.useState<ApiError | null>(null);
+  const [loadMoreError, setLoadMoreError] = React.useState<ApiError | null>(null);
+  const [loadedPage, setLoadedPage] = React.useState(0);
+  const [loadedPageSize, setLoadedPageSize] = React.useState(FINDINGS_PAGE_SIZE);
+  const [totalCandidates, setTotalCandidates] = React.useState(0);
+  const [hasNextPage, setHasNextPage] = React.useState(false);
+  const isLoadingMoreRef = React.useRef(false);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [acknowledgeToday, setAcknowledgeToday] = React.useState(false);
   const [plan, setPlan] = React.useState<PublishedAssignmentRepairPlan | null>(null);
@@ -333,33 +340,50 @@ export default function PublishedAssignmentRepairsPage() {
   const [workflowMessage, setWorkflowMessage] = React.useState<string | null>(null);
   const idempotencyKeyRef = React.useRef<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setLoadError(null);
+  const loadPage = React.useCallback(async (page: number, append: boolean) => {
+    if (append) {
+      if (isLoadingMoreRef.current) return;
+      isLoadingMoreRef.current = true;
+      setIsLoadingMore(true);
+      setLoadMoreError(null);
+    } else {
+      setIsLoading(true);
+      setLoadError(null);
+      setLoadMoreError(null);
+    }
     try {
-      const all: PublishedAssignmentRepairFinding[] = [];
-      let page = 1;
-      let total = Number.POSITIVE_INFINITY;
-      while (all.length < total) {
-        const response = await fetchPublishedAssignmentRepairFindings({
-          page,
-          pageSize: FINDINGS_PAGE_SIZE,
-        });
-        all.push(...response.items);
-        total = response.total;
-        if (response.items.length === 0 || all.length >= total) break;
-        page += 1;
-      }
-      setFindings(all);
+      const response = await fetchPublishedAssignmentRepairFindings({
+        page,
+        pageSize: FINDINGS_PAGE_SIZE,
+      });
+      setFindings((current) => {
+        if (!append) return response.items;
+        const merged = new Map(current.map((finding) => [finding.assignmentId, finding]));
+        for (const finding of response.items) merged.set(finding.assignmentId, finding);
+        return [...merged.values()];
+      });
+      setLoadedPage(response.page);
+      setLoadedPageSize(response.pageSize);
+      setTotalCandidates(response.totalCandidates);
+      setHasNextPage(response.hasNextPage);
     } catch (caught) {
-      setLoadError(
+      const error =
         caught instanceof ApiError
           ? caught
-          : unknownError("Could not load published assignment findings."),
-      );
+          : unknownError("Could not load published assignment findings.");
+      if (append) setLoadMoreError(error);
+      else setLoadError(error);
     } finally {
-      setIsLoading(false);
+      if (append) {
+        isLoadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      } else {
+        setIsLoading(false);
+      }
     }
   }, []);
+
+  const load = React.useCallback(() => loadPage(1, false), [loadPage]);
 
   React.useEffect(() => {
     // Read-only API load on mount.
@@ -381,6 +405,7 @@ export default function PublishedAssignmentRepairsPage() {
     [findings, selectedIds],
   );
   const includesToday = selectedFindings.some((finding) => finding.timeScope === "CURRENT_DAY");
+  const checkedCandidates = Math.min(loadedPage * loadedPageSize, totalCandidates);
 
   function discardPlan() {
     setPlan(null);
@@ -514,7 +539,12 @@ export default function PublishedAssignmentRepairsPage() {
             review the exact replacement or withdrawal before anything changes.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void load()} disabled={isLoading}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void load()}
+          disabled={isLoading || isLoadingMore}
+        >
           <RefreshCw className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
           Refresh findings
         </Button>
@@ -561,10 +591,15 @@ export default function PublishedAssignmentRepairsPage() {
           code={loadError.code}
           onRetry={() => void load()}
         />
-      ) : findings.length === 0 ? (
+      ) : findings.length === 0 && !hasNextPage ? (
         <EmptyState
           title="No invalid published assignments"
           description="The validator found no published work that breaks the current hard rules."
+        />
+      ) : findings.length === 0 ? (
+        <EmptyState
+          title="No findings in the checked assignments yet"
+          description="More published assignments remain. Load the next bounded page to continue checking."
         />
       ) : (
         <div className="space-y-8">
@@ -586,6 +621,33 @@ export default function PublishedAssignmentRepairsPage() {
             selectedIds={selectedIds}
             onToggle={toggleFinding}
           />
+        </div>
+      )}
+
+      {!isLoading && !loadError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-muted/25 p-4">
+          <p className="text-sm text-muted-foreground" role="status">
+            {findings.length} {findings.length === 1 ? "finding" : "findings"} loaded after checking{" "}
+            {checkedCandidates} of {totalCandidates} published assignments.
+          </p>
+          {hasNextPage && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void loadPage(loadedPage + 1, true)}
+              disabled={isLoadingMore}
+            >
+              {isLoadingMore ? "Checking more…" : "Load more findings"}
+            </Button>
+          )}
+          {loadMoreError && (
+            <ErrorState
+              title="Couldn't load more repair findings"
+              description={loadMoreError.message}
+              code={loadMoreError.code}
+              onRetry={() => void loadPage(loadedPage + 1, true)}
+            />
+          )}
         </div>
       )}
 

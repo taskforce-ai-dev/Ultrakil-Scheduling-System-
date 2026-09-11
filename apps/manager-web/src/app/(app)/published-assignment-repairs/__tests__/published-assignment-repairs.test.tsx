@@ -157,6 +157,8 @@ function mockFindings(items = findings) {
   vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue({
     items,
     total: items.length,
+    totalCandidates: items.length,
+    hasNextPage: false,
     page: 1,
     pageSize: 100,
   });
@@ -179,6 +181,48 @@ beforeEach(() => {
 });
 
 describe("PublishedAssignmentRepairsPage", () => {
+  it("loads one bounded page initially and appends only when requested without losing selection", async () => {
+    const firstPage = findings.slice(0, 2);
+    const laterFinding = findings[2];
+    vi.mocked(fetchPublishedAssignmentRepairFindings)
+      .mockResolvedValueOnce({
+        items: firstPage,
+        total: firstPage.length,
+        totalCandidates: 200,
+        hasNextPage: true,
+        page: 1,
+        pageSize: 100,
+      })
+      .mockResolvedValueOnce({
+        items: [laterFinding],
+        total: 1,
+        totalCandidates: 200,
+        hasNextPage: false,
+        page: 2,
+        pageSize: 100,
+      });
+
+    const user = await renderPage();
+
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledTimes(1);
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenLastCalledWith({
+      page: 1,
+      pageSize: 100,
+    });
+    await user.click(screen.getByLabelText(/Select City Hotel/));
+
+    await user.click(screen.getByRole("button", { name: "Load more findings" }));
+
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledTimes(2);
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenLastCalledWith({
+      page: 2,
+      pageSize: 100,
+    });
+    expect(await screen.findByLabelText(/Select Harbour Offices/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Select City Hotel/)).toBeChecked();
+    expect(screen.queryByRole("button", { name: "Load more findings" })).not.toBeInTheDocument();
+  });
+
   it("groups findings into non-selectable history, today, and future work", async () => {
     await renderPage();
 
