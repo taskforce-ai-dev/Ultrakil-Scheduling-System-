@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { expectNoSeriousViolations } from "./accessibility";
 
 /**
  * Starts a real optimizer run against the real scheduler service, waits for
@@ -9,6 +10,37 @@ import { test, expect } from "./fixtures";
  * poll-on-refresh behaviour actually reflects server truth, not stale
  * client state.
  */
+/**
+ * The publish confirmation dialog can only be reached from a run that is still
+ * a draft, and this journey publishes the week's visits — after which an
+ * ordinary run finds nothing left to schedule and no draft can be produced.
+ * The scan therefore belongs here, ahead of publication, rather than in the
+ * accessibility spec where it silently depended on a leftover draft.
+ */
+test("publish confirmation dialog has no serious accessibility violations", async ({ page }) => {
+  test.setTimeout(180_000);
+
+  await page.goto("/schedule-history");
+  await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
+
+  const from = await page.locator("#run-from").inputValue();
+  const to = await page.locator("#run-to").inputValue();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith("/schedule-runs"),
+  );
+  await page.getByRole("button", { name: /^Start run$/ }).click();
+  expect((await started).ok()).toBe(true);
+
+  const row = page.locator("li", { hasText: `${from} – ${to}` }).first();
+  await expect(row.getByText("Draft — ready to publish")).toBeVisible({ timeout: 120_000 });
+
+  await row.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("button", { name: "Publish" })).toBeVisible();
+  await expectNoSeriousViolations(page, "Publish confirmation dialog");
+});
+
 test("starts a schedule run, watches it finish, and publishes it", async ({ page }) => {
   // The suite's default (playwright.config.ts) is 30s, sized for the other
   // specs — this is the one test that genuinely needs minutes, for a real

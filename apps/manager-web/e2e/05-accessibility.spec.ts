@@ -1,5 +1,5 @@
-import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures";
+import { expectNoSeriousViolations } from "./accessibility";
 
 /**
  * Automated accessibility scan (axe-core) of every top-level page, plus the
@@ -31,29 +31,6 @@ const PAGES = [
   { path: "/schedule-history", heading: "Schedule History" },
 ];
 
-async function expectNoSeriousViolations(page: import("@playwright/test").Page, label: string) {
-  const results = await new AxeBuilder({ page })
-    .include("body")
-    .exclude("[data-sonner-toaster]") // third-party toast internals, not this app's markup
-    .analyze();
-
-  const serious = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  test.info().annotations.push({ type: "strict-case", description: label });
-  for (const violation of serious) {
-    test.info().annotations.push({ type: "strict-axe-rule", description: violation.id });
-  }
-  const details = serious
-    .map(
-      (v) =>
-        `\n  [${v.impact}] ${v.id}: ${v.help} (${v.nodes.length} element(s))\n    ${v.nodes
-          .slice(0, 3)
-          .map((n) => n.target.join(" "))
-          .join("\n    ")}`
-    )
-    .join("");
-
-  expect(serious, `${label} — serious/critical accessibility violations:${details}`).toHaveLength(0);
-}
 
 for (const { path, heading } of PAGES) {
   test(`${path} has no serious accessibility violations`, async ({ page }) => {
@@ -105,33 +82,3 @@ test("dispatch board's manual override drawer has no serious accessibility viola
   await expectNoSeriousViolations(page, "Manual override drawer");
 });
 
-test("schedule run publish confirmation dialog has no serious accessibility violations", async ({
-  page,
-}) => {
-  // This test used to scan whichever draft run happened to be lying around,
-  // and skipped when there was none. That made it depend on the publish spec
-  // leaving its run unpublished, which is the opposite of what that spec is
-  // supposed to prove, and a runtime skip fails the strict policy anyway. It
-  // now starts the run it needs, so it stands on its own whatever else ran.
-  test.setTimeout(180_000);
-
-  await page.goto("/schedule-history");
-  await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
-
-  const from = await page.locator("#run-from").inputValue();
-  const to = await page.locator("#run-to").inputValue();
-  const started = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      new URL(response.url()).pathname.endsWith("/schedule-runs"),
-  );
-  await page.getByRole("button", { name: /^Start run$/ }).click();
-  expect((await started).ok()).toBe(true);
-
-  const row = page.locator("li", { hasText: `${from} – ${to}` }).first();
-  await expect(row.getByText("Draft — ready to publish")).toBeVisible({ timeout: 120_000 });
-
-  await row.getByRole("button", { name: "Publish" }).click();
-  await expect(page.getByRole("button", { name: "Publish" })).toBeVisible();
-  await expectNoSeriousViolations(page, "Publish confirmation dialog");
-});
