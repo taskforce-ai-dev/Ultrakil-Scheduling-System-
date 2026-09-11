@@ -199,12 +199,31 @@ export class PaginatedUnassignedVisitsDto {
  * with `whitelist` and `forbidNonWhitelisted`, the complete list of filters
  * that exist. A parameter not named here is refused at the boundary by name,
  * rather than being dropped and answered with a silently unfiltered page.
+ *
+ * `visitId` is the exception to "filter": it selects one visit and overrides
+ * the rest. See its own description.
  */
 export class UnassignedVisitQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   page?: number = 1;
   @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200)
   pageSize?: number = 50;
+  /**
+   * The dispatch board's "Why?" deep link. Not a filter — a selector.
+   *
+   * See the class doc above: everything else here narrows a queue. This one
+   * replaces it. Managers reach the queue from a visit on some other date, or
+   * one that would sit on page 9, and the request that carried only the id
+   * used to be answered with today's first page instead.
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'One named visit, for the dispatch board\'s "Why?" deep link. A selector rather than a filter: when present, page, pageSize, branchCode, from, to, serviceAgreementId, checked, operationState, conflictGroup, conflictCode and withConflictsOnly are all ignored, and the response describes exactly this visit wherever it falls. items holds one row when the visit exists and still needs a crew; when the id is unknown, or the visit has since been staffed, completed or cancelled, items is empty and total is 0. No other visit is ever returned alongside it, so an empty result means "that visit was not found here" and never "here is something else". page is 1 and pageSize is 1 in a focused response, hasNextPage is false, and conflictFacets counts only the returned visit. A malformed id is refused with 400 VALIDATION_FAILED.',
+  })
+  @IsOptional()
+  @IsUUID()
+  visitId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() branchCode?: string;
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() from?: string;
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() to?: string;

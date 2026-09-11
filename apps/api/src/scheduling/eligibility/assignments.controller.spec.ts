@@ -1,7 +1,10 @@
 import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
 
+import { VisitStatus } from '@prisma/client';
+
 import { AssignmentsController } from './assignments.controller';
-import { UnassignedVisitQueryDto } from './dto';
+import { AssignmentsService } from './assignments.service';
+import { PaginatedUnassignedVisitsDto, UnassignedVisitQueryDto } from './dto';
 
 /**
  * The real HTTP boundary, not a stand-in for it.
@@ -196,5 +199,324 @@ describe('GET /unassigned-visits query validation', () => {
         conflictGroup: 'VEHICLE_OVERLAP',
       }),
     );
+  });
+});
+
+/**
+ * The deep link, driven through the same boundary.
+ *
+ * The dispatch board's "Why?" sends a URL carrying one parameter — the visit
+ * id — and the queue behind it defaults to today and page 1. A visit on any
+ * other date, or past the first pageful, was therefore simply absent from the
+ * response, and the screen showed the rows it did get instead.
+ *
+ * These drive the real ValidationPipe into the real controller into the real
+ * service, over a Prisma double that actually honours `where`, `skip` and
+ * `take`. A mock that only records the arguments it was handed cannot tell
+ * whether the named visit comes back; this can.
+ */
+interface FakeVisit {
+  id: string;
+  visitDate: Date;
+  branchCode: string;
+  status: VisitStatus;
+  hasLiveAssignment: boolean;
+  customerName: string;
+  reasonCodes: string[];
+}
+
+const TODAY = new Date('2026-09-11T00:00:00.000Z');
+const ANOTHER_DATE = new Date('2026-11-24T00:00:00.000Z');
+
+function visit(overrides: Partial<FakeVisit> & { id: string }): FakeVisit {
+  return {
+    visitDate: TODAY,
+    branchCode: 'COLOMBO',
+    status: VisitStatus.SCHEDULED,
+    hasLiveAssignment: false,
+    customerName: `Customer ${overrides.id}`,
+    reasonCodes: [],
+    ...overrides,
+  };
+}
+
+/** A uuid the DTO will accept, distinct per index. */
+function uuid(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function matches(row: FakeVisit, where: Record<string, any>): boolean {
+  if (where.id !== undefined && row.id !== where.id) return false;
+  if (where.status?.notIn?.includes(row.status)) return false;
+  if (where.assignments?.none && row.hasLiveAssignment) return false;
+  if (where.branchCode !== undefined && row.branchCode !== where.branchCode) {
+    return false;
+  }
+  if (where.visitDate?.gte && row.visitDate < where.visitDate.gte) return false;
+  if (where.visitDate?.lte && row.visitDate > where.visitDate.lte) return false;
+  for (const clause of where.AND ?? []) {
+    const reasons = clause.unassignedReasons;
+    if (reasons?.none && row.reasonCodes.length > 0) return false;
+    if (reasons?.some) {
+      const code = reasons.some.code;
+      if (code === undefined) {
+        if (row.reasonCodes.length === 0) return false;
+      } else if (typeof code === 'string') {
+        if (!row.reasonCodes.includes(code)) return false;
+      } else if (code.in) {
+        if (!row.reasonCodes.some((c) => code.in.includes(c))) return false;
+      } else if (code.notIn) {
+        if (!row.reasonCodes.some((c) => !code.notIn.includes(c))) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function fakePrisma(rows: FakeVisit[]) {
+  const select = (where: Record<string, any>) =>
+    rows
+      .filter((row) => matches(row, where))
+      .sort((a, b) => a.visitDate.getTime() - b.visitDate.getTime());
+  return {
+    generatedVisit: {
+      count: jest.fn(({ where }: any) => Promise.resolve(select(where).length)),
+      findMany: jest.fn(({ where, skip, take }: any) =>
+        Promise.resolve(
+          select(where)
+            .slice(skip, skip + take)
+            .map((row) => ({
+              id: row.id,
+              visitDate: row.visitDate,
+              branchCode: row.branchCode,
+              requiredCrewSize: 2,
+              updatedAt: TODAY,
+              serviceAgreement: {
+                customer: { name: row.customerName },
+                serviceSite: { name: 'Main Kitchen' },
+              },
+              unassignedReasons: row.reasonCodes.map((code) => ({
+                code,
+                message: `${code} message`,
+                details: null,
+                createdAt: TODAY,
+              })),
+            })),
+        ),
+      ),
+    },
+    visitUnassignedReason: {
+      groupBy: jest.fn(({ where }: any) => {
+        const counts = new Map<string, number>();
+        for (const row of select(where.generatedVisit)) {
+          for (const code of row.reasonCodes) {
+            counts.set(code, (counts.get(code) ?? 0) + 1);
+          }
+        }
+        return Promise.resolve(
+          [...counts.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([code, count]) => ({ code, _count: { code: count } })),
+        );
+      }),
+    },
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** Everything the request does after it leaves the browser. */
+async function get(
+  rows: FakeVisit[],
+  rawQuery: Record<string, unknown>,
+): Promise<PaginatedUnassignedVisitsDto> {
+  const prisma = fakePrisma(rows);
+  const controller = new AssignmentsController(
+    new AssignmentsService(prisma as never, {} as never, {} as never),
+  );
+  const query = (await pipe.transform(
+    rawQuery,
+    asQuery,
+  )) as UnassignedVisitQueryDto;
+  return controller.queue(query);
+}
+
+describe('GET /unassigned-visits?visitId= (the "Why?" deep link)', () => {
+  const FOCUS = uuid(1);
+
+  // A full first pageful of today's queue for the focused visit to hide behind.
+  const todayQueue = Array.from({ length: 30 }, (_, index) =>
+    visit({ id: uuid(100 + index), reasonCodes: ['CREW_TOO_SMALL'] }),
+  );
+
+  it('fetches a focused visit dated outside the date filter the queue is using', async () => {
+    const rows = [
+      ...todayQueue,
+      visit({
+        id: FOCUS,
+        visitDate: ANOTHER_DATE,
+        branchCode: 'KANDY',
+        customerName: 'Grandview Hotel',
+        reasonCodes: ['BRANCH_HAS_NO_PMS_SUPERVISOR'],
+      }),
+    ];
+
+    // What the queue shows on its own: the focused visit is simply not in it.
+    const queue = await get(rows, {
+      from: '2026-09-11',
+      to: '2026-09-11',
+      pageSize: '25',
+    });
+    expect(queue.items.map((item) => item.visitId)).not.toContain(FOCUS);
+
+    const focused = await get(rows, { visitId: FOCUS });
+
+    expect(focused.items).toHaveLength(1);
+    expect(focused.items[0].visitId).toBe(FOCUS);
+    expect(focused.items[0].visitDate).toBe('2026-11-24');
+    expect(focused.total).toBe(1);
+  });
+
+  it('fetches a focused visit that would fall beyond the first page', async () => {
+    // Same date as the rest of the queue, but thirty-first in order.
+    const beyond = visit({
+      id: FOCUS,
+      customerName: 'Cinnamon Grand Colombo',
+      reasonCodes: ['SKILL_NOT_HELD'],
+    });
+    const rows = [...todayQueue, beyond];
+
+    const firstPage = await get(rows, {
+      from: '2026-09-11',
+      to: '2026-09-11',
+      page: '1',
+      pageSize: '25',
+    });
+    expect(firstPage.items).toHaveLength(25);
+    expect(firstPage.items.map((item) => item.visitId)).not.toContain(FOCUS);
+
+    const focused = await get(rows, { visitId: FOCUS });
+
+    expect(focused.items.map((item) => item.visitId)).toEqual([FOCUS]);
+    expect(focused.total).toBe(1);
+  });
+
+  it('ignores every other filter rather than intersecting with them', async () => {
+    // The manager may have left the queue on Kandy exceptions for one date.
+    // The visit asked for by name is an unchecked Colombo visit on another
+    // date entirely, and it is still the answer.
+    const rows = [
+      ...todayQueue,
+      visit({ id: FOCUS, visitDate: ANOTHER_DATE, branchCode: 'COLOMBO' }),
+    ];
+
+    const focused = await get(rows, {
+      visitId: FOCUS,
+      branchCode: 'KANDY',
+      from: '2026-09-11',
+      to: '2026-09-11',
+      operationState: 'EXCEPTION',
+      conflictGroup: 'MISSING_PMS',
+      page: '3',
+      pageSize: '25',
+    });
+
+    expect(focused.items.map((item) => item.visitId)).toEqual([FOCUS]);
+    // A focused answer reports itself as the single-row page it is.
+    expect(focused.page).toBe(1);
+    expect(focused.pageSize).toBe(1);
+    expect(focused.hasNextPage).toBe(false);
+  });
+
+  it('answers an unknown visit id with nothing, never with the queue', async () => {
+    const focused = await get(todayQueue, { visitId: uuid(999) });
+
+    expect(focused.items).toEqual([]);
+    expect(focused.total).toBe(0);
+    expect(focused.hasNextPage).toBe(false);
+    // The facets describe that same empty set, so nothing in the response can
+    // be mistaken for an answer made of somebody else's rows.
+    expect(focused.conflictFacets).toEqual({});
+  });
+
+  it('answers a visit that is no longer unassigned with nothing', async () => {
+    const staffed = visit({ id: FOCUS, hasLiveAssignment: true });
+    const completed = visit({ id: uuid(2), status: VisitStatus.COMPLETED });
+
+    expect(
+      (await get([...todayQueue, staffed], { visitId: FOCUS })).items,
+    ).toEqual([]);
+    expect(
+      (await get([...todayQueue, completed], { visitId: uuid(2) })).items,
+    ).toEqual([]);
+  });
+
+  it('refuses a malformed visit id at the boundary instead of guessing', async () => {
+    await expect(
+      pipe.transform({ visitId: 'not-a-visit-id' }, asQuery),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(await refusalMessages({ visitId: 'not-a-visit-id' })).toEqual(
+      expect.arrayContaining([expect.stringContaining('visitId')]),
+    );
+  });
+
+  it("accepts the deep link's visit id as a parameter the API defines", async () => {
+    const query = (await pipe.transform(
+      { visitId: FOCUS },
+      asQuery,
+    )) as UnassignedVisitQueryDto;
+
+    expect(query.visitId).toBe(FOCUS);
+  });
+
+  it('leaves the ordinary paginated queue untouched when no visit is named', async () => {
+    const kandy = visit({
+      id: uuid(3),
+      branchCode: 'KANDY',
+      reasonCodes: ['BRANCH_HAS_NO_PMS_SUPERVISOR'],
+    });
+    const unchecked = visit({ id: uuid(4) });
+    const rows = [...todayQueue, kandy, unchecked];
+
+    const first = await get(rows, {
+      from: '2026-09-11',
+      to: '2026-09-11',
+      page: '1',
+      pageSize: '25',
+    });
+    expect(first.items).toHaveLength(25);
+    expect(first.total).toBe(32);
+    expect(first.page).toBe(1);
+    expect(first.pageSize).toBe(25);
+    expect(first.hasNextPage).toBe(true);
+
+    const second = await get(rows, {
+      from: '2026-09-11',
+      to: '2026-09-11',
+      page: '2',
+      pageSize: '25',
+    });
+    expect(second.items).toHaveLength(7);
+    expect(second.page).toBe(2);
+    expect(second.hasNextPage).toBe(false);
+
+    // The filters and the facets still answer exactly as they did.
+    const kandyOnly = await get(rows, { branchCode: 'KANDY' });
+    expect(kandyOnly.items.map((item) => item.visitId)).toEqual([kandy.id]);
+
+    const exceptions = await get(rows, { operationState: 'EXCEPTION' });
+    expect(exceptions.total).toBe(31);
+    expect(
+      exceptions.items.every((item) => item.operationState === 'EXCEPTION'),
+    ).toBe(true);
+
+    const untried = await get(rows, { operationState: 'UNASSIGNED' });
+    expect(untried.items.map((item) => item.visitId)).toEqual([unchecked.id]);
+
+    // Facets stay scoped to the other filters, not to the conflict choice.
+    expect(first.conflictFacets).toEqual({
+      BRANCH_HAS_NO_PMS_SUPERVISOR: 1,
+      CREW_TOO_SMALL: 30,
+    });
   });
 });

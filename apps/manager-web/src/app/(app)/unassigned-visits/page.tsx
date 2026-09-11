@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { AlertTriangle, ChevronLeft, ChevronRight, CircleDashed, ShieldAlert, UserCog } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, CircleDashed, SearchX, ShieldAlert, UserCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -96,18 +96,30 @@ export default function UnassignedVisitsPage() {
     setIsLoading(true);
     setError(null);
     // Every filter goes to the server, which is the only place the list, the
-    // total and the paging can be made to agree. `satisfies` makes the API's
-    // own filter vocabulary a compile-time requirement, so a parameter it
-    // would refuse cannot be sent from here again.
-    fetchUnassignedVisits({
-      page,
-      pageSize: PAGE_SIZE,
-      from: date,
-      to: date,
-      ...(branch === "ALL" ? {} : { branchCode: branch }),
-      ...(status === "ALL" ? {} : { operationState: status }),
-      ...(group === "ALL" ? {} : { conflictGroup: group }),
-    } satisfies UnassignedVisitsQuery)
+    // total and the paging can be made to agree. Typing the query as the
+    // contract's own makes the API's filter vocabulary a compile-time
+    // requirement, so a parameter it would refuse cannot be sent from here
+    // again.
+    //
+    // A visit asked for by name is asked for by name: `visitId` goes to the
+    // server *instead of* the filters, not alongside them. The queue's own
+    // defaults are today and page 1, so a request that carried the id but
+    // kept them found the visit only when it happened to be today's and in
+    // the first 25 rows — and otherwise handed back unrelated rows that a
+    // browser-side lookup then quietly displayed. The server answers with
+    // that visit or with nothing; there is no page here to search.
+    const query: UnassignedVisitsQuery = focusVisitId
+      ? { visitId: focusVisitId }
+      : {
+          page,
+          pageSize: PAGE_SIZE,
+          from: date,
+          to: date,
+          ...(branch === "ALL" ? {} : { branchCode: branch }),
+          ...(status === "ALL" ? {} : { operationState: status }),
+          ...(group === "ALL" ? {} : { conflictGroup: group }),
+        };
+    fetchUnassignedVisits(query)
       .then((page) => {
         setItems(page.items);
         setTotal(page.total);
@@ -120,7 +132,7 @@ export default function UnassignedVisitsPage() {
         );
       })
       .finally(() => setIsLoading(false));
-  }, [branch, date, group, page, status]);
+  }, [branch, date, focusVisitId, group, page, status]);
 
   React.useEffect(() => {
     // Fetching from the API — an external system, which is what effects are for.
@@ -128,21 +140,33 @@ export default function UnassignedVisitsPage() {
     load();
   }, [load]);
 
-  const filtered = React.useMemo(() => {
-    // A visit asked for by name wins over every filter. Arriving from "Why?"
-    // and being shown an empty list because the branch filter happened to
-    // exclude it would answer the question with silence.
-    //
-    // This is the only narrowing the page does, and it is not a filter: it
-    // picks out one named row. The conflict-type and status filters are the
-    // server's, deliberately — re-filtering the page here left the list
-    // disagreeing with the total and the pager printed beside it.
-    if (focusVisitId) {
-      const asked = items.filter((visit) => visit.visitId === focusVisitId);
-      if (asked.length > 0) return asked;
-    }
-    return items;
-  }, [items, focusVisitId]);
+  // The named visit was asked for and is not here.
+  //
+  // Nothing narrows the list any more. A visit asked for by name still wins
+  // over every filter, but it wins on the server, which is the only place
+  // that can see past today's first page to find it. Picking the row out of
+  // whatever list came back was the defect: when the visit was not in that
+  // list — another date, or past row 25 — the lookup fell through and the
+  // page displayed the list it did get as though it were the answer.
+  //
+  // So there are three ways to be told it is not here, and they mean the same
+  // thing to a manager. The server answered about that visit alone and
+  // returned nothing — an unknown id, or a visit since staffed, completed or
+  // cancelled. Or it refused the id outright, which for a focused request can
+  // only mean the link carried something that is not a visit id at all, since
+  // the id is the only parameter sent; reporting that as "couldn't load the
+  // queue" would make a bad link look like an outage. Or the response
+  // contradicts the contract by carrying some other visit — and that last
+  // check is not the browser-side lookup this replaced: it never searches a
+  // list for the visit and can only ever show less, refusing the whole
+  // response, because a row that is not the visit that was asked for is not
+  // an answer to it and must never be displayed as one.
+  const focusNotFound =
+    focusVisitId !== null &&
+    (error
+      ? error.code === "VALIDATION_FAILED"
+      : items.length === 0 ||
+        items.some((visit) => visit.visitId !== focusVisitId));
 
   const kandyPmsShortage = React.useMemo(
     () =>
@@ -250,6 +274,28 @@ export default function UnassignedVisitsPage() {
 
       {isLoading ? (
         <LoadingState rows={4} />
+      ) : focusNotFound ? (
+        // Said plainly, and on its own. With `visitId` the server answers
+        // about one visit and no other, so there is nothing else to show —
+        // and showing something else is exactly the failure this replaces.
+        <div className="space-y-3">
+          <EmptyState
+            icon={SearchX}
+            title="That visit isn't in the unassigned queue"
+            description="It may already have a crew, or have been completed or cancelled — or the link may name a visit that no longer exists. Nothing else is shown here, because nothing else would be an answer to it."
+          />
+          <p className="flex justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link href="/unassigned-visits" />}
+            >
+              Show all unassigned visits
+            </Button>
+          </p>
+        </div>
       ) : error ? (
         <ErrorState
           title="Couldn't load unassigned visits"
@@ -257,18 +303,14 @@ export default function UnassignedVisitsPage() {
           code={error.code}
           onRetry={load}
         />
-      ) : filtered.length === 0 ? (
+      ) : items.length === 0 ? (
         <EmptyState
-          title={items.length === 0 ? "Nothing unassigned" : "No visits match this filter"}
-          description={
-            items.length === 0
-              ? "Every visit currently has a valid crew and vehicle assignment."
-              : "Try a different branch or conflict type."
-          }
+          title="Nothing unassigned"
+          description="Every visit currently has a valid crew and vehicle assignment."
         />
       ) : (
         <>
-          {focusVisitId && filtered.length === 1 ? (
+          {focusVisitId ? (
             // Says plainly why the list is one row long, and offers the way back.
             // A shortened list with no explanation reads as a broken page.
             <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -294,7 +336,7 @@ export default function UnassignedVisitsPage() {
           )}
 
           <ul className="space-y-4">
-            {filtered.map((visit) => (
+            {items.map((visit) => (
               <li key={visit.visitId} className="rounded-xl border bg-card p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>

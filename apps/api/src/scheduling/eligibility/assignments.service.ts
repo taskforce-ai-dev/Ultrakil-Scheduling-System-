@@ -320,10 +320,25 @@ export class AssignmentsService {
    * alongside branch and date. A client that instead re-filtered the page it
    * was given would show a list that disagreed with the total and the paging
    * beside it.
+   *
+   * `visitId` is the one parameter that is not a filter. It names a single
+   * visit — the dispatch board's "Why?" deep link — and when present it
+   * replaces every other filter rather than joining them, so the answer is
+   * that visit wherever it falls, or an empty page when it is unknown or no
+   * longer unstaffed. See the DTO for the full contract.
    */
   async unassignedQueue(query: UnassignedVisitQueryDto) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
+    // `visitId` is a selector, not one more filter. A manager who follows
+    // "Why?" from the dispatch board sends a URL that names one visit and
+    // nothing else; answering that with the queue's own default view — today,
+    // page 1 — is how the named visit went missing whenever it sat on another
+    // date or past the first page, leaving the screen showing unrelated rows
+    // as though they were the answer. So when it is present every other
+    // filter is deliberately ignored and the response describes exactly that
+    // visit: one row, or none. Never a neighbour.
+    const focusedVisitId = query.visitId;
 
     const reasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
     const facetReasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
@@ -358,10 +373,19 @@ export class AssignmentsService {
       reasonFilters.push({ unassignedReasons: { some: { code: query.conflictCode } } });
     }
 
-    const baseWhere: Prisma.GeneratedVisitWhereInput = {
+    // What makes a visit part of this queue at all: no live crew on it, and
+    // not already history. It holds for a focused request too, which is what
+    // makes "not actually unassigned" answerable — a visit that has since
+    // been staffed, completed or cancelled simply is not here, and the caller
+    // is told nothing was found instead of being shown someone else's row.
+    const unstaffedWhere: Prisma.GeneratedVisitWhereInput = {
       assignments: { none: { status: { in: LIVE_STATUSES } } },
       // Finished and cancelled work is history; it needs nobody.
       status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
+    };
+
+    const baseWhere: Prisma.GeneratedVisitWhereInput = {
+      ...unstaffedWhere,
       ...(query.serviceAgreementId
         ? { serviceAgreementId: query.serviceAgreementId }
         : {}),
@@ -384,15 +408,22 @@ export class AssignmentsService {
           }
         : {}),
     };
-    const where: Prisma.GeneratedVisitWhereInput = {
-      ...baseWhere,
-      ...(reasonFilters.length ? { AND: reasonFilters } : {}),
-    };
+    const where: Prisma.GeneratedVisitWhereInput = focusedVisitId
+      ? { ...unstaffedWhere, id: focusedVisitId }
+      : {
+          ...baseWhere,
+          ...(reasonFilters.length ? { AND: reasonFilters } : {}),
+        };
 
-    const facetWhere: Prisma.GeneratedVisitWhereInput = {
-      ...baseWhere,
-      ...(facetReasonFilters.length ? { AND: facetReasonFilters } : {}),
-    };
+    // The facets describe the same set the items do. For a focused request
+    // that set is the one visit, so the counts stay true to what is shown
+    // rather than describing a queue the caller did not ask for.
+    const facetWhere: Prisma.GeneratedVisitWhereInput = focusedVisitId
+      ? where
+      : {
+          ...baseWhere,
+          ...(facetReasonFilters.length ? { AND: facetReasonFilters } : {}),
+        };
     const [total, visits, facetRows] = await Promise.all([
       this.prisma.generatedVisit.count({ where }),
       this.prisma.generatedVisit.findMany({
@@ -407,8 +438,8 @@ export class AssignmentsService {
           unassignedReasons: { orderBy: { code: 'asc' } },
         },
         orderBy: [{ visitDate: 'asc' }, { windowStartMinute: 'asc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: focusedVisitId ? 0 : (page - 1) * pageSize,
+        take: focusedVisitId ? 1 : pageSize,
       }),
       this.prisma.visitUnassignedReason.groupBy({ by: ['code'], where: { generatedVisit: facetWhere }, _count: { code: true }, orderBy: { code: 'asc' } }),
     ]);
@@ -439,7 +470,18 @@ export class AssignmentsService {
         visit.updatedAt.toISOString(),
     }));
 
-    return { items, total, page, pageSize, hasNextPage: page * pageSize < total, conflictFacets: Object.fromEntries(facetRows.map((row) => [row.code, row._count.code])) };
+    return {
+      items,
+      total,
+      // A focused answer is a single-row page by construction, so it reports
+      // itself as one rather than echoing paging the caller never used.
+      page: focusedVisitId ? 1 : page,
+      pageSize: focusedVisitId ? 1 : pageSize,
+      hasNextPage: focusedVisitId ? false : page * pageSize < total,
+      conflictFacets: Object.fromEntries(
+        facetRows.map((row) => [row.code, row._count.code]),
+      ),
+    };
   }
 
   /**

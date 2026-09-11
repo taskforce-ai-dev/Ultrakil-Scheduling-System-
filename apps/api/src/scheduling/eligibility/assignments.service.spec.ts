@@ -136,6 +136,63 @@ describe('AssignmentsService unassignedQueue', () => {
     ]);
     expect(result.items.map((item) => item.hasBeenChecked)).toEqual([true, false]);
   });
+
+  it('asks for the named visit alone, with none of the queue\'s filters on it', async () => {
+    // The "Why?" deep link. Every other parameter is deliberately dropped:
+    // keeping the date range or the page is precisely what hid a visit that
+    // was not today's and not in the first pageful.
+    const prisma = emptyQueuePrisma();
+    const service = new AssignmentsService(prisma as never, {} as never, {} as never);
+
+    await service.unassignedQueue({
+      visitId: 'visit-asked-for',
+      from: '2026-09-11',
+      to: '2026-09-11',
+      branchCode: 'KANDY',
+      operationState: 'EXCEPTION',
+      conflictGroup: 'MISSING_SKILL',
+      page: 4,
+      pageSize: 25,
+    });
+
+    const where = prisma.generatedVisit.count.mock.calls[0][0].where;
+    expect(where.id).toBe('visit-asked-for');
+    expect(where.visitDate).toBeUndefined();
+    expect(where.branchCode).toBeUndefined();
+    expect(where.AND).toBeUndefined();
+    // Still only work that needs a crew — which is what lets an already
+    // staffed or finished visit answer "not found" rather than turning up.
+    expect(where.status.notIn).toEqual(
+      expect.arrayContaining(['COMPLETED', 'CANCELLED']),
+    );
+    // And it reads the first row, not row 76 of a page nobody asked for.
+    expect(prisma.generatedVisit.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 0, take: 1 }),
+    );
+    // The facets describe that same single visit.
+    expect(prisma.visitUnassignedReason.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { generatedVisit: where } }),
+    );
+  });
+
+  it('reports a focused answer as the single-row page it is', async () => {
+    const prisma = emptyQueuePrisma();
+    const service = new AssignmentsService(prisma as never, {} as never, {} as never);
+
+    const result = await service.unassignedQueue({
+      visitId: 'visit-asked-for',
+      page: 9,
+      pageSize: 25,
+    });
+
+    expect(result).toMatchObject({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 1,
+      hasNextPage: false,
+    });
+  });
 });
 
 function emptyQueuePrisma() {

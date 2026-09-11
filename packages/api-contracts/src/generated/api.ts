@@ -966,7 +966,7 @@ export interface paths {
         };
         /**
          * Work that still needs a crew, and why it has none
-         * @description Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed.
+         * @description Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed. `visitId` is the one parameter that is not a filter: it names a single visit and overrides all the others, answering with that visit or with nothing.
          */
         get: operations["AssignmentsController_queue"];
         put?: never;
@@ -4472,6 +4472,8 @@ export interface operations {
                 to?: string;
                 from?: string;
                 branchCode?: "COLOMBO" | "KANDY";
+                /** @description One named visit, for the dispatch board's "Why?" deep link. A selector rather than a filter: every other parameter here is ignored when it is present, and the response describes exactly this visit wherever its date and whichever page it would otherwise fall on — one item when it still needs a crew, or an empty page with total 0 when the id is unknown or the visit has since been staffed, completed or cancelled. No other visit is ever returned alongside it, so an empty result means the named visit was not found rather than "here is something else". */
+                visitId?: string;
                 pageSize?: number;
                 page?: number;
             };
