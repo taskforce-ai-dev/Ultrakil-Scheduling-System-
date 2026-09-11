@@ -52,10 +52,38 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   // The runs list is a card list (<ul><li>), not a table.
   await row.getByRole("button", { name: "Publish" }).click();
 
+  // This fixture is built from imported workbooks, so its opening hours, site
+  // branches and agreement values carry the importer's cautious defaults.
+  // Publishing work that rests on an assumption is a decision a manager makes
+  // explicitly, so the dialog asks for an acknowledgement and a reason before
+  // it will publish. Whether this run owes that depends on what the solver
+  // picked, so answer the gate when it is raised rather than assuming it.
+  const acknowledgement = page.getByRole("checkbox", {
+    name: /source data that is not confirmed/i,
+  });
+  if (await acknowledgement.isVisible()) {
+    await expect(page.getByText(/nobody has confirmed/i)).toBeVisible();
+    await acknowledgement.check();
+  }
+
+  const partialAcknowledgement = page.getByRole("checkbox", {
+    name: /unassigned visits will not be dispatched/i,
+  });
+  if (await partialAcknowledgement.isVisible()) {
+    await partialAcknowledgement.check();
+  }
+
+  const reason = page.getByLabel(/^Reason/);
+  if ((await reason.getAttribute("aria-required")) === "true") {
+    await reason.fill("Reviewed the imported source data for this week.");
+  }
+
   // The trigger row is hidden behind the dialog's own modal boundary while
   // it's open, so this resolves to the dialog's confirm button alone — the
   // same pattern the page's own Vitest suite relies on.
-  await page.getByRole("button", { name: "Publish" }).click();
+  const confirm = page.getByRole("button", { name: "Publish" });
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
 
   await expect(row.getByText("Published", { exact: true })).toBeVisible({ timeout: 15_000 });
 });
