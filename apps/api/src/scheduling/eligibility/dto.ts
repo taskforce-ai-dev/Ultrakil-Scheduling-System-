@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AssignmentStatus, CrewRole } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -17,6 +17,7 @@ import {
 } from 'class-validator';
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
+import { toBoolean } from '../../common/validation/to-boolean';
 import { CONFLICT_CODES } from './conflict-codes';
 import {
   CONFLICT_GROUPS,
@@ -208,7 +209,7 @@ export class UnassignedVisitQueryDto {
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() from?: string;
   @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() to?: string;
   @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() serviceAgreementId?: string;
-  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit. The boolean spelling of operationState.' }) @IsOptional() @Type(() => Boolean) @IsBoolean()
+  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit. The boolean spelling of operationState.' }) @IsOptional() @Transform(toBoolean) @IsBoolean()
   checked?: boolean;
   @ApiPropertyOptional({
     enum: UNASSIGNED_OPERATION_STATES,
@@ -228,7 +229,7 @@ export class UnassignedVisitQueryDto {
   conflictGroup?: ConflictGroup;
   @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL is refused here and belongs in conflictGroup.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
   conflictCode?: string;
-  @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Type(() => Boolean) @IsBoolean()
+  @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Transform(toBoolean) @IsBoolean()
   withConflictsOnly?: boolean;
 }
 

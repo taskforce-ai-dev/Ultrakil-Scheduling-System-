@@ -38,6 +38,42 @@ async function refusalMessages(query: Record<string, unknown>): Promise<string[]
 }
 
 describe('GET /unassigned-visits query validation', () => {
+  // `Boolean('false')` is `true`. Under `enableImplicitConversion` a
+  // `@Type(() => Boolean)` flag therefore answered `?checked=false` with
+  // checked visits — the exact opposite of what was asked for — and the
+  // deprecated `withConflictsOnly=false` alias switched conflict-only
+  // filtering on. These pin the raw-string transform that fixes it.
+  it.each([
+    ['checked', 'true', true],
+    ['checked', 'false', false],
+    ['checked', '1', true],
+    ['checked', '0', false],
+    ['withConflictsOnly', 'true', true],
+    ['withConflictsOnly', 'false', false],
+    ['withConflictsOnly', '1', true],
+    ['withConflictsOnly', '0', false],
+  ])('reads ?%s=%s as %s', async (field, raw, expected) => {
+    const query = (await pipe.transform({ [field]: raw }, asQuery)) as Record<string, unknown>;
+
+    expect(query[field]).toBe(expected);
+  });
+
+  it.each(['checked', 'withConflictsOnly'])(
+    'refuses a spelling of %s it cannot read rather than guessing',
+    async (field) => {
+      expect(await refusalMessages({ [field]: 'yes' })).toEqual(
+        expect.arrayContaining([expect.stringContaining(field)]),
+      );
+    },
+  );
+
+  it('leaves an omitted boolean flag absent instead of defaulting it', async () => {
+    const query = (await pipe.transform({}, asQuery)) as UnassignedVisitQueryDto;
+
+    expect(query.checked).toBeUndefined();
+    expect(query.withConflictsOnly).toBeUndefined();
+  });
+
   it('accepts the filters the Unassigned queue page sends', async () => {
     const query = (await pipe.transform(
       {

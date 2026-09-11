@@ -14,14 +14,7 @@ import {
   Min,
 } from 'class-validator';
 
-/** Reads a boolean from a query string. See workforce/dto/query.dto.ts. */
-const toBoolean = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
-  const raw = obj?.[key];
-  if (typeof raw === 'boolean') return raw;
-  if (raw === 'true' || raw === '1') return true;
-  if (raw === 'false' || raw === '0') return false;
-  return raw;
-};
+import { toBoolean } from '../../common/validation/to-boolean';
 
 export class VisitQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 })
