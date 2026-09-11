@@ -151,13 +151,30 @@ const plan: PublishedAssignmentRepairPlan = {
   operations: [replacementOperation, withdrawalOperation],
 };
 
-function mockFindings(items = findings) {
-  vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue({
+function findingsPage(
+  items: PublishedAssignmentRepairFinding[],
+  coverage: {
+    page?: number;
+    checkedInPage?: number;
+    checkedThrough?: number;
+    totalCandidates?: number;
+    hasNextPage?: boolean;
+  } = {},
+) {
+  const checkedInPage = coverage.checkedInPage ?? items.length;
+  return {
     items,
-    total: items.length,
-    page: 1,
+    page: coverage.page ?? 1,
     pageSize: 100,
-  });
+    checkedInPage,
+    checkedThrough: coverage.checkedThrough ?? checkedInPage,
+    totalCandidates: coverage.totalCandidates ?? checkedInPage,
+    hasNextPage: coverage.hasNextPage ?? false,
+  };
+}
+
+function mockFindings(items = findings) {
+  vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue(findingsPage(items));
 }
 
 async function renderPage() {
@@ -177,6 +194,147 @@ beforeEach(() => {
 });
 
 describe("PublishedAssignmentRepairsPage", () => {
+  it("checks one bounded page on mount and asks for nothing more on its own", async () => {
+    vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue(
+      findingsPage(findings, {
+        page: 1,
+        checkedInPage: 100,
+        checkedThrough: 100,
+        totalCandidates: 260,
+        hasNextPage: true,
+      }),
+    );
+
+    await renderPage();
+
+    // The old screen looped until it had every page, re-scanning all published
+    // history on every render. One mount must cost exactly one request.
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledTimes(1);
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledWith({
+      page: 1,
+      pageSize: 100,
+    });
+    expect(
+      await screen.findByText(/Checked 100 of 260 published assignments/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/have not been validated yet/)).toBeInTheDocument();
+  });
+
+  it("checks the next candidate page only when the manager asks, merging without duplicates", async () => {
+    const laterFinding: PublishedAssignmentRepairFinding = {
+      ...findings[2],
+      assignmentId: "assignment-future-2",
+      visitId: "visit-future-2",
+      customerName: "Lakeside Depot",
+      siteName: "Bay 3",
+    };
+    vi.mocked(fetchPublishedAssignmentRepairFindings)
+      .mockResolvedValueOnce(
+        findingsPage(findings, {
+          page: 1,
+          checkedInPage: 100,
+          checkedThrough: 100,
+          totalCandidates: 160,
+          hasNextPage: true,
+        }),
+      )
+      .mockResolvedValueOnce(
+        findingsPage([findings[2], laterFinding], {
+          page: 2,
+          checkedInPage: 60,
+          checkedThrough: 160,
+          totalCandidates: 160,
+          hasNextPage: false,
+        }),
+      );
+
+    const user = await renderPage();
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByLabelText(/Select City Hotel/));
+    await user.click(screen.getByRole("button", { name: "Load more findings" }));
+
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenCalledTimes(2);
+    expect(fetchPublishedAssignmentRepairFindings).toHaveBeenLastCalledWith({
+      page: 2,
+      pageSize: 100,
+    });
+    expect(await screen.findByText("Lakeside Depot")).toBeInTheDocument();
+    // The repeated finding is merged by assignmentId, never listed twice.
+    expect(screen.getAllByText("Harbour Offices")).toHaveLength(1);
+    expect(screen.getByLabelText(/Select City Hotel/)).toBeChecked();
+    expect(
+      await screen.findByText(/Checked 160 of 160 published assignments/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more findings" })).not.toBeInTheDocument();
+  });
+
+  it("reports a failed load-more without discarding the findings already checked", async () => {
+    vi.mocked(fetchPublishedAssignmentRepairFindings)
+      .mockResolvedValueOnce(
+        findingsPage(findings, {
+          page: 1,
+          checkedInPage: 100,
+          checkedThrough: 100,
+          totalCandidates: 260,
+          hasNextPage: true,
+        }),
+      )
+      .mockRejectedValueOnce(
+        new ApiError({ code: "NETWORK_UNAVAILABLE", message: "Connection interrupted." }),
+      );
+
+    const user = await renderPage();
+    await user.click(screen.getByRole("button", { name: "Load more findings" }));
+
+    expect(
+      await screen.findByText("Couldn't check more published assignments"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load repair findings")).not.toBeInTheDocument();
+    expect(screen.getByText("Historic Foods")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Select Harbour Offices/)).toBeInTheDocument();
+  });
+
+  it("says an unchecked remainder is unchecked instead of claiming nothing is wrong", async () => {
+    vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue(
+      findingsPage([], {
+        page: 1,
+        checkedInPage: 100,
+        checkedThrough: 100,
+        totalCandidates: 260,
+        hasNextPage: true,
+      }),
+    );
+    render(<PublishedAssignmentRepairsPage />);
+
+    expect(
+      await screen.findByText("Nothing wrong in the assignments checked so far"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No invalid published assignments"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more findings" })).toBeInTheDocument();
+  });
+
+  it("only calls the collection clean once every candidate has been checked", async () => {
+    vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue(
+      findingsPage([], {
+        page: 1,
+        checkedInPage: 129,
+        checkedThrough: 129,
+        totalCandidates: 129,
+        hasNextPage: false,
+      }),
+    );
+    render(<PublishedAssignmentRepairsPage />);
+
+    expect(await screen.findByText("No invalid published assignments")).toBeInTheDocument();
+    expect(
+      screen.getByText(/checked all 129 published assignments/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more findings" })).not.toBeInTheDocument();
+  });
+
   it("groups findings into non-selectable history, today, and future work", async () => {
     await renderPage();
 

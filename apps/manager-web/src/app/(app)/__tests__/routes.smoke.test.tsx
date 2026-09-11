@@ -43,9 +43,12 @@ vi.mock("@/lib/api-client", async () => {
     fetchCalendar: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     fetchPublishedAssignmentRepairFindings: vi.fn().mockResolvedValue({
       items: [],
-      total: 0,
       page: 1,
       pageSize: 100,
+      checkedInPage: 0,
+      checkedThrough: 0,
+      totalCandidates: 0,
+      hasNextPage: false,
     }),
   };
 });

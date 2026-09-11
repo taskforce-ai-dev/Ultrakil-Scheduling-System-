@@ -44,6 +44,25 @@ import { formatLongDate } from "@/lib/calendar";
 
 const FINDINGS_PAGE_SIZE = 100;
 
+/**
+ * How much of the published-assignment collection this screen has actually had
+ * checked. The API validates one bounded candidate page per request, so an
+ * empty findings list only means "nothing wrong in what was checked".
+ */
+interface FindingsCoverage {
+  page: number;
+  checkedThrough: number;
+  totalCandidates: number;
+  hasNextPage: boolean;
+}
+
+const NOTHING_CHECKED: FindingsCoverage = {
+  page: 0,
+  checkedThrough: 0,
+  totalCandidates: 0,
+  hasNextPage: false,
+};
+
 const SECTION_DETAILS: Record<
   PublishedAssignmentRepairTimeScope,
   { title: string; description: string; icon: React.ComponentType<{ className?: string }> }
@@ -306,7 +325,7 @@ function communicationMessage(result: PublishedAssignmentRepairResult) {
   if (result.communicationState === "APPLIED_PENDING_COMMUNICATION") {
     return "Repair applied; crew communication is pending. Do not assume crews have received the corrected plan yet.";
   }
-  return "Repair applied and recorded. Reloaded findings now show the remaining exceptions.";
+  return "Repair applied and recorded. Findings were reloaded from the first candidate page; load more to re-check the rest.";
 }
 
 export default function PublishedAssignmentRepairsPage() {
@@ -315,6 +334,10 @@ export default function PublishedAssignmentRepairsPage() {
   const [findings, setFindings] = React.useState<PublishedAssignmentRepairFinding[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<ApiError | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = React.useState(false);
+  const [loadMoreError, setLoadMoreError] = React.useState<ApiError | null>(null);
+  const isLoadingMoreRef = React.useRef(false);
+  const [coverage, setCoverage] = React.useState<FindingsCoverage>(NOTHING_CHECKED);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [acknowledgeToday, setAcknowledgeToday] = React.useState(false);
   const [plan, setPlan] = React.useState<PublishedAssignmentRepairPlan | null>(null);
@@ -330,33 +353,69 @@ export default function PublishedAssignmentRepairsPage() {
   const [workflowMessage, setWorkflowMessage] = React.useState<string | null>(null);
   const idempotencyKeyRef = React.useRef<string | null>(null);
 
-  const load = React.useCallback(async () => {
-    setLoadError(null);
+  /**
+   * Fetches exactly one bounded candidate page. The server checks only the
+   * candidates on that page, so this screen never asks it to scan published
+   * history on every render; the manager asks for the next page explicitly.
+   */
+  const loadPage = React.useCallback(async (page: number, append: boolean) => {
+    if (append) {
+      if (isLoadingMoreRef.current) return;
+      isLoadingMoreRef.current = true;
+      setIsLoadingMore(true);
+      setLoadMoreError(null);
+    } else {
+      setIsLoading(true);
+      setLoadError(null);
+      setLoadMoreError(null);
+    }
     try {
-      const all: PublishedAssignmentRepairFinding[] = [];
-      let page = 1;
-      let total = Number.POSITIVE_INFINITY;
-      while (all.length < total) {
-        const response = await fetchPublishedAssignmentRepairFindings({
-          page,
-          pageSize: FINDINGS_PAGE_SIZE,
-        });
-        all.push(...response.items);
-        total = response.total;
-        if (response.items.length === 0 || all.length >= total) break;
-        page += 1;
-      }
-      setFindings(all);
+      const response = await fetchPublishedAssignmentRepairFindings({
+        page,
+        pageSize: FINDINGS_PAGE_SIZE,
+      });
+      setFindings((current) => {
+        if (!append) return response.items;
+        // Merge by assignmentId: a candidate that moved between pages while
+        // the manager was reading must not be listed or counted twice.
+        const merged = new Map(current.map((finding) => [finding.assignmentId, finding]));
+        for (const finding of response.items) merged.set(finding.assignmentId, finding);
+        return [...merged.values()];
+      });
+      setCoverage({
+        page: response.page,
+        checkedThrough: response.checkedThrough,
+        totalCandidates: response.totalCandidates,
+        hasNextPage: response.hasNextPage,
+      });
     } catch (caught) {
-      setLoadError(
+      const error =
         caught instanceof ApiError
           ? caught
-          : unknownError("Could not load published assignment findings."),
-      );
+          : unknownError("Could not load published assignment findings.");
+      // A failed "load more" must not blank out the findings already on screen,
+      // so it is reported separately from a failed initial load.
+      if (append) setLoadMoreError(error);
+      else setLoadError(error);
     } finally {
-      setIsLoading(false);
+      if (append) {
+        isLoadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      } else {
+        setIsLoading(false);
+      }
     }
   }, []);
+
+  const load = React.useCallback(async () => {
+    setCoverage(NOTHING_CHECKED);
+    await loadPage(1, false);
+  }, [loadPage]);
+
+  const loadMore = React.useCallback(
+    () => loadPage(coverage.page + 1, true),
+    [loadPage, coverage.page],
+  );
 
   React.useEffect(() => {
     // Read-only API load on mount.
@@ -513,7 +572,12 @@ export default function PublishedAssignmentRepairsPage() {
             review the exact replacement or withdrawal before anything changes.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void load()} disabled={isLoading}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => void load()}
+          disabled={isLoading || isLoadingMore}
+        >
           <RefreshCw className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
           Refresh findings
         </Button>
@@ -560,10 +624,15 @@ export default function PublishedAssignmentRepairsPage() {
           code={loadError.code}
           onRetry={() => void load()}
         />
-      ) : findings.length === 0 ? (
+      ) : findings.length === 0 && !coverage.hasNextPage ? (
         <EmptyState
           title="No invalid published assignments"
-          description="The validator found no published work that breaks the current hard rules."
+          description={`The validator checked all ${coverage.totalCandidates} published ${coverage.totalCandidates === 1 ? "assignment" : "assignments"} and found none that break the current hard rules.`}
+        />
+      ) : findings.length === 0 ? (
+        <EmptyState
+          title="Nothing wrong in the assignments checked so far"
+          description={`${coverage.checkedThrough} of ${coverage.totalCandidates} published assignments have been checked. Load more to keep checking before concluding the schedule is clean.`}
         />
       ) : (
         <div className="space-y-8">
@@ -585,6 +654,40 @@ export default function PublishedAssignmentRepairsPage() {
             selectedIds={selectedIds}
             onToggle={toggleFinding}
           />
+        </div>
+      )}
+
+      {!isLoading && !loadError && (
+        <div className="space-y-3 rounded-xl border bg-muted/25 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground" role="status">
+              Checked {coverage.checkedThrough} of {coverage.totalCandidates} published{" "}
+              {coverage.totalCandidates === 1 ? "assignment" : "assignments"} ·{" "}
+              {findings.length} {findings.length === 1 ? "finding" : "findings"} loaded.
+              {coverage.hasNextPage
+                ? " The rest have not been validated yet."
+                : " The whole collection has been validated."}
+            </p>
+            {coverage.hasNextPage && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void loadMore()}
+                disabled={isLoadingMore}
+              >
+                {isLoadingMore ? "Checking more…" : "Load more findings"}
+              </Button>
+            )}
+          </div>
+
+          {loadMoreError && (
+            <ErrorState
+              title="Couldn't check more published assignments"
+              description={loadMoreError.message}
+              code={loadMoreError.code}
+              onRetry={() => void loadMore()}
+            />
+          )}
         </div>
       )}
 

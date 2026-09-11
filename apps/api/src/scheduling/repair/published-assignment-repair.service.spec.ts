@@ -77,7 +77,8 @@ function fixture(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
   const tx = {
     $queryRaw: jest.fn(async () => [{ id: visitId }]),
     assignment: {
-      findMany: jest.fn(async () => [row]),
+      findMany: jest.fn(async (_args?: { skip?: number; take?: number }) => [row]),
+      count: jest.fn(async () => 1),
       updateMany: jest.fn(async () => ({ count: 1 })),
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
         ...row,
@@ -120,10 +121,16 @@ function fixture(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
     $transaction: jest.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
   };
   const eligibility = {
-    evaluate: jest.fn(async () => ({
-      isEligible: true,
-      conflicts: [] as Conflict[],
-    })),
+    evaluate: jest.fn(
+      async (
+        _visitId?: string,
+        _proposal?: unknown,
+        _options?: { excludeAssignmentId?: string; excludeAssignmentIds?: string[] },
+      ) => ({
+        isEligible: true,
+        conflicts: [] as Conflict[],
+      }),
+    ),
   };
   const audit = { record: jest.fn() };
   const service = new PublishedAssignmentRepairService(
@@ -132,6 +139,37 @@ function fixture(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
     audit as unknown as AuditService,
   );
   return { service, prisma, tx, eligibility, audit, repairs, row };
+}
+
+/**
+ * Fills the fixture with `count` published candidates and makes the prisma
+ * mock page like the database does: findMany honours skip/take and count
+ * reports the whole candidate set. A mock that ignored skip/take could never
+ * notice a service that scans everything.
+ */
+function candidates(context: ReturnType<typeof fixture>, count: number) {
+  const { tx, row } = context;
+  const rows = Array.from({ length: count }, (_unused, index) => {
+    const id = `aaaaaaaa-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const generatedVisitId = `bbbbbbbb-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    return {
+      ...row,
+      id,
+      generatedVisitId,
+      generatedVisit: {
+        ...row.generatedVisit,
+        id: generatedVisitId,
+        assignments: [{ id }],
+      },
+    };
+  });
+  tx.assignment.count.mockImplementation(async () => rows.length);
+  tx.assignment.findMany.mockImplementation(async (args?: { skip?: number; take?: number }) => {
+    const skip = args?.skip ?? 0;
+    const take = args?.take ?? rows.length;
+    return rows.slice(skip, skip + take);
+  });
+  return rows;
 }
 
 const replacement = {
@@ -238,7 +276,7 @@ describe('PublishedAssignmentRepairService', () => {
 
     const result = await service.validateCurrent({ page: 1, pageSize: 20 });
 
-    expect(result.total).toBe(1);
+    expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({
       assignmentId: sourceId,
       visitId,
@@ -419,37 +457,125 @@ describe('PublishedAssignmentRepairService', () => {
     );
   });
 
-  it('paginates invalid findings and reports the invalid total, not every published row', async () => {
-    const { service, tx, eligibility, row } = fixture();
-    const invalid = {
-      ...row,
-      id: '88888888-8888-4888-8888-888888888888',
-      generatedVisitId: '99999999-9999-4999-8999-999999999999',
-      generatedVisit: {
-        ...row.generatedVisit,
-        id: '99999999-9999-4999-8999-999999999999',
-      },
-    };
-    tx.assignment.findMany.mockResolvedValueOnce([row, invalid]);
-    eligibility.evaluate
-      .mockResolvedValueOnce({ isEligible: true, conflicts: [] })
-      .mockResolvedValueOnce({
-        isEligible: false,
-        conflicts: [
-          {
-            code: 'CREW_CANNOT_TRAVEL',
-            message: 'No transport',
-            remediation: 'Repair',
-            resources: { visitId: invalid.generatedVisitId },
-          },
-        ],
+  it('loads and evaluates only the requested candidate page', async () => {
+    const context = fixture();
+    const rows = candidates(context, 30);
+
+    await context.service.validateCurrent({ page: 3, pageSize: 5 });
+
+    // The database pages, not the service: a request must never read or solve
+    // the 25 candidates outside the page it was asked for.
+    expect(context.tx.assignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 10, take: 5 }),
+    );
+    expect(context.eligibility.evaluate).toHaveBeenCalledTimes(5);
+    for (const candidate of rows.slice(10, 15)) {
+      expect(context.eligibility.evaluate).toHaveBeenCalledWith(
+        candidate.generatedVisitId,
+        expect.any(Object),
+        { excludeAssignmentId: candidate.id },
+      );
+    }
+    for (const candidate of [rows[0], rows[9], rows[15], rows[29]]) {
+      expect(context.eligibility.evaluate).not.toHaveBeenCalledWith(
+        candidate.generatedVisitId,
+        expect.anything(),
+        expect.anything(),
+      );
+    }
+  });
+
+  it('bounds eligibility evaluations in flight instead of firing the whole page at once', async () => {
+    async function peakConcurrencyFor(candidateCount: number) {
+      const context = fixture();
+      candidates(context, candidateCount);
+      let inFlight = 0;
+      let peak = 0;
+      context.eligibility.evaluate.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setImmediate(resolve));
+        inFlight -= 1;
+        return { isEligible: true, conflicts: [] as Conflict[] };
       });
 
-    const result = await service.validateCurrent({ page: 1, pageSize: 1 });
+      await context.service.validateCurrent({ page: 1, pageSize: candidateCount });
 
-    expect(result.total).toBe(1);
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0].assignmentId).toBe(invalid.id);
+      expect(context.eligibility.evaluate).toHaveBeenCalledTimes(candidateCount);
+      return peak;
+    }
+
+    const smallPage = await peakConcurrencyFor(8);
+    const largePage = await peakConcurrencyFor(64);
+
+    // One unbounded Promise.all would put every candidate in flight together,
+    // so each peak would equal its page size and the two would differ.
+    expect(smallPage).toBeLessThan(8);
+    expect(largePage).toBe(smallPage);
+  });
+
+  it('reports pagination fields that describe only the candidates it checked', async () => {
+    const context = fixture();
+    const rows = candidates(context, 7);
+    context.eligibility.evaluate.mockImplementation(async (visitId) => ({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'CREW_CANNOT_TRAVEL',
+          message: 'No transport',
+          remediation: 'Repair',
+          resources: { visitId: visitId ?? '' },
+        },
+      ] as Conflict[],
+    }));
+
+    const first = await context.service.validateCurrent({ page: 1, pageSize: 3 });
+    // items: findings among the three candidates this request checked.
+    expect(first.items.map((finding) => finding.assignmentId)).toEqual(
+      rows.slice(0, 3).map((candidate) => candidate.id),
+    );
+    expect(first).toMatchObject({
+      page: 1, // one-based candidate page
+      pageSize: 3, // candidates this request was allowed to evaluate
+      checkedInPage: 3, // candidates actually evaluated here
+      checkedThrough: 3, // candidates checked from the start of the ordering
+      totalCandidates: 7, // every published candidate, checked or not
+      hasNextPage: true, // four candidates remain unchecked
+    });
+
+    const last = await context.service.validateCurrent({ page: 3, pageSize: 3 });
+    expect(last).toMatchObject({
+      page: 3,
+      pageSize: 3,
+      checkedInPage: 1, // the final page is short
+      checkedThrough: 7,
+      totalCandidates: 7,
+      hasNextPage: false,
+    });
+
+    const beyond = await context.service.validateCurrent({ page: 4, pageSize: 3 });
+    expect(beyond.items).toEqual([]);
+    expect(beyond).toMatchObject({
+      checkedInPage: 0,
+      checkedThrough: 7, // never claims to have checked past the last candidate
+      totalCandidates: 7,
+      hasNextPage: false,
+    });
+  });
+
+  it('never lets a clean candidate page read as a clean collection', async () => {
+    const context = fixture();
+    candidates(context, 5);
+
+    const page = await context.service.validateCurrent({ page: 1, pageSize: 2 });
+
+    expect(page.items).toEqual([]);
+    expect(page).toMatchObject({
+      checkedInPage: 2,
+      checkedThrough: 2,
+      totalCandidates: 5,
+      hasNextPage: true,
+    });
   });
 
   it('atomically replaces the exact predecessor and emits audit and outbox intents', async () => {

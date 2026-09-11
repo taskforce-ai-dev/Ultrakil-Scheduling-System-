@@ -47,10 +47,22 @@ export class PublishedAssignmentRepairController {
   @ApiOperation({
     summary: 'Find current published assignments that violate hard rules',
     description:
-      'Read-only validation. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.',
+      'Read-only validation of one bounded page of published-assignment candidates. Each request loads and evaluates at most pageSize candidates, so the response describes only what it checked: read checkedThrough, totalCandidates and hasNextPage before treating an empty items array as a clean collection. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.',
   })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 20 })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    description: 'One-based candidate page, ordered stably by assignment id.',
+  })
+  @ApiQuery({
+    name: 'pageSize',
+    required: false,
+    type: Number,
+    example: 20,
+    description: 'Maximum published-assignment candidates evaluated by this request.',
+  })
   @ApiResponse({ status: 200, type: PublishedAssignmentFindingsResponseDto })
   findings(@Query() query: PublishedAssignmentFindingQueryDto) {
     return this.repairs.validateCurrent(query);

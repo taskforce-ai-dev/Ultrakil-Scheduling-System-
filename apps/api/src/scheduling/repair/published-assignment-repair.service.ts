@@ -56,6 +56,13 @@ type SourceAssignment = Prisma.AssignmentGetPayload<{
 }>;
 type RepairClient = PrismaService | Prisma.TransactionClient;
 
+/**
+ * Eligibility evaluation is a database-backed solve. Firing one per candidate
+ * at once saturates the connection pool, so a page is worked by a small fixed
+ * pool of workers instead.
+ */
+const FINDING_EVALUATION_CONCURRENCY = 4;
+
 export interface RepairCrewMemberInput {
   employeeId: string;
   role: CrewRole;
@@ -153,6 +160,34 @@ export interface PublishedAssignmentFinding {
 
 export type RepairTimeScope = 'HISTORICAL' | 'CURRENT_DAY' | 'FUTURE';
 
+/**
+ * One bounded slice of the published-assignment candidate set.
+ *
+ * Pagination here walks the *candidates* (published assignments), never the
+ * findings. Evaluating a finding costs a full eligibility solve, so a request
+ * may only ever pay for one candidate page. Every count below therefore
+ * describes candidates checked, not findings that exist somewhere unchecked.
+ */
+export interface PublishedAssignmentFindingsPage {
+  /** Findings among the candidates checked by this request only. */
+  items: PublishedAssignmentFinding[];
+  /** One-based candidate page number this response describes. */
+  page: number;
+  /** Maximum candidates this request was allowed to evaluate. */
+  pageSize: number;
+  /** Candidates actually evaluated by this request (< pageSize on the last page). */
+  checkedInPage: number;
+  /**
+   * Candidates from the start of the stable ordering through the end of this
+   * page: (page - 1) * pageSize + checkedInPage, never more than totalCandidates.
+   */
+  checkedThrough: number;
+  /** Every published assignment that is a candidate, checked or not. */
+  totalCandidates: number;
+  /** Whether candidates remain after this page. */
+  hasNextPage: boolean;
+}
+
 interface BuiltPreview extends PublishedAssignmentRepairPreview {
   sources: Map<string, SourceAssignment>;
   operations: PublishedAssignmentRepairOperation[];
@@ -173,30 +208,39 @@ export class PublishedAssignmentRepairService {
     private readonly audit: AuditService,
   ) {}
 
-  async validateCurrent(query: { page?: number; pageSize?: number }): Promise<{
-    items: PublishedAssignmentFinding[];
-    total: number;
-    page: number;
-    pageSize: number;
-  }> {
+  async validateCurrent(query: {
+    page?: number;
+    pageSize?: number;
+  }): Promise<PublishedAssignmentFindingsPage> {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
     const where = { status: AssignmentStatus.PUBLISHED };
-    const rows = await this.prisma.assignment.findMany({
-      where,
-      include: SOURCE_INCLUDE,
-      orderBy: { id: 'asc' },
-    });
+    // The database does the paging. Only this page's candidates are ever
+    // loaded, and only they are evaluated, so the cost of one request is
+    // bounded by pageSize no matter how much published history exists.
+    const skip = (page - 1) * pageSize;
+    const [totalCandidates, rows] = await Promise.all([
+      this.prisma.assignment.count({ where }),
+      this.prisma.assignment.findMany({
+        where,
+        include: SOURCE_INCLUDE,
+        orderBy: { id: 'asc' },
+        skip,
+        take: pageSize,
+      }),
+    ]);
 
-    const evaluated = await Promise.all(
-      rows.map(async (assignment) => {
+    const evaluated = await mapWithConcurrency(
+      rows,
+      FINDING_EVALUATION_CONCURRENCY,
+      async (assignment) => {
         const verdict = await this.eligibility.evaluate(
           assignment.generatedVisitId,
           proposalFromSource(assignment),
           { excludeAssignmentId: assignment.id },
         );
         return { assignment, conflicts: sortConflicts(verdict.conflicts) };
-      }),
+      },
     );
 
     const findings = evaluated
@@ -213,11 +257,17 @@ export class PublishedAssignmentRepairService {
         isSelectableForRepair:
           repairTimeScope(assignment.generatedVisit.visitDate) !== 'HISTORICAL',
       }));
+    // Math.min keeps checkedThrough honest when a caller asks for a page past
+    // the end of the collection: nothing beyond the last candidate was checked.
+    const checkedThrough = Math.min(skip, totalCandidates) + rows.length;
     return {
-      items: findings.slice((page - 1) * pageSize, page * pageSize),
-      total: findings.length,
+      items: findings,
       page,
       pageSize,
+      checkedInPage: rows.length,
+      checkedThrough,
+      totalCandidates,
+      hasNextPage: checkedThrough < totalCandidates,
     };
   }
 
@@ -912,6 +962,33 @@ export class PublishedAssignmentRepairService {
     }
     return existing.result as unknown as PublishedAssignmentRepairResult;
   }
+}
+
+/**
+ * Runs `work` over `items` with at most `limit` calls in flight at once, and
+ * returns the results in input order. Unlike `Promise.all(items.map(...))` the
+ * number of concurrent calls does not grow with the size of the input, and
+ * unlike a fixed batch loop a fast call never waits on the slowest peer in its
+ * batch before the next one starts.
+ */
+async function mapWithConcurrency<Item, Result>(
+  items: readonly Item[],
+  limit: number,
+  work: (item: Item) => Promise<Result>,
+): Promise<Result[]> {
+  const results = new Array<Result>(items.length);
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (next < items.length) {
+        const index = next;
+        next += 1;
+        results[index] = await work(items[index]);
+      }
+    }),
+  );
+  return results;
 }
 
 function normalizeOperations(

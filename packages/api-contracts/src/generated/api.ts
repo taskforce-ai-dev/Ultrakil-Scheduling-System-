@@ -1138,7 +1138,7 @@ export interface paths {
         };
         /**
          * Find current published assignments that violate hard rules
-         * @description Read-only validation. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.
+         * @description Read-only validation of one bounded page of published-assignment candidates. Each request loads and evaluates at most pageSize candidates, so the response describes only what it checked: read checkedThrough, totalCandidates and hasNextPage before treating an empty items array as a clean collection. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.
          */
         get: operations["PublishedAssignmentRepairController_findings"];
         put?: never;
@@ -2313,10 +2313,20 @@ export interface components {
             isSelectableForRepair: boolean;
         };
         PublishedAssignmentFindingsResponseDto: {
+            /** @description Invalid published assignments found among the candidates checked by THIS request only. An empty array means nothing was wrong in this candidate page, never that the collection is clean. */
             items: components["schemas"]["PublishedAssignmentFindingDto"][];
-            total: number;
+            /** @description One-based candidate page this response describes, in a stable ordering by assignment id. */
             page: number;
+            /** @description Maximum published-assignment candidates this request was allowed to evaluate. */
             pageSize: number;
+            /** @description Published-assignment candidates actually evaluated by this request. Equals pageSize except on the final page, and is 0 past the end of the collection. */
+            checkedInPage: number;
+            /** @description Candidates from the start of the ordering through the end of this page, i.e. (page - 1) * pageSize + checkedInPage, never more than totalCandidates. A caller that has walked pages 1..page can show this as "checked N of totalCandidates so far". */
+            checkedThrough: number;
+            /** @description Every published assignment that is a repair candidate, whether or not it has been checked. Pair it with checkedThrough to state how much of the collection has been validated. */
+            totalCandidates: number;
+            /** @description True when candidates remain after this page, so the caller must request page + 1 before concluding anything about the whole collection. */
+            hasNextPage: boolean;
         };
         PublishedAssignmentRepairPlanDto: {
             sourceAssignmentIds: string[];
@@ -4715,7 +4725,9 @@ export interface operations {
     PublishedAssignmentRepairController_findings: {
         parameters: {
             query?: {
+                /** @description Maximum published-assignment candidates evaluated by this request. */
                 pageSize?: number;
+                /** @description One-based candidate page, ordered stably by assignment id. */
                 page?: number;
             };
             header?: never;

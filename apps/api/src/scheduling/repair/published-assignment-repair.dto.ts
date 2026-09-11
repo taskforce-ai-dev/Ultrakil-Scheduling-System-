@@ -303,10 +303,58 @@ export class PublishedAssignmentRepairPlanResponseDto extends PublishedAssignmen
   resourceLabels!: RepairResourceLabelsDto;
 }
 
+/**
+ * Paging walks the published-assignment candidates, not the findings. One
+ * request evaluates at most one candidate page, so no field here may be read
+ * as a statement about candidates this request never checked.
+ */
 export class PublishedAssignmentFindingsResponseDto {
-  @ApiProperty({ type: [PublishedAssignmentFindingDto] })
+  @ApiProperty({
+    type: [PublishedAssignmentFindingDto],
+    description:
+      'Invalid published assignments found among the candidates checked by THIS request only. An empty array means nothing was wrong in this candidate page, never that the collection is clean.',
+  })
   items!: PublishedAssignmentFindingDto[];
-  @ApiProperty({ type: Number }) total!: number;
-  @ApiProperty({ type: Number }) page!: number;
-  @ApiProperty({ type: Number }) pageSize!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'One-based candidate page this response describes, in a stable ordering by assignment id.',
+  })
+  page!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Maximum published-assignment candidates this request was allowed to evaluate.',
+  })
+  pageSize!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Published-assignment candidates actually evaluated by this request. Equals pageSize except on the final page, and is 0 past the end of the collection.',
+  })
+  checkedInPage!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Candidates from the start of the ordering through the end of this page, i.e. (page - 1) * pageSize + checkedInPage, never more than totalCandidates. A caller that has walked pages 1..page can show this as "checked N of totalCandidates so far".',
+  })
+  checkedThrough!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Every published assignment that is a repair candidate, whether or not it has been checked. Pair it with checkedThrough to state how much of the collection has been validated.',
+  })
+  totalCandidates!: number;
+
+  @ApiProperty({
+    type: Boolean,
+    description:
+      'True when candidates remain after this page, so the caller must request page + 1 before concluding anything about the whole collection.',
+  })
+  hasNextPage!: boolean;
 }
