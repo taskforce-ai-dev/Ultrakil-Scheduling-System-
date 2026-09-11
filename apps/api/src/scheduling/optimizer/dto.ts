@@ -15,7 +15,12 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { PublishReadiness } from './publish-readiness';
+import {
+  PROVENANCE_WARNING_CODES,
+  ProvenanceWarning,
+  ProvenanceWarningCode,
+  PublishReadiness,
+} from './publish-readiness';
 
 export class StartScheduleRunDto {
   @ApiProperty({ format: 'date', example: '2026-09-07' })
@@ -69,15 +74,48 @@ export class PublishScheduleDto {
   @IsOptional()
   @IsBoolean()
   acknowledgePartial?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Required with a non-empty reason when the work being published rests on unconfirmed source data. Independent of acknowledgePartial: a run can need both.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  acknowledgeProvenance?: boolean;
+}
+
+export class ProvenanceWarningDto implements ProvenanceWarning {
+  @ApiProperty({ enum: [...PROVENANCE_WARNING_CODES] })
+  code!: ProvenanceWarningCode;
+  @ApiProperty({ type: String })
+  message!: string;
+  @ApiProperty({ type: Number, description: 'Visits in this publication affected by the warning.' })
+  affectedVisitCount!: number;
 }
 
 export class PublishReadinessDto implements PublishReadiness {
   @ApiProperty({ enum: ['READY', 'BLOCKED', 'ACKNOWLEDGEMENT_REQUIRED'] })
   state!: PublishReadiness['state'];
-  @ApiProperty({ nullable: true, enum: ['ZERO_RESULTS', 'PARTIAL_RESULTS'] })
+  @ApiProperty({
+    nullable: true,
+    enum: ['ZERO_RESULTS', 'PARTIAL_RESULTS', 'SOURCE_DATA_UNCONFIRMED'],
+  })
   code!: PublishReadiness['code'];
   @ApiProperty({ nullable: true, type: String })
   message!: string | null;
+  @ApiProperty({ type: Boolean, description: 'The run left visits unassigned.' })
+  requiresPartialAcknowledgement!: boolean;
+  @ApiProperty({
+    type: Boolean,
+    description: 'The assignments to be published rest on unconfirmed source data.',
+  })
+  requiresProvenanceAcknowledgement!: boolean;
+  @ApiProperty({
+    type: [ProvenanceWarningDto],
+    description:
+      'Advisory. The authoritative set is recalculated inside the publish transaction.',
+  })
+  provenanceWarnings!: ProvenanceWarningDto[];
 }
 
 export class ScheduleRunQueryDto {

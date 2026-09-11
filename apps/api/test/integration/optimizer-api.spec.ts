@@ -15,7 +15,7 @@
  */
 import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AssignmentStatus, AvailabilityKind, BranchCode, CrewRole, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, AvailabilityKind, BranchCode, CrewRole, DataProvenance, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import { Job } from 'bullmq';
 import request from 'supertest';
 
@@ -33,6 +33,7 @@ import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/o
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 import { SchedulerClient, SolveResponse } from '../../src/scheduling/optimizer/scheduler.client';
 import { EmployeesService } from '../../src/workforce/employees.service';
+import { confirmAgreementProvenance } from './confirm-provenance';
 
 const prisma = new PrismaClient();
 
@@ -173,6 +174,10 @@ async function makeVisit(): Promise<string> {
     .post('/api/visit-generation/confirm')
     .set(auth(adminToken))
     .send({ ...RANGE, serviceAgreementIds: [agreement.body.id] });
+  // These tests are about publication mechanics, not provenance, so the
+  // fixture states confirmed facts and publishes without an acknowledgement.
+  // `publish-readiness.spec.ts` and the gate tests below cover the other case.
+  await confirmAgreementProvenance(prisma, agreement.body.id as string);
 
   const listed = await request(http)
     .get('/api/visits')
@@ -731,7 +736,7 @@ describe('standard writer publication protocol', () => {
   async function batchFixture(withVehicle = false) {
     const visits = [await manualPublicationFixture(), await manualPublicationFixture()];
     const vehicle = withVehicle ? await prisma.vehicle.create({ data: {
-      code: `C06-BATCH-${suffix}-${batchVehicleIds.length}`, label: 'C06 shared vehicle', seatCapacity: 2,
+      code: `C06-BATCH-${suffix}-${batchVehicleIds.length}`, label: 'C06 shared vehicle', seatCapacity: 2, branch: { connect: { code: BranchCode.COLOMBO } },
       authorizations: { create: { employeeId: supervisorIds[0] } },
     } }) : undefined;
     if (vehicle) batchVehicleIds.push(vehicle.id);
@@ -1536,6 +1541,7 @@ describe('resource lock concurrency', () => {
     const vehicle = await prisma.vehicle.create({
       data: {
         code: `C06-RACE-${suffix}-${batchVehicleIds.length}`,
+        branch: { connect: { code: BranchCode.COLOMBO } },
         label: 'C06 concurrency vehicle',
         seatCapacity: 2,
         authorizations: {
@@ -1621,6 +1627,7 @@ describe('resource lock concurrency', () => {
     const vehicle = await prisma.vehicle.create({
       data: {
         code: `C06-RULE-${suffix}-${batchVehicleIds.length}`,
+        branch: { connect: { code: BranchCode.COLOMBO } },
         label: 'C06 authorization race vehicle',
         seatCapacity: 2,
         authorizations: { create: { employeeId: supervisorIds[0] } },
@@ -2107,6 +2114,66 @@ describe('publishing', () => {
     expect(snapshotCrew.map((m) => m.employeeId).sort()).toEqual(
       stored.crewMembers.map((m) => m.employeeId).sort(),
     );
+  });
+
+  it('refuses to publish unconfirmed source data, then records the acknowledgement that permits it', async () => {
+    const visitId = await makeVisit();
+    // The visible 08:00-17:00 fallback: an assumption, not a fact the crews
+    // can be told without somebody deciding to stand behind it.
+    await prisma.generatedVisit.update({
+      where: { id: visitId },
+      data: { windowProvenance: DataProvenance.DEFAULTED },
+    });
+    const runId = await solve();
+
+    const listed = await request(http)
+      .get(`/api/schedule-runs/${runId}`)
+      .set(auth(adminToken));
+    expect(listed.status).toBe(200);
+    expect(listed.body.publishReadiness).toMatchObject({
+      state: 'ACKNOWLEDGEMENT_REQUIRED',
+      requiresProvenanceAcknowledgement: true,
+      provenanceWarnings: [
+        expect.objectContaining({ code: 'HOURS_UNCONFIRMED', affectedVisitCount: 1 }),
+      ],
+    });
+
+    const unacknowledged = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ reason: 'Week of 7 September' });
+    expect(unacknowledged.status).toBe(409);
+    expect(unacknowledged.body.message).toContain('unconfirmed');
+    expect(
+      await prisma.assignment.findFirstOrThrow({ where: { generatedVisitId: visitId } }),
+    ).toMatchObject({ status: 'DRAFT' });
+
+    const noReason = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ acknowledgeProvenance: true, reason: '   ' });
+    expect(noReason.status).toBe(409);
+
+    const published = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({
+        acknowledgeProvenance: true,
+        reason: 'Fallback hours agreed with the site for this week.',
+      });
+    expect(published.status).toBe(200);
+    expect(published.body.isPublished).toBe(true);
+
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityId: runId, action: 'schedule_run.published' },
+    });
+    expect(event.after).toMatchObject({
+      reason: 'Fallback hours agreed with the site for this week.',
+      acknowledgedProvenance: true,
+      provenanceWarnings: [
+        expect.objectContaining({ code: 'HOURS_UNCONFIRMED', affectedVisitCount: 1 }),
+      ],
+    });
   });
 
   it('refuses to publish the same run twice', async () => {

@@ -211,6 +211,151 @@ describe("ScheduleHistoryPage", () => {
     });
   });
 
+  it("names the unconfirmed source data and refuses to publish until it is acknowledged", async () => {
+    const run = buildScheduleRun({
+      id: "run-unconfirmed",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsConsidered: 40,
+      visitsScheduled: 40,
+      visitsUnassigned: 0,
+      publishReadiness: {
+        state: "ACKNOWLEDGEMENT_REQUIRED",
+        code: "SOURCE_DATA_UNCONFIRMED",
+        message: "This run rests on source data that is still unconfirmed.",
+        requiresPartialAcknowledgement: false,
+        requiresProvenanceAcknowledgement: true,
+        provenanceWarnings: [
+          {
+            code: "HOURS_UNCONFIRMED",
+            message: "Opening hours were not confirmed; the visible 08:00–17:00 fallback is in use.",
+            affectedVisitCount: 7,
+          },
+          {
+            code: "SITE_BRANCH_UNCONFIRMED",
+            message:
+              "The service site branch is inferred from source data and needs manager confirmation.",
+            affectedVisitCount: 2,
+          },
+        ],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+
+    expect(await screen.findByText(/Opening hours were not confirmed/)).toBeInTheDocument();
+    expect(screen.getByText(/service site branch is inferred/)).toBeInTheDocument();
+    expect(screen.getByText("7 visits")).toBeInTheDocument();
+    expect(screen.getByText("2 visits")).toBeInTheDocument();
+    // Nothing unassigned, so the partial gate must stay out of the way.
+    expect(screen.queryByText(/could not be staffed/)).not.toBeInTheDocument();
+
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    expect(publishButton).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /source data that is not confirmed/i }));
+    expect(publishButton).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText("Reason (required for unconfirmed source data)"),
+      "Hours agreed with the site by phone.",
+    );
+
+    vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
+    expect(publishButton).toBeEnabled();
+    await user.click(publishButton);
+
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-unconfirmed", {
+      acknowledgeProvenance: true,
+      reason: "Hours agreed with the site by phone.",
+    });
+  });
+
+  it("still sends acknowledgePartial, and asks for both, when a partial run is also unconfirmed", async () => {
+    const run = buildScheduleRun({
+      id: "run-both",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 2,
+      publishReadiness: {
+        state: "ACKNOWLEDGEMENT_REQUIRED",
+        code: "PARTIAL_RESULTS",
+        message: "This run left visits unassigned and rests on unconfirmed source data.",
+        requiresPartialAcknowledgement: true,
+        requiresProvenanceAcknowledgement: true,
+        provenanceWarnings: [
+          {
+            code: "CREW_SIZE_UNCONFIRMED",
+            message:
+              "Crew size was not stated by the source and has not been confirmed by a manager.",
+            affectedVisitCount: 1,
+          },
+        ],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+
+    await user.type(
+      screen.getByLabelText("Reason (required for partial schedules)"),
+      "Both reviewed with the branch manager.",
+    );
+    expect(publishButton).toBeDisabled();
+
+    // The partial acknowledgement alone is not enough — the source-data gate
+    // is still outstanding, and must not be swallowed by it.
+    await user.click(
+      screen.getByRole("checkbox", { name: /unassigned visits will not be dispatched/i }),
+    );
+    expect(publishButton).toBeDisabled();
+
+    await user.click(screen.getByRole("checkbox", { name: /source data that is not confirmed/i }));
+    expect(publishButton).toBeEnabled();
+
+    vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
+    await user.click(publishButton);
+
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-both", {
+      acknowledgePartial: true,
+      acknowledgeProvenance: true,
+      reason: "Both reviewed with the branch manager.",
+    });
+  });
+
+  it("asks for no source-data acknowledgement when every value is confirmed", async () => {
+    const run = buildScheduleRun({
+      id: "run-confirmed",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 0,
+      publishReadiness: {
+        state: "READY",
+        code: null,
+        message: null,
+        requiresPartialAcknowledgement: false,
+        requiresProvenanceAcknowledgement: false,
+        provenanceWarnings: [],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reason (optional)")).toBeInTheDocument();
+
+    vi.mocked(publishScheduleRun).mockResolvedValue({ ...run, isPublished: true });
+    await user.click(screen.getByRole("button", { name: "Publish" }));
+
+    expect(publishScheduleRun).toHaveBeenCalledWith("run-confirmed", {});
+  });
+
   it("stays quiet about the warning when nothing is left unassigned", async () => {
     const run = buildScheduleRun({
       id: "run-3",

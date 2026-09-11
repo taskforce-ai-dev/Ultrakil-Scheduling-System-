@@ -5755,6 +5755,34 @@
           "pageSize"
         ]
       },
+      "ProvenanceWarningDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "CREW_SIZE_UNCONFIRMED",
+              "DAY_RULE_UNCONFIRMED",
+              "DURATION_UNCONFIRMED",
+              "HOURS_UNCONFIRMED",
+              "SITE_BRANCH_UNCONFIRMED",
+              "VEHICLE_BRANCH_UNCONFIRMED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "affectedVisitCount": {
+            "type": "number",
+            "description": "Visits in this publication affected by the warning."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "affectedVisitCount"
+        ]
+      },
       "PublishReadinessDto": {
         "type": "object",
         "properties": {
@@ -5771,18 +5799,37 @@
             "nullable": true,
             "enum": [
               "ZERO_RESULTS",
-              "PARTIAL_RESULTS"
+              "PARTIAL_RESULTS",
+              "SOURCE_DATA_UNCONFIRMED"
             ]
           },
           "message": {
             "type": "string",
             "nullable": true
+          },
+          "requiresPartialAcknowledgement": {
+            "type": "boolean",
+            "description": "The run left visits unassigned."
+          },
+          "requiresProvenanceAcknowledgement": {
+            "type": "boolean",
+            "description": "The assignments to be published rest on unconfirmed source data."
+          },
+          "provenanceWarnings": {
+            "description": "Advisory. The authoritative set is recalculated inside the publish transaction.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceWarningDto"
+            }
           }
         },
         "required": [
           "state",
           "code",
-          "message"
+          "message",
+          "requiresPartialAcknowledgement",
+          "requiresProvenanceAcknowledgement",
+          "provenanceWarnings"
         ]
       },
       "ScheduleRunDto": {

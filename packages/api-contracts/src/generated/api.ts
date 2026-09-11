@@ -2062,12 +2062,25 @@ export interface components {
             page: number;
             pageSize: number;
         };
+        ProvenanceWarningDto: {
+            /** @enum {string} */
+            code: "CREW_SIZE_UNCONFIRMED" | "DAY_RULE_UNCONFIRMED" | "DURATION_UNCONFIRMED" | "HOURS_UNCONFIRMED" | "SITE_BRANCH_UNCONFIRMED" | "VEHICLE_BRANCH_UNCONFIRMED";
+            message: string;
+            /** @description Visits in this publication affected by the warning. */
+            affectedVisitCount: number;
+        };
         PublishReadinessDto: {
             /** @enum {string} */
             state: "READY" | "BLOCKED" | "ACKNOWLEDGEMENT_REQUIRED";
             /** @enum {string|null} */
-            code: "ZERO_RESULTS" | "PARTIAL_RESULTS" | null;
+            code: "ZERO_RESULTS" | "PARTIAL_RESULTS" | "SOURCE_DATA_UNCONFIRMED" | null;
             message: string | null;
+            /** @description The run left visits unassigned. */
+            requiresPartialAcknowledgement: boolean;
+            /** @description The assignments to be published rest on unconfirmed source data. */
+            requiresProvenanceAcknowledgement: boolean;
+            /** @description Advisory. The authoritative set is recalculated inside the publish transaction. */
+            provenanceWarnings: components["schemas"]["ProvenanceWarningDto"][];
         };
         ScheduleRunDto: {
             /** Format: uuid */

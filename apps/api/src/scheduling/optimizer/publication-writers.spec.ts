@@ -2,9 +2,12 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  DataProvenance,
   LockScope,
   Prisma,
   ScheduleRunStatus,
+  SiteBranchConfidence,
+  SiteBranchSource,
   VisitStatus,
 } from '@prisma/client';
 
@@ -39,10 +42,21 @@ function fixture() {
     updatedAt: new Date(),
     isManuallyAdjusted: false,
     lockedAt: null,
+    // Confirmed source data by default: the publication gate has nothing to
+    // warn about unless a test deliberately unconfirms something.
+    windowProvenance: DataProvenance.SOURCE as DataProvenance,
     serviceAgreement: {
       customer: { name: 'Customer' },
-      serviceSite: { name: 'Site', _count: { operatingHours: 1 } },
+      serviceSite: {
+        name: 'Site',
+        branchConfidence: SiteBranchConfidence.CONFIRMED as SiteBranchConfidence,
+        branchSource: SiteBranchSource.MANAGER_CONFIRMED as SiteBranchSource,
+        _count: { operatingHours: 1 },
+      },
       jobType: { name: 'Job' },
+      crewSizeProvenance: DataProvenance.SOURCE as DataProvenance,
+      durationProvenance: DataProvenance.SOURCE as DataProvenance,
+      dayRuleProvenance: DataProvenance.SOURCE as DataProvenance,
     },
     _count: { assignments: 1 },
   };
@@ -67,7 +81,7 @@ function fixture() {
     ],
     vehicles: [] as {
       vehicleId: string;
-      vehicle: { label: string };
+      vehicle: { label: string; branchId: string | null };
       driverEmployeeId: string | null;
     }[],
     locks: [],
@@ -217,6 +231,9 @@ function fixture() {
     id: 'original-run',
     status: ScheduleRunStatus.SUCCEEDED,
     publishedAt: null,
+    visitsConsidered: 1,
+    visitsScheduled: 1,
+    visitsUnassigned: 0,
   };
   const prisma = {
     assignment,
@@ -278,6 +295,7 @@ function fixture() {
     prisma,
     audit,
     eligibility,
+    run,
     manual: new AssignmentsService(
       client,
       eligibility as unknown as EligibilityService,
@@ -611,17 +629,164 @@ describe('standard writers preserve publication', () => {
     expect(f.prisma.assignmentLock.update).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses publication when the locked snapshot turns out to rest on unconfirmed source data', async () => {
+    // Readiness read before the transaction says READY. A correction lands
+    // while publication waits for the visit lock, so the assignments actually
+    // being published are no longer backed by confirmed hours.
+    const f = fixture();
+    f.beforeTransaction(async () => {
+      f.visit.windowProvenance = DataProvenance.DEFAULTED;
+    });
+
+    const failure = await f.publishing
+      .publish('original-run', 'Publishing this week.', actor)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      details: {
+        publishReadiness: expect.objectContaining({
+          requiresProvenanceAcknowledgement: true,
+          provenanceWarnings: [
+            expect.objectContaining({ code: 'HOURS_UNCONFIRMED', affectedVisitCount: 1 }),
+          ],
+        }),
+      },
+    });
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+    expect(f.prisma.scheduleRun.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignment.updateMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignmentNotificationOutbox.createMany).not.toHaveBeenCalled();
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('evaluates the source-data gate from the locked snapshot, not the pre-lock read', async () => {
+    // The mirror image: unconfirmed before the lock, corrected and confirmed by
+    // the time the locks are held. Publication proceeds and records no warning
+    // the locked snapshot did not carry.
+    const f = fixture();
+    f.visit.windowProvenance = DataProvenance.DEFAULTED;
+    f.beforeTransaction(async () => {
+      f.visit.windowProvenance = DataProvenance.MANAGER_CONFIRMED;
+    });
+
+    await f.publishing.publish('original-run', 'Hours confirmed with the site.', actor);
+
+    expect(f.original.status).toBe(AssignmentStatus.PUBLISHED);
+    expect(f.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: expect.objectContaining({ provenanceWarnings: [] }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('publishes unconfirmed source data with an acknowledgement and a reason, and records both', async () => {
+    const f = fixture();
+    f.visit.windowProvenance = DataProvenance.DEFAULTED;
+    f.visit.serviceAgreement.crewSizeProvenance = DataProvenance.DEFAULTED;
+    f.original.vehicles.push({
+      vehicleId: 'vehicle-one',
+      vehicle: { label: 'Vehicle one', branchId: null },
+      driverEmployeeId: 'employee',
+    });
+
+    await f.publishing.publish(
+      'original-run',
+      'Hours and crew size carried over from the workbook; branch manager agreed.',
+      actor,
+      false,
+      true,
+    );
+
+    expect(f.original.status).toBe(AssignmentStatus.PUBLISHED);
+    expect(f.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'schedule_run.published',
+        after: expect.objectContaining({
+          reason:
+            'Hours and crew size carried over from the workbook; branch manager agreed.',
+          acknowledgedProvenance: true,
+          acknowledgedPartial: false,
+          provenanceWarnings: [
+            { code: 'CREW_SIZE_UNCONFIRMED', message: expect.any(String), affectedVisitCount: 1 },
+            { code: 'HOURS_UNCONFIRMED', message: expect.any(String), affectedVisitCount: 1 },
+            {
+              code: 'VEHICLE_BRANCH_UNCONFIRMED',
+              message: expect.any(String),
+              affectedVisitCount: 1,
+            },
+          ],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('makes a partial run and an unconfirmed-source run both acknowledgeable on one publish', async () => {
+    const f = fixture();
+    f.run.visitsConsidered = 2;
+    f.run.visitsScheduled = 1;
+    f.run.visitsUnassigned = 1;
+    f.visit.windowProvenance = DataProvenance.DEFAULTED;
+    const reason = 'One visit stays unassigned and the hours are the 08:00-17:00 fallback.';
+
+    // The partial acknowledgement alone does not cover the unconfirmed hours.
+    const partialOnly = await f.publishing
+      .publish('original-run', reason, actor, true, false)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(partialOnly).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      message: expect.stringContaining('unconfirmed'),
+    });
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+
+    // Nor does the provenance acknowledgement alone cover the unassigned visit.
+    const provenanceOnly = await f.publishing
+      .publish('original-run', reason, actor, false, true)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(provenanceOnly).toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      message: expect.stringContaining('left visits unassigned'),
+    });
+    expect(f.original.status).toBe(AssignmentStatus.DRAFT);
+    expect(f.audit.record).not.toHaveBeenCalled();
+
+    await f.publishing.publish('original-run', reason, actor, true, true);
+
+    expect(f.original.status).toBe(AssignmentStatus.PUBLISHED);
+    expect(f.audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        after: expect.objectContaining({
+          acknowledgedPartial: true,
+          acknowledgedProvenance: true,
+          provenanceWarnings: [expect.objectContaining({ code: 'HOURS_UNCONFIRMED' })],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
   it('refuses a pre-upgrade multi-vehicle draft when publish-time eligibility rejects it', async () => {
     const f = fixture();
     f.original.vehicles.push(
       {
         vehicleId: 'vehicle-one',
-        vehicle: { label: 'Vehicle one' },
+        vehicle: { label: 'Vehicle one', branchId: 'branch' },
         driverEmployeeId: 'employee',
       },
       {
         vehicleId: 'vehicle-two',
-        vehicle: { label: 'Vehicle two' },
+        vehicle: { label: 'Vehicle two', branchId: 'branch' },
         driverEmployeeId: 'employee',
       },
     );

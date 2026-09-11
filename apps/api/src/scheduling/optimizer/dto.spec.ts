@@ -19,4 +19,22 @@ describe('PublishScheduleDto', () => {
 
     expect(await validate(dto, { whitelist: true })).not.toEqual([]);
   });
+
+  it('carries both acknowledgements independently under whitelist validation', async () => {
+    const dto = plainToInstance(PublishScheduleDto, {
+      reason: 'Unassigned visits reviewed and the fallback hours accepted.',
+      acknowledgePartial: true,
+      acknowledgeProvenance: true,
+    });
+
+    expect(await validate(dto, { whitelist: true })).toEqual([]);
+    expect(dto.acknowledgePartial).toBe(true);
+    expect(dto.acknowledgeProvenance).toBe(true);
+  });
+
+  it('rejects a non-boolean source-data acknowledgement', async () => {
+    const dto = plainToInstance(PublishScheduleDto, { acknowledgeProvenance: 'yes' });
+
+    expect(await validate(dto, { whitelist: true })).not.toEqual([]);
+  });
 });

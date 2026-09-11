@@ -24,6 +24,7 @@ import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.fil
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
 import { VisitGenerationService } from '../../src/scheduling/visit-generation/visit-generation.service';
+import { confirmAgreementProvenance } from './confirm-provenance';
 
 const prisma = new PrismaClient();
 
@@ -496,8 +497,12 @@ describe('regeneration never loses manager-controlled work', () => {
           });
           // Leave the visit timestamp/status unchanged: the assignment/history
           // recheck must protect it even independently of the revision fence.
-          if (change === 'publication')
+          if (change === 'publication') {
+            // The subject here is regeneration, not provenance: state the
+            // fixture as confirmed fact so publishing needs no acknowledgement.
+            await confirmAgreementProvenance(prisma, agreement.id);
             await app.get(PublishingService).publish(run.id, null, actor);
+          }
         }
         const visitsBefore = await prisma.generatedVisit.findMany({
           where: { serviceAgreementId: agreement.id },
