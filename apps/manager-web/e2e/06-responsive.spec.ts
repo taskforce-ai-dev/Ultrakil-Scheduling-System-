@@ -25,13 +25,13 @@ const PAGES: Array<{ path: string; heading: string }> = [
   { path: "/dashboard", heading: "Dashboard" },
   { path: "/customers", heading: "Customers" },
   { path: "/service-agreements", heading: "Service Agreements" },
-  { path: "/visits", heading: "Visit Calendar" },
+  { path: "/visits", heading: "Generate Schedule" },
   { path: "/calendar", heading: "Calendar" },
   { path: "/workforce", heading: "Workforce" },
   { path: "/vehicles", heading: "Vehicles" },
   { path: "/dispatch-board", heading: "Dispatch Board" },
   { path: "/unassigned-visits", heading: "Unassigned Visits" },
-  { path: "/schedule-history", heading: "Schedule History" },
+  { path: "/schedule-history", heading: "Assign Crew" },
 ];
 
 async function expectNoDocumentLevelHorizontalScroll(page: Page, label: string) {
@@ -77,6 +77,6 @@ for (const { path, heading } of PAGES) {
     const menuButton = page.getByRole("button", { name: "Open navigation menu" });
     await expect(menuButton).toBeVisible();
     await menuButton.click();
-    await expect(page.getByRole("link", { name: "Schedule History" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Assign Crew" })).toBeVisible();
   });
 }

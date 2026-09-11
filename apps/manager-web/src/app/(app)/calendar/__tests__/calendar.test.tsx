@@ -96,7 +96,7 @@ describe("CalendarPage", () => {
     const user = userEvent.setup();
     render(<CalendarPage />);
     const chip = await screen.findByRole("button", {
-      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayIso()}, published`,
+      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayIso()}, post`,
     });
     expect(within(chip).getByText("09:00–11:30")).toBeInTheDocument();
     await user.click(chip);
@@ -128,7 +128,7 @@ describe("CalendarPage", () => {
     render(<CalendarPage />);
     expect(await screen.findByRole("button", { name: /Cinnamon Grand Colombo.*completed \/ cancelled/ })).toBeInTheDocument();
     expect(screen.getByText("Completed / cancelled (1)")).toBeInTheDocument();
-    expect(screen.getByText("Published (0)")).toBeInTheDocument();
+    expect(screen.getByText("Post (0)")).toBeInTheDocument();
   });
 
   it.each(["success", "failure"])("ignores an older request's %s after a newer success", async (outcome) => {
@@ -172,7 +172,7 @@ describe("CalendarPage", () => {
     expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
     // The stage legend counts every visible entry by stage.
     expect(screen.getByText(/Needs a crew \(1\)/)).toBeInTheDocument();
-    expect(screen.getByText(/Published \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Post \(1\)/)).toBeInTheDocument();
   });
 
   it("shows crew, supervisor and vehicle detail when a published visit is opened", async () => {
@@ -218,7 +218,7 @@ describe("CalendarPage", () => {
     await screen.findByText("Grandview Hotel");
 
     await user.click(screen.getByLabelText("Stage"));
-    await user.click(await screen.findByRole("option", { name: "Published to the crew" }));
+    await user.click(await screen.findByRole("option", { name: "Post to the crew" }));
 
     expect(screen.queryByText("Grandview Hotel")).not.toBeInTheDocument();
     expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();

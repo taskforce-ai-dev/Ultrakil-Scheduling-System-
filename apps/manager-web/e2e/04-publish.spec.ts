@@ -16,7 +16,7 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   test.setTimeout(180_000);
 
   await page.goto("/schedule-history");
-  await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Assign Crew" })).toBeVisible();
 
   const from = await page.locator('#run-from').inputValue();
   const to = await page.locator('#run-to').inputValue();
@@ -57,5 +57,5 @@ test("starts a schedule run, watches it finish, and publishes it", async ({ page
   // same pattern the page's own Vitest suite relies on.
   await page.getByRole("button", { name: "Publish" }).click();
 
-  await expect(row.getByText("Published", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(row.getByText("Post", { exact: true })).toBeVisible({ timeout: 15_000 });
 });
