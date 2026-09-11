@@ -28,6 +28,8 @@ const EXPECTED_TABLES = [
   'generated_visits',
   'job_types',
   'permanent_assignments',
+  'published_assignment_repair_items',
+  'published_assignment_repairs',
   'schedule_run_dispatch_outbox',
   'schedule_runs',
   'service_agreement_day_rules',
