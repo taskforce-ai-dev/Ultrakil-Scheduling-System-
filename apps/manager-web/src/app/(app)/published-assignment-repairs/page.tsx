@@ -10,8 +10,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
-  Truck,
-  UserRoundCheck,
 } from "lucide-react";
 
 import { EmptyState } from "@/components/shared/empty-state";
@@ -35,6 +33,7 @@ import {
   buildPublishedAssignmentRepairPlan,
   fetchPublishedAssignmentRepairFindings,
   type PublishedAssignmentRepairFinding,
+  type PublishedAssignmentRepairOperation,
   type PublishedAssignmentRepairPlan,
   type PublishedAssignmentRepairPlanItem,
   type PublishedAssignmentRepairResult,
@@ -77,12 +76,6 @@ function formatMinutes(minutes: number) {
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return `${String(hours).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
-}
-
-function sameMembers(left: string[], right: string[]) {
-  if (left.length !== right.length) return false;
-  const expected = new Set(left);
-  return right.every((value) => expected.has(value));
 }
 
 function createBrowserIdempotencyKey() {
@@ -198,80 +191,84 @@ function FindingSection({
   );
 }
 
+/**
+ * One planned repair. The item carries the server's decision and identity;
+ * the matching operation carries the exact crew, vehicle and timing that
+ * apply will send back. Both come from the generated contract, so nothing
+ * here can read a field the API never returns.
+ */
 function PlanItem({
   item,
-  finding,
+  operation,
+  resourceLabels,
 }: {
   item: PublishedAssignmentRepairPlanItem;
-  finding?: PublishedAssignmentRepairFinding;
+  operation?: PublishedAssignmentRepairOperation;
+  resourceLabels: PublishedAssignmentRepairPlan["resourceLabels"];
 }) {
-  const replacementCrewIds = item.replacement?.crew.map((member) => member.employeeId) ?? [];
-  const replacementVehicleIds = item.replacement?.vehicles?.map((vehicle) => vehicle.vehicleId) ?? [];
-  const crewPreserved = sameMembers(item.preserved.crewEmployeeIds, replacementCrewIds);
-  const vehiclePreserved = sameMembers(item.preserved.vehicleIds, replacementVehicleIds);
+  const employeeName = (employeeId: string) =>
+    resourceLabels.employees.find((employee) => employee.employeeId === employeeId)?.fullName ??
+    employeeId;
+  const vehicleLabel = (vehicleId: string) =>
+    resourceLabels.vehicles.find((vehicle) => vehicle.vehicleId === vehicleId)?.label ?? vehicleId;
+
+  if (!operation) {
+    return (
+      <li className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+        <p className="font-medium">{item.customerName}</p>
+        <p className="text-sm">
+          The repair plan returned no operation for this visit. Rebuild the plan before applying it.
+        </p>
+      </li>
+    );
+  }
 
   return (
     <li className="rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="font-medium">{finding?.customerName ?? `Visit ${item.visitId}`}</p>
+          <p className="font-medium">{item.customerName}</p>
           <p className="text-sm text-muted-foreground">
-            {finding?.siteName ? `${finding.siteName} · ` : ""}
-            {formatLongDate(item.visitDate)}
+            {item.siteName} · {formatLongDate(item.visitDate)}
           </p>
         </div>
-        <Badge variant={item.action === "REPLACED" ? "success" : "destructive"}>
-          {item.action === "REPLACED" ? "Safe replacement" : "Withdraw to Unassigned Visits"}
+        <Badge variant={operation.action === "REPLACED" ? "success" : "destructive"}>
+          {operation.action === "REPLACED" ? "Safe replacement" : "Withdraw to Unassigned Visits"}
         </Badge>
       </div>
 
-      {item.action === "REPLACED" && item.replacement ? (
+      {operation.action === "REPLACED" && operation.replacement ? (
         <div className="mt-4 space-y-3">
-          <div className="flex flex-wrap gap-2" aria-label="Preservation summary">
-            <Badge variant={crewPreserved ? "success" : "outline"}>
-              <UserRoundCheck aria-hidden="true" />
-              {crewPreserved ? "Crew preserved" : "Crew changed"}
-            </Badge>
-            <Badge variant={item.preserved.keptOriginalTime ? "success" : "outline"}>
-              <Clock3 aria-hidden="true" />
-              {item.preserved.keptOriginalTime ? "Time preserved" : "Time changed"}
-            </Badge>
-            <Badge variant={vehiclePreserved ? "success" : "outline"}>
-              <Truck aria-hidden="true" />
-              {vehiclePreserved ? "Vehicle preserved" : "Vehicle changed"}
-            </Badge>
-          </div>
-
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Time</dt>
               <dd>
-                {formatMinutes(item.replacement.plannedStartMinute)}–
-                {formatMinutes(item.replacement.plannedEndMinute)}
+                <Clock3 className="mr-1 inline h-3.5 w-3.5" aria-hidden="true" />
+                {formatMinutes(operation.replacement.plannedStartMinute)}–
+                {formatMinutes(operation.replacement.plannedEndMinute)}
               </dd>
             </div>
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Crew</dt>
               <dd>
-                {item.replacement.crew
-                  .map((member) => member.fullName ?? member.employeeId)
+                {operation.replacement.crew
+                  .map((member) => employeeName(member.employeeId))
                   .join(", ")}
               </dd>
             </div>
             <div className="sm:col-span-2">
               <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Vehicle</dt>
               <dd>
-                {item.replacement.vehicles?.length
-                  ? item.replacement.vehicles.map((vehicle, index) => {
-                      const driver = vehicle.driverName ?? vehicle.driverEmployeeId;
-                      return (
-                        <React.Fragment key={vehicle.vehicleId}>
-                          {index > 0 ? ", " : ""}
-                          <span>{vehicle.label ?? vehicle.vehicleId}</span>
-                          {driver ? ` — driver ${driver}` : ""}
-                        </React.Fragment>
-                      );
-                    })
+                {operation.replacement.vehicles?.length
+                  ? operation.replacement.vehicles.map((vehicle, index) => (
+                      <React.Fragment key={vehicle.vehicleId}>
+                        {index > 0 ? ", " : ""}
+                        <span>{vehicleLabel(vehicle.vehicleId)}</span>
+                        {vehicle.driverEmployeeId
+                          ? ` — driver ${employeeName(vehicle.driverEmployeeId)}`
+                          : ""}
+                      </React.Fragment>
+                    ))
                   : "Public transport only"}
               </dd>
             </div>
@@ -281,7 +278,7 @@ function PlanItem({
         <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
           <p className="text-sm font-medium">No safe replacement was available.</p>
           <ul className="mt-2 space-y-2">
-            {(item.unassignedReasons ?? []).map((reason) => (
+            {(operation.unassignedReasons ?? []).map((reason) => (
               <li key={`${reason.code}-${reason.message}`}>
                 <span className="font-mono text-xs font-semibold">{reason.code}</span>
                 <p className="text-sm text-muted-foreground">{reason.message}</p>
@@ -450,7 +447,9 @@ export default function PublishedAssignmentRepairsPage() {
         operations: plan.operations,
         planHash: plan.planHash,
         sourceFingerprints: plan.sourceFingerprints,
-        ...(plan.items.some((item) => item.repairability === "CURRENT_DAY")
+        // The server decides what counts as today. Deriving it from the plan's
+        // own timeScope keeps apply's acknowledgement in step with the gate.
+        ...(plan.items.some((item) => item.timeScope === "CURRENT_DAY")
           ? { acknowledgeCurrentDay: true as const }
           : {}),
         confirmation: true,
@@ -649,8 +648,8 @@ export default function PublishedAssignmentRepairsPage() {
             <div>
               <h2 className="text-xl font-semibold">Repair plan preview</h2>
               <p className="text-sm text-muted-foreground">
-                Solver {plan.solver.status.toLowerCase()} in {plan.solver.solveSeconds.toFixed(2)}s
-                · plan {plan.planHash.slice(0, 10)}…
+                {plan.isValid ? "Validated" : "Needs review"} · plan{" "}
+                {plan.planHash.slice(0, 10)}…
               </p>
             </div>
             <Badge variant="outline">
@@ -664,9 +663,10 @@ export default function PublishedAssignmentRepairsPage() {
               <PlanItem
                 key={item.sourceAssignmentId}
                 item={item}
-                finding={findings.find(
-                  (finding) => finding.assignmentId === item.sourceAssignmentId,
+                operation={plan.operations.find(
+                  (operation) => operation.sourceAssignmentId === item.sourceAssignmentId,
                 )}
+                resourceLabels={plan.resourceLabels}
               />
             ))}
           </ul>

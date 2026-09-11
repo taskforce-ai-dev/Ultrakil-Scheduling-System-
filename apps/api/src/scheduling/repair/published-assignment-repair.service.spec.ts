@@ -164,6 +164,21 @@ describe('PublishedAssignmentRepairService', () => {
     expect(tx.publishedAssignmentRepair.create).not.toHaveBeenCalled();
   });
 
+  it('carries the visit identity a review screen needs on every item', async () => {
+    const { service } = fixture();
+
+    const preview = await service.preview({ operations: [replacement] });
+
+    // The Repair Center renders these directly. Leaving them off forced the
+    // screen to guess from a findings page that may not contain the visit.
+    expect(preview.items[0]).toMatchObject({
+      visitId,
+      visitDate: '2027-03-03',
+      customerName: 'Customer',
+      siteName: 'Site',
+    });
+  });
+
   it('evaluates a batch without retaining any targeted predecessor reservation', async () => {
     const { service, tx, eligibility, row } = fixture();
     const secondSourceId = '88888888-8888-4888-8888-888888888888';

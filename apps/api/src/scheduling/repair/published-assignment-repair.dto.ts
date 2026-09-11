@@ -236,6 +236,9 @@ export class PublishedAssignmentFindingDto {
 export class PublishedAssignmentRepairPreviewItemDto {
   @ApiProperty({ type: String, format: 'uuid' }) sourceAssignmentId!: string;
   @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
+  @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
+  @ApiProperty({ type: String }) customerName!: string;
+  @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ enum: AssignmentRepairAction }) action!: AssignmentRepairAction;
   @ApiProperty({ type: String }) sourceFingerprint!: string;
   @ApiProperty({ type: Boolean }) isValid!: boolean;
@@ -268,12 +271,36 @@ export class PublishedAssignmentRepairResultDto {
   items!: PublishedAssignmentRepairResultItemDto[];
 }
 
+export class RepairEmployeeLabelDto {
+  @ApiProperty({ type: String, format: 'uuid' }) employeeId!: string;
+  @ApiProperty({ type: String }) fullName!: string;
+}
+
+export class RepairVehicleLabelDto {
+  @ApiProperty({ type: String, format: 'uuid' }) vehicleId!: string;
+  @ApiProperty({ type: String }) label!: string;
+}
+
+export class RepairResourceLabelsDto {
+  @ApiProperty({ type: [RepairEmployeeLabelDto] })
+  employees!: RepairEmployeeLabelDto[];
+  @ApiProperty({ type: [RepairVehicleLabelDto] })
+  vehicles!: RepairVehicleLabelDto[];
+}
+
 export class PublishedAssignmentRepairPlanResponseDto extends PublishedAssignmentRepairPreviewResponseDto {
   @ApiProperty({ type: [PublishedAssignmentRepairOperationDto] })
   operations!: PublishedAssignmentRepairOperationDto[];
 
   @ApiProperty({ type: [RepairSourceFingerprintDto] })
   sourceFingerprints!: RepairSourceFingerprintDto[];
+
+  @ApiProperty({
+    type: RepairResourceLabelsDto,
+    description:
+      'Names for exactly the employees and vehicles this plan references, so the review screen never shows a crew as bare identifiers.',
+  })
+  resourceLabels!: RepairResourceLabelsDto;
 }
 
 export class PublishedAssignmentFindingsResponseDto {

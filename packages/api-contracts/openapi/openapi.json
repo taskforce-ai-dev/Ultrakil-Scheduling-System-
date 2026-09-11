@@ -6546,6 +6546,16 @@
             "type": "string",
             "format": "uuid"
           },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
           "action": {
             "type": "string",
             "enum": [
@@ -6576,6 +6586,9 @@
         "required": [
           "sourceAssignmentId",
           "visitId",
+          "visitDate",
+          "customerName",
+          "siteName",
           "action",
           "sourceFingerprint",
           "isValid",
@@ -6720,6 +6733,59 @@
           "fingerprint"
         ]
       },
+      "RepairEmployeeLabelDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName"
+        ]
+      },
+      "RepairVehicleLabelDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label"
+        ]
+      },
+      "RepairResourceLabelsDto": {
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairEmployeeLabelDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairVehicleLabelDto"
+            }
+          }
+        },
+        "required": [
+          "employees",
+          "vehicles"
+        ]
+      },
       "PublishedAssignmentRepairPlanResponseDto": {
         "type": "object",
         "properties": {
@@ -6746,6 +6812,14 @@
             "items": {
               "$ref": "#/components/schemas/RepairSourceFingerprintDto"
             }
+          },
+          "resourceLabels": {
+            "description": "Names for exactly the employees and vehicles this plan references, so the review screen never shows a crew as bare identifiers.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RepairResourceLabelsDto"
+              }
+            ]
           }
         },
         "required": [
@@ -6753,7 +6827,8 @@
           "isValid",
           "items",
           "operations",
-          "sourceFingerprints"
+          "sourceFingerprints",
+          "resourceLabels"
         ]
       },
       "PublishedAssignmentRepairPreviewDto": {

@@ -2270,6 +2270,10 @@ export interface components {
             sourceAssignmentId: string;
             /** Format: uuid */
             visitId: string;
+            /** Format: date */
+            visitDate: string;
+            customerName: string;
+            siteName: string;
             /** @enum {string} */
             action: "REPLACED" | "WITHDRAWN";
             sourceFingerprint: string;
@@ -2315,12 +2319,28 @@ export interface components {
             /** @description SHA-256 fingerprint returned by preview. */
             fingerprint: string;
         };
+        RepairEmployeeLabelDto: {
+            /** Format: uuid */
+            employeeId: string;
+            fullName: string;
+        };
+        RepairVehicleLabelDto: {
+            /** Format: uuid */
+            vehicleId: string;
+            label: string;
+        };
+        RepairResourceLabelsDto: {
+            employees: components["schemas"]["RepairEmployeeLabelDto"][];
+            vehicles: components["schemas"]["RepairVehicleLabelDto"][];
+        };
         PublishedAssignmentRepairPlanResponseDto: {
             planHash: string;
             isValid: boolean;
             items: components["schemas"]["PublishedAssignmentRepairPreviewItemDto"][];
             operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];
             sourceFingerprints: components["schemas"]["RepairSourceFingerprintDto"][];
+            /** @description Names for exactly the employees and vehicles this plan references, so the review screen never shows a crew as bare identifiers. */
+            resourceLabels: components["schemas"]["RepairResourceLabelsDto"];
         };
         PublishedAssignmentRepairPreviewDto: {
             operations: components["schemas"]["PublishedAssignmentRepairOperationDto"][];

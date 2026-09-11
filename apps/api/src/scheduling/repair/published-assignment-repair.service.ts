@@ -13,6 +13,7 @@ import {
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
+import { toDateOnly } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict, sortConflicts } from '../eligibility/conflict-codes';
@@ -104,6 +105,14 @@ export interface PublishedAssignmentRepairApplyInput extends PublishedAssignment
 export interface PublishedAssignmentRepairPreviewItem {
   sourceAssignmentId: string;
   visitId: string;
+  /**
+   * Visit identity carried on every preview and plan item, so a review screen
+   * never has to re-derive a visit's customer, site or date from a separate
+   * findings request that may have been filtered or paged away.
+   */
+  visitDate: string;
+  customerName: string;
+  siteName: string;
   action: AssignmentRepairAction;
   sourceFingerprint: string;
   isValid: boolean;
@@ -496,6 +505,9 @@ export class PublishedAssignmentRepairService {
       items.push({
         sourceAssignmentId: source.id,
         visitId: source.generatedVisitId,
+        visitDate: toDateOnly(source.generatedVisit.visitDate),
+        customerName: source.generatedVisit.serviceAgreement.customer.name,
+        siteName: source.generatedVisit.serviceAgreement.serviceSite.name,
         action: operation.action,
         sourceFingerprint: fingerprintSource(source),
         timeScope: repairTimeScope(source.generatedVisit.visitDate),

@@ -30,6 +30,8 @@ vi.mock("@/lib/auth", () => ({
   }),
 }));
 
+import { buildConflict } from "@/test/fixtures";
+
 import PublishedAssignmentRepairsPage from "../page";
 import {
   ApiError,
@@ -47,7 +49,7 @@ const findings: PublishedAssignmentRepairFinding[] = [
     visitDate: "2026-09-09",
     customerName: "Historic Foods",
     siteName: "Archive store",
-    conflicts: [{ code: "MULTIPLE_VEHICLES", message: "Five vehicles were published." }],
+    conflicts: [buildConflict({ code: "TOO_MANY_VEHICLES", message: "Five vehicles were published." })],
     sourceFingerprint: "h".repeat(64),
     timeScope: "HISTORICAL",
     isSelectableForRepair: false,
@@ -58,7 +60,7 @@ const findings: PublishedAssignmentRepairFinding[] = [
     visitDate: "2026-09-10",
     customerName: "City Hotel",
     siteName: "Kitchen",
-    conflicts: [{ code: "MULTIPLE_VEHICLES", message: "Two vehicles were published." }],
+    conflicts: [buildConflict({ code: "TOO_MANY_VEHICLES", message: "Two vehicles were published." })],
     sourceFingerprint: "t".repeat(64),
     timeScope: "CURRENT_DAY",
     isSelectableForRepair: true,
@@ -69,88 +71,84 @@ const findings: PublishedAssignmentRepairFinding[] = [
     visitDate: "2026-09-12",
     customerName: "Harbour Offices",
     siteName: "Tower A",
-    conflicts: [{ code: "VEHICLE_REQUIRED", message: "The assigned crew needs transport." }],
+    conflicts: [buildConflict({ code: "CREW_CANNOT_TRAVEL", message: "The assigned crew needs transport." })],
     sourceFingerprint: "f".repeat(64),
     timeScope: "FUTURE",
     isSelectableForRepair: true,
   },
 ];
 
-const replacementOperation = {
+/**
+ * Everything below is the exact JSON the API returns, taken from the generated
+ * contract. A fixture that invents a planner field is a test that passes while
+ * the real screen crashes, which is precisely what this page got wrong before.
+ */
+const replacementOperation: PublishedAssignmentRepairPlan["operations"][number] = {
   sourceAssignmentId: "assignment-future",
-  action: "REPLACED" as const,
+  action: "REPLACED",
   replacement: {
     plannedStartMinute: 540,
     plannedEndMinute: 600,
     crew: [
-      { employeeId: "employee-1", fullName: "A Perera", role: "SUPERVISOR" },
-      { employeeId: "employee-2", fullName: "B Silva", role: "MEMBER" },
+      { employeeId: "employee-1", role: "SUPERVISOR" },
+      { employeeId: "employee-2", role: "TECHNICIAN" },
     ],
-    vehicles: [
-      {
-        vehicleId: "vehicle-1",
-        label: "Van DAC-2485",
-        driverEmployeeId: "employee-1",
-        driverName: "A Perera",
-      },
-    ],
+    vehicles: [{ vehicleId: "vehicle-1", driverEmployeeId: "employee-1" }],
   },
+};
+
+const withdrawalOperation: PublishedAssignmentRepairPlan["operations"][number] = {
+  sourceAssignmentId: "assignment-today",
+  action: "WITHDRAWN",
+  unassignedReasons: [
+    {
+      code: "NO_AUTHORIZED_DRIVER",
+      message: "No authorised driver and vehicle are available.",
+    },
+  ],
 };
 
 const plan: PublishedAssignmentRepairPlan = {
   planHash: "a".repeat(64),
+  isValid: true,
   sourceFingerprints: [
     { sourceAssignmentId: "assignment-future", fingerprint: "f".repeat(64) },
+    { sourceAssignmentId: "assignment-today", fingerprint: "t".repeat(64) },
   ],
-  solver: { status: "FEASIBLE", solveSeconds: 0.24 },
+  resourceLabels: {
+    employees: [
+      { employeeId: "employee-1", fullName: "A Perera" },
+      { employeeId: "employee-2", fullName: "B Silva" },
+    ],
+    vehicles: [{ vehicleId: "vehicle-1", label: "Van DAC-2485" }],
+  },
   items: [
     {
       sourceAssignmentId: "assignment-future",
       visitId: "visit-future",
       visitDate: "2026-09-12",
-      repairability: "FUTURE",
+      customerName: "Harbour Offices",
+      siteName: "Tower A",
       action: "REPLACED",
-      replacement: replacementOperation.replacement,
-      preserved: {
-        crewEmployeeIds: ["employee-1", "employee-2"],
-        vehicleIds: [],
-        keptOriginalTime: true,
-      },
+      sourceFingerprint: "f".repeat(64),
+      isValid: true,
       conflicts: [],
+      timeScope: "FUTURE",
     },
     {
       sourceAssignmentId: "assignment-today",
       visitId: "visit-today",
       visitDate: "2026-09-10",
-      repairability: "CURRENT_DAY",
+      customerName: "City Hotel",
+      siteName: "Kitchen",
       action: "WITHDRAWN",
-      unassignedReasons: [
-        {
-          code: "NO_FEASIBLE_VEHICLE",
-          message: "No authorised driver and vehicle are available.",
-        },
-      ],
-      preserved: {
-        crewEmployeeIds: ["employee-3"],
-        vehicleIds: [],
-        keptOriginalTime: true,
-      },
+      sourceFingerprint: "t".repeat(64),
+      isValid: true,
       conflicts: [],
+      timeScope: "CURRENT_DAY",
     },
   ],
-  operations: [
-    replacementOperation,
-    {
-      sourceAssignmentId: "assignment-today",
-      action: "WITHDRAWN",
-      unassignedReasons: [
-        {
-          code: "NO_FEASIBLE_VEHICLE",
-          message: "No authorised driver and vehicle are available.",
-        },
-      ],
-    },
-  ],
+  operations: [replacementOperation, withdrawalOperation],
 };
 
 function mockFindings(items = findings) {
@@ -241,12 +239,12 @@ describe("PublishedAssignmentRepairsPage", () => {
     await user.click(screen.getByRole("button", { name: "Build repair plan" }));
 
     const preview = await screen.findByRole("region", { name: "Repair plan preview" });
-    expect(within(preview).getByText("Crew preserved")).toBeInTheDocument();
-    expect(within(preview).getByText("Time preserved")).toBeInTheDocument();
-    expect(within(preview).getByText("Vehicle changed")).toBeInTheDocument();
+    expect(within(preview).getByText("09:00–10:00")).toBeInTheDocument();
+    expect(within(preview).getByText("A Perera, B Silva")).toBeInTheDocument();
     expect(within(preview).getByText("Van DAC-2485")).toBeInTheDocument();
+    expect(within(preview).getByText(/driver A Perera/)).toBeInTheDocument();
     expect(within(preview).getByText("Withdraw to Unassigned Visits")).toBeInTheDocument();
-    expect(within(preview).getByText("NO_FEASIBLE_VEHICLE")).toBeInTheDocument();
+    expect(within(preview).getByText("NO_AUTHORIZED_DRIVER")).toBeInTheDocument();
     expect(within(preview).getByText(/No authorised driver and vehicle/)).toBeInTheDocument();
   });
 
@@ -306,6 +304,67 @@ describe("PublishedAssignmentRepairsPage", () => {
     });
     expect(request.idempotencyKey).toMatch(/^repair-/);
     expect(await screen.findByText(/applied; crew communication is pending/i)).toBeInTheDocument();
+  });
+
+  it("acknowledges the current day on apply whenever the server scoped a plan item to today", async () => {
+    vi.mocked(buildPublishedAssignmentRepairPlan).mockResolvedValue(plan);
+    vi.mocked(applyPublishedAssignmentRepair).mockResolvedValue({
+      repairId: "repair-2",
+      planHash: plan.planHash,
+      idempotencyKey: "browser-key",
+      communicationState: "APPLIED_PENDING_COMMUNICATION",
+      items: [],
+    });
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText(/Select City Hotel/));
+    await user.click(screen.getByLabelText(/Select Harbour Offices/));
+    await user.click(screen.getByRole("checkbox", { name: /I understand today.s dispatched work/i }));
+    await user.click(screen.getByRole("button", { name: "Build repair plan" }));
+
+    const applyButton = await screen.findByRole("button", { name: "Apply repair" });
+    fireEvent.change(screen.getByLabelText("Repair reason"), {
+      target: { value: "Correct today's stranded crew" },
+    });
+    await user.click(
+      screen.getByRole("checkbox", { name: /I confirm this will supersede published assignments/i }),
+    );
+    await user.click(applyButton);
+
+    expect(vi.mocked(applyPublishedAssignmentRepair).mock.calls[0][0]).toMatchObject({
+      acknowledgeCurrentDay: true,
+    });
+  });
+
+  it("never claims a current-day acknowledgement the plan does not need", async () => {
+    vi.mocked(buildPublishedAssignmentRepairPlan).mockResolvedValue({
+      ...plan,
+      items: [plan.items[0]],
+      operations: [plan.operations[0]],
+    });
+    vi.mocked(applyPublishedAssignmentRepair).mockResolvedValue({
+      repairId: "repair-3",
+      planHash: plan.planHash,
+      idempotencyKey: "browser-key",
+      communicationState: "APPLIED_PENDING_COMMUNICATION",
+      items: [],
+    });
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText(/Select Harbour Offices/));
+    await user.click(screen.getByRole("button", { name: "Build repair plan" }));
+
+    fireEvent.change(await screen.findByLabelText("Repair reason"), {
+      target: { value: "Correct a future allocation" },
+    });
+    await user.click(
+      screen.getByRole("checkbox", { name: /I confirm this will supersede published assignments/i }),
+    );
+    await user.click(screen.getByRole("button", { name: "Apply repair" }));
+
+    expect(vi.mocked(applyPublishedAssignmentRepair).mock.calls[0][0]).not.toHaveProperty(
+      "acknowledgeCurrentDay",
+    );
   });
 
   it("discards a stale plan and reloads findings after RESOURCE_CONFLICT", async () => {

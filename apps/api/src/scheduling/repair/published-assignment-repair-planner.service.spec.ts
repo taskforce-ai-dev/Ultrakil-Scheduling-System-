@@ -78,6 +78,10 @@ function fixture(row = source()) {
   };
   const prisma = {
     assignment: { findMany: jest.fn(async () => [row]), ...writes },
+    employee: {
+      findMany: jest.fn(async () => [{ id: employeeId, fullName: 'S Tharilingam' }]),
+    },
+    vehicle: { findMany: jest.fn(async () => []) },
   };
   const eligibility = {
     evaluate: jest.fn(async () => ({
@@ -113,6 +117,9 @@ function fixture(row = source()) {
       {
         sourceAssignmentId: sourceId,
         visitId,
+        visitDate: '2027-01-04',
+        customerName: 'Customer',
+        siteName: 'Site',
         action: AssignmentRepairAction.REPLACED,
         sourceFingerprint: 'b'.repeat(64),
         isValid: true,
@@ -153,6 +160,10 @@ describe('PublishedAssignmentRepairPlannerService', () => {
       sourceFingerprints: [
         { sourceAssignmentId: sourceId, fingerprint: 'b'.repeat(64) },
       ],
+      resourceLabels: {
+        employees: [{ employeeId, fullName: 'S Tharilingam' }],
+        vehicles: [],
+      },
       ...f.preview,
     });
     expect(f.adapter.solve).toHaveBeenCalledTimes(1);
@@ -162,6 +173,20 @@ describe('PublishedAssignmentRepairPlannerService', () => {
     expect(f.writes.create).not.toHaveBeenCalled();
     expect(f.writes.update).not.toHaveBeenCalled();
     expect(f.writes.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('names only the employees and vehicles this plan actually references', async () => {
+    const f = fixture();
+
+    const plan = await f.service.plan({ sourceAssignmentIds: [sourceId] });
+
+    expect(f.prisma.employee.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: [employeeId] } } }),
+    );
+    expect(f.prisma.vehicle.findMany).not.toHaveBeenCalled();
+    expect(plan.resourceLabels.employees).toEqual([
+      { employeeId, fullName: 'S Tharilingam' },
+    ]);
   });
 
   it('turns a locked invalid source into a structured withdrawal without solving', async () => {

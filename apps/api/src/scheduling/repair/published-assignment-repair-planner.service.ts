@@ -61,6 +61,16 @@ export interface PublishedAssignmentRepairPlan extends PublishedAssignmentRepair
     sourceAssignmentId: string;
     fingerprint: string;
   }>;
+  /**
+   * Names for exactly the employees and vehicles this plan references.
+   * The apply payload is identifiers only, so without this a manager would
+   * be asked to approve a crew described as a row of UUIDs. Bounded by the
+   * plan's own resources, never by the workforce.
+   */
+  resourceLabels: {
+    employees: Array<{ employeeId: string; fullName: string }>;
+    vehicles: Array<{ vehicleId: string; label: string }>;
+  };
 }
 
 @Injectable()
@@ -226,7 +236,50 @@ export class PublishedAssignmentRepairPlannerService {
         sourceAssignmentId: item.sourceAssignmentId,
         fingerprint: item.sourceFingerprint,
       })),
+      resourceLabels: await this.resourceLabels(operations),
       ...preview,
+    };
+  }
+
+  private async resourceLabels(
+    operations: PublishedAssignmentRepairOperation[],
+  ): Promise<PublishedAssignmentRepairPlan['resourceLabels']> {
+    const employeeIds = new Set<string>();
+    const vehicleIds = new Set<string>();
+    for (const operation of operations) {
+      for (const member of operation.replacement?.crew ?? []) {
+        employeeIds.add(member.employeeId);
+      }
+      for (const vehicle of operation.replacement?.vehicles ?? []) {
+        vehicleIds.add(vehicle.vehicleId);
+        if (vehicle.driverEmployeeId) employeeIds.add(vehicle.driverEmployeeId);
+      }
+    }
+    const [employees, vehicles] = await Promise.all([
+      employeeIds.size === 0
+        ? []
+        : this.prisma.employee.findMany({
+            where: { id: { in: [...employeeIds] } },
+            select: { id: true, fullName: true },
+            orderBy: { id: 'asc' },
+          }),
+      vehicleIds.size === 0
+        ? []
+        : this.prisma.vehicle.findMany({
+            where: { id: { in: [...vehicleIds] } },
+            select: { id: true, label: true },
+            orderBy: { id: 'asc' },
+          }),
+    ]);
+    return {
+      employees: employees.map((employee) => ({
+        employeeId: employee.id,
+        fullName: employee.fullName,
+      })),
+      vehicles: vehicles.map((vehicle) => ({
+        vehicleId: vehicle.id,
+        label: vehicle.label,
+      })),
     };
   }
 }
