@@ -6328,6 +6328,123 @@
           "publishedAt"
         ]
       },
+      "OperationsPublishedAssignmentLineageEntryDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Immutable identity of this published assignment version."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ],
+            "description": "Published lifecycle status of this version. SUPERSEDED means it is history, never dispatch truth."
+          },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published predecessor this version supersedes, when it is a correction."
+          },
+          "supersededByAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published successor that superseded this version, when one exists in the returned chain."
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The audited repair transaction that published this version, when it came from one."
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "SCHEDULE_RUN",
+              "REPAIR",
+              "MANUAL_PUBLISH"
+            ],
+            "description": "Whether this version came from an ordinary schedule run, an audited repair, or a manual publish."
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "description": "Whether this version is the assignment the read model treats as current dispatch truth."
+          }
+        },
+        "required": [
+          "assignmentId",
+          "status",
+          "supersedesAssignmentId",
+          "supersededByAssignmentId",
+          "publishedByRepairId",
+          "provenance",
+          "publishedAt",
+          "isCurrent"
+        ]
+      },
+      "OperationsPublishedAssignmentLineageDto": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "description": "Published assignment versions for this visit, ordered predecessor to successor. Draft and proposed assignments are deliberately excluded: this is published history, not schedule-run history.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageEntryDto"
+            }
+          },
+          "totalCount": {
+            "type": "number",
+            "description": "How many published versions exist for this visit, before any truncation."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether older versions were omitted to keep the day payload bounded."
+          },
+          "omittedCount": {
+            "type": "number",
+            "description": "How many older versions were omitted. Zero when the chain is complete."
+          },
+          "currentAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published version that is current dispatch truth, or null when the published work was withdrawn."
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "description": "Whether published work existed for this visit and was withdrawn rather than replaced."
+          },
+          "hasMixedProvenance": {
+            "type": "boolean",
+            "description": "Whether the returned chain mixes schedule-run and repair provenance."
+          }
+        },
+        "required": [
+          "entries",
+          "totalCount",
+          "truncated",
+          "omittedCount",
+          "currentAssignmentId",
+          "withdrawn",
+          "hasMixedProvenance"
+        ]
+      },
       "OperationsDayItemDto": {
         "type": "object",
         "properties": {
@@ -6382,10 +6499,19 @@
           },
           "scheduleVersion": {
             "nullable": true,
+            "description": "The schedule RUN the current assignment came from. Run history, not per-visit assignment history.",
             "type": "object",
             "allOf": [
               {
                 "$ref": "#/components/schemas/OperationsScheduleVersionDto"
+              }
+            ]
+          },
+          "publishedAssignmentLineage": {
+            "description": "Per-visit published-assignment lineage. Distinct from scheduleVersion: this is the chain of published assignment versions for this visit.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageDto"
               }
             ]
           }
@@ -6398,7 +6524,8 @@
           "violations",
           "warnings",
           "nextAction",
-          "scheduleVersion"
+          "scheduleVersion",
+          "publishedAssignmentLineage"
         ]
       },
       "OperationsDayResponseDto": {

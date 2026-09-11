@@ -148,6 +148,21 @@ export interface OperationsScheduleVersion {
   publishedAt: string | null;
 }
 
+/**
+ * Per-visit published-assignment lineage. Types come from the generated
+ * contract so a server-side rename cannot silently drift from the UI. This is
+ * assignment history, not schedule-run history: `scheduleVersion` still
+ * reports the run the current assignment came from.
+ */
+export type OperationsPublishedAssignmentLineage =
+  OperationsDayContractItem["publishedAssignmentLineage"];
+export type OperationsPublishedAssignmentLineageEntry =
+  OperationsPublishedAssignmentLineage["entries"][number];
+export type OperationsPublishedAssignmentProvenance =
+  OperationsPublishedAssignmentLineageEntry["provenance"];
+export type OperationsPublishedAssignmentStatus =
+  OperationsPublishedAssignmentLineageEntry["status"];
+
 export interface OperationWarning {
   code: OperationWarningCode;
   message: string;
@@ -161,6 +176,7 @@ export interface OperationsDayItem {
   violations: OperationViolation[];
   nextAction: string;
   scheduleVersion: OperationsScheduleVersion | null;
+  publishedAssignmentLineage: OperationsPublishedAssignmentLineage;
   warnings: OperationWarning[];
 }
 
@@ -221,6 +237,23 @@ const OPERATION_STATES = new Set<OperationState>([
 ]);
 
 const ASSIGNMENT_STATUSES = new Set<AssignmentStatus>([
+  "DRAFT",
+  "PROPOSED",
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
+
+const PUBLISHED_ASSIGNMENT_PROVENANCE = new Set<OperationsPublishedAssignmentProvenance>([
+  "SCHEDULE_RUN",
+  "REPAIR",
+  "MANUAL_PUBLISH",
+]);
+
+const PUBLISHED_ASSIGNMENT_LINEAGE_STATUSES = new Set<OperationsPublishedAssignmentStatus>([
   "DRAFT",
   "PROPOSED",
   "PUBLISHED",
@@ -301,6 +334,59 @@ function parseAssignment(value: unknown): OperationsAssignment | null {
   };
 }
 
+/**
+ * A malformed or older response must leave the lineage empty rather than let
+ * the board tell a correction story the server never sent. Entries without a
+ * recognised identity, status or provenance are dropped, and the counters are
+ * recomputed from what actually survived so the truncation notice stays true.
+ */
+function parsePublishedAssignmentLineage(value: unknown): OperationsPublishedAssignmentLineage {
+  const record = asRecord(value);
+  const entries = Array.isArray(record.entries)
+    ? record.entries.flatMap((entry): OperationsPublishedAssignmentLineageEntry[] => {
+        const row = asRecord(entry);
+        const assignmentId = asString(row.assignmentId);
+        const status = asString(row.status);
+        const provenance = asString(row.provenance);
+        if (
+          !assignmentId
+          || !PUBLISHED_ASSIGNMENT_LINEAGE_STATUSES.has(status as OperationsPublishedAssignmentStatus)
+          || !PUBLISHED_ASSIGNMENT_PROVENANCE.has(provenance as OperationsPublishedAssignmentProvenance)
+        ) {
+          return [];
+        }
+        return [{
+          assignmentId,
+          status: status as OperationsPublishedAssignmentStatus,
+          supersedesAssignmentId: typeof row.supersedesAssignmentId === "string" ? row.supersedesAssignmentId : null,
+          supersededByAssignmentId: typeof row.supersededByAssignmentId === "string" ? row.supersededByAssignmentId : null,
+          publishedByRepairId: typeof row.publishedByRepairId === "string" ? row.publishedByRepairId : null,
+          provenance: provenance as OperationsPublishedAssignmentProvenance,
+          publishedAt: typeof row.publishedAt === "string" ? row.publishedAt : null,
+          isCurrent: asBoolean(row.isCurrent),
+        }];
+      })
+    : [];
+  const currentAssignmentId = typeof record.currentAssignmentId === "string" ? record.currentAssignmentId : null;
+  const current = entries.some((entry) => entry.isCurrent && entry.assignmentId === currentAssignmentId)
+    ? currentAssignmentId
+    : null;
+  const reportedTotal = asNumber(record.totalCount, entries.length);
+  const totalCount = Math.max(reportedTotal, entries.length);
+  const omittedCount = Math.max(0, totalCount - entries.length);
+  return {
+    entries,
+    totalCount,
+    truncated: omittedCount > 0,
+    omittedCount,
+    currentAssignmentId: current,
+    // Only the server may declare a withdrawal, and only about a chain that
+    // actually has published versions in it.
+    withdrawn: entries.length > 0 && current === null && asBoolean(record.withdrawn),
+    hasMixedProvenance: new Set(entries.map((entry) => entry.provenance)).size > 1,
+  };
+}
+
 function parseOperationsItem(value: unknown): OperationsDayItem | null {
   if (typeof value !== "object" || value === null) return null;
   const record = asRecord(value);
@@ -322,6 +408,7 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     : [];
   const version = asRecord(record.scheduleVersion);
   const hasVersion = Object.keys(version).length > 0;
+  const publishedAssignmentLineage = parsePublishedAssignmentLineage(record.publishedAssignmentLineage);
   const warnings = Array.isArray(record.warnings)
     ? record.warnings.flatMap((warning) => {
         if (typeof warning !== "object" || warning === null) return [];
@@ -370,6 +457,7 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
           publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
         }
       : null,
+    publishedAssignmentLineage,
     warnings: warnings.filter(
       (warning, index) => warnings.findIndex(
         (candidate) => candidate.code === warning.code && candidate.message === warning.message,

@@ -10,6 +10,7 @@ import {
   type OperationState,
   type OperationsDayItem,
   type OperationsDayResponse,
+  type OperationsPublishedAssignmentProvenance,
 } from "@/lib/api-client";
 
 const STATE_LABELS: Record<OperationState, string> = {
@@ -102,6 +103,78 @@ function ScheduleLineage({ item }: { item: OperationsDayItem }) {
   );
 }
 
+const PROVENANCE_LABELS: Record<OperationsPublishedAssignmentProvenance, string> = {
+  SCHEDULE_RUN: "schedule run",
+  REPAIR: "audited repair",
+  MANUAL_PUBLISH: "manual publish",
+};
+
+function shortId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+/**
+ * The per-visit story of published work: which version is current, what each
+ * one superseded, and whether a repair produced it. Schedule-run history is a
+ * different thing and stays in its own line above.
+ */
+function PublishedAssignmentLineage({ item }: { item: OperationsDayItem }) {
+  const lineage = item.publishedAssignmentLineage;
+  if (lineage.entries.length === 0) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        No published assignment history for this visit yet.
+      </p>
+    );
+  }
+
+  return (
+    <section
+      className="mt-3 rounded-md border bg-muted/30 p-2 text-xs"
+      aria-label="Published assignment history"
+    >
+      <h3 className="font-medium text-foreground">Published assignment history</h3>
+      {lineage.truncated && (
+        <p className="mt-1 text-muted-foreground" role="note">
+          Showing the {lineage.entries.length} most recent of {lineage.totalCount} published versions
+          — {lineage.omittedCount} older {lineage.omittedCount === 1 ? "version is" : "versions are"} not shown.
+        </p>
+      )}
+      {lineage.withdrawn && (
+        <p className="mt-1 text-muted-foreground">
+          The published work was withdrawn; no version is current.
+        </p>
+      )}
+      {lineage.hasMixedProvenance && (
+        <p className="mt-1 text-muted-foreground">
+          This visit mixes scheduled and repaired published versions.
+        </p>
+      )}
+      <ol className="mt-1 space-y-1 text-muted-foreground">
+        {lineage.entries.map((entry, index) => (
+          <li key={entry.assignmentId} className={cn(entry.isCurrent && "text-foreground")}>
+            <span className="font-medium">
+              Version {lineage.totalCount - lineage.entries.length + index + 1}
+            </span>{" "}
+            <span className="font-mono">{shortId(entry.assignmentId)}</span> ·{" "}
+            {entry.isCurrent ? "current published version" : entry.status.toLowerCase().replaceAll("_", " ")} · from{" "}
+            {PROVENANCE_LABELS[entry.provenance]}
+            {entry.provenance === "REPAIR" && entry.publishedByRepairId
+              ? ` ${shortId(entry.publishedByRepairId)}`
+              : ""}
+            {entry.supersedesAssignmentId
+              ? ` · supersedes ${shortId(entry.supersedesAssignmentId)}`
+              : ""}
+            {!entry.supersededByAssignmentId && !entry.isCurrent && lineage.withdrawn
+              ? " · withdrawn, not replaced"
+              : ""}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function ViolationList({ violations }: { violations: OperationsDayItem["violations"] }) {
   if (violations.length === 0) return null;
   return (
@@ -144,6 +217,7 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
         <span className="font-medium">Next action:</span> {item.nextAction}
       </p>
       <ScheduleLineage item={item} />
+      <PublishedAssignmentLineage item={item} />
       <ViolationList violations={item.violations} />
       <WarningList item={item} />
     </li>

@@ -17,6 +17,26 @@ export const OPERATION_WARNING_CODES = [
 
 export type OperationWarningCode = (typeof OPERATION_WARNING_CODES)[number];
 
+/**
+ * Where a published assignment version came from. A repair successor is an
+ * audited correction of published history; an ordinary schedule run is not.
+ */
+export const OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE = [
+  'SCHEDULE_RUN',
+  'REPAIR',
+  'MANUAL_PUBLISH',
+] as const;
+
+export type OperationsPublishedAssignmentProvenance =
+  (typeof OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE)[number];
+
+/**
+ * The most recent published versions returned for one visit. A visit with a
+ * pathological correction history must not be able to balloon the day payload,
+ * so the chain is truncated from the oldest end and the truncation is reported.
+ */
+export const MAX_PUBLISHED_ASSIGNMENT_LINEAGE_ENTRIES = 10;
+
 export class OperationsDayQueryDto {
   @ApiProperty({ format: 'date', description: 'The Colombo calendar date to inspect.' })
   @IsDateOnly()
@@ -65,6 +85,58 @@ export class OperationsScheduleVersionDto {
   @ApiProperty({ type: String, nullable: true, format: 'date-time' }) publishedAt!: string | null;
 }
 
+export class OperationsPublishedAssignmentLineageEntryDto {
+  @ApiProperty({ type: String, format: 'uuid', description: 'Immutable identity of this published assignment version.' })
+  assignmentId!: string;
+
+  @ApiProperty({ enum: AssignmentStatus, description: 'Published lifecycle status of this version. SUPERSEDED means it is history, never dispatch truth.' })
+  status!: AssignmentStatus;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'The published predecessor this version supersedes, when it is a correction.' })
+  supersedesAssignmentId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'The published successor that superseded this version, when one exists in the returned chain.' })
+  supersededByAssignmentId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'The audited repair transaction that published this version, when it came from one.' })
+  publishedByRepairId!: string | null;
+
+  @ApiProperty({ enum: OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE, description: 'Whether this version came from an ordinary schedule run, an audited repair, or a manual publish.' })
+  provenance!: OperationsPublishedAssignmentProvenance;
+
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  publishedAt!: string | null;
+
+  @ApiProperty({ type: Boolean, description: 'Whether this version is the assignment the read model treats as current dispatch truth.' })
+  isCurrent!: boolean;
+}
+
+export class OperationsPublishedAssignmentLineageDto {
+  @ApiProperty({
+    type: [OperationsPublishedAssignmentLineageEntryDto],
+    description: 'Published assignment versions for this visit, ordered predecessor to successor. Draft and proposed assignments are deliberately excluded: this is published history, not schedule-run history.',
+  })
+  entries!: OperationsPublishedAssignmentLineageEntryDto[];
+
+  @ApiProperty({ type: Number, description: 'How many published versions exist for this visit, before any truncation.' })
+  totalCount!: number;
+
+  @ApiProperty({ type: Boolean, description: 'Whether older versions were omitted to keep the day payload bounded.' })
+  truncated!: boolean;
+
+  @ApiProperty({ type: Number, description: 'How many older versions were omitted. Zero when the chain is complete.' })
+  omittedCount!: number;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'The published version that is current dispatch truth, or null when the published work was withdrawn.' })
+  currentAssignmentId!: string | null;
+
+  @ApiProperty({ type: Boolean, description: 'Whether published work existed for this visit and was withdrawn rather than replaced.' })
+  withdrawn!: boolean;
+
+  @ApiProperty({ type: Boolean, description: 'Whether the returned chain mixes schedule-run and repair provenance.' })
+  hasMixedProvenance!: boolean;
+}
+
 export class OperationsVisitDto {
   @ApiProperty({ type: String, format: 'uuid' }) id!: string;
   @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
@@ -90,8 +162,10 @@ export class OperationsDayItemDto {
   @ApiProperty({ type: [ConflictDto] }) violations!: ConflictDto[];
   @ApiProperty({ type: [OperationsWarningDto] }) warnings!: OperationsWarningDto[];
   @ApiProperty({ type: String }) nextAction!: string;
-  @ApiProperty({ type: OperationsScheduleVersionDto, nullable: true })
+  @ApiProperty({ type: OperationsScheduleVersionDto, nullable: true, description: 'The schedule RUN the current assignment came from. Run history, not per-visit assignment history.' })
   scheduleVersion!: OperationsScheduleVersionDto | null;
+  @ApiProperty({ type: OperationsPublishedAssignmentLineageDto, description: 'Per-visit published-assignment lineage. Distinct from scheduleVersion: this is the chain of published assignment versions for this visit.' })
+  publishedAssignmentLineage!: OperationsPublishedAssignmentLineageDto;
 }
 
 export class OperationsSummaryDto {

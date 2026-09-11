@@ -2218,6 +2218,61 @@ export interface components {
             /** Format: date-time */
             publishedAt: string | null;
         };
+        OperationsPublishedAssignmentLineageEntryDto: {
+            /**
+             * Format: uuid
+             * @description Immutable identity of this published assignment version.
+             */
+            assignmentId: string;
+            /**
+             * @description Published lifecycle status of this version. SUPERSEDED means it is history, never dispatch truth.
+             * @enum {string}
+             */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /**
+             * Format: uuid
+             * @description The published predecessor this version supersedes, when it is a correction.
+             */
+            supersedesAssignmentId: string | null;
+            /**
+             * Format: uuid
+             * @description The published successor that superseded this version, when one exists in the returned chain.
+             */
+            supersededByAssignmentId: string | null;
+            /**
+             * Format: uuid
+             * @description The audited repair transaction that published this version, when it came from one.
+             */
+            publishedByRepairId: string | null;
+            /**
+             * @description Whether this version came from an ordinary schedule run, an audited repair, or a manual publish.
+             * @enum {string}
+             */
+            provenance: "SCHEDULE_RUN" | "REPAIR" | "MANUAL_PUBLISH";
+            /** Format: date-time */
+            publishedAt: string | null;
+            /** @description Whether this version is the assignment the read model treats as current dispatch truth. */
+            isCurrent: boolean;
+        };
+        OperationsPublishedAssignmentLineageDto: {
+            /** @description Published assignment versions for this visit, ordered predecessor to successor. Draft and proposed assignments are deliberately excluded: this is published history, not schedule-run history. */
+            entries: components["schemas"]["OperationsPublishedAssignmentLineageEntryDto"][];
+            /** @description How many published versions exist for this visit, before any truncation. */
+            totalCount: number;
+            /** @description Whether older versions were omitted to keep the day payload bounded. */
+            truncated: boolean;
+            /** @description How many older versions were omitted. Zero when the chain is complete. */
+            omittedCount: number;
+            /**
+             * Format: uuid
+             * @description The published version that is current dispatch truth, or null when the published work was withdrawn.
+             */
+            currentAssignmentId: string | null;
+            /** @description Whether published work existed for this visit and was withdrawn rather than replaced. */
+            withdrawn: boolean;
+            /** @description Whether the returned chain mixes schedule-run and repair provenance. */
+            hasMixedProvenance: boolean;
+        };
         OperationsDayItemDto: {
             visit: components["schemas"]["OperationsVisitDto"];
             /** @enum {string} */
@@ -2229,7 +2284,10 @@ export interface components {
             violations: components["schemas"]["ConflictDto"][];
             warnings: components["schemas"]["OperationsWarningDto"][];
             nextAction: string;
+            /** @description The schedule RUN the current assignment came from. Run history, not per-visit assignment history. */
             scheduleVersion: components["schemas"]["OperationsScheduleVersionDto"] | null;
+            /** @description Per-visit published-assignment lineage. Distinct from scheduleVersion: this is the chain of published assignment versions for this visit. */
+            publishedAssignmentLineage: components["schemas"]["OperationsPublishedAssignmentLineageDto"];
         };
         OperationsDayResponseDto: {
             /** Format: date */

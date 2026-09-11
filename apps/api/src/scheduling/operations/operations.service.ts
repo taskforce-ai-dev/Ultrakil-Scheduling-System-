@@ -12,11 +12,42 @@ import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConflictDto } from '../eligibility/dto';
 import { EligibilityService } from '../eligibility/eligibility.service';
-import { OperationsAssignmentSnapshotDto, OperationsDayItemDto, OperationsDayQueryDto, OperationsDayResponseDto, OperationsWarningDto } from './dto';
+import {
+  MAX_PUBLISHED_ASSIGNMENT_LINEAGE_ENTRIES,
+  OperationsAssignmentSnapshotDto,
+  OperationsDayItemDto,
+  OperationsDayQueryDto,
+  OperationsDayResponseDto,
+  OperationsPublishedAssignmentLineageDto,
+  OperationsPublishedAssignmentProvenance,
+  OperationsWarningDto,
+} from './dto';
 
 const DISPATCH_STATUSES: AssignmentStatus[] = [AssignmentStatus.PUBLISHED, AssignmentStatus.ACKNOWLEDGED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED];
 const PROPOSED_STATUSES: AssignmentStatus[] = [AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED];
 const LIVE_STATUSES = [...DISPATCH_STATUSES, ...PROPOSED_STATUSES];
+/**
+ * Published history for one visit: the live published work plus every version
+ * it has already retired. Draft/proposed rows are never published history.
+ */
+const PUBLISHED_LINEAGE_STATUSES: AssignmentStatus[] = [...DISPATCH_STATUSES, AssignmentStatus.SUPERSEDED];
+
+/**
+ * Lineage needs scalars only. Selecting crew and vehicle rows for superseded
+ * versions would multiply the day payload for information no one reads there.
+ */
+const PUBLISHED_LINEAGE_SELECT = {
+  id: true,
+  generatedVisitId: true,
+  status: true,
+  supersedesAssignmentId: true,
+  publishedByRepairId: true,
+  scheduleRunId: true,
+  publishedAt: true,
+  updatedAt: true,
+} satisfies Prisma.AssignmentSelect;
+
+type PublishedLineageRow = Prisma.AssignmentGetPayload<{ select: typeof PUBLISHED_LINEAGE_SELECT }>;
 
 const OPERATIONS_INCLUDE = {
   serviceAgreement: { include: {
@@ -47,7 +78,10 @@ export class OperationsService {
       include: OPERATIONS_INCLUDE,
       orderBy: [{ windowStartMinute: 'asc' }, { id: 'asc' }],
     });
-    const items = await Promise.all(visits.map((visit) => this.toItem(visit)));
+    const lineageByVisit = await this.publishedLineageRows(visits.map((visit) => visit.id));
+    const items = await Promise.all(
+      visits.map((visit) => this.toItem(visit, lineageByVisit.get(visit.id) ?? [])),
+    );
     return {
       date: query.date,
       branchCode: query.branchCode ?? null,
@@ -63,7 +97,27 @@ export class OperationsService {
     };
   }
 
-  private async toItem(visit: VisitRow): Promise<OperationsDayItemDto> {
+  /**
+   * One batched query for the whole day, never one per visit. Ordering is done
+   * in SQL so the in-memory chain walk starts from a deterministic sequence.
+   */
+  private async publishedLineageRows(visitIds: string[]): Promise<Map<string, PublishedLineageRow[]>> {
+    const grouped = new Map<string, PublishedLineageRow[]>();
+    if (visitIds.length === 0) return grouped;
+    const rows = await this.prisma.assignment.findMany({
+      where: { generatedVisitId: { in: visitIds }, status: { in: PUBLISHED_LINEAGE_STATUSES } },
+      select: PUBLISHED_LINEAGE_SELECT,
+      orderBy: [{ publishedAt: 'asc' }, { updatedAt: 'asc' }, { id: 'asc' }],
+    });
+    for (const row of rows) {
+      const bucket = grouped.get(row.generatedVisitId);
+      if (bucket) bucket.push(row);
+      else grouped.set(row.generatedVisitId, [row]);
+    }
+    return grouped;
+  }
+
+  private async toItem(visit: VisitRow, lineageRows: PublishedLineageRow[]): Promise<OperationsDayItemDto> {
     const dispatches = visit.assignments.filter((row) => DISPATCH_STATUSES.includes(row.status));
     const proposals = visit.assignments.filter((row) => PROPOSED_STATUSES.includes(row.status));
     const dispatch = selectDispatch(dispatches);
@@ -96,6 +150,7 @@ export class OperationsService {
       violations,
       warnings: operationWarnings,
       nextAction: nextAction(state, violations),
+      publishedAssignmentLineage: publishedAssignmentLineage(lineageRows, dispatch?.id ?? null),
       scheduleVersion: lineage
         ? {
             id: lineage.scheduleRunId,
@@ -115,6 +170,86 @@ export class OperationsService {
     }, { excludeAssignmentId: assignment.id });
     return result.conflicts.map((conflict) => ({ ...conflict, resources: resources(conflict.resources) }));
   }
+}
+
+/**
+ * Order the published versions predecessor -> successor by following
+ * `supersedesAssignmentId`. A broken chain (a predecessor that was never
+ * published, or that belongs to another visit) simply starts a new run rather
+ * than dropping its rows, and a cycle terminates on the visited set.
+ */
+function publishedAssignmentLineage(
+  rows: PublishedLineageRow[],
+  currentAssignmentId: string | null,
+): OperationsPublishedAssignmentLineageDto {
+  const published = [...rows].sort(comparePublishedAssignment);
+  const byId = new Map(published.map((row) => [row.id, row]));
+  const successorByPredecessor = new Map<string, PublishedLineageRow>();
+  for (const row of published) {
+    const predecessorId = row.supersedesAssignmentId;
+    // `supersedesAssignmentId` is unique in the database, so a second claimant
+    // means corrupted data. Keep the deterministically earlier one and let the
+    // loser start its own run instead of silently disappearing.
+    if (predecessorId && byId.has(predecessorId) && !successorByPredecessor.has(predecessorId)) {
+      successorByPredecessor.set(predecessorId, row);
+    }
+  }
+
+  const ordered: PublishedLineageRow[] = [];
+  const seen = new Set<string>();
+  const appendChain = (first: PublishedLineageRow): void => {
+    let current: PublishedLineageRow | undefined = first;
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      ordered.push(current);
+      current = successorByPredecessor.get(current.id);
+    }
+  };
+
+  for (const row of published) {
+    const predecessorId = row.supersedesAssignmentId;
+    if (!predecessorId || !byId.has(predecessorId)) appendChain(row);
+  }
+  // Anything left is only reachable from inside a cycle; emit it rather than
+  // dropping rows from an audit trail.
+  for (const row of published) if (!seen.has(row.id)) appendChain(row);
+
+  const totalCount = ordered.length;
+  const omittedCount = Math.max(0, totalCount - MAX_PUBLISHED_ASSIGNMENT_LINEAGE_ENTRIES);
+  // Truncate the oldest versions: a manager reads the story backwards from the
+  // version that is current now.
+  const visible = omittedCount > 0 ? ordered.slice(omittedCount) : ordered;
+  const entries = visible.map((row) => ({
+    assignmentId: row.id,
+    status: row.status,
+    supersedesAssignmentId: row.supersedesAssignmentId,
+    supersededByAssignmentId: successorByPredecessor.get(row.id)?.id ?? null,
+    publishedByRepairId: row.publishedByRepairId,
+    provenance: provenanceOf(row),
+    publishedAt: row.publishedAt?.toISOString() ?? null,
+    isCurrent: currentAssignmentId !== null && row.id === currentAssignmentId,
+  }));
+
+  return {
+    entries,
+    totalCount,
+    truncated: omittedCount > 0,
+    omittedCount,
+    currentAssignmentId: entries.some((entry) => entry.isCurrent) ? currentAssignmentId : null,
+    withdrawn: totalCount > 0 && currentAssignmentId === null,
+    hasMixedProvenance: new Set(entries.map((entry) => entry.provenance)).size > 1,
+  };
+}
+
+function provenanceOf(row: PublishedLineageRow): OperationsPublishedAssignmentProvenance {
+  if (row.publishedByRepairId) return 'REPAIR';
+  return row.scheduleRunId ? 'SCHEDULE_RUN' : 'MANUAL_PUBLISH';
+}
+
+function comparePublishedAssignment(a: PublishedLineageRow, b: PublishedLineageRow): number {
+  return (a.publishedAt?.getTime() ?? 0) - (b.publishedAt?.getTime() ?? 0)
+    || a.updatedAt.getTime() - b.updatedAt.getTime()
+    || a.id.localeCompare(b.id);
 }
 
 function selectDispatch<T extends { publishedAt: Date | null; updatedAt: Date; id: string }>(rows: T[]): T | null {
