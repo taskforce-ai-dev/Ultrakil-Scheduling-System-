@@ -105,6 +105,8 @@ describe('migrations against an empty database', () => {
       prisma.assignmentVehicle.count(),
       prisma.assignmentLock.count(),
       prisma.assignmentNotificationOutbox.count(),
+      prisma.publishedAssignmentRepair.count(),
+      prisma.publishedAssignmentRepairItem.count(),
       prisma.scheduleRunDispatchOutbox.count(),
       prisma.scheduleRun.count(),
       prisma.auditEvent.count(),

@@ -33,7 +33,10 @@ import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/o
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 import { SchedulerClient, SolveResponse } from '../../src/scheduling/optimizer/scheduler.client';
 import { EmployeesService } from '../../src/workforce/employees.service';
-import { confirmAgreementProvenance } from './confirm-provenance';
+import {
+  confirmAgreementProvenance,
+  confirmRunVehicleBranches,
+} from './confirm-provenance';
 
 const prisma = new PrismaClient();
 
@@ -195,6 +198,7 @@ async function solve(): Promise<string> {
   expect(created.status).toBe(201);
 
   await runs.execute(created.body.id, { timeLimitSeconds: 5 });
+  await confirmRunVehicleBranches(prisma, created.body.id as string);
   return created.body.id as string;
 }
 
@@ -616,6 +620,12 @@ async function manualPublicationFixture(withDraft = true) {
       rangeStart: new Date(RANGE.from),
       rangeEnd: new Date(RANGE.to),
       branchCode: BranchCode.COLOMBO,
+      // Publication blocks a run that scheduled nothing and asks for an
+      // acknowledgement when one left visits behind. This hand-built run
+      // stands for exactly the assignment it publishes, so it says so.
+      visitsConsidered: 1,
+      visitsScheduled: 1,
+      visitsUnassigned: 0,
     },
   });
   const createDraft = async () => {
@@ -1697,6 +1707,9 @@ describe('publishing', () => {
           rangeStart: new Date(RANGE.from),
           rangeEnd: new Date(RANGE.to),
           branchCode: BranchCode.COLOMBO,
+          visitsConsidered: 1,
+          visitsScheduled: 1,
+          visitsUnassigned: 0,
         },
       });
       const createDraft = () =>
@@ -1868,6 +1881,9 @@ describe('publishing', () => {
           rangeStart: new Date(RANGE.from),
           rangeEnd: new Date(RANGE.to),
           branchCode: BranchCode.COLOMBO,
+          visitsConsidered: 1,
+          visitsScheduled: 1,
+          visitsUnassigned: 0,
         },
       });
       const staleRun = await prisma.scheduleRun.create({

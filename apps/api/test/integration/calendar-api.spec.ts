@@ -26,7 +26,10 @@ import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { cleanupCapturedIds } from '../support/fixture-cleanup';
-import { confirmAgreementProvenance } from './confirm-provenance';
+import {
+  confirmAgreementProvenance,
+  confirmRunVehicleBranches,
+} from './confirm-provenance';
 
 const prisma = new PrismaClient();
 
@@ -125,6 +128,12 @@ async function publish(assignmentId: string): Promise<void> {
       rangeStart: new Date(`${HORIZON.from}T00:00:00.000Z`),
       rangeEnd: new Date(`${HORIZON.to}T00:00:00.000Z`),
       finishedAt: new Date(),
+      // A run that scheduled nothing is blocked from publication, and a run
+      // that left visits behind needs an acknowledgement. This hand-built run
+      // stands for exactly the one assignment it publishes, so it says so.
+      visitsConsidered: 1,
+      visitsScheduled: 1,
+      visitsUnassigned: 0,
     },
   });
   scheduleRunIds.push(run.id);
@@ -132,6 +141,7 @@ async function publish(assignmentId: string): Promise<void> {
     where: { id: assignmentId },
     data: { scheduleRunId: run.id },
   });
+  await confirmRunVehicleBranches(prisma, run.id);
 
   const published = await request(http)
     .post(`/api/schedule-runs/${run.id}/publish`)
@@ -553,6 +563,9 @@ describe('employee published assignments', () => {
         rangeStart: new Date(`${HORIZON.from}T00:00:00.000Z`),
         rangeEnd: new Date(`${HORIZON.to}T00:00:00.000Z`),
         finishedAt: new Date(),
+        visitsConsidered: 1,
+        visitsScheduled: 1,
+        visitsUnassigned: 0,
       },
     });
     scheduleRunIds.push(run.id);
@@ -560,6 +573,7 @@ describe('employee published assignments', () => {
       where: { id: assignmentId },
       data: { scheduleRunId: run.id },
     });
+    await confirmRunVehicleBranches(prisma, run.id);
 
     const results = await Promise.all([
       request(http).post(`/api/schedule-runs/${run.id}/publish`).set(auth(adminToken)).send({}),

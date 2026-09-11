@@ -24,7 +24,10 @@ import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.fil
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
 import { VisitGenerationService } from '../../src/scheduling/visit-generation/visit-generation.service';
-import { confirmAgreementProvenance } from './confirm-provenance';
+import {
+  confirmAgreementProvenance,
+  confirmRunVehicleBranches,
+} from './confirm-provenance';
 
 const prisma = new PrismaClient();
 
@@ -475,6 +478,11 @@ describe('regeneration never loses manager-controlled work', () => {
               status: 'SUCCEEDED',
               rangeStart: new Date(HORIZON.from),
               rangeEnd: new Date(HORIZON.to),
+              // Publication blocks a run that scheduled nothing, so this
+              // hand-built run states the one assignment it stands for.
+              visitsConsidered: 1,
+              visitsScheduled: 1,
+              visitsUnassigned: 0,
             },
           });
           await prisma.assignment.create({
@@ -501,6 +509,7 @@ describe('regeneration never loses manager-controlled work', () => {
             // The subject here is regeneration, not provenance: state the
             // fixture as confirmed fact so publishing needs no acknowledgement.
             await confirmAgreementProvenance(prisma, agreement.id);
+            await confirmRunVehicleBranches(prisma, run.id);
             await app.get(PublishingService).publish(run.id, null, actor);
           }
         }

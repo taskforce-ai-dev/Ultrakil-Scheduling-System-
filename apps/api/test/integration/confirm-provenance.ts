@@ -44,3 +44,39 @@ export async function confirmAgreementProvenance(
     data: { windowProvenance: DataProvenance.MANAGER_CONFIRMED },
   });
 }
+
+/**
+ * The solver picks vehicles from the whole database, and this database is
+ * shared with suites whose fixtures deliberately carry no vehicle branch —
+ * which is realistic, because the Technician Matrix does not state one. A run
+ * that happens to be given such a vehicle would then fail the publication gate
+ * for a reason the suite is not about.
+ *
+ * This confirms a branch only for the vehicles the given run actually uses,
+ * taking it from the assignment that uses them. Scoping it to the run keeps
+ * the gate honest: a vehicle nothing published still counts as unconfirmed.
+ */
+export async function confirmRunVehicleBranches(
+  prisma: PrismaClient,
+  runId: string,
+): Promise<void> {
+  const assignments = await prisma.assignment.findMany({
+    where: { scheduleRunId: runId },
+    select: {
+      branchId: true,
+      vehicles: {
+        select: { vehicleId: true, vehicle: { select: { branchId: true } } },
+      },
+    },
+  });
+
+  for (const assignment of assignments) {
+    for (const entry of assignment.vehicles) {
+      if (entry.vehicle.branchId !== null) continue;
+      await prisma.vehicle.update({
+        where: { id: entry.vehicleId },
+        data: { branchId: assignment.branchId },
+      });
+    }
+  }
+}
