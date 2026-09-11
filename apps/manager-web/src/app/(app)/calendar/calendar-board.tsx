@@ -53,7 +53,7 @@ const STAGE_LABELS: Record<StageFilter, string> = {
   ALL: "Every stage",
   UNASSIGNED: "Needs a crew",
   DRAFT: "Proposed, not published",
-  PUBLISHED: "Published to the crew",
+  PUBLISHED: "Post to the crew",
   DONE: "Completed or cancelled",
 };
 
@@ -96,7 +96,7 @@ const STAGE_STYLES: Record<
     dot: "bg-emerald-500",
     badge:
       "border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-    label: "Published",
+    label: "Post",
   },
   DONE: {
     chip: "border-slate-300 bg-slate-50 text-slate-600 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400",

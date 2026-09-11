@@ -38,7 +38,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/calendar", label: "Calendar", icon: CalendarRange },
   { href: "/customers", label: "Customers", icon: Users },
   { href: "/service-agreements", label: "Service Agreements", icon: FileText },
-  { href: "/visits", label: "Visit Calendar", icon: CalendarDays },
+  { href: "/visits", label: "Generate Schedule", icon: CalendarDays },
   { href: "/workforce", label: "Workforce", icon: HardHat },
   { href: "/vehicles", label: "Vehicles", icon: Car },
   { href: "/dispatch-board", label: "Dispatch Board", icon: ClipboardList },
@@ -53,7 +53,7 @@ const NAV_ITEMS: NavItem[] = [
     icon: Wrench,
     roles: ["ADMIN", "MANAGER"],
   },
-  { href: "/schedule-history", label: "Schedule History", icon: History },
+  { href: "/schedule-history", label: "Assign Crew", icon: History },
 ];
 
 function Brand() {

@@ -154,7 +154,7 @@ export function GenerationImpactDrawer({
     <AppDrawer
       open={open}
       onOpenChange={onOpenChange}
-      title="Generate visits"
+      title="Generate Schedule"
       description={`${formatLongDate(from)} to ${formatLongDate(to)}`}
       // This body is a read-only impact summary — no form fields, nothing
       // for the Sheet's open-time autofocus to prefer instead.
