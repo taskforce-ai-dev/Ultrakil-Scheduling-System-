@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardList,
   Footprints,
+  Share2,
   ShieldAlert,
   UserCog,
   UserX,
@@ -44,6 +45,7 @@ import {
   type Visit,
 } from "@/lib/api-client";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
+import { notify } from "@/lib/notify";
 import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
@@ -126,6 +128,38 @@ export default function DispatchBoardPage() {
     [visits, assignments]
   );
 
+  // Plain text so it pastes cleanly into WhatsApp/email/SMS — the channels a
+  // manager actually shares a day's dispatch with, none of which render HTML.
+  function shareBoardText(): string {
+    const lines = sorted.map((visit) => {
+      const assignment = assignments[visit.id];
+      const time = assignment
+        ? `${formatMinuteOfDay(assignment.plannedStartMinute)}–${formatMinuteOfDay(assignment.plannedEndMinute)}`
+        : "Not booked yet";
+      const supervisor = assignment?.crew.find((member) => member.isPmsSupervisor);
+      const crew = assignment?.crew.map((member) => member.fullName).join(", ") || "No crew yet";
+      const vehicle =
+        assignment && assignment.vehicles.length > 0
+          ? assignment.vehicles
+              .map((v) => (v.driverName ? `${v.label} (${v.driverName})` : v.label))
+              .join(", ")
+          : assignment
+            ? "Public transport"
+            : "No vehicle";
+      return `${time} — ${visit.customerName} (${visit.siteName})\n  Supervisor: ${supervisor?.fullName ?? "None"} | Crew: ${crew} | Vehicle: ${vehicle}`;
+    });
+    return `Dispatch Board — ${formatLongDate(date)}${branch !== "ALL" ? ` (${BRANCH_LABELS[branch]})` : ""}\n\n${lines.join("\n\n")}`;
+  }
+
+  async function shareBoard() {
+    try {
+      await navigator.clipboard.writeText(shareBoardText());
+      notify.success("Dispatch board copied to clipboard.");
+    } catch {
+      notify.error("Could not copy the dispatch board — your browser may be blocking clipboard access.");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -137,24 +171,35 @@ export default function DispatchBoardPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-1" role="group" aria-label="View">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1" role="group" aria-label="View">
+            <Button
+              type="button"
+              variant={view === "list" ? "default" : "outline"}
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+            >
+              <ClipboardList className="h-4 w-4" aria-hidden="true" />
+              List
+            </Button>
+            <Button
+              type="button"
+              variant={view === "calendar" ? "default" : "outline"}
+              aria-pressed={view === "calendar"}
+              onClick={() => setView("calendar")}
+            >
+              <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              Calendar
+            </Button>
+          </div>
           <Button
             type="button"
-            variant={view === "list" ? "default" : "outline"}
-            aria-pressed={view === "list"}
-            onClick={() => setView("list")}
+            variant="outline"
+            onClick={shareBoard}
+            disabled={sorted.length === 0}
           >
-            <ClipboardList className="h-4 w-4" aria-hidden="true" />
-            List
-          </Button>
-          <Button
-            type="button"
-            variant={view === "calendar" ? "default" : "outline"}
-            aria-pressed={view === "calendar"}
-            onClick={() => setView("calendar")}
-          >
-            <CalendarDays className="h-4 w-4" aria-hidden="true" />
-            Calendar
+            <Share2 className="h-4 w-4" aria-hidden="true" />
+            Share
           </Button>
         </div>
       </div>

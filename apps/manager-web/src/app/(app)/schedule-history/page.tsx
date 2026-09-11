@@ -105,7 +105,7 @@ function StatusBadge({ run }: { run: ScheduleRun }) {
     return (
       <Badge variant="success">
         <Rocket className="h-3 w-3" aria-hidden="true" />
-        Published
+        Post
       </Badge>
     );
   }
@@ -282,7 +282,7 @@ export default function ScheduleHistoryPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Schedule History</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Assign Crew</h1>
         <p className="text-muted-foreground">
           Run the optimizer over a date range, watch it work, then publish what it finds. A
           published run is never edited — a new run supersedes it, and both stay on the record.
@@ -370,7 +370,7 @@ export default function ScheduleHistoryPage() {
             </h2>
             {live ? (
               <p className="mt-1 text-sm text-muted-foreground">
-                Published {new Date(live.publishedAt ?? live.createdAt).toLocaleString()} for{" "}
+                Post {new Date(live.publishedAt ?? live.createdAt).toLocaleString()} for{" "}
                 {live.rangeStart} – {live.rangeEnd}. {live.visitsScheduled} of{" "}
                 {live.visitsScheduled + live.visitsUnassigned} visits have a crew. This is what
                 the crews were given.
@@ -418,7 +418,7 @@ export default function ScheduleHistoryPage() {
                       <p className="text-xs text-muted-foreground">
                         Started {new Date(run.createdAt).toLocaleString()}
                         {run.publishedAt &&
-                          ` · Published ${new Date(run.publishedAt).toLocaleString()}`}
+                          ` · Post ${new Date(run.publishedAt).toLocaleString()}`}
                       </p>
                     </div>
                     <StatusBadge run={run} />

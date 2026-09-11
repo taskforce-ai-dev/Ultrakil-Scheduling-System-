@@ -380,14 +380,14 @@ export default function VisitsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Visit Calendar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Generate Schedule</h1>
           <p className="text-muted-foreground">
             Recurring work generated from service agreements. Nobody is assigned here.
           </p>
         </div>
         <Button onClick={() => setGenerateOpen(true)}>
           <CalendarPlus className="h-4 w-4" />
-          Generate visits
+          Generate Schedule
         </Button>
       </div>
 
