@@ -27,18 +27,19 @@ test("previews visit generation for the current month, then confirms it", async 
   const strict = process.env.E2E_STRICT === '1';
   const listing = strict ? page.waitForResponse(isVisitList) : undefined;
   await page.goto("/visits");
-  await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Generate Schedule" })).toBeVisible();
   const before = listing ? await readSuccessful<PaginatedVisits>(listing) : undefined;
 
   const previewing = strict ? page.waitForResponse(isGeneration('preview')) : undefined;
-  await page.getByRole("button", { name: "Generate visits" }).click();
+  await page.getByRole("button", { name: "Generate Schedule" }).click();
   const preview = previewing ? await readSuccessful<GenerationImpact>(previewing) : undefined;
 
-  // The trigger button also reads "Generate visits" and stays in the
-  // accessibility tree while the drawer is open (unlike the modal Dialog
-  // elsewhere in the app, this Sheet does not hide background content), so
-  // this must be scoped to the drawer's own heading specifically.
-  await expect(page.getByRole("heading", { name: "Generate visits" })).toBeVisible();
+  // The page heading, the trigger button, and the drawer's own title all
+  // read "Generate Schedule" and stay in the accessibility tree together
+  // while the drawer is open (unlike the modal Dialog elsewhere in the app,
+  // this Sheet does not hide background content), so this must be scoped to
+  // the drawer's own heading specifically.
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Generate Schedule" })).toBeVisible();
   // Never a blank drawer: either the impact loaded, or a real error explains
   // why it did not — both are acceptable outcomes for this API call, an
   // indefinite spinner or a silent blank panel are not.
@@ -65,13 +66,13 @@ test("previews visit generation for the current month, then confirms it", async 
   await generateButton.click();
   if (confirming) {
     const confirmed = await readSuccessful<GenerationImpact>(confirming);
-    await expect(page.getByRole('heading', { name: 'Generate visits', exact: true })).toBeHidden();
+    await expect(page.getByRole('dialog')).toBeHidden();
     await page.waitForLoadState('networkidle');
     const reloaded = page.waitForResponse(isVisitList);
     await page.reload();
     const after = await readSuccessful<PaginatedVisits>(reloaded);
     assertGenerationPersisted(preview, confirmed, before, after);
-    await expect(page.getByRole('heading', { name: 'Visit Calendar' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Generate Schedule' })).toBeVisible();
     return;
   }
   // Either wording the confirm handler uses, depending on whether anything
