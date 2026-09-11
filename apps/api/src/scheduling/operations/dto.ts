@@ -17,6 +17,15 @@ export const OPERATION_WARNING_CODES = [
 
 export type OperationWarningCode = (typeof OPERATION_WARNING_CODES)[number];
 
+export const OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE = [
+  'SCHEDULE_RUN',
+  'REPAIR',
+  'MANUAL_PUBLISH',
+] as const;
+
+export type OperationsPublishedAssignmentProvenance =
+  (typeof OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE)[number];
+
 export class OperationsDayQueryDto {
   @ApiProperty({ format: 'date', description: 'The Colombo calendar date to inspect.' })
   @IsDateOnly()
@@ -65,6 +74,34 @@ export class OperationsScheduleVersionDto {
   @ApiProperty({ type: String, nullable: true, format: 'date-time' }) publishedAt!: string | null;
 }
 
+export class OperationsPublishedAssignmentLineageEntryDto {
+  @ApiProperty({ type: String, format: 'uuid', description: 'Immutable published assignment identity.' })
+  assignmentId!: string;
+
+  @ApiProperty({ enum: AssignmentStatus })
+  status!: AssignmentStatus;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'The immutable published assignment this version supersedes.' })
+  supersedesAssignmentId!: string | null;
+
+  @ApiProperty({ type: String, nullable: true, format: 'uuid', description: 'Repair transaction that published this assignment, when it is a repair successor.' })
+  publishedByRepairId!: string | null;
+
+  @ApiProperty({ enum: OPERATION_PUBLISHED_ASSIGNMENT_PROVENANCE })
+  provenance!: OperationsPublishedAssignmentProvenance;
+
+  @ApiProperty({ type: String, nullable: true, format: 'date-time' })
+  publishedAt!: string | null;
+}
+
+export class OperationsPublishedAssignmentLineageDto {
+  @ApiProperty({ type: [OperationsPublishedAssignmentLineageEntryDto], description: 'Published assignment versions ordered from predecessor to successor. Draft/proposed assignments are deliberately excluded.' })
+  entries!: OperationsPublishedAssignmentLineageEntryDto[];
+
+  @ApiProperty({ type: Boolean, description: 'Whether the visible published chain combines scheduled and repair provenance.' })
+  hasMixedProvenance!: boolean;
+}
+
 export class OperationsVisitDto {
   @ApiProperty({ type: String, format: 'uuid' }) id!: string;
   @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
@@ -92,6 +129,8 @@ export class OperationsDayItemDto {
   @ApiProperty({ type: String }) nextAction!: string;
   @ApiProperty({ type: OperationsScheduleVersionDto, nullable: true })
   scheduleVersion!: OperationsScheduleVersionDto | null;
+  @ApiProperty({ type: OperationsPublishedAssignmentLineageDto, description: 'Authoritative per-visit published-assignment history. This is assignment lineage, not schedule-run history.' })
+  publishedAssignmentLineage!: OperationsPublishedAssignmentLineageDto;
 }
 
 export class OperationsSummaryDto {

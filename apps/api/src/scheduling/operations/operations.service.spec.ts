@@ -17,7 +17,9 @@ interface AssignmentFixture {
   status: AssignmentStatus;
   updatedAt: Date;
   publishedAt: Date | null;
-  scheduleRunId: string;
+  scheduleRunId: string | null;
+  publishedByRepairId: string | null;
+  supersedesAssignmentId: string | null;
   plannedStart: Date;
   plannedEnd: Date;
   acknowledgedAt: Date | null;
@@ -44,6 +46,8 @@ function assignment(id: string, status: AssignmentStatus, updatedAt: Date): Assi
     updatedAt,
     publishedAt: status === AssignmentStatus.PUBLISHED ? updatedAt : null,
     scheduleRunId: `${id}-run`,
+    publishedByRepairId: null,
+    supersedesAssignmentId: null,
     plannedStart: new Date('2026-09-10T09:00:00.000Z'),
     plannedEnd: new Date('2026-09-10T10:00:00.000Z'),
     acknowledgedAt: null,
@@ -84,6 +88,54 @@ function visit(overrides: Record<string, unknown> = {}) {
 }
 
 describe('OperationsService', () => {
+  it('returns the immutable original, superseded predecessor, and repair successor as one published assignment lineage', async () => {
+    const original = assignment('original', AssignmentStatus.SUPERSEDED, new Date('2026-09-09T08:00:00.000Z'));
+    original.publishedAt = new Date('2026-09-09T08:00:00.000Z');
+    const repaired = assignment('repair-successor', AssignmentStatus.PUBLISHED, new Date('2026-09-10T08:00:00.000Z'));
+    repaired.scheduleRunId = null;
+    repaired.publishedByRepairId = 'repair-1';
+    repaired.supersedesAssignmentId = original.id;
+    const prisma = {
+      generatedVisit: {
+        findMany: jest.fn().mockResolvedValue([visit({ assignments: [repaired, original] })]),
+      },
+    };
+    const eligibility = { evaluate: jest.fn().mockResolvedValue({ isEligible: true, conflicts: [] }) };
+
+    const result = await new OperationsService(prisma as never, eligibility as never)
+      .day({ date: '2026-09-10' });
+
+    expect(result.items[0]).toMatchObject({
+      dispatchAssignment: { id: 'repair-successor' },
+      publishedAssignmentLineage: {
+        hasMixedProvenance: true,
+        entries: [
+          {
+            assignmentId: 'original',
+            status: AssignmentStatus.SUPERSEDED,
+            supersedesAssignmentId: null,
+            publishedByRepairId: null,
+            provenance: 'SCHEDULE_RUN',
+          },
+          {
+            assignmentId: 'repair-successor',
+            status: AssignmentStatus.PUBLISHED,
+            supersedesAssignmentId: 'original',
+            publishedByRepairId: 'repair-1',
+            provenance: 'REPAIR',
+          },
+        ],
+      },
+    });
+    expect(prisma.generatedVisit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        assignments: expect.objectContaining({
+          where: { status: { in: expect.arrayContaining([AssignmentStatus.SUPERSEDED]) } },
+        }),
+      }),
+    }));
+  });
+
   it('uses the published assignment as dispatch truth even when a newer draft exists', async () => {
     const published = assignment('published', AssignmentStatus.PUBLISHED, date);
     const draft = assignment('draft', AssignmentStatus.DRAFT, new Date('2026-09-10T12:00:00.000Z'));

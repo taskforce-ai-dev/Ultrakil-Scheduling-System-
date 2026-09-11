@@ -148,6 +148,10 @@ export interface OperationsScheduleVersion {
   publishedAt: string | null;
 }
 
+export type OperationsPublishedAssignmentLineage = OperationsDayContractItem["publishedAssignmentLineage"];
+export type OperationsPublishedAssignmentLineageEntry = OperationsPublishedAssignmentLineage["entries"][number];
+export type OperationsPublishedAssignmentProvenance = OperationsPublishedAssignmentLineageEntry["provenance"];
+
 export interface OperationWarning {
   code: OperationWarningCode;
   message: string;
@@ -161,6 +165,7 @@ export interface OperationsDayItem {
   violations: OperationViolation[];
   nextAction: string;
   scheduleVersion: OperationsScheduleVersion | null;
+  publishedAssignmentLineage: OperationsPublishedAssignmentLineage;
   warnings: OperationWarning[];
 }
 
@@ -324,6 +329,12 @@ const ASSIGNMENT_STATUSES = new Set<AssignmentStatus>([
   "SUPERSEDED",
 ]);
 
+const PUBLISHED_ASSIGNMENT_PROVENANCE = new Set<OperationsPublishedAssignmentProvenance>([
+  "SCHEDULE_RUN",
+  "REPAIR",
+  "MANUAL_PUBLISH",
+]);
+
 const OPERATION_WARNING_CODES = new Set<OperationWarningCode>([
   "CREW_SIZE_DEFAULTED",
   "DAY_RULE_DERIVED",
@@ -415,6 +426,25 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     : [];
   const version = asRecord(record.scheduleVersion);
   const hasVersion = Object.keys(version).length > 0;
+  const lineage = asRecord(record.publishedAssignmentLineage);
+  const lineageEntries = Array.isArray(lineage.entries)
+    ? lineage.entries.flatMap((entry) => {
+        const row = asRecord(entry);
+        const assignmentId = asString(row.assignmentId);
+        const status = asString(row.status);
+        const provenance = asString(row.provenance);
+        if (!assignmentId || !ASSIGNMENT_STATUSES.has(status as AssignmentStatus)
+          || !PUBLISHED_ASSIGNMENT_PROVENANCE.has(provenance as OperationsPublishedAssignmentProvenance)) return [];
+        return [{
+          assignmentId,
+          status: status as AssignmentStatus,
+          supersedesAssignmentId: typeof row.supersedesAssignmentId === "string" ? row.supersedesAssignmentId : null,
+          publishedByRepairId: typeof row.publishedByRepairId === "string" ? row.publishedByRepairId : null,
+          provenance: provenance as OperationsPublishedAssignmentProvenance,
+          publishedAt: typeof row.publishedAt === "string" ? row.publishedAt : null,
+        }];
+      })
+    : [];
   const warnings = Array.isArray(record.warnings)
     ? record.warnings.flatMap((warning) => {
         if (typeof warning !== "object" || warning === null) return [];
@@ -463,6 +493,11 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
           publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
         }
       : null,
+    publishedAssignmentLineage: {
+      entries: lineageEntries,
+      hasMixedProvenance: lineageEntries.length > 1
+        && new Set(lineageEntries.map((entry) => entry.provenance)).size > 1,
+    },
     warnings: warnings.filter(
       (warning, index) => warnings.findIndex(
         (candidate) => candidate.code === warning.code && candidate.message === warning.message,

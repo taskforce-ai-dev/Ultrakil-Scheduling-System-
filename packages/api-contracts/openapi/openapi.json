@@ -6328,6 +6328,82 @@
           "publishedAt"
         ]
       },
+      "OperationsPublishedAssignmentLineageEntryDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Immutable published assignment identity."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The immutable published assignment this version supersedes."
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "Repair transaction that published this assignment, when it is a repair successor."
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "SCHEDULE_RUN",
+              "REPAIR",
+              "MANUAL_PUBLISH"
+            ]
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "status",
+          "supersedesAssignmentId",
+          "publishedByRepairId",
+          "provenance",
+          "publishedAt"
+        ]
+      },
+      "OperationsPublishedAssignmentLineageDto": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "description": "Published assignment versions ordered from predecessor to successor. Draft/proposed assignments are deliberately excluded.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageEntryDto"
+            }
+          },
+          "hasMixedProvenance": {
+            "type": "boolean",
+            "description": "Whether the visible published chain combines scheduled and repair provenance."
+          }
+        },
+        "required": [
+          "entries",
+          "hasMixedProvenance"
+        ]
+      },
       "OperationsDayItemDto": {
         "type": "object",
         "properties": {
@@ -6388,6 +6464,14 @@
                 "$ref": "#/components/schemas/OperationsScheduleVersionDto"
               }
             ]
+          },
+          "publishedAssignmentLineage": {
+            "description": "Authoritative per-visit published-assignment history. This is assignment lineage, not schedule-run history.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageDto"
+              }
+            ]
           }
         },
         "required": [
@@ -6398,7 +6482,8 @@
           "violations",
           "warnings",
           "nextAction",
-          "scheduleVersion"
+          "scheduleVersion",
+          "publishedAssignmentLineage"
         ]
       },
       "OperationsDayResponseDto": {

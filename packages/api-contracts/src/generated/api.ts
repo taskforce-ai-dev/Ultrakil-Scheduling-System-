@@ -2218,6 +2218,35 @@ export interface components {
             /** Format: date-time */
             publishedAt: string | null;
         };
+        OperationsPublishedAssignmentLineageEntryDto: {
+            /**
+             * Format: uuid
+             * @description Immutable published assignment identity.
+             */
+            assignmentId: string;
+            /** @enum {string} */
+            status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
+            /**
+             * Format: uuid
+             * @description The immutable published assignment this version supersedes.
+             */
+            supersedesAssignmentId: string | null;
+            /**
+             * Format: uuid
+             * @description Repair transaction that published this assignment, when it is a repair successor.
+             */
+            publishedByRepairId: string | null;
+            /** @enum {string} */
+            provenance: "SCHEDULE_RUN" | "REPAIR" | "MANUAL_PUBLISH";
+            /** Format: date-time */
+            publishedAt: string | null;
+        };
+        OperationsPublishedAssignmentLineageDto: {
+            /** @description Published assignment versions ordered from predecessor to successor. Draft/proposed assignments are deliberately excluded. */
+            entries: components["schemas"]["OperationsPublishedAssignmentLineageEntryDto"][];
+            /** @description Whether the visible published chain combines scheduled and repair provenance. */
+            hasMixedProvenance: boolean;
+        };
         OperationsDayItemDto: {
             visit: components["schemas"]["OperationsVisitDto"];
             /** @enum {string} */
@@ -2230,6 +2259,8 @@ export interface components {
             warnings: components["schemas"]["OperationsWarningDto"][];
             nextAction: string;
             scheduleVersion: components["schemas"]["OperationsScheduleVersionDto"] | null;
+            /** @description Authoritative per-visit published-assignment history. This is assignment lineage, not schedule-run history. */
+            publishedAssignmentLineage: components["schemas"]["OperationsPublishedAssignmentLineageDto"];
         };
         OperationsDayResponseDto: {
             /** Format: date */

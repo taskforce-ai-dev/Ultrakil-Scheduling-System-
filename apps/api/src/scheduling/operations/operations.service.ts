@@ -12,11 +12,20 @@ import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ConflictDto } from '../eligibility/dto';
 import { EligibilityService } from '../eligibility/eligibility.service';
-import { OperationsAssignmentSnapshotDto, OperationsDayItemDto, OperationsDayQueryDto, OperationsDayResponseDto, OperationsWarningDto } from './dto';
+import {
+  OperationsAssignmentSnapshotDto,
+  OperationsDayItemDto,
+  OperationsDayQueryDto,
+  OperationsDayResponseDto,
+  OperationsPublishedAssignmentLineageDto,
+  OperationsWarningDto,
+} from './dto';
 
 const DISPATCH_STATUSES: AssignmentStatus[] = [AssignmentStatus.PUBLISHED, AssignmentStatus.ACKNOWLEDGED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED];
 const PROPOSED_STATUSES: AssignmentStatus[] = [AssignmentStatus.DRAFT, AssignmentStatus.PROPOSED];
 const LIVE_STATUSES = [...DISPATCH_STATUSES, ...PROPOSED_STATUSES];
+const PUBLISHED_LINEAGE_STATUSES: AssignmentStatus[] = [...DISPATCH_STATUSES, AssignmentStatus.SUPERSEDED];
+const OPERATIONS_ASSIGNMENT_STATUSES: AssignmentStatus[] = [...LIVE_STATUSES, AssignmentStatus.SUPERSEDED];
 
 const OPERATIONS_INCLUDE = {
   serviceAgreement: { include: {
@@ -25,7 +34,7 @@ const OPERATIONS_INCLUDE = {
     jobType: { select: { name: true } },
   } },
   unassignedReasons: { orderBy: { code: 'asc' } },
-  assignments: { where: { status: { in: LIVE_STATUSES } }, include: {
+  assignments: { where: { status: { in: OPERATIONS_ASSIGNMENT_STATUSES } }, include: {
     crewMembers: { include: { employee: { select: { fullName: true } } } },
     vehicles: { include: {
       vehicle: { select: { label: true, branchId: true } },
@@ -96,6 +105,7 @@ export class OperationsService {
       violations,
       warnings: operationWarnings,
       nextAction: nextAction(state, violations),
+      publishedAssignmentLineage: publishedAssignmentLineage(visit.assignments),
       scheduleVersion: lineage
         ? {
             id: lineage.scheduleRunId,
@@ -115,6 +125,61 @@ export class OperationsService {
     }, { excludeAssignmentId: assignment.id });
     return result.conflicts.map((conflict) => ({ ...conflict, resources: resources(conflict.resources) }));
   }
+}
+
+function publishedAssignmentLineage(
+  rows: VisitRow['assignments'],
+): OperationsPublishedAssignmentLineageDto {
+  const published = rows.filter((row) => PUBLISHED_LINEAGE_STATUSES.includes(row.status));
+  const byId = new Map(published.map((row) => [row.id, row]));
+  const successorByPredecessor = new Map<string, typeof published[number]>();
+
+  for (const row of published) {
+    if (row.supersedesAssignmentId && byId.has(row.supersedesAssignmentId)) {
+      successorByPredecessor.set(row.supersedesAssignmentId, row);
+    }
+  }
+
+  const roots = published
+    .filter((row) => !row.supersedesAssignmentId || !byId.has(row.supersedesAssignmentId))
+    .sort(comparePublishedAssignment);
+  const ordered: typeof published = [];
+  const seen = new Set<string>();
+  const appendChain = (first: typeof published[number]) => {
+    let current: typeof published[number] | undefined = first;
+    while (current && !seen.has(current.id)) {
+      ordered.push(current);
+      seen.add(current.id);
+      current = successorByPredecessor.get(current.id);
+    }
+  };
+
+  roots.forEach(appendChain);
+  published.filter((row) => !seen.has(row.id)).sort(comparePublishedAssignment).forEach(appendChain);
+
+  const entries = ordered.map((row) => ({
+    assignmentId: row.id,
+    status: row.status,
+    supersedesAssignmentId: row.supersedesAssignmentId,
+    publishedByRepairId: row.publishedByRepairId,
+    provenance: row.publishedByRepairId
+      ? 'REPAIR' as const
+      : row.scheduleRunId
+        ? 'SCHEDULE_RUN' as const
+        : 'MANUAL_PUBLISH' as const,
+    publishedAt: row.publishedAt?.toISOString() ?? null,
+  }));
+
+  return {
+    entries,
+    hasMixedProvenance: new Set(entries.map((entry) => entry.provenance)).size > 1,
+  };
+}
+
+function comparePublishedAssignment<T extends { id: string; publishedAt: Date | null; updatedAt: Date }>(a: T, b: T): number {
+  return (a.publishedAt?.getTime() ?? 0) - (b.publishedAt?.getTime() ?? 0)
+    || a.updatedAt.getTime() - b.updatedAt.getTime()
+    || a.id.localeCompare(b.id);
 }
 
 function selectDispatch<T extends { publishedAt: Date | null; updatedAt: Date; id: string }>(rows: T[]): T | null {

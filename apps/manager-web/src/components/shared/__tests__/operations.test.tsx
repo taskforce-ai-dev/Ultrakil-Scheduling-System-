@@ -42,6 +42,36 @@ const day = parseOperationsDay({
 });
 
 describe("OperationsDayPanel", () => {
+  it("shows published assignment history with a repair successor and mixed provenance", () => {
+    const repaired = parseOperationsDay({
+      date: "2026-09-10",
+      items: [{
+        visit: { id: "repair-visit", customerName: "Repair customer" },
+        state: "READY",
+        dispatchAssignment: { id: "repair-successor", status: "PUBLISHED", crew: [], vehicles: [] },
+        proposedAssignment: null,
+        violations: [],
+        warnings: [],
+        nextAction: "Dispatch the published assignment.",
+        publishedAssignmentLineage: {
+          hasMixedProvenance: true,
+          entries: [
+            { assignmentId: "original", status: "SUPERSEDED", supersedesAssignmentId: null, publishedByRepairId: null, provenance: "SCHEDULE_RUN", publishedAt: "2026-09-09T08:00:00.000Z" },
+            { assignmentId: "repair-successor", status: "PUBLISHED", supersedesAssignmentId: "original", publishedByRepairId: "repair-1", provenance: "REPAIR", publishedAt: "2026-09-10T08:00:00.000Z" },
+          ],
+        },
+      }],
+    });
+
+    render(<OperationsDayPanel data={repaired} />);
+
+    const item = screen.getByText("Repair customer").closest("li")!;
+    expect(within(item).getByText("Published assignment history")).toBeInTheDocument();
+    expect(within(item).getByText(/Mixed scheduled and repair versions/)).toBeInTheDocument();
+    expect(within(item).getByText(/Version 1.*Superseded.*Scheduled run/)).toBeInTheDocument();
+    expect(within(item).getByText(/Version 2.*Published.*Repair.*supersedes original/)).toBeInTheDocument();
+  });
+
   it("labels proposals and exceptions without calling them assigned", () => {
     render(<OperationsDayPanel data={day} />);
 
@@ -63,7 +93,7 @@ describe("OperationsDayPanel", () => {
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
     const exception = screen.getByText("Exception customer").closest("li")!;
     expect(within(exception).getByText("Confirm branch")).toBeInTheDocument();
-    expect(within(exception).getByText(/Published schedule version/)).toBeInTheDocument();
+    expect(within(exception).queryByText(/Published schedule version/)).not.toBeInTheDocument();
   });
 
   it("keeps the published crew visible after a visit is completed", () => {
@@ -113,7 +143,6 @@ describe("OperationsDayPanel", () => {
 
     const item = screen.getByText("Acknowledged customer").closest("li")!;
     expect(within(item).getByText("Crew assigned")).toBeInTheDocument();
-    expect(within(item).getByText("Published schedule version run-1")).toBeInTheDocument();
-    expect(within(item).queryByText(/not dispatch truth/)).not.toBeInTheDocument();
+    expect(within(item).queryByText(/schedule version/)).not.toBeInTheDocument();
   });
 });

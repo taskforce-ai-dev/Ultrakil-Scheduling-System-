@@ -87,18 +87,28 @@ function WarningList({ item }: { item: OperationsDayItem }) {
   );
 }
 
-function ScheduleLineage({ item }: { item: OperationsDayItem }) {
-  const version = item.scheduleVersion;
-  if (!version) return null;
-  const versionName = version.version != null ? `v${version.version}` : version.id ?? "recorded";
-  const status = version.status?.toUpperCase();
-  if (["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
-    return <p className="mt-2 text-xs text-muted-foreground">Published schedule version {versionName}</p>;
-  }
+function PublishedAssignmentLineage({ item }: { item: OperationsDayItem }) {
+  const lineage = item.publishedAssignmentLineage;
+  if (lineage.entries.length === 0) return null;
+  const provenanceLabel = {
+    SCHEDULE_RUN: "Scheduled run",
+    REPAIR: "Repair",
+    MANUAL_PUBLISH: "Manual publish",
+  } as const;
+
   return (
-    <p className="mt-2 text-xs text-muted-foreground">
-      {status === "DRAFT" ? "Draft schedule version" : "Schedule version"} {versionName} — not dispatch truth
-    </p>
+    <section className="mt-3 rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground" aria-label="Published assignment history">
+      <h3 className="font-medium text-foreground">Published assignment history</h3>
+      {lineage.hasMixedProvenance && <p className="mt-1">Mixed scheduled and repair versions.</p>}
+      <ol className="mt-1 space-y-1">
+        {lineage.entries.map((entry, index) => (
+          <li key={entry.assignmentId}>
+            Version {index + 1} · {entry.status.charAt(0) + entry.status.slice(1).toLowerCase()} · {provenanceLabel[entry.provenance]}
+            {entry.supersedesAssignmentId ? ` · supersedes ${entry.supersedesAssignmentId}` : ""}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -143,7 +153,7 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
       <p className="mt-2 text-sm">
         <span className="font-medium">Next action:</span> {item.nextAction}
       </p>
-      <ScheduleLineage item={item} />
+      <PublishedAssignmentLineage item={item} />
       <ViolationList violations={item.violations} />
       <WarningList item={item} />
     </li>
