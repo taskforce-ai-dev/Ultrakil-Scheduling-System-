@@ -287,7 +287,7 @@ function warnings(
   ) {
     result.push({
       code: 'HOURS_UNCONFIRMED',
-      message: 'Opening hours were not confirmed; the visible 08:00–17:00 fallback is in use.',
+      message: 'Opening hours for this visit are not confirmed: either the recorded hours are unconfirmed, or the visible 08:00–17:00 fallback is in use.',
     });
   }
   if (

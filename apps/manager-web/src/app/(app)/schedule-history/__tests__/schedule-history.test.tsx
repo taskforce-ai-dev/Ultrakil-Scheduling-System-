@@ -228,7 +228,7 @@ describe("ScheduleHistoryPage", () => {
         provenanceWarnings: [
           {
             code: "HOURS_UNCONFIRMED",
-            message: "Opening hours were not confirmed; the visible 08:00–17:00 fallback is in use.",
+            message: "Opening hours for this visit are not confirmed: either the recorded hours are unconfirmed, or the visible 08:00–17:00 fallback is in use.",
             affectedVisitCount: 7,
           },
           {
@@ -245,7 +245,7 @@ describe("ScheduleHistoryPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Publish" }));
 
-    expect(await screen.findByText(/Opening hours were not confirmed/)).toBeInTheDocument();
+    expect(await screen.findByText(/Opening hours for this visit are not confirmed/)).toBeInTheDocument();
     expect(screen.getByText(/service site branch is inferred/)).toBeInTheDocument();
     expect(screen.getByText("7 visits")).toBeInTheDocument();
     expect(screen.getByText("2 visits")).toBeInTheDocument();

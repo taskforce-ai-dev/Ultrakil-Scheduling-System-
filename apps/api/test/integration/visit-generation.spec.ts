@@ -763,6 +763,86 @@ describe('a site with no recorded opening hours', () => {
 
 });
 
+describe('where a generated visit\'s window came from', () => {
+  // The publication gate asks a manager to acknowledge source data nobody
+  // confirmed. Stamping every visit with recorded hours as DERIVED made it ask
+  // about hours a manager had typed in by hand, quoting the 08:00-17:00
+  // fallback that was not in use.
+  it('records manager-entered site hours as confirmed, so publication does not query them', async () => {
+    const agreement = await createAgreement({});
+
+    await confirm({ serviceAgreementIds: [agreement.id] });
+
+    const visits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: agreement.id },
+      select: { windowProvenance: true },
+    });
+    expect(visits.length).toBeGreaterThan(0);
+    expect(visits.every((visit) => visit.windowProvenance === 'MANAGER_CONFIRMED')).toBe(true);
+  });
+
+  it('records imported hours as imported rather than promoting them to confirmed', async () => {
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 Imported Hours ${suffix}`, branchCode: BranchCode.COLOMBO });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({
+        name: `C04 Imported Hours Site ${suffix}`,
+        operatingHours: [
+          Weekday.MONDAY,
+          Weekday.TUESDAY,
+          Weekday.WEDNESDAY,
+          Weekday.THURSDAY,
+          Weekday.FRIDAY,
+        ].map((weekday) => ({ weekday, opensAtMinute: 540, closesAtMinute: 1020 })),
+      });
+    // What the importer leaves behind: hours nobody has confirmed.
+    await prisma.siteOperatingHours.updateMany({
+      where: { serviceSiteId: site.body.id },
+      data: { provenance: 'SOURCE' },
+    });
+
+    const agreement = await createAgreement({ serviceSiteId: site.body.id });
+    await confirm({ serviceAgreementIds: [agreement.id] });
+
+    const visits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: agreement.id },
+      select: { windowProvenance: true },
+    });
+    expect(visits.length).toBeGreaterThan(0);
+    expect(visits.every((visit) => visit.windowProvenance === 'SOURCE')).toBe(true);
+  });
+
+  it('treats an explicit agreement window with no site hours as manager-stated, not defaulted', async () => {
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 Agreement Window ${suffix}`, branchCode: BranchCode.COLOMBO });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({ name: `C04 Agreement Window Site ${suffix}`, operatingHours: [] });
+
+    const agreement = await createAgreement({
+      serviceSiteId: site.body.id,
+      serviceWindowStartMinute: 10 * 60,
+      serviceWindowEndMinute: 15 * 60,
+    });
+    await confirm({ serviceAgreementIds: [agreement.id] });
+
+    const visits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: agreement.id },
+      select: { windowProvenance: true, windowStartMinute: true, windowEndMinute: true },
+    });
+    expect(visits.length).toBeGreaterThan(0);
+    expect(visits.every((visit) => visit.windowProvenance === 'MANAGER_CONFIRMED')).toBe(true);
+    expect(visits[0]).toMatchObject({ windowStartMinute: 600, windowEndMinute: 900 });
+  });
+});
+
 describe('the run is recorded', () => {
   it('writes a schedule run and an audit entry', async () => {
     const agreement = await createAgreement();

@@ -41,7 +41,7 @@ const PROVENANCE_WARNING_MESSAGES: Record<ProvenanceWarningCode, string> = {
   DURATION_UNCONFIRMED:
     'Visit duration was not stated by the source and has not been confirmed by a manager.',
   HOURS_UNCONFIRMED:
-    'Opening hours were not confirmed; the visible 08:00–17:00 fallback is in use.',
+    'Opening hours for this visit are not confirmed: either the recorded hours are unconfirmed, or the visible 08:00–17:00 fallback is in use.',
   SITE_BRANCH_UNCONFIRMED:
     'The service site branch is inferred from source data and needs manager confirmation.',
   VEHICLE_BRANCH_UNCONFIRMED:

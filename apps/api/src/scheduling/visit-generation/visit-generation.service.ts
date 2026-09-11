@@ -203,6 +203,7 @@ export class VisitGenerationService {
           weekday: hours.weekday,
           startMinute: hours.opensAtMinute,
           endMinute: hours.closesAtMinute,
+          provenance: hours.provenance,
         })),
         agreementWindowStartMinute: agreement.serviceWindowStartMinute,
         agreementWindowEndMinute: agreement.serviceWindowEndMinute,
@@ -226,10 +227,12 @@ export class VisitGenerationService {
           requiredCrewSize: agreement.crewSize,
           branchCode: agreement.branchCode,
           agreementVersionId: null,
-          windowProvenance:
-            agreement.serviceSite.operatingHours.length === 0
-              ? DataProvenance.DEFAULTED
-              : DataProvenance.DERIVED,
+          // The preview says where each visit's window actually came from:
+          // the provenance of the hours row it used, the agreement's own
+          // stated window, or the disclosed 08:00-17:00 assumption. Deciding
+          // it here from "has any hours rows" called manager-confirmed hours
+          // derived and raised a source-data warning against them.
+          windowProvenance: visit.windowProvenance,
           isPreferredDay: visit.isPreferredDay,
         });
       }
