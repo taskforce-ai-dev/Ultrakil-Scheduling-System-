@@ -96,7 +96,7 @@ beforeEach(() => {
 });
 
 async function renderBoard() {
-  const user = userEvent.setup();
+  const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   render(<DispatchBoardPage />);
   await screen.findByText("Cinnamon Grand Colombo");
   return user;
@@ -284,5 +284,13 @@ describe("dispatch board", () => {
     expect(screen.queryByText("Colombo Stale Co")).not.toBeInTheDocument();
     expect(screen.getByText("Kandy Fresh Co")).toBeInTheDocument();
     expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("22");
+  });
+
+  it("disables Share when there is nothing on the board to share", async () => {
+    mockVisits([]);
+    render(<DispatchBoardPage />);
+    await screen.findByText("Nothing scheduled for this date");
+
+    expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
   });
 });

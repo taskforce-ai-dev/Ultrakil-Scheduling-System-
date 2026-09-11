@@ -50,7 +50,7 @@ beforeEach(() => {
 async function renderPage() {
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
   render(<ScheduleHistoryPage />);
-  await screen.findByRole("heading", { name: "Schedule History" });
+  await screen.findByRole("heading", { name: "Assign Crew" });
   return user;
 }
 
@@ -482,7 +482,7 @@ describe("ScheduleHistoryPage", () => {
     await renderPage();
 
     expect(await screen.findByText("Draft — ready to publish")).toBeInTheDocument();
-    expect(screen.getByText("Published")).toBeInTheDocument();
+    expect(screen.getByText("Post")).toBeInTheDocument();
     expect(screen.getByText("Superseded")).toBeInTheDocument();
   });
 
