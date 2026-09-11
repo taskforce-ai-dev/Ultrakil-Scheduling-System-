@@ -18,6 +18,11 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { AssignmentsService } from './assignments.service';
+import { CONFLICT_CODES } from './conflict-codes';
+import {
+  CONFLICT_GROUPS,
+  UNASSIGNED_OPERATION_STATES,
+} from './conflict-groups';
 import {
   AssignCrewDto,
   AssignmentDto,
@@ -25,6 +30,7 @@ import {
   EmployeeAssignmentQueryDto,
   PaginatedEmployeeAssignmentsDto,
   PaginatedUnassignedVisitsDto,
+  UnassignedVisitQueryDto,
 } from './dto';
 
 @ApiTags('assignments')
@@ -100,10 +106,23 @@ export class AssignmentsController {
   @ApiOperation({
     summary: 'Work that still needs a crew, and why it has none',
     description:
-      'Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.',
+      'Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed. `visitId` is the one parameter that is not a filter: it names a single visit and overrides all the others, answering with that visit or with nothing.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'VALIDATION_FAILED — an unknown filter, or a conflict-group label sent as conflictCode.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })
+  @ApiQuery({
+    name: 'visitId',
+    required: false,
+    type: String,
+    format: 'uuid',
+    description:
+      'One named visit, for the dispatch board\'s "Why?" deep link. A selector rather than a filter: every other parameter here is ignored when it is present, and the response describes exactly this visit wherever its date and whichever page it would otherwise fall on — one item when it still needs a crew, or an empty page with total 0 when the id is unknown or the visit has since been staffed, completed or cancelled. No other visit is ever returned alongside it, so an empty result means the named visit was not found rather than "here is something else".',
+  })
   @ApiQuery({
     name: 'branchCode',
     required: false,
@@ -129,30 +148,41 @@ export class AssignmentsController {
     description: 'Only unstaffed visits generated from this agreement.',
   })
   @ApiQuery({
+    name: 'checked',
+    required: false,
+    type: Boolean,
+    description: 'true returns visits with recorded conflict checks; false returns unchecked visits.',
+  })
+  @ApiQuery({
+    name: 'operationState',
+    required: false,
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      'UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both.',
+  })
+  @ApiQuery({
+    name: 'conflictGroup',
+    required: false,
+    enum: CONFLICT_GROUPS,
+    description:
+      'Only visits carrying at least one conflict in this manager-facing group. Each group maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters.',
+  })
+  @ApiQuery({
+    name: 'conflictCode',
+    required: false,
+    enum: CONFLICT_CODES,
+    description: 'Only visits with this recorded conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL belongs in conflictGroup. Facets remain scoped to the other filters.',
+  })
+  @ApiQuery({
     name: 'withConflictsOnly',
     required: false,
     type: Boolean,
-    description: 'Only visits already found to be unstaffable, rather than all unstaffed work.',
+    deprecated: true,
+    description: 'Deprecated alias for checked=true.',
   })
   @ApiResponse({ status: 200, type: PaginatedUnassignedVisitsDto })
-  queue(
-    @Query('page') page?: string,
-    @Query('pageSize') pageSize?: string,
-    @Query('branchCode') branchCode?: string,
-    @Query('from') from?: string,
-    @Query('to') to?: string,
-    @Query('withConflictsOnly') withConflictsOnly?: string,
-    @Query('serviceAgreementId') serviceAgreementId?: string,
-  ): Promise<PaginatedUnassignedVisitsDto> {
-    return this.assignments.unassignedQueue({
-      page: page ? Number(page) : undefined,
-      pageSize: pageSize ? Number(pageSize) : undefined,
-      branchCode,
-      from,
-      to,
-      withConflictsOnly: withConflictsOnly === 'true' || withConflictsOnly === '1',
-      serviceAgreementId,
-    });
+  queue(@Query() query: UnassignedVisitQueryDto): Promise<PaginatedUnassignedVisitsDto> {
+    return this.assignments.unassignedQueue(query);
   }
 
   @Get('employees/:employeeId/assignments')
@@ -160,7 +190,7 @@ export class AssignmentsController {
   @ApiOperation({
     summary: "An employee's published daily assignments",
     description:
-      'Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.',
+      'Manager/admin read model prepared for a future worker app. Only published-descended assignments with schedule-run or repair provenance and non-null publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.',
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'pageSize', required: false, type: Number, example: 50 })

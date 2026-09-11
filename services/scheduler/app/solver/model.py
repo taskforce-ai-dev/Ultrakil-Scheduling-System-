@@ -42,6 +42,7 @@ WEIGHT_VISIT_STAFFED = 10_000
 WEIGHT_PREFERRED_DAY = 30
 WEIGHT_KEEP_EXISTING_CREW = 20
 WEIGHT_KEEP_EXISTING_VEHICLE = 10
+WEIGHT_KEEP_EXISTING_TIME = 15
 WEIGHT_WORKLOAD_SPREAD = 5
 # A crew that can take a van should. Without a reward the solver has no reason
 # to assign one at all, since a vehicle is optional — and a pest control crew
@@ -414,6 +415,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     all_dates = sorted(
         {v.visit_date for v in visits}
         | {slot.date for v in visits for slot in v.candidate_slots}
+        | {
+            reservation.scheduled_date
+            for reservation in request.reservations
+            if reservation.assignment_id
+            not in set(request.excluded_reservation_assignment_ids)
+        }
     )
     day_index = {date: index for index, date in enumerate(all_dates)}
 
@@ -424,11 +431,19 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         integer carries both the date and the time and two visits on different
         days can never be found to overlap.
         """
+        lock = locks_by_visit.get(v.id)
+        if (
+            lock is not None
+            and lock.scope in ("FULL", "TIME")
+            and lock.start_minute is not None
+        ):
+            return [day_index[v.visit_date] * 1440 + lock.start_minute]
         if not v.candidate_slots:
             base = day_index[v.visit_date] * 1440 + v.window_start_minute
             return [base]
 
         starts: list[int] = []
+        occupied = {(key.date, key.start_minute) for key in v.occupied_start_keys}
         for slot in v.candidate_slots:
             if slot.date not in day_index:
                 continue
@@ -436,7 +451,8 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             latest = min(slot.latest_start_minute, 1440 - v.duration_minutes)
             minute = slot.earliest_start_minute
             while minute <= latest:
-                starts.append(offset + minute)
+                if (slot.date, minute) not in occupied:
+                    starts.append(offset + minute)
                 minute += SLOT_GRANULARITY_MINUTES
         return sorted(set(starts))
 
@@ -528,8 +544,33 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         """The visit's start on the horizon timeline — now a variable."""
         return start_of[v.id]
 
+    reservations = [
+        reservation
+        for reservation in request.reservations
+        if reservation.assignment_id not in set(request.excluded_reservation_assignment_ids)
+    ]
+
+    def reservation_interval(reservation, resource_id: str, kind: str):
+        resource_ids = (
+            reservation.employee_ids if kind == "employee" else reservation.vehicle_ids
+        )
+        if resource_id not in resource_ids:
+            return None
+        duration = reservation.end_minute - reservation.start_minute
+        if duration <= 0:
+            return None
+        start = day_index[reservation.scheduled_date] * 1440 + reservation.start_minute
+        return model.NewFixedSizeIntervalVar(
+            start, duration, f"reserved_{kind}_{resource_id}_{reservation.assignment_id or start}"
+        )
+
     for employee in employees:
-        intervals = []
+        intervals = [
+            interval
+            for reservation in reservations
+            if (interval := reservation_interval(reservation, employee.id, "employee"))
+            is not None
+        ]
         for v in visits:
             var = assign.get((v.id, employee.id))
             if var is None:
@@ -548,7 +589,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             model.AddNoOverlap(intervals)
 
     for vehicle in vehicles:
-        intervals = []
+        intervals = [
+            interval
+            for reservation in reservations
+            if (interval := reservation_interval(reservation, vehicle.id, "vehicle"))
+            is not None
+        ]
         for v in visits:
             var = uses_vehicle.get((v.id, vehicle.id))
             if var is None:
@@ -702,6 +748,22 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                 var = uses_vehicle.get((visit.id, vehicle_id))
                 if var is not None:
                     terms.append((WEIGHT_KEEP_EXISTING_VEHICLE, var))
+
+            # Keeping the published/draft start makes a correction easier for
+            # dispatch to understand. It remains a preference: an occupied or
+            # otherwise illegal time is absent from the variable's domain and
+            # receives no term, so reservations and every hard rule still win.
+            if existing.start_minute is not None:
+                wanted_start = (
+                    day_index[visit.visit_date] * 1440 + existing.start_minute
+                )
+                if wanted_start in slot_starts(visit):
+                    kept_time = model.NewBoolVar(f"keep_time_{visit.id}")
+                    model.Add(start_of[visit.id] == wanted_start).OnlyEnforceIf(
+                        kept_time
+                    )
+                    model.AddImplication(kept_time, staffed[visit.id])
+                    terms.append((WEIGHT_KEEP_EXISTING_TIME, kept_time))
 
     # Balanced utilisation, expressed as "flatten the busiest person". Without
     # it the solver happily gives one supervisor every job on a Wednesday.

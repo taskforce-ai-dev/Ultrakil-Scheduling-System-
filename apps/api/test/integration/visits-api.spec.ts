@@ -393,6 +393,9 @@ describe('hand-editing a visit', () => {
     );
     const after = await prisma.generatedVisit.findUniqueOrThrow({ where: { id: visit.id } });
     expect(after.windowStartMinute).toBe(600);
+    // The window is now a manager's fact, not the disclosed 08:00-17:00
+    // assumption, so the operations read model must stop warning about it.
+    expect(after.windowProvenance).toBe('MANAGER_CONFIRMED');
   });
 
   it('records who changed it and why', async () => {

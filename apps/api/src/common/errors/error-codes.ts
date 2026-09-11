@@ -18,6 +18,7 @@ export const ErrorCode = {
   DATABASE_UNAVAILABLE: 'DATABASE_UNAVAILABLE',
   QUEUE_UNAVAILABLE: 'QUEUE_UNAVAILABLE',
   SCHEDULER_UNAVAILABLE: 'SCHEDULER_UNAVAILABLE',
+  REPAIR_PLANNER_UNAVAILABLE: 'REPAIR_PLANNER_UNAVAILABLE',
 
   // --- Workforce import ------------------------------------------------------
   MATRIX_FILE_NOT_FOUND: 'MATRIX_FILE_NOT_FOUND',
@@ -57,10 +58,15 @@ export const ErrorCode = {
   AGREEMENT_DATES_INVALID: 'AGREEMENT_DATES_INVALID',
   AGREEMENT_ARCHIVED: 'AGREEMENT_ARCHIVED',
   AGREEMENT_UNSATISFIABLE: 'AGREEMENT_UNSATISFIABLE',
+  /** Asked to reactivate an agreement no import ever archived. */
+  AGREEMENT_NOT_IMPORTER_ARCHIVED: 'AGREEMENT_NOT_IMPORTER_ARCHIVED',
   SCHEDULE_EXECUTION_BUDGET_EXCEEDED: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
   SITE_INACTIVE: 'SITE_INACTIVE',
   JOB_TYPE_INACTIVE: 'JOB_TYPE_INACTIVE',
   CUSTOMER_INACTIVE: 'CUSTOMER_INACTIVE',
+
+  // --- Published assignment repair ------------------------------------------
+  REPAIR_TARGET_ALREADY_VALID: 'REPAIR_TARGET_ALREADY_VALID',
 
   // --- Scheduling hard rules (ULK-C05) ---------------------------------------
   //
@@ -97,6 +103,8 @@ export const ErrorCode = {
   /// The crew travels together in one vehicle, and a vehicle must seat all of
   /// them. A second vehicle carries nobody and keeps it off another job.
   TOO_MANY_VEHICLES: 'TOO_MANY_VEHICLES',
+  /** No legal crew/vehicle combination exists for the visit as currently defined. */
+  NO_FEASIBLE_CREW: 'NO_FEASIBLE_CREW',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];

@@ -1,5 +1,9 @@
 import { ScheduleRunProcessor } from './optimizer/schedule-run.processor';
 import { QStashScheduleRunDispatcher } from './optimizer/schedule-run.dispatcher';
+import { PublishedAssignmentRepairController } from './repair/published-assignment-repair.controller';
+import { PublishedAssignmentRepairPlannerAdapter } from './repair/published-assignment-repair-planner.adapter';
+import { PublishedAssignmentRepairPlannerService } from './repair/published-assignment-repair-planner.service';
+import { PublishedAssignmentRepairService } from './repair/published-assignment-repair.service';
 import { SchedulingModule } from './scheduling.module';
 
 describe('SchedulingModule QStash mode', () => {
@@ -19,5 +23,20 @@ describe('SchedulingModule QStash mode', () => {
       if (previous === undefined) delete process.env.SCHEDULE_DISPATCHER;
       else process.env.SCHEDULE_DISPATCHER = previous;
     }
+  });
+
+  it('registers the published-assignment repair API and service', () => {
+    const module = SchedulingModule.register();
+
+    expect(module.controllers).toEqual(
+      expect.arrayContaining([PublishedAssignmentRepairController]),
+    );
+    expect(module.providers).toEqual(
+      expect.arrayContaining([
+        PublishedAssignmentRepairService,
+        PublishedAssignmentRepairPlannerService,
+        PublishedAssignmentRepairPlannerAdapter,
+      ]),
+    );
   });
 });

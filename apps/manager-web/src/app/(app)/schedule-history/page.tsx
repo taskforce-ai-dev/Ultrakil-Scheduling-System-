@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -109,12 +110,47 @@ function StatusBadge({ run }: { run: ScheduleRun }) {
       </Badge>
     );
   }
+  if (run.visitsScheduled === 0) {
+    return (
+      <Badge variant="outline">
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+        Draft — no dispatchable assignments
+      </Badge>
+    );
+  }
+  if (run.visitsUnassigned > 0) {
+    return (
+      <Badge variant="outline">
+        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+        <span>Draft — ready to publish</span>
+        <span className="font-normal">· {run.visitsUnassigned} unassigned</span>
+      </Badge>
+    );
+  }
   return (
     <Badge variant="outline">
       <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
       Draft — ready to publish
     </Badge>
   );
+}
+
+function canPublishRun(run: ScheduleRun): boolean {
+  return run.status === "SUCCEEDED" && !run.isPublished && run.visitsScheduled > 0;
+}
+
+/**
+ * Imported workbook data carries assumptions, not facts: hours defaulted to
+ * 08:00–17:00, a site branch guessed from an address, a crew size or duration
+ * filled in because the source was silent. Publishing turns a proposal into
+ * what the crews are told, so accepting those assumptions is a decision a
+ * person makes and signs, never a side effect of clicking Publish.
+ *
+ * The list is advisory — the API recalculates it under the publication locks
+ * and refuses anything the manager did not actually acknowledge.
+ */
+function unconfirmedSourceWarnings(run: ScheduleRun | null) {
+  return run?.publishReadiness?.provenanceWarnings ?? [];
 }
 
 /**
@@ -175,8 +211,16 @@ export default function ScheduleHistoryPage() {
   const busyRunIdRef = React.useRef<string | null>(null);
   const [publishTarget, setPublishTarget] = React.useState<ScheduleRun | null>(null);
   const [publishReason, setPublishReason] = React.useState("");
+  const [partialAcknowledged, setPartialAcknowledged] = React.useState(false);
+  const [provenanceAcknowledged, setProvenanceAcknowledged] = React.useState(false);
   const [isPublishing, setIsPublishing] = React.useState(false);
   const isPublishingRef = React.useRef(false);
+
+  // Either gate makes the reason mandatory — an acknowledgement with no stated
+  // reason records that somebody clicked, not why.
+  const publishNeedsReason =
+    (publishTarget?.visitsUnassigned ?? 0) > 0 ||
+    unconfirmedSourceWarnings(publishTarget).length > 0;
 
   const load = React.useCallback(() => {
     setError(null);
@@ -257,16 +301,28 @@ export default function ScheduleHistoryPage() {
   function openPublish(run: ScheduleRun) {
     setPublishTarget(run);
     setPublishReason("");
+    setPartialAcknowledged(false);
+    setProvenanceAcknowledged(false);
   }
 
   async function confirmPublish() {
     if (!publishTarget) return;
+    const isPartial = publishTarget.visitsUnassigned > 0;
+    const isUnconfirmed = unconfirmedSourceWarnings(publishTarget).length > 0;
+    const reason = publishReason.trim();
+    // Each gate stands on its own: a run can owe both acknowledgements, and
+    // either one alone is not enough to publish.
+    if (isPartial && !partialAcknowledged) return;
+    if (isUnconfirmed && !provenanceAcknowledged) return;
+    if ((isPartial || isUnconfirmed) && !reason) return;
     if (isPublishingRef.current) return; // Collapses a double-click into one request.
     isPublishingRef.current = true;
     setIsPublishing(true);
     try {
       await publishScheduleRun(publishTarget.id, {
-        ...(publishReason.trim() ? { reason: publishReason.trim() } : {}),
+        ...(isPartial ? { acknowledgePartial: true } : {}),
+        ...(isUnconfirmed ? { acknowledgeProvenance: true } : {}),
+        ...(reason ? { reason } : {}),
       });
       notify.success("Schedule published.");
       setPublishTarget(null);
@@ -401,7 +457,7 @@ export default function ScheduleHistoryPage() {
             {runs.map((run) => {
               const isActive = ACTIVE_STATUSES.has(run.status);
               const canCancel = isActive && !run.cancelRequested;
-              const canPublish = run.status === "SUCCEEDED" && !run.isPublished;
+              const canPublish = canPublishRun(run);
 
               return (
                 <li key={run.id} className="rounded-xl border bg-card p-4 shadow-sm">
@@ -461,9 +517,10 @@ export default function ScheduleHistoryPage() {
                     </div>
                   </dl>
 
-                  {run.status === "FAILED" && run.errorMessage && (
+                  {run.status === "FAILED" && (
                     <p className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm text-destructive">
-                      {run.errorMessage}
+                      This schedule run failed before it produced a dispatchable plan. Review the
+                      run status and try again; internal error details are withheld here.
                     </p>
                   )}
 
@@ -514,21 +571,73 @@ export default function ScheduleHistoryPage() {
           </DialogHeader>
 
           {publishTarget && publishTarget.visitsUnassigned > 0 && (
-            <p className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              {publishTarget.visitsUnassigned}{" "}
-              {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
-              be staffed and will remain in the Unassigned queue after publishing.
-            </p>
+            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              <p className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                {publishTarget.visitsUnassigned}{" "}
+                {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
+                be staffed and will remain in the Unassigned queue after publishing.
+              </p>
+              <label htmlFor="partial-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
+                <Checkbox
+                  id="partial-publish-ack"
+                  checked={partialAcknowledged}
+                  onCheckedChange={(checked) => setPartialAcknowledged(checked === true)}
+                />
+                <span>I understand that unassigned visits will not be dispatched.</span>
+              </label>
+            </div>
+          )}
+
+          {unconfirmedSourceWarnings(publishTarget).length > 0 && (
+            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+              <p className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                Some of this schedule rests on source data nobody has confirmed. Publishing it
+                tells the crews to act on an assumption.
+              </p>
+              <ul className="ml-6 list-disc space-y-1">
+                {unconfirmedSourceWarnings(publishTarget).map((warning) => (
+                  <li key={warning.code}>
+                    {warning.message}{" "}
+                    <span className="font-medium">
+                      {warning.affectedVisitCount}{" "}
+                      {warning.affectedVisitCount === 1 ? "visit" : "visits"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <label
+                htmlFor="provenance-publish-ack"
+                className="flex items-start gap-2 font-medium text-foreground"
+              >
+                <Checkbox
+                  id="provenance-publish-ack"
+                  checked={provenanceAcknowledged}
+                  onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
+                />
+                <span>
+                  I understand this schedule uses source data that is not confirmed, and I am
+                  publishing it anyway.
+                </span>
+              </label>
+            </div>
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="publish-reason">Reason (optional)</Label>
+            <Label htmlFor="publish-reason">
+              {publishTarget && publishTarget.visitsUnassigned > 0
+                ? "Reason (required for partial schedules)"
+                : publishNeedsReason
+                  ? "Reason (required for unconfirmed source data)"
+                  : "Reason (optional)"}
+            </Label>
             <Textarea
               id="publish-reason"
               value={publishReason}
               onChange={(event) => setPublishReason(event.target.value)}
               placeholder="Why is this being published now?"
+              aria-required={publishNeedsReason}
             />
           </div>
 
@@ -536,7 +645,16 @@ export default function ScheduleHistoryPage() {
             <Button variant="outline" onClick={() => setPublishTarget(null)}>
               Cancel
             </Button>
-            <Button onClick={confirmPublish} disabled={isPublishing}>
+            <Button
+              onClick={confirmPublish}
+              disabled={
+                isPublishing ||
+                ((publishTarget?.visitsUnassigned ?? 0) > 0 && !partialAcknowledged) ||
+                (unconfirmedSourceWarnings(publishTarget).length > 0 &&
+                  !provenanceAcknowledged) ||
+                (publishNeedsReason && !publishReason.trim())
+              }
+            >
               {isPublishing ? "Publishing…" : "Publish"}
             </Button>
           </DialogFooter>

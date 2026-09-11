@@ -1,9 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AssignmentStatus, CrewRole } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -16,7 +17,14 @@ import {
 } from 'class-validator';
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
+import { toBoolean } from '../../common/validation/to-boolean';
 import { CONFLICT_CODES } from './conflict-codes';
+import {
+  CONFLICT_GROUPS,
+  ConflictGroup,
+  UNASSIGNED_OPERATION_STATES,
+  UnassignedOperationState,
+} from './conflict-groups';
 
 export class ProposedCrewMemberDto {
   @ApiProperty({ type: String, format: 'uuid' })
@@ -135,6 +143,10 @@ export class AssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) generatedVisitId!: string;
   @ApiProperty({ type: String }) status!: string;
   @ApiProperty({ type: String }) branchCode!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supersedesAssignmentId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  publishedByRepairId!: string | null;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;
   @ApiProperty({ type: Number }) plannedEndMinute!: number;
   @ApiProperty({ type: [AssignedCrewMemberDto] })
@@ -153,9 +165,15 @@ export class UnassignedVisitDto {
   @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ type: Number }) requiredCrewSize!: number;
   @ApiProperty({
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      "The server's own reading of this row: EXCEPTION when eligibility conflicts are recorded against the visit, UNASSIGNED when none are. The same meaning the operationState filter selects on, so a client is told the state rather than re-deriving it.",
+  })
+  operationState!: UnassignedOperationState;
+  @ApiProperty({
     type: Boolean,
     description:
-      'True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine.',
+      'True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. The boolean spelling of operationState === EXCEPTION.',
   })
   hasBeenChecked!: boolean;
   @ApiProperty({
@@ -171,6 +189,67 @@ export class PaginatedUnassignedVisitsDto {
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) page!: number;
   @ApiProperty({ type: Number }) pageSize!: number;
+  @ApiProperty({ type: Boolean }) hasNextPage!: boolean;
+  @ApiProperty({ type: Object, additionalProperties: { type: 'number' } })
+  conflictFacets!: Record<string, number>;
+}
+
+/**
+ * The Unassigned queue's filters — and, because the global ValidationPipe runs
+ * with `whitelist` and `forbidNonWhitelisted`, the complete list of filters
+ * that exist. A parameter not named here is refused at the boundary by name,
+ * rather than being dropped and answered with a silently unfiltered page.
+ *
+ * `visitId` is the exception to "filter": it selects one visit and overrides
+ * the rest. See its own description.
+ */
+export class UnassignedVisitQueryDto {
+  @ApiPropertyOptional({ minimum: 1, default: 1 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1)
+  page?: number = 1;
+  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 }) @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(200)
+  pageSize?: number = 50;
+  /**
+   * The dispatch board's "Why?" deep link. Not a filter — a selector.
+   *
+   * See the class doc above: everything else here narrows a queue. This one
+   * replaces it. Managers reach the queue from a visit on some other date, or
+   * one that would sit on page 9, and the request that carried only the id
+   * used to be answered with today's first page instead.
+   */
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'One named visit, for the dispatch board\'s "Why?" deep link. A selector rather than a filter: when present, page, pageSize, branchCode, from, to, serviceAgreementId, checked, operationState, conflictGroup, conflictCode and withConflictsOnly are all ignored, and the response describes exactly this visit wherever it falls. items holds one row when the visit exists and still needs a crew; when the id is unknown, or the visit has since been staffed, completed or cancelled, items is empty and total is 0. No other visit is ever returned alongside it, so an empty result means "that visit was not found here" and never "here is something else". page is 1 and pageSize is 1 in a focused response, hasNextPage is false, and conflictFacets counts only the returned visit. A malformed id is refused with 400 VALIDATION_FAILED.',
+  })
+  @IsOptional()
+  @IsUUID()
+  visitId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() branchCode?: string;
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() from?: string;
+  @ApiPropertyOptional({ format: 'date' }) @IsOptional() @IsDateOnly() to?: string;
+  @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() serviceAgreementId?: string;
+  @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit. The boolean spelling of operationState.' }) @IsOptional() @Transform(toBoolean) @IsBoolean()
+  checked?: boolean;
+  @ApiPropertyOptional({
+    enum: UNASSIGNED_OPERATION_STATES,
+    description:
+      'UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both.',
+  })
+  @IsOptional()
+  @IsEnum(UNASSIGNED_OPERATION_STATES)
+  operationState?: UnassignedOperationState;
+  @ApiPropertyOptional({
+    enum: CONFLICT_GROUPS,
+    description:
+      'Only visits carrying at least one conflict in this manager-facing group. Groups are the vocabulary the queue filter is offered in; each maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters.',
+  })
+  @IsOptional()
+  @IsEnum(CONFLICT_GROUPS)
+  conflictGroup?: ConflictGroup;
+  @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL is refused here and belongs in conflictGroup.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
+  conflictCode?: string;
+  @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Transform(toBoolean) @IsBoolean()
+  withConflictsOnly?: boolean;
 }
 
 export class EmployeeAssignmentQueryDto {
@@ -214,7 +293,12 @@ export class EmployeeAssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) assignmentId!: string;
   @ApiProperty({ type: String, enum: Object.values(AssignmentStatus) })
   status!: AssignmentStatus;
-  @ApiProperty({ type: String, format: 'uuid' }) scheduleRunId!: string;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  scheduleRunId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  publishedByRepairId!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  supersedesAssignmentId!: string | null;
   @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
   @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
   @ApiProperty({ type: Number }) plannedStartMinute!: number;

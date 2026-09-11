@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AgreementStatus,
+  DataProvenance,
   DayRuleKind,
   Prisma,
   ScheduleRunStatus,
@@ -202,6 +203,7 @@ export class VisitGenerationService {
           weekday: hours.weekday,
           startMinute: hours.opensAtMinute,
           endMinute: hours.closesAtMinute,
+          provenance: hours.provenance,
         })),
         agreementWindowStartMinute: agreement.serviceWindowStartMinute,
         agreementWindowEndMinute: agreement.serviceWindowEndMinute,
@@ -225,6 +227,12 @@ export class VisitGenerationService {
           requiredCrewSize: agreement.crewSize,
           branchCode: agreement.branchCode,
           agreementVersionId: null,
+          // The preview says where each visit's window actually came from:
+          // the provenance of the hours row it used, the agreement's own
+          // stated window, or the disclosed 08:00-17:00 assumption. Deciding
+          // it here from "has any hours rows" called manager-confirmed hours
+          // derived and raised a source-data warning against them.
+          windowProvenance: visit.windowProvenance,
           isPreferredDay: visit.isPreferredDay,
         });
       }
@@ -357,6 +365,7 @@ export class VisitGenerationService {
             windowEndMinute: addition.required.windowEndMinute,
             durationMinutes: addition.required.durationMinutes,
             requiredCrewSize: addition.required.requiredCrewSize,
+            windowProvenance: addition.required.windowProvenance ?? DataProvenance.UNKNOWN,
             status: VisitStatus.PENDING,
             generatedByRunId: run.id,
             agreementVersionId:
@@ -372,6 +381,7 @@ export class VisitGenerationService {
             windowEndMinute: update.required.windowEndMinute,
             durationMinutes: update.required.durationMinutes,
             requiredCrewSize: update.required.requiredCrewSize,
+            windowProvenance: update.required.windowProvenance ?? DataProvenance.UNKNOWN,
             generatedByRunId: run.id,
             agreementVersionId:
               currentVersions.get(update.required.serviceAgreementId) ?? null,

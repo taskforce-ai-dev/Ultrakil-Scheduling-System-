@@ -3,6 +3,11 @@ import { ConfigService } from '@nestjs/config';
 
 import { AppException } from '../../common/errors/app.exception';
 
+const SCHEDULER_REJECTION_MESSAGE =
+  'The scheduling service rejected the request. Please try again.';
+const SCHEDULER_UNAVAILABLE_MESSAGE =
+  'The scheduling service is temporarily unavailable. Please try again.';
+
 /** Mirrors `services/scheduler/app/solver/schemas.py`. */
 export interface SolveRequest {
   run_id: string;
@@ -25,6 +30,8 @@ export interface SolveRequest {
       latest_start_minute: number;
       is_preferred: boolean;
     }[];
+    /** Unique generated-visit keys already owned by sibling rows. */
+    occupied_start_keys?: { date: string; start_minute: number }[];
   }[];
   employees: {
     id: string;
@@ -53,7 +60,20 @@ export interface SolveRequest {
     visit_id: string;
     employee_ids: string[];
     vehicle_ids: string[];
+    /** Previous minute-of-day, retained as a soft preference when still legal. */
+    start_minute?: number | null;
   }[];
+  /** Published work outside this solve which must retain its resources. */
+  reservations?: {
+    assignment_id?: string;
+    scheduled_date: string;
+    start_minute: number;
+    end_minute: number;
+    employee_ids: string[];
+    vehicle_ids: string[];
+  }[];
+  /** A repair may omit only its exact published predecessor reservation. */
+  excluded_reservation_assignment_ids?: string[];
   time_limit_seconds: number;
 }
 
@@ -113,9 +133,17 @@ export class SchedulerClient {
 
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
+        this.logger.warn(
+          JSON.stringify({
+            event: 'scheduler.solve.failed',
+            kind: 'http',
+            status: response.status,
+            responseBodyLength: detail.length,
+          }),
+        );
         throw new AppException(
           'SCHEDULER_UNAVAILABLE',
-          `The scheduling service rejected the request (HTTP ${response.status}). ${detail.slice(0, 200)}`,
+          SCHEDULER_REJECTION_MESSAGE,
           HttpStatus.BAD_GATEWAY,
           { status: response.status },
         );
@@ -126,15 +154,41 @@ export class SchedulerClient {
       if (caught instanceof AppException) throw caught;
 
       const reason = caught instanceof Error ? caught.message : String(caught);
-      this.logger.warn(`Scheduler call failed: ${reason}`);
+      this.logger.warn(
+        JSON.stringify({
+          event: 'scheduler.solve.failed',
+          kind: 'transport',
+          errorName: caught instanceof Error ? caught.name : typeof caught,
+          reason: protectSchedulerDiagnostic(reason),
+        }),
+      );
       throw new AppException(
         'SCHEDULER_UNAVAILABLE',
-        `Could not reach the scheduling service at ${baseUrl}. Start it with "pnpm dev:scheduler" and check SCHEDULER_BASE_URL.`,
+        SCHEDULER_UNAVAILABLE_MESSAGE,
         HttpStatus.SERVICE_UNAVAILABLE,
-        { baseUrl },
       );
     } finally {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Transport errors are untrusted strings and often include a URL or config
+ * hint. Keep a bounded, redacted reason in server logs without returning it
+ * through the manager-facing exception.
+ */
+function protectSchedulerDiagnostic(value: string): string {
+  return value
+    .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, '[redacted-url]')
+    .replace(
+      /\b(?:authorization|bearer|token|api[_-]?key|password|secret)\b\s*[:=]\s*[^\s,;]+/gi,
+      '$1=[redacted]',
+    )
+    .replace(
+      /\b(?:localhost|(?:\d{1,3}\.){3}\d{1,3}|(?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?\b/gi,
+      '[redacted-host]',
+    )
+    .replace(/\bSCHEDULER_[A-Z0-9_]+\b/g, '[redacted-config]')
+    .slice(0, 200);
 }

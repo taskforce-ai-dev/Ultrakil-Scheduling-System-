@@ -1,6 +1,7 @@
 import {
   AssignmentStatus,
   BranchCode,
+  LockScope,
   Prisma,
   ScheduleRunStatus,
   VisitStatus,
@@ -62,6 +63,8 @@ function fixture(
   const oldAssignment = {
     id: 'snapshotted',
     status: initialStatus,
+    plannedStart: new Date('2027-03-03T10:00:00Z'),
+    plannedEnd: new Date('2027-03-03T11:30:00Z'),
     crewMembers: [{ employeeId: 'employee', isPmsSupervisor: true }],
     vehicles: [],
     locks: [],
@@ -349,6 +352,12 @@ function fixture(
     $queryRaw: jest.fn(async (query: Prisma.Sql) =>
       query.sql.includes('generated_visits')
         ? [{ id: visit.id }]
+        : query.sql.includes('service_agreements')
+          ? [{ id: visit.serviceAgreementId }]
+          : query.sql.includes('employees')
+            ? query.values.map((id) => ({ id }))
+            : query.sql.includes('vehicles')
+              ? query.values.map((id) => ({ id }))
         : assignments
             .filter((entry) => entry.id === query.values[0])
             .map((entry) => ({ status: entry.status })),
@@ -452,6 +461,231 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it('sends published reservations and sibling keys while retaining the target own date', () => {
+    const f = fixture();
+    const target = {
+      ...f.visit,
+      assignments: [],
+    };
+    const published = {
+      ...f.visit,
+      id: 'published-visit',
+      assignments: [
+        {
+          ...f.oldAssignment,
+          id: 'published-assignment',
+          status: AssignmentStatus.PUBLISHED,
+          plannedStart: new Date('2027-03-03T09:00:00Z'),
+          plannedEnd: new Date('2027-03-03T10:30:00Z'),
+          crewMembers: [{ employeeId: 'published-employee', isPmsSupervisor: true }],
+          vehicles: [{ vehicleId: 'published-vehicle' }],
+        },
+      ],
+    };
+    const request = (
+      f.service as unknown as {
+        buildSolveRequest: (
+          runId: string,
+          visits: unknown[],
+          employees: unknown[],
+          vehicles: unknown[],
+          options: {
+            timeLimitSeconds: number;
+            from: Date;
+            to: Date;
+            excludeReservationAssignmentIds?: string[];
+          },
+          siblingKeys: unknown[],
+        ) => {
+          visits: { id: string; occupied_start_keys: unknown[] }[];
+          reservations: unknown[];
+          excluded_reservation_assignment_ids: string[];
+        };
+      }
+    ).buildSolveRequest(
+      'run',
+      [target, published],
+      [],
+      [],
+      {
+        timeLimitSeconds: 20,
+        from: new Date('2027-03-03T00:00:00Z'),
+        to: new Date('2027-03-03T00:00:00Z'),
+      },
+      [
+        {
+          id: target.id,
+          serviceAgreementId: target.serviceAgreementId,
+          visitDate: target.visitDate,
+          windowStartMinute: target.windowStartMinute,
+        },
+        {
+          id: published.id,
+          serviceAgreementId: published.serviceAgreementId,
+          visitDate: published.visitDate,
+          windowStartMinute: published.windowStartMinute,
+        },
+      ],
+    );
+
+    expect(request.reservations).toEqual([
+      {
+        assignment_id: 'published-assignment',
+        scheduled_date: '2027-03-03',
+        start_minute: 540,
+        end_minute: 630,
+        employee_ids: ['published-employee'],
+        vehicle_ids: ['published-vehicle'],
+      },
+    ]);
+    expect(request.visits).toEqual([
+      expect.objectContaining({
+        id: target.id,
+        occupied_start_keys: [
+          { date: '2027-03-03', start_minute: target.windowStartMinute },
+        ],
+      }),
+    ]);
+    expect(request.excluded_reservation_assignment_ids).toEqual([]);
+  });
+
+  it('sends an existing draft start minute as a soft solver preference', () => {
+    const f = fixture();
+    const existing = {
+      ...f.oldAssignment,
+      plannedStart: new Date('2027-03-03T10:00:00Z'),
+      plannedEnd: new Date('2027-03-03T11:30:00Z'),
+    };
+    const target = {
+      ...f.visit,
+      assignments: [existing],
+    };
+    const request = (
+      f.service as unknown as {
+        buildSolveRequest: (
+          runId: string,
+          visits: unknown[],
+          employees: unknown[],
+          vehicles: unknown[],
+          options: { timeLimitSeconds: number; from: Date; to: Date },
+        ) => {
+          existing: {
+            visit_id: string;
+            employee_ids: string[];
+            vehicle_ids: string[];
+            start_minute?: number;
+          }[];
+        };
+      }
+    ).buildSolveRequest('run', [target], [], [], {
+      timeLimitSeconds: 20,
+      from: new Date('2027-03-03T00:00:00Z'),
+      to: new Date('2027-03-03T00:00:00Z'),
+    });
+
+    expect(request.existing).toEqual([
+      {
+        visit_id: target.id,
+        employee_ids: ['employee'],
+        vehicle_ids: [],
+        start_minute: 600,
+      },
+    ]);
+  });
+
+  it('sends the actual assignment minute for a hard time lock', () => {
+    const f = fixture();
+    const target = {
+      ...f.visit,
+      assignments: [
+        {
+          ...f.oldAssignment,
+          locks: [{ scope: LockScope.TIME }],
+        },
+      ],
+    };
+    const request = (
+      f.service as unknown as {
+        buildSolveRequest: (
+          runId: string,
+          visits: unknown[],
+          employees: unknown[],
+          vehicles: unknown[],
+          options: { timeLimitSeconds: number; from: Date; to: Date },
+        ) => {
+          locks: { visit_id: string; scope: string; start_minute: number | null }[];
+        };
+      }
+    ).buildSolveRequest('run', [target], [], [], {
+      timeLimitSeconds: 20,
+      from: new Date('2027-03-03T00:00:00Z'),
+      to: new Date('2027-03-03T00:00:00Z'),
+    });
+
+    expect(request.locks).toEqual([
+      expect.objectContaining({
+        visit_id: target.id,
+        scope: 'TIME',
+        start_minute: 600,
+      }),
+    ]);
+  });
+
+  it('maps a final Prisma unique collision to a safe resource conflict', async () => {
+    const f = fixture();
+    f.assignment.create.mockRejectedValueOnce({
+      code: 'P2002',
+      message: 'Unique constraint failed at https://internal.example/prisma',
+    });
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.run.errorMessage).not.toContain('https://internal.example');
+    expect(f.run.errorMessage).not.toContain('P2002');
+  });
+
+  it('locks affected agreements before visit rows while persisting a solve', async () => {
+    const f = fixture();
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    const lockQueries = f.tx.$queryRaw.mock.calls.map(
+      ([query]: [Prisma.Sql]) => query.sql,
+    );
+    expect(lockQueries).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('service_agreements'),
+        expect.stringContaining('generated_visits'),
+      ]),
+    );
+    expect(lockQueries.findIndex((sql) => sql.includes('service_agreements'))).toBeLessThan(
+      lockQueries.findIndex((sql) => sql.includes('generated_visits')),
+    );
+  });
+
+  it('locks proposed resources before rechecking persisted eligibility', async () => {
+    const f = fixture();
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    const resourceLockCall = f.tx.$queryRaw.mock.calls.findIndex(
+      ([query]: [Prisma.Sql]) => query.sql.includes('employees'),
+    );
+    expect(resourceLockCall).toBeGreaterThanOrEqual(0);
+    expect(
+      f.tx.$queryRaw.mock.invocationCallOrder[resourceLockCall],
+    ).toBeLessThan(f.eligibility.evaluate.mock.invocationCallOrder[0]);
+  });
+
   it.each(['assignment', 'unassigned'])(
     'rejects duplicate %s outcomes for an empty assignment snapshot',
     async (duplicate) => {

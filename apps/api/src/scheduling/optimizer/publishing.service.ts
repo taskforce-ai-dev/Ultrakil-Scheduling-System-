@@ -8,18 +8,29 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import {
   assertUnpublishedAssignment,
+  lockScheduleResources,
   lockScheduleVisits,
 } from './schedule-visit-lock';
+import {
+  missingPublishAcknowledgement,
+  provenanceWarnings,
+  publishReadiness,
+} from './publish-readiness';
 
+// `include` already yields every scalar of the included row, so the agreement's
+// crewSize/duration/dayRule provenance and the visit's windowProvenance arrive
+// without being named. Only the narrowed nested selects have to be widened.
 const PUBLISH_ASSIGNMENT_INCLUDE = {
   crewMembers: { include: { employee: { select: { fullName: true } } } },
-  vehicles: { include: { vehicle: { select: { label: true } } } },
+  vehicles: { include: { vehicle: { select: { label: true, branchId: true } } } },
   generatedVisit: {
     include: {
       serviceAgreement: {
         include: {
           customer: { select: { name: true } },
-          serviceSite: { select: { name: true } },
+          serviceSite: {
+            select: { name: true, branchConfidence: true, branchSource: true },
+          },
         },
       },
     },
@@ -52,6 +63,8 @@ export class PublishingService {
     runId: string,
     reason: string | null,
     actor: AuthenticatedUser,
+    acknowledgePartial = false,
+    acknowledgeProvenance = false,
   ) {
     const run = await this.prisma.scheduleRun.findUnique({
       where: { id: runId },
@@ -93,12 +106,29 @@ export class PublishingService {
       (assignment) => assignment.status === AssignmentStatus.DRAFT,
     );
 
-    if (expected.length === 0) {
+    const readiness = publishReadiness(run);
+    if (readiness.state === 'BLOCKED' || expected.length === 0) {
       throw new AppException(
         'RESOURCE_CONFLICT',
         'This run produced no assignments to publish.',
         HttpStatus.CONFLICT,
         { runId },
+      );
+    }
+    // Advisory fail-fast on the run's own counters. The authoritative gate —
+    // including every unconfirmed-source warning — is re-evaluated under the
+    // publication locks below, from the assignments actually being published.
+    const preLockFailure = missingPublishAcknowledgement(readiness, {
+      acknowledgePartial,
+      acknowledgeProvenance,
+      reason,
+    });
+    if (preLockFailure) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        preLockFailure,
+        HttpStatus.CONFLICT,
+        { runId, publishReadiness: readiness },
       );
     }
 
@@ -124,6 +154,38 @@ export class PublishingService {
           'One or more assignments changed while the schedule was being published. Refresh and try again.',
           HttpStatus.CONFLICT,
           { runId },
+        );
+      }
+
+      await lockScheduleResources(
+        tx,
+        publishable.flatMap((assignment) =>
+          assignment.crewMembers.map((member) => member.employeeId),
+        ),
+        publishable.flatMap((assignment) =>
+          assignment.vehicles.map((vehicle) => vehicle.vehicleId),
+        ),
+      );
+
+      // The authoritative unconfirmed-source warning set. Readiness shown on a
+      // list or detail screen is advisory and can be stale by the time Publish
+      // is clicked, so the gate is calculated here — under the visit and
+      // resource locks, from the assignments actually being published — and a
+      // publication can never proceed on a different warning set from the one
+      // it was checked against.
+      const warnings = provenanceWarnings(publishable);
+      const lockedReadiness = publishReadiness(run, warnings);
+      const failure = missingPublishAcknowledgement(lockedReadiness, {
+        acknowledgePartial,
+        acknowledgeProvenance,
+        reason,
+      });
+      if (failure) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          failure,
+          HttpStatus.CONFLICT,
+          { runId, publishReadiness: lockedReadiness },
         );
       }
 
@@ -307,6 +369,15 @@ export class PublishingService {
             reason,
             assignmentCount: snapshot.length,
             supersededAssignments: previouslyPublished.length,
+            // What the manager accepted, and exactly which unconfirmed source
+            // values they accepted it over.
+            acknowledgedPartial: lockedReadiness.requiresPartialAcknowledgement
+              ? acknowledgePartial
+              : false,
+            acknowledgedProvenance: lockedReadiness.requiresProvenanceAcknowledgement
+              ? acknowledgeProvenance
+              : false,
+            provenanceWarnings: warnings,
             snapshot,
           } as unknown as Prisma.InputJsonValue,
         },
@@ -316,6 +387,7 @@ export class PublishingService {
       return {
         run: await tx.scheduleRun.findUniqueOrThrow({ where: { id: runId } }),
         publishedCount: publishable.length,
+        provenanceWarnings: warnings,
       };
     }, { timeout: 30_000 });
 

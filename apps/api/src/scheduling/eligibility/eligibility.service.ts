@@ -23,6 +23,8 @@ const LIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
 
 interface EligibilityOptions {
   excludeAssignmentId?: string;
+  /** A repair batch replaces all of these reservations atomically. */
+  excludeAssignmentIds?: string[];
   /** Evaluate a solver's proposed move without changing the stored visit. */
   proposedVisit?: {
     visitDate: Date;
@@ -91,10 +93,13 @@ export class EligibilityService {
     const employeeIds = [...new Set(proposal.crew.map((member) => member.employeeId))];
     const vehicleIds = [...new Set(proposal.vehicles.map((entry) => entry.vehicleId))];
     const timing = options.proposedVisit ?? visit;
+    const excludedAssignmentIds =
+      options.excludeAssignmentIds ??
+      (options.excludeAssignmentId ? [options.excludeAssignmentId] : []);
 
     const [employees, vehicles, pmsCount] = await Promise.all([
-      this.loadEmployees(client, employeeIds, timing.visitDate, options.excludeAssignmentId),
-      this.loadVehicles(client, vehicleIds, timing.visitDate, options.excludeAssignmentId),
+      this.loadEmployees(client, employeeIds, timing.visitDate, excludedAssignmentIds),
+      this.loadVehicles(client, vehicleIds, timing.visitDate, excludedAssignmentIds),
       client.employee.count({
         where: { branchCode: visit.branchCode, isPmsGrade: true, isActive: true },
       }),
@@ -108,7 +113,7 @@ export class EligibilityService {
           reason: entry.reason,
         })),
       )
-      .find((entry) => entry.assignmentId !== options.excludeAssignmentId);
+      .find((entry) => !excludedAssignmentIds.includes(entry.assignmentId));
 
     return {
       visit: {
@@ -150,7 +155,7 @@ export class EligibilityService {
     client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
-    excludeAssignmentId?: string,
+    excludeAssignmentIds: string[] = [],
   ): Promise<EmployeeFacts[]> {
     if (ids.length === 0) return [];
 
@@ -175,7 +180,7 @@ export class EligibilityService {
             assignment: {
               status: { in: LIVE_ASSIGNMENT_STATUSES },
               generatedVisit: { visitDate },
-              ...(excludeAssignmentId ? { id: { not: excludeAssignmentId } } : {}),
+              ...assignmentExclusion(excludeAssignmentIds),
             },
           },
           select: {
@@ -217,7 +222,7 @@ export class EligibilityService {
     client: Prisma.TransactionClient,
     ids: string[],
     visitDate: Date,
-    excludeAssignmentId?: string,
+    excludeAssignmentIds: string[] = [],
   ): Promise<VehicleFacts[]> {
     if (ids.length === 0) return [];
 
@@ -230,7 +235,7 @@ export class EligibilityService {
             assignment: {
               status: { in: LIVE_ASSIGNMENT_STATUSES },
               generatedVisit: { visitDate },
-              ...(excludeAssignmentId ? { id: { not: excludeAssignmentId } } : {}),
+              ...assignmentExclusion(excludeAssignmentIds),
             },
           },
           select: {
@@ -271,3 +276,10 @@ export class EligibilityService {
 
 /** Kept so the module's Prisma types stay reachable from tests. */
 export type EligibilityWhere = Prisma.GeneratedVisitWhereInput;
+
+function assignmentExclusion(ids: string[]) {
+  if (ids.length === 0) return {};
+  return ids.length === 1
+    ? { id: { not: ids[0] } }
+    : { id: { notIn: [...ids].sort() } };
+}

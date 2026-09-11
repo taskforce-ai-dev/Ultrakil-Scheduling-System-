@@ -152,6 +152,26 @@ export class AgreementsController {
     return this.agreements.changeStatus(id, dto, actor);
   }
 
+  @Post(':id/reactivate')
+  @HttpCode(HttpStatus.OK)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Reactivate an agreement an import archived',
+    description:
+      "A dedicated administrator action, not a way round the rule that archiving is final. It applies only to an agreement an import archived from a red cell: clearing that marking is what stops the next import archiving it again, and the marking's previous value is kept in the audit trail. An agreement archived by hand stays archived.",
+  })
+  @ApiResponse({ status: 200, type: ServiceAgreementDto })
+  @ApiResponse({
+    status: 409,
+    description: 'AGREEMENT_NOT_IMPORTER_ARCHIVED — no import archived this agreement.',
+  })
+  reactivateImported(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<ServiceAgreementDto> {
+    return this.agreements.reactivateImported(id, actor);
+  }
+
   @Get(':id/versions')
   @ApiOperation({
     summary: 'Every version of this agreement',

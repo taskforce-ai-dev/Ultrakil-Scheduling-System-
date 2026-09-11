@@ -118,19 +118,23 @@ export class CustomersController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<CustomerDto> {
-    return this.customers.setActive(id, false, actor);
+    return this.customers.deactivate(id, actor);
   }
 
   @Post(':id/reactivate')
   @HttpCode(HttpStatus.OK)
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Reactivate a customer' })
+  @ApiOperation({
+    summary: 'Reactivate a customer',
+    description:
+      "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking. The marking's previous value is kept in the audit trail, so the workbook once reading this customer as gone stays on record.",
+  })
   @ApiResponse({ status: 200, type: CustomerDto })
   reactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<CustomerDto> {
-    return this.customers.setActive(id, true, actor);
+    return this.customers.reactivate(id, actor);
   }
 
   // --- Sites ---------------------------------------------------------------
@@ -208,18 +212,22 @@ export class ServiceSitesController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ServiceSiteDto> {
-    return this.customers.setSiteActive(id, false, actor);
+    return this.customers.deactivateSite(id, actor);
   }
 
   @Post(':id/reactivate')
   @HttpCode(HttpStatus.OK)
   @Roles(UserRole.ADMIN)
-  @ApiOperation({ summary: 'Reactivate a site' })
+  @ApiOperation({
+    summary: 'Reactivate a site',
+    description:
+      "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking.",
+  })
   @ApiResponse({ status: 200, type: ServiceSiteDto })
   reactivate(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ServiceSiteDto> {
-    return this.customers.setSiteActive(id, true, actor);
+    return this.customers.reactivateSite(id, actor);
   }
 }

@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, fetchMeta, fetchHealth, fetchVisitAssignment } from "../api-client";
+import {
+  applyPublishedAssignmentRepair,
+  ApiError,
+  buildPublishedAssignmentRepairPlan,
+  fetchHealth,
+  fetchMeta,
+  fetchOperationsDay,
+  fetchPublishedAssignmentRepairFindings,
+  fetchVisitAssignment,
+  publishScheduleRun,
+} from "../api-client";
 
 describe("api-client", () => {
   const originalFetch = global.fetch;
@@ -72,5 +82,119 @@ describe("api-client", () => {
     }) as unknown as typeof fetch;
 
     await expect(fetchVisitAssignment("visit-1")).resolves.toBeNull();
+  });
+
+  it("sends the operational day contract query and parses the server read model", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            date: "2026-09-10",
+            summary: { total: 0 },
+            items: [],
+          }),
+        ),
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchOperationsDay({
+        date: "2026-09-10",
+        branchCode: "KANDY",
+      }),
+    ).resolves.toMatchObject({ date: "2026-09-10" });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/api/operations/day?date=2026-09-10&branchCode=KANDY",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("uses the published-assignment repair boundary for findings and zero-write planning", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 })),
+    }) as unknown as typeof fetch;
+
+    await fetchPublishedAssignmentRepairFindings({ page: 1, pageSize: 100 });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/findings?page=1&pageSize=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+
+    await buildPublishedAssignmentRepairPlan({
+      sourceAssignmentIds: ["assignment-1"],
+      acknowledgeCurrentDay: true,
+    });
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/plans",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          sourceAssignmentIds: ["assignment-1"],
+          acknowledgeCurrentDay: true,
+        }),
+      }),
+    );
+  });
+
+  it("passes the reviewed plan and browser idempotency key unchanged to apply", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            repairId: "repair-1",
+            planHash: "a".repeat(64),
+            idempotencyKey: "repair-browser-1",
+            communicationState: "APPLIED_PENDING_COMMUNICATION",
+            items: [],
+          }),
+        ),
+    }) as unknown as typeof fetch;
+
+    await applyPublishedAssignmentRepair({
+      operations: [{ sourceAssignmentId: "assignment-1", action: "WITHDRAWN", unassignedReasons: [{ code: "NO_VEHICLE", message: "No vehicle." }] }],
+      planHash: "a".repeat(64),
+      sourceFingerprints: [{ sourceAssignmentId: "assignment-1", fingerprint: "f".repeat(64) }],
+      confirmation: true,
+      reason: "Remove an invalid published assignment",
+      idempotencyKey: "repair-browser-1",
+    });
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/operations/published-assignment-repairs/apply",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"idempotencyKey":"repair-browser-1"'),
+      }),
+    );
+  });
+
+  it("serializes a partial publish acknowledgement and reason at the API boundary", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve("{}"),
+    }) as unknown as typeof fetch;
+
+    await publishScheduleRun("run-partial", {
+      acknowledgePartial: true,
+      reason: "Manager reviewed the remaining unassigned visits.",
+    });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/api/schedule-runs/run-partial/publish",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          acknowledgePartial: true,
+          reason: "Manager reviewed the remaining unassigned visits.",
+        }),
+      }),
+    );
   });
 });

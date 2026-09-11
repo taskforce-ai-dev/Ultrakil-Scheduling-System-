@@ -5,8 +5,18 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
-import { assertScheduleSnapshot, assertUnpublishedVisit, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import {
+  assertScheduleSnapshot,
+  assertUnpublishedVisit,
+  lockScheduleResources,
+  lockScheduleVisits,
+} from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
+import {
+  CONFLICT_GROUP_CODES,
+  ConflictGroup,
+  NAMED_CONFLICT_GROUP_CODES,
+} from './conflict-groups';
 import {
   AssignCrewDto,
   AssignmentDto,
@@ -14,6 +24,7 @@ import {
   EligibilityResultDto,
   EmployeeAssignmentDto,
   EmployeeAssignmentQueryDto,
+  UnassignedVisitQueryDto,
   UnassignedVisitDto,
 } from './dto';
 import { EligibilityService } from './eligibility.service';
@@ -121,6 +132,11 @@ export class AssignmentsService {
     const saved = await this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [visitId]);
       await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      await lockScheduleResources(
+        tx,
+        proposal.crew.map((member) => member.employeeId),
+        proposal.vehicles.map((vehicle) => vehicle.vehicleId),
+      );
       const existing = await tx.assignment.findFirst({
         where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
         include: ASSIGNMENT_INCLUDE,
@@ -294,28 +310,82 @@ export class AssignmentsService {
    * exact work the queue exists to surface. A visit belongs here when it has
    * no live assignment, whether or not anybody has tried yet.
    *
-   * `hasBeenChecked` keeps the two honest: false means nobody has proposed a
-   * crew, so the empty conflict list is silence rather than a clean bill of
-   * health. Pass `withConflictsOnly` to narrow to work already found to be
-   * impossible.
+   * `operationState` keeps the two honest and is the server's to decide:
+   * UNASSIGNED means no reasons are recorded, so the empty conflict list is
+   * silence rather than a clean bill of health; EXCEPTION means a crew was
+   * judged and refused. (`checked` and the deprecated `withConflictsOnly` are
+   * the boolean spellings of the same question.)
+   *
+   * `operationState` and `conflictGroup` are applied here, in the query,
+   * alongside branch and date. A client that instead re-filtered the page it
+   * was given would show a list that disagreed with the total and the paging
+   * beside it.
+   *
+   * `visitId` is the one parameter that is not a filter. It names a single
+   * visit — the dispatch board's "Why?" deep link — and when present it
+   * replaces every other filter rather than joining them, so the answer is
+   * that visit wherever it falls, or an empty page when it is unknown or no
+   * longer unstaffed. See the DTO for the full contract.
    */
-  async unassignedQueue(query: {
-    page?: number;
-    pageSize?: number;
-    branchCode?: string;
-    from?: string;
-    to?: string;
-    withConflictsOnly?: boolean;
-    serviceAgreementId?: string;
-  }) {
+  async unassignedQueue(query: UnassignedVisitQueryDto) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
+    // `visitId` is a selector, not one more filter. A manager who follows
+    // "Why?" from the dispatch board sends a URL that names one visit and
+    // nothing else; answering that with the queue's own default view — today,
+    // page 1 — is how the named visit went missing whenever it sat on another
+    // date or past the first page, leaving the screen showing unrelated rows
+    // as though they were the answer. So when it is present every other
+    // filter is deliberately ignored and the response describes exactly that
+    // visit: one row, or none. Never a neighbour.
+    const focusedVisitId = query.visitId;
 
-    const where: Prisma.GeneratedVisitWhereInput = {
+    const reasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
+    const facetReasonFilters: Prisma.GeneratedVisitWhereInput[] = [];
+    // The operation state, expressed against the stored reason rows that
+    // define it. The facets are narrowed by it too: "which conflicts are in
+    // this state?" is a question about the same set the list describes.
+    if (
+      query.checked === true ||
+      query.withConflictsOnly ||
+      query.operationState === 'EXCEPTION'
+    ) {
+      const filter = { unassignedReasons: { some: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
+    if (query.checked === false || query.operationState === 'UNASSIGNED') {
+      const filter = { unassignedReasons: { none: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
+    // Which conflicts a visit must carry. Deliberately kept out of the facet
+    // filters: the facets answer "what would the other conflict choices
+    // show?", which they cannot once they are narrowed to one of them.
+    if (query.conflictGroup) {
+      reasonFilters.push({
+        unassignedReasons: {
+          some: { code: groupCodeFilter(query.conflictGroup) },
+        },
+      });
+    }
+    if (query.conflictCode) {
+      reasonFilters.push({ unassignedReasons: { some: { code: query.conflictCode } } });
+    }
+
+    // What makes a visit part of this queue at all: no live crew on it, and
+    // not already history. It holds for a focused request too, which is what
+    // makes "not actually unassigned" answerable — a visit that has since
+    // been staffed, completed or cancelled simply is not here, and the caller
+    // is told nothing was found instead of being shown someone else's row.
+    const unstaffedWhere: Prisma.GeneratedVisitWhereInput = {
       assignments: { none: { status: { in: LIVE_STATUSES } } },
       // Finished and cancelled work is history; it needs nobody.
       status: { notIn: [VisitStatus.COMPLETED, VisitStatus.CANCELLED] },
-      ...(query.withConflictsOnly ? { unassignedReasons: { some: {} } } : {}),
+    };
+
+    const baseWhere: Prisma.GeneratedVisitWhereInput = {
+      ...unstaffedWhere,
       ...(query.serviceAgreementId
         ? { serviceAgreementId: query.serviceAgreementId }
         : {}),
@@ -338,8 +408,23 @@ export class AssignmentsService {
           }
         : {}),
     };
+    const where: Prisma.GeneratedVisitWhereInput = focusedVisitId
+      ? { ...unstaffedWhere, id: focusedVisitId }
+      : {
+          ...baseWhere,
+          ...(reasonFilters.length ? { AND: reasonFilters } : {}),
+        };
 
-    const [total, visits] = await Promise.all([
+    // The facets describe the same set the items do. For a focused request
+    // that set is the one visit, so the counts stay true to what is shown
+    // rather than describing a queue the caller did not ask for.
+    const facetWhere: Prisma.GeneratedVisitWhereInput = focusedVisitId
+      ? where
+      : {
+          ...baseWhere,
+          ...(facetReasonFilters.length ? { AND: facetReasonFilters } : {}),
+        };
+    const [total, visits, facetRows] = await Promise.all([
       this.prisma.generatedVisit.count({ where }),
       this.prisma.generatedVisit.findMany({
         where,
@@ -353,9 +438,10 @@ export class AssignmentsService {
           unassignedReasons: { orderBy: { code: 'asc' } },
         },
         orderBy: [{ visitDate: 'asc' }, { windowStartMinute: 'asc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip: focusedVisitId ? 0 : (page - 1) * pageSize,
+        take: focusedVisitId ? 1 : pageSize,
       }),
+      this.prisma.visitUnassignedReason.groupBy({ by: ['code'], where: { generatedVisit: facetWhere }, _count: { code: true }, orderBy: { code: 'asc' } }),
     ]);
 
     const items: UnassignedVisitDto[] = visits.map((visit) => ({
@@ -365,6 +451,8 @@ export class AssignmentsService {
       customerName: visit.serviceAgreement.customer.name,
       siteName: visit.serviceAgreement.serviceSite.name,
       requiredCrewSize: visit.requiredCrewSize,
+      operationState:
+        visit.unassignedReasons.length > 0 ? 'EXCEPTION' : 'UNASSIGNED',
       hasBeenChecked: visit.unassignedReasons.length > 0,
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,
@@ -382,7 +470,18 @@ export class AssignmentsService {
         visit.updatedAt.toISOString(),
     }));
 
-    return { items, total, page, pageSize };
+    return {
+      items,
+      total,
+      // A focused answer is a single-row page by construction, so it reports
+      // itself as one rather than echoing paging the caller never used.
+      page: focusedVisitId ? 1 : page,
+      pageSize: focusedVisitId ? 1 : pageSize,
+      hasNextPage: focusedVisitId ? false : page * pageSize < total,
+      conflictFacets: Object.fromEntries(
+        facetRows.map((row) => [row.code, row._count.code]),
+      ),
+    };
   }
 
   /**
@@ -422,7 +521,10 @@ export class AssignmentsService {
 
     const where: Prisma.AssignmentWhereInput = {
       status: { in: EMPLOYEE_ASSIGNMENT_STATUSES },
-      scheduleRunId: { not: null },
+      OR: [
+        { scheduleRunId: { not: null } },
+        { publishedByRepairId: { not: null } },
+      ],
       publishedAt: { not: null },
       crewMembers: { some: { employeeId } },
       ...(query.from || query.to
@@ -497,7 +599,9 @@ export class AssignmentsService {
       return {
         assignmentId: assignment.id,
         status: assignment.status,
-        scheduleRunId: assignment.scheduleRunId!,
+        scheduleRunId: assignment.scheduleRunId,
+        publishedByRepairId: assignment.publishedByRepairId,
+        supersedesAssignmentId: assignment.supersedesAssignmentId,
         visitId: assignment.generatedVisitId,
         visitDate: assignment.plannedStart.toISOString().slice(0, 10),
         plannedStartMinute: minutes(assignment.plannedStart),
@@ -587,6 +691,21 @@ export class AssignmentsService {
   }
 }
 
+/**
+ * Which stored codes count as a conflict group.
+ *
+ * OTHER is the complement of the named groups rather than a list of its own
+ * five codes, which keeps the filter in step with how an unrecognised stored
+ * code is displayed: under Other. Asking for Other therefore finds it too.
+ * Every other group is an exact set derived from the catalogue, so a code
+ * added to the engine is filtered for the moment it is grouped.
+ */
+function groupCodeFilter(group: ConflictGroup): Prisma.StringFilter {
+  return group === 'OTHER'
+    ? { notIn: [...NAMED_CONFLICT_GROUP_CODES] }
+    : { in: [...CONFLICT_GROUP_CODES[group]] };
+}
+
 function toProposal(dto: AssignCrewDto): AssignmentProposal {
   return {
     plannedStartMinute: dto.plannedStartMinute,
@@ -644,6 +763,8 @@ function toAssignmentDto(assignment: AssignmentWithRelations): AssignmentDto {
     generatedVisitId: assignment.generatedVisitId,
     status: assignment.status,
     branchCode: assignment.branchCode,
+    supersedesAssignmentId: assignment.supersedesAssignmentId,
+    publishedByRepairId: assignment.publishedByRepairId,
     plannedStartMinute: minutes(assignment.plannedStart),
     plannedEndMinute: minutes(assignment.plannedEnd),
     crew: assignment.crewMembers

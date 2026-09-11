@@ -1,4 +1,4 @@
-import { FrequencyUnit, Weekday } from '@prisma/client';
+import { DataProvenance, FrequencyUnit, Weekday } from '@prisma/client';
 
 /**
  * Works out which dates an agreement asks for, and says so when it cannot.
@@ -34,6 +34,12 @@ export interface DayWindow {
 
 export interface SiteWindow extends DayWindow {
   weekday: Weekday;
+  /**
+   * Provenance of the opening-hours row this window was read from. Carried
+   * through so a generated visit records where its window actually came from,
+   * rather than every visit with any recorded hours being called derived.
+   */
+  provenance?: DataProvenance;
 }
 
 export interface SchedulePreviewInput {
@@ -78,6 +84,13 @@ export interface PreviewVisit {
   windowEndMinute: number;
   /** True when the date fell on a preferred weekday, not merely an allowed one. */
   isPreferredDay: boolean;
+  /**
+   * Where this visit's window came from: the provenance of the opening-hours
+   * row it was read from, MANAGER_CONFIRMED when the agreement's own service
+   * window determined it outright, or DEFAULTED when it rests on the
+   * disclosed 08:00-17:00 assumption.
+   */
+  windowProvenance: DataProvenance;
 }
 
 export type ShortfallReason =
@@ -135,20 +148,50 @@ export function weekdayOf(date: Date): Weekday {
  * The agreement can only ever restrict: a customer who opens 09:00–17:00 does
  * not become reachable at 08:00 because an agreement says so.
  */
-export function effectiveWindows(
-  siteWindows: DayWindow[],
+export function effectiveWindows<T extends DayWindow>(
+  siteWindows: T[],
   agreementStart: number | null,
   agreementEnd: number | null,
-): DayWindow[] {
-  const windows: DayWindow[] = [];
+): Array<T & DayWindow> {
+  const windows: Array<T & DayWindow> = [];
 
   for (const window of siteWindows) {
     const startMinute = Math.max(window.startMinute, agreementStart ?? window.startMinute);
     const endMinute = Math.min(window.endMinute, agreementEnd ?? window.endMinute);
-    if (endMinute > startMinute) windows.push({ startMinute, endMinute });
+    if (endMinute > startMinute) windows.push({ ...window, startMinute, endMinute });
   }
 
   return windows.sort((a, b) => a.startMinute - b.startMinute);
+}
+
+/**
+ * Where a visit's window came from.
+ *
+ * Recorded hours speak for themselves: a manager-confirmed row yields a
+ * confirmed window, and an imported one stays imported. Narrowing by the
+ * agreement's own service window does not weaken that — the agreement is
+ * manager-entered too, and it can only restrict.
+ *
+ * With no hours recorded at all the 08:00-17:00 assumption is in play and the
+ * window is DEFAULTED — unless the agreement stated both bounds and they sit
+ * inside the assumption, in which case the assumption contributed nothing to
+ * the answer and the window is exactly what a manager asked for.
+ */
+export function windowProvenanceOf(input: {
+  hoursRecorded: boolean;
+  hoursProvenance?: DataProvenance;
+  agreementStart: number | null;
+  agreementEnd: number | null;
+  startMinute: number;
+  endMinute: number;
+}): DataProvenance {
+  if (input.hoursRecorded) return input.hoursProvenance ?? DataProvenance.DERIVED;
+  const statedByAgreement =
+    input.agreementStart !== null &&
+    input.agreementEnd !== null &&
+    input.startMinute === input.agreementStart &&
+    input.endMinute === input.agreementEnd;
+  return statedByAgreement ? DataProvenance.MANAGER_CONFIRMED : DataProvenance.DEFAULTED;
 }
 
 /**
@@ -200,10 +243,15 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   // No hours anywhere for this site means unknown, not shut.
   const hoursUnconfirmed = input.siteWindows.length === 0;
 
-  const windowsByWeekday = new Map<Weekday, DayWindow[]>();
+  type SourcedWindow = DayWindow & { provenance?: DataProvenance };
+  const windowsByWeekday = new Map<Weekday, SourcedWindow[]>();
   for (const window of input.siteWindows) {
     const list = windowsByWeekday.get(window.weekday) ?? [];
-    list.push({ startMinute: window.startMinute, endMinute: window.endMinute });
+    list.push({
+      startMinute: window.startMinute,
+      endMinute: window.endMinute,
+      provenance: window.provenance,
+    });
     windowsByWeekday.set(window.weekday, list);
   }
 
@@ -230,7 +278,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     if (!allowed.has(weekday)) continue;
     periodsWithAllowedDay.add(period);
 
-    const windows = effectiveWindows(
+    const windows = effectiveWindows<SourcedWindow>(
       hoursUnconfirmed ? [ASSUMED_DAY_WINDOW] : (windowsByWeekday.get(weekday) ?? []),
       input.agreementWindowStartMinute,
       input.agreementWindowEndMinute,
@@ -245,6 +293,14 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
         windowStartMinute: window.startMinute,
         windowEndMinute: window.endMinute,
         isPreferredDay: preferred.has(weekday),
+        windowProvenance: windowProvenanceOf({
+          hoursRecorded: !hoursUnconfirmed,
+          hoursProvenance: window.provenance,
+          agreementStart: input.agreementWindowStartMinute,
+          agreementEnd: input.agreementWindowEndMinute,
+          startMinute: window.startMinute,
+          endMinute: window.endMinute,
+        }),
         period,
       });
     }

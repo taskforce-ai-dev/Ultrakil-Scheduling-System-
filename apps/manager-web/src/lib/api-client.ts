@@ -5,9 +5,9 @@ import { clearToken, readToken } from "./session-token";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
 
 /* -------------------------------------------------------------------------
- * Types, all taken from the generated contract. Nothing here is hand-written:
- * if the backend changes a field, this file stops compiling, which is the
- * whole point of publishing the contract.
+ * Wire types come from the generated contract. Runtime-normalized view models
+ * below deliberately broaden malformed scalar fields to safe empty/null values
+ * while preserving the generated response's names and nesting.
  * ---------------------------------------------------------------------- */
 
 type Json<T> = T extends { content: { "application/json": infer B } } ? B : never;
@@ -77,6 +77,427 @@ export type PaginatedUnassignedVisits = components["schemas"]["PaginatedUnassign
 export type EligibilityResult = components["schemas"]["EligibilityResultDto"];
 export type CrewRole = Assignment["crew"][number]["role"];
 
+/* -------------------------------------------------------------------------
+ * Manager operational read model
+ *
+ * This endpoint is intentionally parsed at the boundary. The generated types
+ * keep its wire shape aligned with the API, while this parser keeps a manager
+ * screen readable when a malformed or older response omits a field. In
+ * particular, a missing/invalid assignment never becomes a positive dispatch
+ * claim.
+ * ---------------------------------------------------------------------- */
+
+type OperationsDayContract = components["schemas"]["OperationsDayResponseDto"];
+type OperationsDayContractItem = OperationsDayContract["items"][number];
+export type OperationState = OperationsDayContractItem["state"];
+export type OperationWarningCode = OperationsDayContractItem["warnings"][number]["code"];
+export type OperationsDayQuery = NonNullable<
+  paths["/api/operations/day"]["get"]["parameters"]["query"]
+>;
+
+export interface OperationsVisit {
+  id: string;
+  visitDate: string;
+  customerName: string;
+  siteName: string;
+  jobTypeName: string;
+  requiredCrewSize: number | null;
+  durationMinutes: number | null;
+  windowStartMinute: number | null;
+  windowEndMinute: number | null;
+  hoursUnconfirmed: boolean;
+  branchCode: BranchCode | "";
+}
+
+export interface OperationsCrewMember {
+  id?: string;
+  employeeId?: string;
+  fullName?: string;
+  role?: string;
+  isPmsSupervisor?: boolean;
+}
+
+export interface OperationsVehicle {
+  id?: string;
+  vehicleId?: string;
+  label?: string;
+  driverName?: string;
+  driverEmployeeId?: string;
+}
+
+export interface OperationsAssignment {
+  id: string;
+  status: AssignmentStatus;
+  crew: OperationsCrewMember[];
+  vehicles: OperationsVehicle[];
+  plannedStartMinute?: number | null;
+  plannedEndMinute?: number | null;
+}
+
+export interface OperationViolation {
+  code: string;
+  message: string;
+  remediation?: string;
+}
+
+export interface OperationsScheduleVersion {
+  id: string | null;
+  version?: number | null;
+  status: AssignmentStatus | "";
+  predecessorId?: string | null;
+  publishedAt: string | null;
+}
+
+/**
+ * Per-visit published-assignment lineage. Types come from the generated
+ * contract so a server-side rename cannot silently drift from the UI. This is
+ * assignment history, not schedule-run history: `scheduleVersion` still
+ * reports the run the current assignment came from.
+ */
+export type OperationsPublishedAssignmentLineage =
+  OperationsDayContractItem["publishedAssignmentLineage"];
+export type OperationsPublishedAssignmentLineageEntry =
+  OperationsPublishedAssignmentLineage["entries"][number];
+export type OperationsPublishedAssignmentProvenance =
+  OperationsPublishedAssignmentLineageEntry["provenance"];
+export type OperationsPublishedAssignmentStatus =
+  OperationsPublishedAssignmentLineageEntry["status"];
+
+export interface OperationWarning {
+  code: OperationWarningCode;
+  message: string;
+}
+
+export interface OperationsDayItem {
+  visit: OperationsVisit;
+  state: OperationState;
+  dispatchAssignment: OperationsAssignment | null;
+  proposedAssignment: OperationsAssignment | null;
+  violations: OperationViolation[];
+  nextAction: string;
+  scheduleVersion: OperationsScheduleVersion | null;
+  publishedAssignmentLineage: OperationsPublishedAssignmentLineage;
+  warnings: OperationWarning[];
+}
+
+export interface OperationsSummary {
+  total: number;
+  ready: number;
+  proposed: number;
+  unassigned: number;
+  exceptions: number;
+  hoursUnconfirmed: number;
+}
+
+export interface OperationsDayResponse {
+  date: string;
+  branchCode: BranchCode | null;
+  summary: OperationsSummary;
+  items: OperationsDayItem[];
+}
+
+/* -------------------------------------------------------------------------
+ * Published assignment repair
+ *
+ * Every type here is a direct projection of the generated OpenAPI contract.
+ * Pages may compose the returned fields for display, but must not invent
+ * planner metadata the server never returned: a hand-written duplicate
+ * compiles happily and then renders a crash against the real response.
+ * ---------------------------------------------------------------------- */
+
+export type PublishedAssignmentRepairFindingsPage = Json<
+  paths["/api/operations/published-assignment-repairs/findings"]["get"]["responses"]["200"]
+>;
+export type PublishedAssignmentRepairFinding =
+  PublishedAssignmentRepairFindingsPage["items"][number];
+export type PublishedAssignmentRepairTimeScope = PublishedAssignmentRepairFinding["timeScope"];
+export type PublishedAssignmentRepairConflict = components["schemas"]["ConflictDto"];
+export type PublishedAssignmentRepairOperation =
+  components["schemas"]["PublishedAssignmentRepairOperationDto"];
+export type PublishedAssignmentRepairAction = PublishedAssignmentRepairOperation["action"];
+export type PublishedAssignmentRepairPlan = Json<
+  paths["/api/operations/published-assignment-repairs/plans"]["post"]["responses"]["200"]
+>;
+export type PublishedAssignmentRepairPlanItem = PublishedAssignmentRepairPlan["items"][number];
+export type BuildPublishedAssignmentRepairPlanRequest =
+  components["schemas"]["PublishedAssignmentRepairPlanDto"];
+export type ApplyPublishedAssignmentRepairRequest =
+  components["schemas"]["PublishedAssignmentRepairApplyDto"];
+export type PublishedAssignmentRepairResult = Json<
+  paths["/api/operations/published-assignment-repairs/apply"]["post"]["responses"]["200"]
+>;
+
+const OPERATION_STATES = new Set<OperationState>([
+  "READY",
+  "PROPOSED",
+  "UNASSIGNED",
+  "EXCEPTION",
+  "COMPLETED",
+  "CANCELLED",
+]);
+
+const ASSIGNMENT_STATUSES = new Set<AssignmentStatus>([
+  "DRAFT",
+  "PROPOSED",
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
+
+const PUBLISHED_ASSIGNMENT_PROVENANCE = new Set<OperationsPublishedAssignmentProvenance>([
+  "SCHEDULE_RUN",
+  "REPAIR",
+  "MANUAL_PUBLISH",
+]);
+
+const PUBLISHED_ASSIGNMENT_LINEAGE_STATUSES = new Set<OperationsPublishedAssignmentStatus>([
+  "DRAFT",
+  "PROPOSED",
+  "PUBLISHED",
+  "ACKNOWLEDGED",
+  "IN_PROGRESS",
+  "COMPLETED",
+  "CANCELLED",
+  "SUPERSEDED",
+]);
+
+const OPERATION_WARNING_CODES = new Set<OperationWarningCode>([
+  "CREW_SIZE_DEFAULTED",
+  "DAY_RULE_DERIVED",
+  "DAY_RULE_UNCONFIRMED",
+  "DURATION_DEFAULTED",
+  "HOURS_UNCONFIRMED",
+  "SITE_BRANCH_UNCONFIRMED",
+  "VEHICLE_BRANCH_UNCONFIRMED",
+]);
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function parseAssignment(value: unknown): OperationsAssignment | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = asRecord(value);
+  const id = asString(record.id);
+  const status = asString(record.status);
+  if (!id || !ASSIGNMENT_STATUSES.has(status as AssignmentStatus)) return null;
+  const crew = Array.isArray(record.crew)
+    ? record.crew.filter((member) => typeof member === "object" && member !== null).map((member) => {
+        const row = asRecord(member);
+        return {
+          id: typeof row.id === "string" ? row.id : undefined,
+          employeeId: typeof row.employeeId === "string" ? row.employeeId : undefined,
+          fullName: typeof row.fullName === "string" ? row.fullName : undefined,
+          role: typeof row.role === "string" ? row.role : undefined,
+          isPmsSupervisor: typeof row.isPmsSupervisor === "boolean" ? row.isPmsSupervisor : undefined,
+        };
+      })
+    : [];
+  const vehicles = Array.isArray(record.vehicles)
+    ? record.vehicles.filter((vehicle) => typeof vehicle === "object" && vehicle !== null).map((vehicle) => {
+        const row = asRecord(vehicle);
+        return {
+          id: typeof row.id === "string" ? row.id : undefined,
+          vehicleId: typeof row.vehicleId === "string" ? row.vehicleId : undefined,
+          label: typeof row.label === "string" ? row.label : undefined,
+          driverName: typeof row.driverName === "string" ? row.driverName : undefined,
+          driverEmployeeId: typeof row.driverEmployeeId === "string" ? row.driverEmployeeId : undefined,
+        };
+      })
+    : [];
+  return {
+    id,
+    status: status as AssignmentStatus,
+    crew,
+    vehicles,
+    plannedStartMinute: asNullableNumber(record.plannedStartMinute),
+    plannedEndMinute: asNullableNumber(record.plannedEndMinute),
+  };
+}
+
+/**
+ * A malformed or older response must leave the lineage empty rather than let
+ * the board tell a correction story the server never sent. Entries without a
+ * recognised identity, status or provenance are dropped, and the counters are
+ * recomputed from what actually survived so the truncation notice stays true.
+ */
+function parsePublishedAssignmentLineage(value: unknown): OperationsPublishedAssignmentLineage {
+  const record = asRecord(value);
+  const entries = Array.isArray(record.entries)
+    ? record.entries.flatMap((entry): OperationsPublishedAssignmentLineageEntry[] => {
+        const row = asRecord(entry);
+        const assignmentId = asString(row.assignmentId);
+        const status = asString(row.status);
+        const provenance = asString(row.provenance);
+        if (
+          !assignmentId
+          || !PUBLISHED_ASSIGNMENT_LINEAGE_STATUSES.has(status as OperationsPublishedAssignmentStatus)
+          || !PUBLISHED_ASSIGNMENT_PROVENANCE.has(provenance as OperationsPublishedAssignmentProvenance)
+        ) {
+          return [];
+        }
+        return [{
+          assignmentId,
+          status: status as OperationsPublishedAssignmentStatus,
+          supersedesAssignmentId: typeof row.supersedesAssignmentId === "string" ? row.supersedesAssignmentId : null,
+          supersededByAssignmentId: typeof row.supersededByAssignmentId === "string" ? row.supersededByAssignmentId : null,
+          publishedByRepairId: typeof row.publishedByRepairId === "string" ? row.publishedByRepairId : null,
+          provenance: provenance as OperationsPublishedAssignmentProvenance,
+          publishedAt: typeof row.publishedAt === "string" ? row.publishedAt : null,
+          isCurrent: asBoolean(row.isCurrent),
+        }];
+      })
+    : [];
+  const currentAssignmentId = typeof record.currentAssignmentId === "string" ? record.currentAssignmentId : null;
+  const current = entries.some((entry) => entry.isCurrent && entry.assignmentId === currentAssignmentId)
+    ? currentAssignmentId
+    : null;
+  const reportedTotal = asNumber(record.totalCount, entries.length);
+  const totalCount = Math.max(reportedTotal, entries.length);
+  const omittedCount = Math.max(0, totalCount - entries.length);
+  return {
+    entries,
+    totalCount,
+    truncated: omittedCount > 0,
+    omittedCount,
+    currentAssignmentId: current,
+    // Only the server may declare a withdrawal, and only about a chain that
+    // actually has published versions in it.
+    withdrawn: entries.length > 0 && current === null && asBoolean(record.withdrawn),
+    hasMixedProvenance: new Set(entries.map((entry) => entry.provenance)).size > 1,
+  };
+}
+
+function parseOperationsItem(value: unknown): OperationsDayItem | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = asRecord(value);
+  const visitRecord = asRecord(record.visit);
+  const stateValue = asString(record.state);
+  const hasKnownState = OPERATION_STATES.has(stateValue as OperationState);
+  const state = hasKnownState
+    ? (stateValue as OperationState)
+    : "UNASSIGNED";
+  const violations = Array.isArray(record.violations)
+    ? record.violations.filter((violation) => typeof violation === "object" && violation !== null).map((violation) => {
+        const row = asRecord(violation);
+        return {
+          code: asString(row.code, "UNKNOWN_VIOLATION"),
+          message: asString(row.message, "This visit needs review."),
+          remediation: typeof row.remediation === "string" ? row.remediation : undefined,
+        };
+      })
+    : [];
+  const version = asRecord(record.scheduleVersion);
+  const hasVersion = Object.keys(version).length > 0;
+  const publishedAssignmentLineage = parsePublishedAssignmentLineage(record.publishedAssignmentLineage);
+  const warnings = Array.isArray(record.warnings)
+    ? record.warnings.flatMap((warning) => {
+        if (typeof warning !== "object" || warning === null) return [];
+        const warningRecord = asRecord(warning);
+        const code = asString(warningRecord.code);
+        const message = asString(warningRecord.message);
+        return OPERATION_WARNING_CODES.has(code as OperationWarningCode) && message
+          ? [{ code: code as OperationWarningCode, message }]
+          : [];
+      })
+    : [];
+  return {
+    visit: {
+      id: asString(visitRecord.id),
+      visitDate: asString(visitRecord.visitDate),
+      customerName: asString(visitRecord.customerName, "Unknown customer"),
+      siteName: asString(visitRecord.siteName, "Unknown site"),
+      jobTypeName: asString(visitRecord.jobTypeName, "Visit"),
+      requiredCrewSize: asNullableNumber(visitRecord.requiredCrewSize),
+      durationMinutes: asNullableNumber(visitRecord.durationMinutes),
+      windowStartMinute: asNullableNumber(visitRecord.windowStartMinute),
+      windowEndMinute: asNullableNumber(visitRecord.windowEndMinute),
+      hoursUnconfirmed: asBoolean(visitRecord.hoursUnconfirmed),
+      branchCode: ["COLOMBO", "KANDY"].includes(asString(visitRecord.branchCode))
+        ? (visitRecord.branchCode as BranchCode)
+        : "",
+    },
+    state,
+    // An unknown state cannot safely be treated as dispatch truth, even when
+    // an older server happened to include an assignment-shaped object.
+    dispatchAssignment:
+      state === "READY" || state === "EXCEPTION" || state === "COMPLETED" || state === "CANCELLED"
+        ? parseAssignment(record.dispatchAssignment)
+        : null,
+    proposedAssignment: parseAssignment(record.proposedAssignment),
+    violations,
+    nextAction: asString(record.nextAction, state === "READY" ? "No action needed" : "Review visit"),
+    scheduleVersion: hasVersion
+      ? {
+          id: typeof version.id === "string" ? version.id : null,
+          version: typeof version.version === "number" ? version.version : null,
+          status: ASSIGNMENT_STATUSES.has(asString(version.status) as AssignmentStatus)
+            ? (version.status as AssignmentStatus)
+            : "",
+          predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
+          publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
+        }
+      : null,
+    publishedAssignmentLineage,
+    warnings: warnings.filter(
+      (warning, index) => warnings.findIndex(
+        (candidate) => candidate.code === warning.code && candidate.message === warning.message,
+      ) === index,
+    ),
+  };
+}
+
+export function parseOperationsDay(payload: unknown): OperationsDayResponse {
+  const record = asRecord(payload);
+  const summary = asRecord(record.summary);
+  const items = Array.isArray(record.items)
+    ? record.items.map(parseOperationsItem).filter((item): item is OperationsDayItem => item !== null)
+    : [];
+  return {
+    date: asString(record.date),
+    branchCode: ["COLOMBO", "KANDY"].includes(asString(record.branchCode))
+      ? (record.branchCode as BranchCode)
+      : null,
+    summary: {
+      total: asNumber(summary.total),
+      ready: asNumber(summary.ready),
+      proposed: asNumber(summary.proposed),
+      unassigned: asNumber(summary.unassigned),
+      exceptions: asNumber(summary.exceptions),
+      hoursUnconfirmed: asNumber(summary.hoursUnconfirmed),
+    },
+    items,
+  };
+}
+
+export function isDispatchableOperation(item: OperationsDayItem): boolean {
+  return item.state === "READY"
+    && item.dispatchAssignment !== null
+    && ["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(
+      item.dispatchAssignment.status,
+    )
+    && item.violations.length === 0;
+}
+
 /**
  * Hand-typed request body — `AssignCrewDto` at
  * `apps/api/src/scheduling/eligibility/dto.ts`. Used for both the dry-run
@@ -145,21 +566,28 @@ export interface ScheduleRunQuery {
 /** `PublishScheduleDto` — same request-body gap. */
 export interface PublishScheduleRequest {
   reason?: string;
+  acknowledgePartial?: boolean;
 }
 /**
- * Hand-typed: the published contract has no `path`/`query` types for
- * `/api/unassigned-visits` (same gap as elsewhere — see the note above
- * `CreateCustomerRequest`), but the controller
- * (`apps/api/src/scheduling/eligibility/assignments.controller.ts`) does
- * accept these.
+ * Straight from the published contract, no longer hand-typed.
+ *
+ * The queue's filters are a validated DTO on the server
+ * (`UnassignedVisitQueryDto`, `apps/api/src/scheduling/eligibility/dto.ts`)
+ * documented with `@ApiQuery`, so the contract now carries them. Deriving the
+ * type from it means a filter the API does not define — a `status`, or a
+ * conflict *group* label passed as `conflictCode` — fails to compile here
+ * instead of being refused at runtime by the API's `forbidNonWhitelisted`
+ * validation, which is how the queue's filters came to send 400s.
  */
-export interface UnassignedVisitsQuery {
-  page?: number;
-  pageSize?: number;
-  branchCode?: "COLOMBO" | "KANDY";
-  from?: string;
-  to?: string;
-}
+export type UnassignedVisitsQuery = NonNullable<
+  paths["/api/unassigned-visits"]["get"]["parameters"]["query"]
+>;
+
+/** The queue's own reading of a row — and of the operation-state filter. */
+export type UnassignedOperationState = UnassignedVisit["operationState"];
+
+/** The manager-facing conflict groupings the queue can be filtered by. */
+export type ConflictGroupCode = NonNullable<UnassignedVisitsQuery["conflictGroup"]>;
 
 export type CustomerQuery = NonNullable<paths["/api/customers"]["get"]["parameters"]["query"]>;
 export type ServiceAgreementQuery = NonNullable<
@@ -688,5 +1116,45 @@ export function publishScheduleRun(
 export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
   return request<CalendarResponse>(
     `/schedule/calendar${buildQuery(query as Record<string, unknown>)}`,
+  );
+}
+
+/**
+ * Authoritative manager read model for one operating day. The response is
+ * parsed here rather than in each page so every view agrees that a proposal
+ * or an invalid assignment is not dispatch truth.
+ */
+export function fetchOperationsDay(query: OperationsDayQuery): Promise<OperationsDayResponse> {
+  return request<unknown>(`/operations/day${buildQuery(query as unknown as Record<string, unknown>)}`).then(
+    parseOperationsDay,
+  );
+}
+
+/** Lists invalid published assignments. This call is read-only. */
+export function fetchPublishedAssignmentRepairFindings(
+  query: { page?: number; pageSize?: number } = {},
+): Promise<PublishedAssignmentRepairFindingsPage> {
+  return request<PublishedAssignmentRepairFindingsPage>(
+    `/operations/published-assignment-repairs/findings${buildQuery(query)}`,
+  );
+}
+
+/** Asks the solver for an exact, zero-write repair manifest. */
+export function buildPublishedAssignmentRepairPlan(
+  dto: BuildPublishedAssignmentRepairPlanRequest,
+): Promise<PublishedAssignmentRepairPlan> {
+  return request<PublishedAssignmentRepairPlan>(
+    "/operations/published-assignment-repairs/plans",
+    { method: "POST", body: dto },
+  );
+}
+
+/** Applies the exact reviewed manifest. The API revalidates every safety gate. */
+export function applyPublishedAssignmentRepair(
+  dto: ApplyPublishedAssignmentRepairRequest,
+): Promise<PublishedAssignmentRepairResult> {
+  return request<PublishedAssignmentRepairResult>(
+    "/operations/published-assignment-repairs/apply",
+    { method: "POST", body: dto },
   );
 }

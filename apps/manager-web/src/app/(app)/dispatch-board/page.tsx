@@ -39,14 +39,17 @@ import { VisitStatusBadge, VisitOwnershipBadges } from "@/components/shared/visi
 import {
   ApiError,
   fetchVisitAssignment,
+  fetchOperationsDay,
   fetchVisits,
   type Assignment,
+  type OperationsDayResponse,
   type Visit,
 } from "@/lib/api-client";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
 import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
+import { OperationsDayPanel } from "@/components/shared/operations";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 
@@ -74,6 +77,7 @@ export default function DispatchBoardPage() {
   const [error, setError] = React.useState<ApiError | null>(null);
   const [selectedVisitId, setSelectedVisitId] = React.useState<string | null>(null);
   const [editVisitId, setEditVisitId] = React.useState<string | null>(null);
+  const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
 
   const load = React.useCallback(() => {
     setIsLoading(true);
@@ -102,6 +106,13 @@ export default function DispatchBoardPage() {
         );
       })
       .finally(() => setIsLoading(false));
+
+    fetchOperationsDay({
+      date,
+      ...(branch === "ALL" ? {} : { branchCode: branch }),
+    })
+      .then(setOperations)
+      .catch(() => setOperations(null));
   }, [date, branch]);
 
   React.useEffect(() => {
@@ -160,6 +171,10 @@ export default function DispatchBoardPage() {
       </div>
 
       {view === "calendar" && <CalendarBoard />}
+
+      {operations && view === "list" && (
+        <OperationsDayPanel data={operations} onSelect={setSelectedVisitId} />
+      )}
 
       {view === "list" && (
         <>
@@ -281,6 +296,11 @@ export default function DispatchBoardPage() {
                             open {formatMinuteOfDay(visit.windowStartMinute)}–
                             {formatMinuteOfDay(visit.windowEndMinute)}
                           </span>
+                          {visit.hoursUnconfirmed && (
+                            <span role="note" className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
+                              Assumed hours: 08:00–17:00 — confirm site hours
+                            </span>
+                          )}
                         </>
                       ) : (
                         <>
@@ -289,6 +309,11 @@ export default function DispatchBoardPage() {
                             open {formatMinuteOfDay(visit.windowStartMinute)}–
                             {formatMinuteOfDay(visit.windowEndMinute)}
                           </span>
+                          {visit.hoursUnconfirmed && (
+                            <span role="note" className="mt-1 block text-xs text-amber-700 dark:text-amber-300">
+                              Assumed hours: 08:00–17:00 — confirm site hours
+                            </span>
+                          )}
                         </>
                       )}
                     </TableCell>

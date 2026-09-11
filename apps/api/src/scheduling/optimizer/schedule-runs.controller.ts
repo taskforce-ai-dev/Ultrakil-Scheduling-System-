@@ -16,7 +16,14 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { LockScope, ScheduleRun, UserRole } from '@prisma/client';
+import {
+  AssignmentStatus,
+  LockScope,
+  Prisma,
+  ScheduleRun,
+  ScheduleRunStatus,
+  UserRole,
+} from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
@@ -38,8 +45,49 @@ import {
   ScheduleRunDispatcher,
 } from './schedule-run.dispatcher';
 import { ScheduleRunService } from './schedule-run.service';
+import {
+  ProvenanceWarning,
+  provenanceWarnings,
+  publishReadiness,
+} from './publish-readiness';
 
-function toDto(run: ScheduleRun): ScheduleRunDto {
+/**
+ * Readiness is shown on a list, so it has to cost a list's worth of reading.
+ * Nothing here loads an assignment object graph: only the scalar provenance
+ * markers and the one vehicle column the vehicle-branch warning needs.
+ */
+const PROVENANCE_SELECT = {
+  scheduleRunId: true,
+  generatedVisitId: true,
+  generatedVisit: {
+    select: {
+      windowProvenance: true,
+      serviceAgreement: {
+        select: {
+          crewSizeProvenance: true,
+          durationProvenance: true,
+          dayRuleProvenance: true,
+          serviceSite: { select: { branchConfidence: true, branchSource: true } },
+        },
+      },
+    },
+  },
+  vehicles: { select: { vehicle: { select: { branchId: true } } } },
+} satisfies Prisma.AssignmentSelect;
+
+/** Only a finished, unpublished run with results can still be published. */
+function awaitsPublication(run: ScheduleRun): boolean {
+  return (
+    run.status === ScheduleRunStatus.SUCCEEDED &&
+    run.publishedAt === null &&
+    run.visitsScheduled > 0
+  );
+}
+
+function toDto(
+  run: ScheduleRun,
+  warnings: ProvenanceWarning[] = [],
+): ScheduleRunDto {
   return {
     id: run.id,
     status: run.status,
@@ -50,16 +98,23 @@ function toDto(run: ScheduleRun): ScheduleRunDto {
     visitsConsidered: run.visitsConsidered,
     visitsScheduled: run.visitsScheduled,
     visitsUnassigned: run.visitsUnassigned,
+    publishReadiness: publishReadiness(run, warnings),
     isPublished: run.publishedAt !== null,
     publishedAt: run.publishedAt?.toISOString() ?? null,
     supersededByRunId: run.supersededByRunId,
     cancelRequested: run.cancelRequestedAt !== null,
     errorCode: run.errorCode,
-    errorMessage: run.errorMessage,
+    errorMessage: managerSafeError(run.errorMessage),
     startedAt: run.startedAt?.toISOString() ?? null,
     finishedAt: run.finishedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
   };
+}
+
+/** Scheduler/provider diagnostics belong in logs, never in a manager response. */
+export function managerSafeError(message: string | null): string | null {
+  if (!message) return null;
+  return 'The schedule run could not finish. Retry it, and contact support with the run ID if it persists.';
 }
 
 @ApiTags('schedule-runs')
@@ -124,7 +179,39 @@ export class ScheduleRunsController {
       }),
     ]);
 
-    return { items: rows.map(toDto), total, page, pageSize };
+    const warnings = await this.provenanceWarningsByRun(rows);
+    return {
+      items: rows.map((run) => toDto(run, warnings.get(run.id) ?? [])),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  /**
+   * One scalar-only read for the whole page, and only for the runs that can
+   * still be published — a published or failed run has no decision left to
+   * warn about.
+   */
+  private async provenanceWarningsByRun(
+    runs: ScheduleRun[],
+  ): Promise<Map<string, ProvenanceWarning[]>> {
+    const runIds = runs.filter(awaitsPublication).map((run) => run.id);
+    if (runIds.length === 0) return new Map();
+
+    const rows = await this.prisma.assignment.findMany({
+      where: { scheduleRunId: { in: runIds }, status: AssignmentStatus.DRAFT },
+      select: PROVENANCE_SELECT,
+    });
+
+    const byRun = new Map<string, typeof rows>();
+    for (const row of rows) {
+      if (row.scheduleRunId === null) continue;
+      byRun.set(row.scheduleRunId, [...(byRun.get(row.scheduleRunId) ?? []), row]);
+    }
+    return new Map(
+      [...byRun].map(([runId, assignments]) => [runId, provenanceWarnings(assignments)]),
+    );
   }
 
   @Get('schedule-runs/:id')
@@ -140,7 +227,8 @@ export class ScheduleRunsController {
     const run = await this.prisma.scheduleRun.findUniqueOrThrow({
       where: { id },
     });
-    return toDto(run);
+    const warnings = await this.provenanceWarningsByRun([run]);
+    return toDto(run, warnings.get(run.id) ?? []);
   }
 
   private async reconcileSelfHosted(): Promise<void> {
@@ -210,12 +298,14 @@ export class ScheduleRunsController {
     @Body() dto: PublishScheduleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<ScheduleRunDto> {
-    const { run } = await this.publishing.publish(
+    const { run, provenanceWarnings: warnings } = await this.publishing.publish(
       id,
       dto.reason ?? null,
       actor,
+      dto.acknowledgePartial === true,
+      dto.acknowledgeProvenance === true,
     );
-    return toDto(run);
+    return toDto(run, warnings);
   }
 
   @Post('assignments/:id/lock')

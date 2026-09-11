@@ -33,6 +33,35 @@ enum BranchCode {
   KANDY
 }
 
+/// How confidently the system knows which branch serves a site. The master
+/// schedule names locations, not UltraKIL branches, so an address match is
+/// useful evidence but not a manager confirmation.
+enum SiteBranchConfidence {
+  MATCHED
+  UNCERTAIN
+  CONFIRMED
+}
+
+/// Where the site branch decision came from. Kept separately from confidence
+/// so a fallback can never be displayed as a fact merely because it has a
+/// concrete BranchCode value.
+enum SiteBranchSource {
+  ADDRESS_MATCH
+  FALLBACK_DEFAULT
+  MANAGER_CONFIRMED
+}
+
+/// Provenance for values whose source may be a workbook, evidence derived from
+/// it, a safe fallback, or a manager's explicit confirmation. UNKNOWN keeps
+/// this migration additive for rows created before provenance was recorded.
+enum DataProvenance {
+  UNKNOWN
+  SOURCE
+  DERIVED
+  DEFAULTED
+  MANAGER_CONFIRMED
+}
+
 enum Weekday {
   MONDAY
   TUESDAY
@@ -94,6 +123,19 @@ enum AssignmentStatus {
   /// schedule is a record of what the crews were told, and rewriting history
   /// is how a dispute becomes unanswerable.
   SUPERSEDED
+}
+
+/// The two safe outcomes for correcting already-published work. Published
+/// predecessors are retained in both cases; replacement adds a successor,
+/// while withdrawal returns the visit to the unassigned queue.
+enum AssignmentRepairAction {
+  REPLACED
+  WITHDRAWN
+}
+
+enum PublishedAssignmentRepairCommunicationState {
+  APPLIED_PENDING_COMMUNICATION
+  COMMUNICATION_CONFIRMED
 }
 
 enum CrewRole {
@@ -366,6 +408,11 @@ model Vehicle {
   /// Number of crew the vehicle can carry. Null when the source does not say.
   seatCapacity Int?
 
+  /// Workbook column group, e.g. Personal or Transport Company. The matrix
+  /// states this ownership grouping but does not state a branch, so branchId
+  /// intentionally remains nullable and is never inferred by its importer.
+  ownershipGroup String?
+
   isActive Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -446,6 +493,8 @@ model ServiceSite {
   branchId   String     @db.Uuid
   branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
   branchCode BranchCode
+  branchConfidence SiteBranchConfidence @default(UNCERTAIN)
+  branchSource     SiteBranchSource     @default(FALLBACK_DEFAULT)
 
   latitude  Decimal? @db.Decimal(9, 6)
   longitude Decimal? @db.Decimal(9, 6)
@@ -484,6 +533,10 @@ model SiteOperatingHours {
 
   opensAtMinute  Int
   closesAtMinute Int
+  /// Actual hours are manager-entered facts. No row is fabricated for the
+  /// master schedule's missing hours; the generation fallback is recorded on
+  /// GeneratedVisit instead.
+  provenance DataProvenance @default(MANAGER_CONFIRMED)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -555,6 +608,9 @@ model ServiceAgreement {
   /// Crew size is variable per agreement.
   crewSize        Int
   durationMinutes Int
+  crewSizeProvenance DataProvenance @default(UNKNOWN)
+  durationProvenance DataProvenance @default(UNKNOWN)
+  dayRuleProvenance DataProvenance @default(UNKNOWN)
 
   /// Service window within the day, as minutes from midnight. Null falls back to
   /// the site's operating hours for that weekday.
@@ -565,6 +621,11 @@ model ServiceAgreement {
   endDate   DateTime? @db.Date
 
   status AgreementStatus @default(ACTIVE)
+
+  /// Equivalent to Customer/ServiceSite.importedInactiveAt. An agreement read
+  /// from a red cell remains archived until a person explicitly clears this
+  /// marker; removing a fill on re-import is not evidence that work resumed.
+  importedInactiveAt DateTime?
 
   /// Bumped on every change that alters what visits this agreement produces.
   /// A generated visit records the version it came from, so a schedule stays
@@ -683,6 +744,9 @@ model GeneratedVisit {
 
   durationMinutes  Int
   requiredCrewSize Int
+  /// Whether this visit window came from actual site hours or the disclosed
+  /// 08:00-17:00 fallback used when no actual hours are recorded.
+  windowProvenance DataProvenance @default(UNKNOWN)
 
   status VisitStatus @default(PENDING)
 
@@ -713,6 +777,7 @@ model GeneratedVisit {
 
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
+  repairItems       PublishedAssignmentRepairItem[]
 
   // Idempotency: one visit per agreement, date and start time. Generating the
   // same horizon twice therefore updates rather than duplicating.
@@ -773,6 +838,15 @@ model Assignment {
   startedAt      DateTime?
   completedAt    DateTime?
 
+  /// Assignment-level published lineage. A correction points at the exact
+  /// published predecessor it supersedes; the predecessor itself is immutable.
+  supersedesAssignmentId String?     @unique @db.Uuid
+  supersedesAssignment   Assignment? @relation("AssignmentSupersession", fields: [supersedesAssignmentId], references: [id], onDelete: Restrict)
+  supersededByAssignment Assignment? @relation("AssignmentSupersession")
+
+  publishedByRepairId String?                      @db.Uuid
+  publishedByRepair   PublishedAssignmentRepair?  @relation("RepairPublishedAssignments", fields: [publishedByRepairId], references: [id], onDelete: Restrict)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -780,11 +854,70 @@ model Assignment {
   vehicles                  AssignmentVehicle[]
   locks                     AssignmentLock[]
   notificationOutboxEntries AssignmentNotificationOutbox[]
+  repairItemsAsSource       PublishedAssignmentRepairItem[] @relation("RepairSourceAssignment")
+  repairItemAsReplacement   PublishedAssignmentRepairItem?  @relation("RepairReplacementAssignment")
 
   @@index([branchId, status])
   @@index([generatedVisitId])
   @@index([plannedStart])
+  @@index([publishedByRepairId])
   @@map("assignments")
+}
+
+/// One administrator-confirmed, idempotent repair transaction. The request
+/// and result hashes make retries safe without rewriting published history.
+model PublishedAssignmentRepair {
+  id String @id @default(uuid()) @db.Uuid
+
+  idempotencyKey String @unique
+  requestHash    String
+  planHash       String
+  reason         String
+
+  actorUserId String
+  actorLabel  String
+
+  result Json
+
+  communicationState       PublishedAssignmentRepairCommunicationState @default(APPLIED_PENDING_COMMUNICATION)
+  communicationConfirmedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  items                        PublishedAssignmentRepairItem[]
+  publishedAssignments         Assignment[]                    @relation("RepairPublishedAssignments")
+  cancelledNotificationIntents AssignmentNotificationOutbox[]  @relation("OutboxCancelledByRepair")
+
+  @@index([createdAt])
+  @@map("published_assignment_repairs")
+}
+
+/// Immutable before/after evidence for one assignment in a repair batch.
+model PublishedAssignmentRepairItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  repairId String                    @db.Uuid
+  repair   PublishedAssignmentRepair @relation(fields: [repairId], references: [id], onDelete: Restrict)
+
+  sourceAssignmentId String     @unique @db.Uuid
+  sourceAssignment   Assignment @relation("RepairSourceAssignment", fields: [sourceAssignmentId], references: [id], onDelete: Restrict)
+
+  replacementAssignmentId String?     @unique @db.Uuid
+  replacementAssignment   Assignment? @relation("RepairReplacementAssignment", fields: [replacementAssignmentId], references: [id], onDelete: Restrict)
+
+  generatedVisitId  String                 @db.Uuid
+  generatedVisit    GeneratedVisit         @relation(fields: [generatedVisitId], references: [id], onDelete: Restrict)
+  action            AssignmentRepairAction
+  sourceFingerprint String
+
+  before Json
+  after  Json
+
+  createdAt DateTime @default(now())
+
+  @@unique([repairId, sourceAssignmentId])
+  @@index([generatedVisitId])
+  @@map("published_assignment_repair_items")
 }
 
 model AssignmentCrewMember {
@@ -987,8 +1120,16 @@ model AssignmentNotificationOutbox {
   /// Phase 1 — this column exists so adding one needs no migration either.
   processedAt DateTime?
 
+  /// A published intent made obsolete by a repair is retained as evidence but
+  /// must never be delivered. Database constraints keep this terminal state
+  /// mutually exclusive with successful processing.
+  cancelledAt         DateTime?
+  cancelledByRepairId String?                    @db.Uuid
+  cancelledByRepair   PublishedAssignmentRepair? @relation("OutboxCancelledByRepair", fields: [cancelledByRepairId], references: [id], onDelete: Restrict)
+
   @@unique([assignmentId, employeeId, eventType])
   @@index([processedAt])
+  @@index([cancelledAt])
   @@index([employeeId])
   @@map("assignment_notification_outbox")
 }

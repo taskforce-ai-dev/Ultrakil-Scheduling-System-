@@ -1,4 +1,4 @@
-import { FrequencyUnit, Weekday } from '@prisma/client';
+import { DataProvenance, FrequencyUnit, Weekday } from '@prisma/client';
 
 import {
   SchedulePreviewInput,
@@ -203,6 +203,121 @@ describe('schedule preview', () => {
 
       expect(preview.visits).toEqual([]);
       expect(preview.shortfalls[0].reason).toBe('WINDOW_TOO_SHORT_FOR_VISIT');
+    });
+  });
+
+  describe('window provenance — where a visit\'s hours actually came from', () => {
+    it('keeps manager-confirmed hours confirmed', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: weekdayHours().map((window) => ({
+            ...window,
+            provenance: DataProvenance.MANAGER_CONFIRMED,
+          })),
+        }),
+      );
+
+      expect(preview.visits.length).toBeGreaterThan(0);
+      expect(
+        preview.visits.every(
+          (visit) => visit.windowProvenance === DataProvenance.MANAGER_CONFIRMED,
+        ),
+      ).toBe(true);
+    });
+
+    it('keeps imported hours imported rather than promoting them', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: weekdayHours().map((window) => ({
+            ...window,
+            provenance: DataProvenance.SOURCE,
+          })),
+        }),
+      );
+
+      expect(
+        preview.visits.every((visit) => visit.windowProvenance === DataProvenance.SOURCE),
+      ).toBe(true);
+    });
+
+    it('leaves unconfirmed recorded hours unconfirmed', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: weekdayHours().map((window) => ({
+            ...window,
+            provenance: DataProvenance.UNKNOWN,
+          })),
+        }),
+      );
+
+      expect(
+        preview.visits.every((visit) => visit.windowProvenance === DataProvenance.UNKNOWN),
+      ).toBe(true);
+    });
+
+    it('marks the disclosed 08:00-17:00 fallback as defaulted', () => {
+      const preview = computeSchedulePreview(buildInput({ siteWindows: [] }));
+
+      expect(preview.visits.length).toBeGreaterThan(0);
+      expect(preview.visits.every((visit) => visit.windowProvenance === DataProvenance.DEFAULTED))
+        .toBe(true);
+      expect(preview.visits[0].windowStartMinute).toBe(ASSUMED_DAY_WINDOW.startMinute);
+    });
+
+    it('treats an explicit agreement window with no site hours as manager-stated', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: [],
+          agreementWindowStartMinute: 10 * 60,
+          agreementWindowEndMinute: 15 * 60,
+        }),
+      );
+
+      expect(preview.visits.length).toBeGreaterThan(0);
+      expect(
+        preview.visits.every(
+          (visit) => visit.windowProvenance === DataProvenance.MANAGER_CONFIRMED,
+        ),
+      ).toBe(true);
+      expect(preview.visits[0]).toMatchObject({
+        windowStartMinute: 10 * 60,
+        windowEndMinute: 15 * 60,
+      });
+    });
+
+    it('stays defaulted when the agreement window is wider than the assumption', () => {
+      // The assumption still decides one of the bounds, so the window is not
+      // something a manager actually stated.
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: [],
+          agreementWindowStartMinute: 7 * 60,
+          agreementWindowEndMinute: 15 * 60,
+        }),
+      );
+
+      expect(preview.visits.every((visit) => visit.windowProvenance === DataProvenance.DEFAULTED))
+        .toBe(true);
+      expect(preview.visits[0].windowStartMinute).toBe(ASSUMED_DAY_WINDOW.startMinute);
+    });
+
+    it('does not let an agreement window weaken confirmed site hours', () => {
+      const preview = computeSchedulePreview(
+        buildInput({
+          siteWindows: weekdayHours().map((window) => ({
+            ...window,
+            provenance: DataProvenance.MANAGER_CONFIRMED,
+          })),
+          agreementWindowStartMinute: 10 * 60,
+          agreementWindowEndMinute: 15 * 60,
+        }),
+      );
+
+      expect(
+        preview.visits.every(
+          (visit) => visit.windowProvenance === DataProvenance.MANAGER_CONFIRMED,
+        ),
+      ).toBe(true);
     });
   });
 

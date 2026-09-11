@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   AgreementStatus,
+  DataProvenance,
   DayRuleKind,
   Prisma,
   Weekday,
@@ -146,6 +147,13 @@ export class AgreementsService {
           frequencyInterval: dto.frequencyInterval ?? 1,
           crewSize,
           durationMinutes,
+          // A manager wrote this agreement, so none of it is an import
+          // assumption — even the values taken from the job type's defaults
+          // were offered to the manager and accepted. Marking them confirmed
+          // is what stops a later import overwriting them.
+          crewSizeProvenance: DataProvenance.MANAGER_CONFIRMED,
+          durationProvenance: DataProvenance.MANAGER_CONFIRMED,
+          dayRuleProvenance: DataProvenance.MANAGER_CONFIRMED,
           serviceWindowStartMinute: dto.serviceWindowStartMinute ?? null,
           serviceWindowEndMinute: dto.serviceWindowEndMinute ?? null,
           startDate: parseDateOnly(dto.startDate),
@@ -288,6 +296,19 @@ export class AgreementsService {
             : {}),
           crewSize,
           durationMinutes,
+          // Only what this edit actually carried becomes confirmed. Changing
+          // the crew size says nothing about whether the imported duration was
+          // right, and confirming it anyway would quietly promote an
+          // assumption to a fact and hide it from the publish warnings.
+          ...(dto.crewSize !== undefined
+            ? { crewSizeProvenance: DataProvenance.MANAGER_CONFIRMED }
+            : {}),
+          ...(dto.durationMinutes !== undefined
+            ? { durationProvenance: DataProvenance.MANAGER_CONFIRMED }
+            : {}),
+          ...(dto.allowedDays || dto.preferredDays
+            ? { dayRuleProvenance: DataProvenance.MANAGER_CONFIRMED }
+            : {}),
           serviceWindowStartMinute: startMinute,
           serviceWindowEndMinute: endMinute,
           startDate: parseDateOnly(startDate),
@@ -383,6 +404,72 @@ export class AgreementsService {
           actor,
           before,
           after: agreement,
+        },
+        tx,
+      );
+
+      return agreement;
+    });
+
+    return toAgreementDto(updated as AgreementWithRelations);
+  }
+
+  /**
+   * A manager explicitly restoring an agreement an import archived.
+   *
+   * Deliberately not part of `changeStatus`. Ordinary archiving stays final:
+   * past visits are explained by the agreement as it stood, so reviving one a
+   * manager archived would make them unexplainable. What this action reverses
+   * is narrower and different in kind — an import read a red cell and archived
+   * the agreement on the workbook's say-so, and a person is now overruling
+   * that. Only an agreement carrying the importer's marking qualifies, which
+   * is what keeps the two cases apart.
+   *
+   * Clearing `importedInactiveAt` is the decision itself: it is what tells the
+   * next import to treat the agreement normally instead of re-archiving it.
+   * The marking's old value is recorded in the audit event, so the workbook
+   * once reading this agreement as dead survives as history.
+   */
+  async reactivateImported(id: string, actor: AuthenticatedUser) {
+    const before = await this.load(id);
+
+    if (!before.importedInactiveAt) {
+      throw new AppException(
+        'AGREEMENT_NOT_IMPORTER_ARCHIVED',
+        'No import archived this agreement, so there is nothing to undo. Archiving by hand is final, because past visits are explained by the agreement as it stands — create a new agreement instead.',
+        HttpStatus.CONFLICT,
+        { serviceAgreementId: id, status: before.status },
+      );
+    }
+
+    const clearedImportedInactiveAt = before.importedInactiveAt;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const agreement = await tx.serviceAgreement.update({
+        where: { id },
+        data: {
+          status: AgreementStatus.ACTIVE,
+          importedInactiveAt: null,
+          currentVersion: { increment: 1 },
+        },
+        include: AGREEMENT_INCLUDE,
+      });
+
+      await this.writeVersion(
+        tx,
+        agreement as AgreementWithRelations,
+        actor,
+        `Reactivated by a manager; the import marked it inactive on ${clearedImportedInactiveAt.toISOString()}`,
+      );
+
+      await this.audit.record(
+        {
+          entityType: 'ServiceAgreement',
+          entityId: id,
+          action: 'service_agreement.imported_reactivated',
+          actor,
+          before,
+          after: { ...agreement, clearedImportedInactiveAt },
         },
         tx,
       );

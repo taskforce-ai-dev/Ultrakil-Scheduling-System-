@@ -821,3 +821,261 @@ describe('required skills', () => {
     ]);
   });
 });
+
+/**
+ * Manager confirmation, driven over the real API.
+ *
+ * A unit test can prove the service builds the right write. Only this can
+ * prove the route, the guard, the validation pipe and the transaction between
+ * them actually deliver it — which is the gap that let this ship broken: the
+ * behaviour had only ever been exercised by writing to the database directly.
+ */
+describe('manager confirmation provenance', () => {
+  it('records a manager-created site branch as confirmed, not a fallback', async () => {
+    const customer = await createCustomer({ branchCode: BranchCode.KANDY });
+    const site = await createSite(customer.id);
+
+    expect(site.branchCode).toBe(BranchCode.KANDY);
+    expect(
+      await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } }),
+    ).toMatchObject({
+      branchConfidence: 'CONFIRMED',
+      branchSource: 'MANAGER_CONFIRMED',
+    });
+  });
+
+  it('records manager-entered opening hours as confirmed', async () => {
+    const customer = await createCustomer();
+    const site = await createSite(customer.id, { operatingHours: CAFE_HOURS });
+
+    const hours = await prisma.siteOperatingHours.findMany({
+      where: { serviceSiteId: site.id },
+    });
+    expect(hours).toHaveLength(CAFE_HOURS.length);
+    expect(hours.every((row) => row.provenance === 'MANAGER_CONFIRMED')).toBe(true);
+  });
+
+  it('confirms a site branch an edit supplies, and only then', async () => {
+    const customer = await createCustomer({ branchCode: BranchCode.COLOMBO });
+    const site = await createSite(customer.id);
+
+    // Put the site back into the state an import leaves behind, then rename it.
+    // A rename is not a statement about the town the importer guessed.
+    await prisma.serviceSite.update({
+      where: { id: site.id },
+      data: { branchConfidence: 'UNCERTAIN', branchSource: 'FALLBACK_DEFAULT' },
+    });
+
+    const renamed = await request(http)
+      .patch(`/api/service-sites/${site.id}`)
+      .set(auth(adminToken))
+      .send({ name: 'Renamed by a manager' });
+    expect(renamed.status).toBe(200);
+    expect(
+      await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } }),
+    ).toMatchObject({
+      branchConfidence: 'UNCERTAIN',
+      branchSource: 'FALLBACK_DEFAULT',
+    });
+
+    const moved = await request(http)
+      .patch(`/api/service-sites/${site.id}`)
+      .set(auth(adminToken))
+      .send({ branchCode: BranchCode.KANDY });
+    expect(moved.status).toBe(200);
+    expect(
+      await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } }),
+    ).toMatchObject({
+      branchCode: 'KANDY',
+      branchConfidence: 'CONFIRMED',
+      branchSource: 'MANAGER_CONFIRMED',
+    });
+  });
+
+  it('records a manager-created agreement as confirmed throughout', async () => {
+    const res = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload());
+
+    expect(res.status).toBe(201);
+    expect(
+      await prisma.serviceAgreement.findUniqueOrThrow({ where: { id: res.body.id } }),
+    ).toMatchObject({
+      crewSizeProvenance: 'MANAGER_CONFIRMED',
+      durationProvenance: 'MANAGER_CONFIRMED',
+      dayRuleProvenance: 'MANAGER_CONFIRMED',
+    });
+  });
+
+  it('confirms only the agreement values an edit actually supplies', async () => {
+    const created = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload());
+    expect(created.status).toBe(201);
+
+    // Wind the row back to how an import leaves it, so the edit has something
+    // to change rather than re-asserting what is already confirmed.
+    await prisma.serviceAgreement.update({
+      where: { id: created.body.id },
+      data: {
+        crewSizeProvenance: 'DEFAULTED',
+        durationProvenance: 'DEFAULTED',
+        dayRuleProvenance: 'DERIVED',
+      },
+    });
+
+    const edited = await request(http)
+      .patch(`/api/service-agreements/${created.body.id}`)
+      .set(auth(adminToken))
+      .send({ crewSize: 4 });
+    expect(edited.status).toBe(200);
+
+    expect(
+      await prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: created.body.id },
+      }),
+    ).toMatchObject({
+      crewSize: 4,
+      crewSizeProvenance: 'MANAGER_CONFIRMED',
+      // Untouched by this edit, so still visibly unconfirmed.
+      durationProvenance: 'DEFAULTED',
+      dayRuleProvenance: 'DERIVED',
+    });
+  });
+});
+
+describe('explicit manager reactivation', () => {
+  it('clears an import marking on a customer and keeps it in the audit trail', async () => {
+    const customer = await createCustomer();
+    const importedInactiveAt = new Date('2026-09-03T00:00:00.000Z');
+    await prisma.customer.update({
+      where: { id: customer.id },
+      data: { isActive: false, importedInactiveAt },
+    });
+
+    const res = await request(http)
+      .post(`/api/customers/${customer.id}/reactivate`)
+      .set(auth(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(
+      await prisma.customer.findUniqueOrThrow({ where: { id: customer.id } }),
+    ).toMatchObject({ isActive: true, importedInactiveAt: null });
+
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        entityType: 'Customer',
+        entityId: customer.id,
+        action: 'customer.reactivated',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(event.after).toMatchObject({
+      clearedImportedInactiveAt: importedInactiveAt.toISOString(),
+    });
+  });
+
+  it('clears an import marking on a site', async () => {
+    const customer = await createCustomer();
+    const site = await createSite(customer.id);
+    await prisma.serviceSite.update({
+      where: { id: site.id },
+      data: {
+        isActive: false,
+        importedInactiveAt: new Date('2026-09-03T00:00:00.000Z'),
+      },
+    });
+
+    const res = await request(http)
+      .post(`/api/service-sites/${site.id}/reactivate`)
+      .set(auth(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(
+      await prisma.serviceSite.findUniqueOrThrow({ where: { id: site.id } }),
+    ).toMatchObject({ isActive: true, importedInactiveAt: null });
+  });
+
+  it('restores an importer-archived agreement through its own route', async () => {
+    const created = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload());
+    expect(created.status).toBe(201);
+
+    const importedInactiveAt = new Date('2026-09-03T00:00:00.000Z');
+    await prisma.serviceAgreement.update({
+      where: { id: created.body.id },
+      data: { status: 'ARCHIVED', importedInactiveAt },
+    });
+
+    // The ordinary route still refuses: archiving by hand is final.
+    const viaStatus = await request(http)
+      .post(`/api/service-agreements/${created.body.id}/status`)
+      .set(auth(adminToken))
+      .send({ status: 'ACTIVE' });
+    expect(viaStatus.status).toBe(409);
+    expect(viaStatus.body.code).toBe('AGREEMENT_ARCHIVED');
+
+    const res = await request(http)
+      .post(`/api/service-agreements/${created.body.id}/reactivate`)
+      .set(auth(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('ACTIVE');
+    expect(
+      await prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: created.body.id },
+      }),
+    ).toMatchObject({ status: 'ACTIVE', importedInactiveAt: null });
+
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        entityType: 'ServiceAgreement',
+        entityId: created.body.id,
+        action: 'service_agreement.imported_reactivated',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(event.after).toMatchObject({
+      clearedImportedInactiveAt: importedInactiveAt.toISOString(),
+    });
+  });
+
+  it('refuses to revive an agreement no import archived', async () => {
+    const created = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload());
+    expect(created.status).toBe(201);
+
+    await request(http)
+      .post(`/api/service-agreements/${created.body.id}/status`)
+      .set(auth(adminToken))
+      .send({ status: 'ARCHIVED' })
+      .expect(200);
+
+    const res = await request(http)
+      .post(`/api/service-agreements/${created.body.id}/reactivate`)
+      .set(auth(adminToken));
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AGREEMENT_NOT_IMPORTER_ARCHIVED');
+  });
+
+  it('is an administrator action', async () => {
+    const created = await request(http)
+      .post('/api/service-agreements')
+      .set(auth(adminToken))
+      .send(agreementPayload());
+    expect(created.status).toBe(201);
+
+    const res = await request(http)
+      .post(`/api/service-agreements/${created.body.id}/reactivate`)
+      .set(auth(managerToken));
+
+    expect(res.status).toBe(403);
+  });
+});

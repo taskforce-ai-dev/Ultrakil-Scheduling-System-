@@ -13,23 +13,7 @@ import {
   Min,
 } from 'class-validator';
 
-/**
- * Reads a boolean from a query string.
- *
- * Deliberately reads the *raw* value off the source object rather than the
- * `value` argument. The global ValidationPipe runs with
- * `enableImplicitConversion`, which coerces to the declared type using
- * `Boolean(...)` — and `Boolean('false')` is `true`. Taking `value` here would
- * therefore invert every `?flag=false` filter, silently returning the opposite
- * of what was asked for.
- */
-const toBoolean = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
-  const raw = obj?.[key];
-  if (typeof raw === 'boolean') return raw;
-  if (raw === 'true' || raw === '1') return true;
-  if (raw === 'false' || raw === '0') return false;
-  return raw;
-};
+import { toBoolean } from '../../common/validation/to-boolean';
 
 export class PaginationQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 })

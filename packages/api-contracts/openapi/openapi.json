@@ -1180,6 +1180,7 @@
     },
     "/api/customers/{id}/reactivate": {
       "post": {
+        "description": "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking. The marking's previous value is kept in the audit trail, so the workbook once reading this customer as gone stays on record.",
         "operationId": "CustomersController_reactivate",
         "parameters": [],
         "responses": {
@@ -1373,6 +1374,7 @@
     },
     "/api/service-sites/{id}/reactivate": {
       "post": {
+        "description": "A manager's own decision, and the only thing that clears an import's \"no longer serviced\" marking.",
         "operationId": "ServiceSitesController_reactivate",
         "parameters": [],
         "responses": {
@@ -1663,6 +1665,40 @@
           }
         ],
         "summary": "Pause, resume or archive an agreement",
+        "tags": [
+          "service-agreements"
+        ]
+      }
+    },
+    "/api/service-agreements/{id}/reactivate": {
+      "post": {
+        "description": "A dedicated administrator action, not a way round the rule that archiving is final. It applies only to an agreement an import archived from a red cell: clearing that marking is what stops the next import archiving it again, and the marking's previous value is kept in the audit trail. An agreement archived by hand stays archived.",
+        "operationId": "AgreementsController_reactivateImported",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAgreementDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "AGREEMENT_NOT_IMPORTER_ARCHIVED — no import archived this agreement."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reactivate an agreement an import archived",
         "tags": [
           "service-agreements"
         ]
@@ -2425,14 +2461,93 @@
     },
     "/api/unassigned-visits": {
       "get": {
-        "description": "Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped.",
+        "description": "Every visit with no crew on it — including ones nobody has tried to staff yet, which is most of them before the optimizer runs. Where a crew was proposed and refused, the full conflict list comes with it. This is the queue the hard rules protect: work is never quietly dropped. Every filter is applied here, in the query, so the items, the total and the paging always describe the same set — which they cannot if a client re-filters the page it was handed. `visitId` is the one parameter that is not a filter: it names a single visit and overrides all the others, answering with that visit or with nothing.",
         "operationId": "AssignmentsController_queue",
         "parameters": [
           {
             "name": "withConflictsOnly",
             "required": false,
             "in": "query",
-            "description": "Only visits already found to be unstaffable, rather than all unstaffed work.",
+            "deprecated": true,
+            "description": "Deprecated alias for checked=true.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "conflictCode",
+            "required": false,
+            "in": "query",
+            "description": "Only visits with this recorded conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL belongs in conflictGroup. Facets remain scoped to the other filters.",
+            "schema": {
+              "enum": [
+                "BRANCH_MISMATCH",
+                "EMPLOYEE_INACTIVE",
+                "EMPLOYEE_UNAVAILABLE",
+                "EMPLOYEE_DOUBLE_BOOKED",
+                "EMPLOYEE_PERMANENTLY_STATIONED",
+                "NO_PMS_SUPERVISOR_AVAILABLE",
+                "BRANCH_HAS_NO_PMS_SUPERVISOR",
+                "CREW_TOO_SMALL",
+                "SKILL_NOT_HELD",
+                "DUPLICATE_CREW_MEMBER",
+                "VEHICLE_INACTIVE",
+                "VEHICLE_BRANCH_MISMATCH",
+                "VEHICLE_DOUBLE_BOOKED",
+                "NO_AUTHORIZED_DRIVER",
+                "VEHICLE_CAPACITY_EXCEEDED",
+                "OUTSIDE_SERVICE_HOURS",
+                "WINDOW_TOO_SHORT",
+                "VISIT_NOT_SCHEDULABLE",
+                "ASSIGNMENT_LOCKED",
+                "CREW_CANNOT_TRAVEL",
+                "TOO_MANY_VEHICLES",
+                "NO_FEASIBLE_CREW"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "conflictGroup",
+            "required": false,
+            "in": "query",
+            "description": "Only visits carrying at least one conflict in this manager-facing group. Each group maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters.",
+            "schema": {
+              "enum": [
+                "MISSING_PMS",
+                "INSUFFICIENT_CREW",
+                "MISSING_SKILL",
+                "NO_AUTHORIZED_DRIVER",
+                "UNAVAILABLE_VEHICLE",
+                "BRANCH_RESTRICTION",
+                "PERMANENT_STAFF_RESTRICTION",
+                "SERVICE_WINDOW_CONFLICT",
+                "EMPLOYEE_OVERLAP",
+                "VEHICLE_OVERLAP",
+                "CREW_CANNOT_TRAVEL",
+                "OTHER"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "operationState",
+            "required": false,
+            "in": "query",
+            "description": "UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both.",
+            "schema": {
+              "enum": [
+                "UNASSIGNED",
+                "EXCEPTION"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "checked",
+            "required": false,
+            "in": "query",
+            "description": "true returns visits with recorded conflict checks; false returns unchecked visits.",
             "schema": {
               "type": "boolean"
             }
@@ -2478,6 +2593,16 @@
             }
           },
           {
+            "name": "visitId",
+            "required": false,
+            "in": "query",
+            "description": "One named visit, for the dispatch board's \"Why?\" deep link. A selector rather than a filter: every other parameter here is ignored when it is present, and the response describes exactly this visit wherever its date and whichever page it would otherwise fall on — one item when it still needs a crew, or an empty page with total 0 when the id is unknown or the visit has since been staffed, completed or cancelled. No other visit is ever returned alongside it, so an empty result means the named visit was not found rather than \"here is something else\".",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
             "name": "pageSize",
             "required": false,
             "in": "query",
@@ -2507,6 +2632,9 @@
               }
             }
           },
+          "400": {
+            "description": "VALIDATION_FAILED — an unknown filter, or a conflict-group label sent as conflictCode."
+          },
           "401": {
             "description": "Missing or invalid token."
           }
@@ -2524,7 +2652,7 @@
     },
     "/api/employees/{employeeId}/assignments": {
       "get": {
-        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with non-null scheduleRunId and publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
+        "description": "Manager/admin read model prepared for a future worker app. Only published-descended assignments with schedule-run or repair provenance and non-null publishedAt are returned. Dates and date filters use assignment plannedStart, preserving the published planned date if the visit is later moved. Phase 2 must add User-to-Employee identity linking and worker self-scope authorization before worker access is enabled.",
         "operationId": "AssignmentsController_employeeAssignments",
         "parameters": [
           {
@@ -2866,6 +2994,234 @@
         "summary": "The unified schedule, one row per visit",
         "tags": [
           "calendar"
+        ]
+      }
+    },
+    "/api/operations/day": {
+      "get": {
+        "description": "Server-calculated dispatch state. Published work is dispatch truth; draft proposals remain separate.",
+        "operationId": "OperationsController_day",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationsDayResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Authoritative operational view for one day",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/findings": {
+      "get": {
+        "description": "Read-only validation of one bounded page of published-assignment candidates. Each request loads and evaluates at most pageSize candidates, so the response describes only what it checked: read checkedThrough, totalCandidates and hasNextPage before treating an empty items array as a clean collection. Historical acknowledged, started, completed, cancelled, and superseded assignments are not automatic repair targets.",
+        "operationId": "PublishedAssignmentRepairController_findings",
+        "parameters": [
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "description": "Maximum published-assignment candidates evaluated by this request.",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "One-based candidate page, ordered stably by assignment id.",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentFindingsResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Find current published assignments that violate hard rules",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/plans": {
+      "post": {
+        "description": "Runs one joint solve, preserves non-target live reservations, and returns apply-ready operations, source fingerprints, and a canonical plan hash without writing state.",
+        "operationId": "PublishedAssignmentRepairController_plan",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairPlanDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairPlanResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Build an automatic write-free repair plan for exact published sources",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/preview": {
+      "post": {
+        "description": "Returns a canonical plan hash and exact source fingerprints. Apply rejects them if any source or rule result changes.",
+        "operationId": "PublishedAssignmentRepairController_preview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Validate a repair batch without writing anything",
+        "tags": [
+          "published-assignment-repairs"
+        ]
+      }
+    },
+    "/api/operations/published-assignment-repairs/apply": {
+      "post": {
+        "description": "Requires an administrator, reason, explicit confirmation, idempotency key, matching plan hash, and unchanged source fingerprints.",
+        "operationId": "PublishedAssignmentRepairController_apply",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedAssignmentRepairApplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedAssignmentRepairResultDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT or ASSIGNMENT_NOT_ELIGIBLE — run a new preview before retrying."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Atomically apply a confirmed published-assignment repair",
+        "tags": [
+          "published-assignment-repairs"
         ]
       }
     }
@@ -4968,7 +5324,8 @@
               "VISIT_NOT_SCHEDULABLE",
               "ASSIGNMENT_LOCKED",
               "CREW_CANNOT_TRAVEL",
-              "TOO_MANY_VEHICLES"
+              "TOO_MANY_VEHICLES",
+              "NO_FEASIBLE_CREW"
             ]
           },
           "message": {
@@ -5083,6 +5440,16 @@
           "branchCode": {
             "type": "string"
           },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
           "plannedStartMinute": {
             "type": "number"
           },
@@ -5118,6 +5485,8 @@
           "generatedVisitId",
           "status",
           "branchCode",
+          "supersedesAssignmentId",
+          "publishedByRepairId",
           "plannedStartMinute",
           "plannedEndMinute",
           "crew",
@@ -5150,9 +5519,17 @@
           "requiredCrewSize": {
             "type": "number"
           },
+          "operationState": {
+            "type": "string",
+            "enum": [
+              "UNASSIGNED",
+              "EXCEPTION"
+            ],
+            "description": "The server's own reading of this row: EXCEPTION when eligibility conflicts are recorded against the visit, UNASSIGNED when none are. The same meaning the operationState filter selects on, so a client is told the state rather than re-deriving it."
+          },
           "hasBeenChecked": {
             "type": "boolean",
-            "description": "True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine."
+            "description": "True once a crew has been proposed and judged. When false the empty conflict list means nobody has tried yet, not that the visit is fine. The boolean spelling of operationState === EXCEPTION."
           },
           "conflicts": {
             "description": "Why it could not be staffed. Empty when nobody has proposed a crew.",
@@ -5173,6 +5550,7 @@
           "customerName",
           "siteName",
           "requiredCrewSize",
+          "operationState",
           "hasBeenChecked",
           "conflicts",
           "recordedAt"
@@ -5195,13 +5573,24 @@
           },
           "pageSize": {
             "type": "number"
+          },
+          "hasNextPage": {
+            "type": "boolean"
+          },
+          "conflictFacets": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
           }
         },
         "required": [
           "items",
           "total",
           "page",
-          "pageSize"
+          "pageSize",
+          "hasNextPage",
+          "conflictFacets"
         ]
       },
       "EmployeeAssignmentDto": {
@@ -5226,6 +5615,17 @@
           },
           "scheduleRunId": {
             "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
             "format": "uuid"
           },
           "visitId": {
@@ -5316,6 +5716,8 @@
           "assignmentId",
           "status",
           "scheduleRunId",
+          "publishedByRepairId",
+          "supersedesAssignmentId",
           "visitId",
           "visitDate",
           "plannedStartMinute",
@@ -5363,6 +5765,83 @@
           "pageSize"
         ]
       },
+      "ProvenanceWarningDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "CREW_SIZE_UNCONFIRMED",
+              "DAY_RULE_UNCONFIRMED",
+              "DURATION_UNCONFIRMED",
+              "HOURS_UNCONFIRMED",
+              "SITE_BRANCH_UNCONFIRMED",
+              "VEHICLE_BRANCH_UNCONFIRMED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "affectedVisitCount": {
+            "type": "number",
+            "description": "Visits in this publication affected by the warning."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "affectedVisitCount"
+        ]
+      },
+      "PublishReadinessDto": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "BLOCKED",
+              "ACKNOWLEDGEMENT_REQUIRED"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "ZERO_RESULTS",
+              "PARTIAL_RESULTS",
+              "SOURCE_DATA_UNCONFIRMED"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "requiresPartialAcknowledgement": {
+            "type": "boolean",
+            "description": "The run left visits unassigned."
+          },
+          "requiresProvenanceAcknowledgement": {
+            "type": "boolean",
+            "description": "The assignments to be published rest on unconfirmed source data."
+          },
+          "provenanceWarnings": {
+            "description": "Advisory. The authoritative set is recalculated inside the publish transaction.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProvenanceWarningDto"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "code",
+          "message",
+          "requiresPartialAcknowledgement",
+          "requiresProvenanceAcknowledgement",
+          "provenanceWarnings"
+        ]
+      },
       "ScheduleRunDto": {
         "type": "object",
         "properties": {
@@ -5405,6 +5884,9 @@
           },
           "visitsUnassigned": {
             "type": "number"
+          },
+          "publishReadiness": {
+            "$ref": "#/components/schemas/PublishReadinessDto"
           },
           "isPublished": {
             "type": "boolean",
@@ -5457,6 +5939,7 @@
           "visitsConsidered",
           "visitsScheduled",
           "visitsUnassigned",
+          "publishReadiness",
           "isPublished",
           "publishedAt",
           "supersededByRunId",
@@ -5742,6 +6225,1051 @@
         "required": [
           "items",
           "total"
+        ]
+      },
+      "OperationsSummaryDto": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "ready": {
+            "type": "number"
+          },
+          "proposed": {
+            "type": "number"
+          },
+          "unassigned": {
+            "type": "number"
+          },
+          "exceptions": {
+            "type": "number"
+          },
+          "hoursUnconfirmed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "total",
+          "ready",
+          "proposed",
+          "unassigned",
+          "exceptions",
+          "hoursUnconfirmed"
+        ]
+      },
+      "OperationsVisitDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "jobTypeName": {
+            "type": "string"
+          },
+          "requiredCrewSize": {
+            "type": "number"
+          },
+          "durationMinutes": {
+            "type": "number"
+          },
+          "windowStartMinute": {
+            "type": "number"
+          },
+          "windowEndMinute": {
+            "type": "number"
+          },
+          "hoursUnconfirmed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "visitDate",
+          "branchCode",
+          "customerName",
+          "siteName",
+          "jobTypeName",
+          "requiredCrewSize",
+          "durationMinutes",
+          "windowStartMinute",
+          "windowEndMinute",
+          "hoursUnconfirmed"
+        ]
+      },
+      "OperationsCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "isPmsSupervisor": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName",
+          "role",
+          "isPmsSupervisor"
+        ]
+      },
+      "OperationsVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "driverName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label",
+          "driverEmployeeId",
+          "driverName"
+        ]
+      },
+      "OperationsAssignmentSnapshotDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "plannedStartMinute": {
+            "type": "number"
+          },
+          "plannedEndMinute": {
+            "type": "number"
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsVehicleDto"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "crew",
+          "vehicles"
+        ]
+      },
+      "OperationsWarningDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "CREW_SIZE_DEFAULTED",
+              "DAY_RULE_DERIVED",
+              "DAY_RULE_UNCONFIRMED",
+              "DURATION_DEFAULTED",
+              "HOURS_UNCONFIRMED",
+              "SITE_BRANCH_UNCONFIRMED",
+              "VEHICLE_BRANCH_UNCONFIRMED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "OperationsScheduleVersionDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ]
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "publishedAt"
+        ]
+      },
+      "OperationsPublishedAssignmentLineageEntryDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Immutable identity of this published assignment version."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "DRAFT",
+              "PROPOSED",
+              "PUBLISHED",
+              "ACKNOWLEDGED",
+              "IN_PROGRESS",
+              "COMPLETED",
+              "CANCELLED",
+              "SUPERSEDED"
+            ],
+            "description": "Published lifecycle status of this version. SUPERSEDED means it is history, never dispatch truth."
+          },
+          "supersedesAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published predecessor this version supersedes, when it is a correction."
+          },
+          "supersededByAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published successor that superseded this version, when one exists in the returned chain."
+          },
+          "publishedByRepairId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The audited repair transaction that published this version, when it came from one."
+          },
+          "provenance": {
+            "type": "string",
+            "enum": [
+              "SCHEDULE_RUN",
+              "REPAIR",
+              "MANUAL_PUBLISH"
+            ],
+            "description": "Whether this version came from an ordinary schedule run, an audited repair, or a manual publish."
+          },
+          "publishedAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "isCurrent": {
+            "type": "boolean",
+            "description": "Whether this version is the assignment the read model treats as current dispatch truth."
+          }
+        },
+        "required": [
+          "assignmentId",
+          "status",
+          "supersedesAssignmentId",
+          "supersededByAssignmentId",
+          "publishedByRepairId",
+          "provenance",
+          "publishedAt",
+          "isCurrent"
+        ]
+      },
+      "OperationsPublishedAssignmentLineageDto": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "description": "Published assignment versions for this visit, ordered predecessor to successor. Draft and proposed assignments are deliberately excluded: this is published history, not schedule-run history.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageEntryDto"
+            }
+          },
+          "totalCount": {
+            "type": "number",
+            "description": "How many published versions exist for this visit, before any truncation."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether older versions were omitted to keep the day payload bounded."
+          },
+          "omittedCount": {
+            "type": "number",
+            "description": "How many older versions were omitted. Zero when the chain is complete."
+          },
+          "currentAssignmentId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "The published version that is current dispatch truth, or null when the published work was withdrawn."
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "description": "Whether published work existed for this visit and was withdrawn rather than replaced."
+          },
+          "hasMixedProvenance": {
+            "type": "boolean",
+            "description": "Whether the returned chain mixes schedule-run and repair provenance."
+          }
+        },
+        "required": [
+          "entries",
+          "totalCount",
+          "truncated",
+          "omittedCount",
+          "currentAssignmentId",
+          "withdrawn",
+          "hasMixedProvenance"
+        ]
+      },
+      "OperationsDayItemDto": {
+        "type": "object",
+        "properties": {
+          "visit": {
+            "$ref": "#/components/schemas/OperationsVisitDto"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "PROPOSED",
+              "UNASSIGNED",
+              "EXCEPTION",
+              "COMPLETED",
+              "CANCELLED"
+            ]
+          },
+          "dispatchAssignment": {
+            "nullable": true,
+            "description": "Published dispatch snapshot. An EXCEPTION retains it for inspection but is never dispatchable.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsAssignmentSnapshotDto"
+              }
+            ]
+          },
+          "proposedAssignment": {
+            "nullable": true,
+            "description": "Newest draft/proposed snapshot; never dispatch truth.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsAssignmentSnapshotDto"
+              }
+            ]
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsWarningDto"
+            }
+          },
+          "nextAction": {
+            "type": "string"
+          },
+          "scheduleVersion": {
+            "nullable": true,
+            "description": "The schedule RUN the current assignment came from. Run history, not per-visit assignment history.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsScheduleVersionDto"
+              }
+            ]
+          },
+          "publishedAssignmentLineage": {
+            "description": "Per-visit published-assignment lineage. Distinct from scheduleVersion: this is the chain of published assignment versions for this visit.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OperationsPublishedAssignmentLineageDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "visit",
+          "state",
+          "dispatchAssignment",
+          "proposedAssignment",
+          "violations",
+          "warnings",
+          "nextAction",
+          "scheduleVersion",
+          "publishedAssignmentLineage"
+        ]
+      },
+      "OperationsDayResponseDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "nullable": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/OperationsSummaryDto"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsDayItemDto"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "branchCode",
+          "summary",
+          "items"
+        ]
+      },
+      "PublishedAssignmentFindingDto": {
+        "type": "object",
+        "properties": {
+          "assignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "sourceFingerprint": {
+            "type": "string"
+          },
+          "timeScope": {
+            "type": "string",
+            "enum": [
+              "HISTORICAL",
+              "CURRENT_DAY",
+              "FUTURE"
+            ]
+          },
+          "isSelectableForRepair": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "assignmentId",
+          "visitId",
+          "visitDate",
+          "customerName",
+          "siteName",
+          "conflicts",
+          "sourceFingerprint",
+          "timeScope",
+          "isSelectableForRepair"
+        ]
+      },
+      "PublishedAssignmentFindingsResponseDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "Invalid published assignments found among the candidates checked by THIS request only. An empty array means nothing was wrong in this candidate page, never that the collection is clean.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentFindingDto"
+            }
+          },
+          "page": {
+            "type": "number",
+            "description": "One-based candidate page this response describes, in a stable ordering by assignment id."
+          },
+          "pageSize": {
+            "type": "number",
+            "description": "Maximum published-assignment candidates this request was allowed to evaluate."
+          },
+          "checkedInPage": {
+            "type": "number",
+            "description": "Published-assignment candidates actually evaluated by this request. Equals pageSize except on the final page, and is 0 past the end of the collection."
+          },
+          "checkedThrough": {
+            "type": "number",
+            "description": "Candidates from the start of the ordering through the end of this page, i.e. (page - 1) * pageSize + checkedInPage, never more than totalCandidates. A caller that has walked pages 1..page can show this as \"checked N of totalCandidates so far\"."
+          },
+          "totalCandidates": {
+            "type": "number",
+            "description": "Every published assignment that is a repair candidate, whether or not it has been checked. Pair it with checkedThrough to state how much of the collection has been validated."
+          },
+          "hasNextPage": {
+            "type": "boolean",
+            "description": "True when candidates remain after this page, so the caller must request page + 1 before concluding anything about the whole collection."
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "checkedInPage",
+          "checkedThrough",
+          "totalCandidates",
+          "hasNextPage"
+        ]
+      },
+      "PublishedAssignmentRepairPlanDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentIds": {
+            "minItems": 1,
+            "maxItems": 100,
+            "uniqueItems": true,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "acknowledgeCurrentDay": {
+            "type": "boolean",
+            "description": "Must be true when any target visit is on the current Colombo day."
+          }
+        },
+        "required": [
+          "sourceAssignmentIds"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewItemDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "sourceFingerprint": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "conflicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConflictDto"
+            }
+          },
+          "timeScope": {
+            "type": "string",
+            "enum": [
+              "CURRENT_DAY",
+              "FUTURE"
+            ]
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "visitId",
+          "visitDate",
+          "customerName",
+          "siteName",
+          "action",
+          "sourceFingerprint",
+          "isValid",
+          "conflicts",
+          "timeScope"
+        ]
+      },
+      "RepairCrewMemberDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "SUPERVISOR",
+              "TECHNICIAN",
+              "DRIVER",
+              "HELPER"
+            ]
+          }
+        },
+        "required": [
+          "employeeId",
+          "role"
+        ]
+      },
+      "RepairVehicleDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "driverEmployeeId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "vehicleId"
+        ]
+      },
+      "RepairReplacementDto": {
+        "type": "object",
+        "properties": {
+          "plannedStartMinute": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1440
+          },
+          "crew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairCrewMemberDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairVehicleDto"
+            }
+          }
+        },
+        "required": [
+          "plannedStartMinute",
+          "plannedEndMinute",
+          "crew"
+        ]
+      },
+      "RepairUnassignedReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "details": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "PublishedAssignmentRepairOperationDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "replacement": {
+            "$ref": "#/components/schemas/RepairReplacementDto"
+          },
+          "unassignedReasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairUnassignedReasonDto"
+            }
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "action"
+        ]
+      },
+      "RepairSourceFingerprintDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "SHA-256 fingerprint returned by preview."
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "fingerprint"
+        ]
+      },
+      "RepairEmployeeLabelDto": {
+        "type": "object",
+        "properties": {
+          "employeeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fullName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "employeeId",
+          "fullName"
+        ]
+      },
+      "RepairVehicleLabelDto": {
+        "type": "object",
+        "properties": {
+          "vehicleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vehicleId",
+          "label"
+        ]
+      },
+      "RepairResourceLabelsDto": {
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairEmployeeLabelDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairVehicleLabelDto"
+            }
+          }
+        },
+        "required": [
+          "employees",
+          "vehicles"
+        ]
+      },
+      "PublishedAssignmentRepairPlanResponseDto": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewItemDto"
+            }
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          },
+          "sourceFingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairSourceFingerprintDto"
+            }
+          },
+          "resourceLabels": {
+            "description": "Names for exactly the employees and vehicles this plan references, so the review screen never shows a crew as bare identifiers.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RepairResourceLabelsDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "planHash",
+          "isValid",
+          "items",
+          "operations",
+          "sourceFingerprints",
+          "resourceLabels"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewDto": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "PublishedAssignmentRepairPreviewResponseDto": {
+        "type": "object",
+        "properties": {
+          "planHash": {
+            "type": "string"
+          },
+          "isValid": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairPreviewItemDto"
+            }
+          }
+        },
+        "required": [
+          "planHash",
+          "isValid",
+          "items"
+        ]
+      },
+      "PublishedAssignmentRepairApplyDto": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairOperationDto"
+            }
+          },
+          "planHash": {
+            "type": "string",
+            "description": "Canonical SHA-256 plan hash returned by preview."
+          },
+          "sourceFingerprints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairSourceFingerprintDto"
+            }
+          },
+          "confirmation": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Must be exactly true."
+          },
+          "acknowledgeCurrentDay": {
+            "type": "boolean",
+            "description": "Must be true when any target visit is on the current Colombo day."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "operations",
+          "planHash",
+          "sourceFingerprints",
+          "confirmation",
+          "reason",
+          "idempotencyKey"
+        ]
+      },
+      "PublishedAssignmentRepairResultItemDto": {
+        "type": "object",
+        "properties": {
+          "sourceAssignmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "REPLACED",
+              "WITHDRAWN"
+            ]
+          },
+          "replacementAssignmentId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          }
+        },
+        "required": [
+          "sourceAssignmentId",
+          "visitId",
+          "action",
+          "replacementAssignmentId"
+        ]
+      },
+      "PublishedAssignmentRepairResultDto": {
+        "type": "object",
+        "properties": {
+          "repairId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "communicationState": {
+            "type": "string",
+            "enum": [
+              "APPLIED_PENDING_COMMUNICATION",
+              "COMMUNICATION_CONFIRMED"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedAssignmentRepairResultItemDto"
+            }
+          }
+        },
+        "required": [
+          "repairId",
+          "planHash",
+          "idempotencyKey",
+          "communicationState",
+          "items"
         ]
       }
     }

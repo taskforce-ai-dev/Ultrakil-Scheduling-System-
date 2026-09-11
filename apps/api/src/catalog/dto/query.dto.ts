@@ -13,22 +13,8 @@ import {
   Min,
 } from 'class-validator';
 
+import { toBoolean } from '../../common/validation/to-boolean';
 import { PaginationQueryDto } from '../../workforce/dto/query.dto';
-
-/**
- * Reads a boolean from a query string.
- *
- * Reads the raw value off the source object rather than the coerced `value`:
- * the global ValidationPipe runs with `enableImplicitConversion`, and
- * `Boolean('false')` is `true`, which would invert every `?flag=false` filter.
- */
-const toBoolean = ({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
-  const raw = obj?.[key];
-  if (typeof raw === 'boolean') return raw;
-  if (raw === 'true' || raw === '1') return true;
-  if (raw === 'false' || raw === '0') return false;
-  return raw;
-};
 
 export class CustomerQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: BranchCode })

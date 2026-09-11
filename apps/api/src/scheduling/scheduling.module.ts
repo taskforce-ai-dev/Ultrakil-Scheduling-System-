@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
+import { OperationsController } from './operations/operations.controller';
+import { OperationsService } from './operations/operations.service';
 import { PublishingService } from './optimizer/publishing.service';
 import {
   ScheduleRunProcessor,
@@ -30,6 +32,10 @@ import { VisitGenerationController } from './visit-generation/visit-generation.c
 import { VisitGenerationService } from './visit-generation/visit-generation.service';
 import { VisitsController } from './visits/visits.controller';
 import { VisitsService } from './visits/visits.service';
+import { PublishedAssignmentRepairController } from './repair/published-assignment-repair.controller';
+import { PublishedAssignmentRepairPlannerAdapter } from './repair/published-assignment-repair-planner.adapter';
+import { PublishedAssignmentRepairPlannerService } from './repair/published-assignment-repair-planner.service';
+import { PublishedAssignmentRepairService } from './repair/published-assignment-repair.service';
 
 /**
  * Turning commitments into dated work.
@@ -51,6 +57,8 @@ export class SchedulingModule {
         AssignmentsController,
         ScheduleRunsController,
         CalendarController,
+        OperationsController,
+        PublishedAssignmentRepairController,
         ...(qstash ? [ScheduleRunQStashController] : []),
       ],
       providers: [
@@ -63,6 +71,10 @@ export class SchedulingModule {
         ScheduleRunDispatchService,
         PublishingService,
         CalendarService,
+        OperationsService,
+        PublishedAssignmentRepairService,
+        PublishedAssignmentRepairPlannerAdapter,
+        PublishedAssignmentRepairPlannerService,
         ...(qstash
           ? [
               {

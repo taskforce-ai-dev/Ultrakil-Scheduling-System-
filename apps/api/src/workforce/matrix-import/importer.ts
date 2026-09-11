@@ -1,4 +1,5 @@
 import { BranchCode, DeploymentType, Prisma, PrismaClient } from '@prisma/client';
+import { lockScheduleResources } from '../../scheduling/optimizer/schedule-visit-lock';
 import { normalizeHeader } from './mapping';
 import { ParsedMatrix } from './types';
 
@@ -111,6 +112,27 @@ export async function importMatrix(
 
   await prisma.$transaction(
     async (tx) => {
+      const parsedVehicleIdentities = new Set(
+        parsed.vehicles.map((vehicle) => vehicleIdentity(vehicle.code)),
+      );
+      const [existingEmployees, existingVehicles] = await Promise.all([
+        tx.employee.findMany({
+          where: { sourceKey: { in: parsed.employees.map((employee) => employee.sourceKey) } },
+          select: { id: true },
+        }),
+        tx.vehicle.findMany({ select: { id: true, code: true } }),
+      ]);
+      // Imports rewrite employee eligibility and vehicle authorization. Lock
+      // every existing affected resource in assignment-writer order before
+      // updating either table; newly created rows cannot already be assigned.
+      await lockScheduleResources(
+        tx,
+        existingEmployees.map(({ id }) => id),
+        existingVehicles
+          .filter(({ code }) => parsedVehicleIdentities.has(vehicleIdentity(code)))
+          .map(({ id }) => id),
+      );
+
       const branchIds = new Map<BranchCode, string>();
       for (const code of Object.values(BranchCode)) {
         const branch = await tx.branch.upsert({
@@ -122,9 +144,6 @@ export async function importMatrix(
         summary.branchesEnsured += 1;
       }
 
-      const existingVehicles = await tx.vehicle.findMany({
-        select: { id: true, code: true },
-      });
       const vehiclesByIdentity = new Map<string, typeof existingVehicles>();
       for (const existing of existingVehicles) {
         const identity = vehicleIdentity(existing.code);
@@ -157,6 +176,7 @@ export async function importMatrix(
                 code: vehicle.code,
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
+                ownershipGroup: vehicle.ownershipGroup,
               },
             })
           : await tx.vehicle.create({
@@ -164,6 +184,7 @@ export async function importMatrix(
                 code: vehicle.code,
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
+                ownershipGroup: vehicle.ownershipGroup,
               },
             });
         summary.authorizationsRemoved += await mergeVehicleAliases(
