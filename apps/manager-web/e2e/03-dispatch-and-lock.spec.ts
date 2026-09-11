@@ -137,7 +137,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
 
 test("visit calendar: locks and releases a visit", async ({ page }) => {
   await page.goto("/visits");
-  await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Generate Schedule" })).toBeVisible();
   await page.waitForLoadState('networkidle');
 
   // Every visit tile names its date. It names an hour only when a crew is
