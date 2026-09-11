@@ -40,4 +40,31 @@ describe('AssignmentsService unassignedQueue', () => {
       conflictFacets: { [ErrorCode.CREW_TOO_SMALL]: 2, [ErrorCode.SKILL_NOT_HELD]: 1 },
     });
   });
+
+  it('resolves operation state and conflict group into server-side reason filters', async () => {
+    const prisma = {
+      generatedVisit: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      visitUnassignedReason: {
+        groupBy: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const service = new AssignmentsService(prisma as never, {} as never, {} as never);
+
+    await service.unassignedQueue({
+      operationState: 'EXCEPTION',
+      conflictGroup: 'MISSING_SKILL',
+    });
+
+    expect(prisma.generatedVisit.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          { unassignedReasons: { some: {} } },
+          { unassignedReasons: { some: { code: { in: [ErrorCode.SKILL_NOT_HELD] } } } },
+        ]),
+      }),
+    });
+  });
 });

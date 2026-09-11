@@ -155,14 +155,28 @@ describe("unassigned visits queue", () => {
     });
   });
 
-  it("filters by conflict type on the client", async () => {
+  it("requests conflict groups from the server", async () => {
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Conflict type"));
     await user.click(await screen.findByRole("option", { name: "Missing skill" }));
 
-    expect(screen.getByText("Cinnamon Grand Colombo")).toBeInTheDocument();
-    expect(screen.queryByText("Grandview Hotel")).not.toBeInTheDocument();
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      conflictGroup: "MISSING_SKILL",
+      page: 1,
+    });
+  });
+
+  it("requests operation state from the server", async () => {
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Exceptions" }));
+
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      operationState: "EXCEPTION",
+      page: 1,
+    });
   });
 
   it("shows an empty state when nothing is unassigned", async () => {

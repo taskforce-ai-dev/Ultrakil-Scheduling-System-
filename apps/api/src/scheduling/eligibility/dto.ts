@@ -18,6 +18,11 @@ import {
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
 import { CONFLICT_CODES } from './conflict-codes';
+import {
+  CONFLICT_GROUPS,
+  UNASSIGNED_OPERATION_STATES,
+  UnassignedOperationState,
+} from './conflict-groups';
 
 export class ProposedCrewMemberDto {
   @ApiProperty({ type: String, format: 'uuid' })
@@ -157,6 +162,8 @@ export class UnassignedVisitDto {
   @ApiProperty({ type: String }) customerName!: string;
   @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ type: Number }) requiredCrewSize!: number;
+  @ApiProperty({ enum: UNASSIGNED_OPERATION_STATES })
+  operationState!: UnassignedOperationState;
   @ApiProperty({
     type: Boolean,
     description:
@@ -192,6 +199,20 @@ export class UnassignedVisitQueryDto {
   @ApiPropertyOptional({ format: 'uuid' }) @IsOptional() @IsUUID() serviceAgreementId?: string;
   @ApiPropertyOptional({ description: 'Whether eligibility has been checked for this visit.' }) @IsOptional() @Type(() => Boolean) @IsBoolean()
   checked?: boolean;
+  @ApiPropertyOptional({
+    enum: UNASSIGNED_OPERATION_STATES,
+    description: 'Server-calculated queue state. EXCEPTION means persisted eligibility conflicts exist.',
+  })
+  @IsOptional()
+  @IsEnum(UNASSIGNED_OPERATION_STATES)
+  operationState?: UnassignedOperationState;
+  @ApiPropertyOptional({
+    enum: CONFLICT_GROUPS,
+    description: 'Only visits carrying a conflict code in this manager-facing group.',
+  })
+  @IsOptional()
+  @IsEnum(CONFLICT_GROUPS)
+  conflictGroup?: string;
   @ApiPropertyOptional({ enum: CONFLICT_CODES, description: 'Only visits carrying this stored conflict code.' }) @IsOptional() @IsEnum(CONFLICT_CODES)
   conflictCode?: string;
   @ApiPropertyOptional({ deprecated: true }) @IsOptional() @Type(() => Boolean) @IsBoolean()

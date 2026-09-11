@@ -572,22 +572,9 @@ export interface ScheduleRunQuery {
 export interface PublishScheduleRequest {
   reason?: string;
 }
-/**
- * Hand-typed: the published contract has no `path`/`query` types for
- * `/api/unassigned-visits` (same gap as elsewhere — see the note above
- * `CreateCustomerRequest`), but the controller
- * (`apps/api/src/scheduling/eligibility/assignments.controller.ts`) does
- * accept these.
- */
-export interface UnassignedVisitsQuery {
-  page?: number;
-  pageSize?: number;
-  branchCode?: "COLOMBO" | "KANDY";
-  from?: string;
-  to?: string;
-  status?: "UNASSIGNED" | "EXCEPTION";
-  conflictCode?: string;
-}
+export type UnassignedVisitsQuery = NonNullable<
+  paths["/api/unassigned-visits"]["get"]["parameters"]["query"]
+>;
 
 export type CustomerQuery = NonNullable<paths["/api/customers"]["get"]["parameters"]["query"]>;
 export type ServiceAgreementQuery = NonNullable<

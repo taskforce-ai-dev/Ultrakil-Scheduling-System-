@@ -12,6 +12,7 @@ import {
   lockScheduleVisits,
 } from '../optimizer/schedule-visit-lock';
 import { Conflict } from './conflict-codes';
+import { CONFLICT_GROUP_CODES, ConflictGroup } from './conflict-groups';
 import {
   AssignCrewDto,
   AssignmentDto,
@@ -326,8 +327,29 @@ export class AssignmentsService {
       reasonFilters.push(filter);
       facetReasonFilters.push(filter);
     }
+    if (query.operationState === 'UNASSIGNED') {
+      const filter = { unassignedReasons: { none: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
+    if (query.operationState === 'EXCEPTION') {
+      const filter = { unassignedReasons: { some: {} } };
+      reasonFilters.push(filter);
+      facetReasonFilters.push(filter);
+    }
     if (query.conflictCode) {
       reasonFilters.push({ unassignedReasons: { some: { code: query.conflictCode } } });
+    }
+    if (query.conflictGroup) {
+      reasonFilters.push({
+        unassignedReasons: {
+          some: {
+            code: {
+              in: [...CONFLICT_GROUP_CODES[query.conflictGroup as ConflictGroup]],
+            },
+          },
+        },
+      });
     }
 
     const baseWhere: Prisma.GeneratedVisitWhereInput = {
@@ -392,6 +414,7 @@ export class AssignmentsService {
       customerName: visit.serviceAgreement.customer.name,
       siteName: visit.serviceAgreement.serviceSite.name,
       requiredCrewSize: visit.requiredCrewSize,
+      operationState: visit.unassignedReasons.length > 0 ? 'EXCEPTION' : 'UNASSIGNED',
       hasBeenChecked: visit.unassignedReasons.length > 0,
       conflicts: visit.unassignedReasons.map((reason) => ({
         code: reason.code,

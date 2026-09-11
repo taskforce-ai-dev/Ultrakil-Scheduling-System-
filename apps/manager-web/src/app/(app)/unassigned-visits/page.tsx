@@ -19,12 +19,16 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { ConflictList } from "@/components/shared/conflict-list";
-import { ApiError, fetchUnassignedVisits, type UnassignedVisit } from "@/lib/api-client";
+import {
+  ApiError,
+  fetchUnassignedVisits,
+  type UnassignedVisit,
+  type UnassignedVisitsQuery,
+} from "@/lib/api-client";
 import { formatLongDate, todayIso } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
   CONFLICT_GROUP_LABEL,
-  conflictGroup,
   type ConflictGroup,
 } from "@/lib/conflict-groups";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
@@ -88,9 +92,9 @@ export default function UnassignedVisitsPage() {
       from: date,
       to: date,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
-      ...(status === "ALL" ? {} : { status }),
-      ...(group === "ALL" ? {} : { conflictCode: group }),
-    })
+      ...(status === "ALL" ? {} : { operationState: status }),
+      ...(group === "ALL" ? {} : { conflictGroup: group }),
+    } satisfies UnassignedVisitsQuery)
       .then((page) => {
         setItems(page.items);
         setTotal(page.total);
@@ -111,7 +115,7 @@ export default function UnassignedVisitsPage() {
     load();
   }, [load]);
 
-  const filtered = React.useMemo(() => {
+  const visibleItems = React.useMemo(() => {
     // A visit asked for by name wins over every filter. Arriving from "Why?"
     // and being shown an empty list because the branch filter happened to
     // exclude it would answer the question with silence.
@@ -119,9 +123,8 @@ export default function UnassignedVisitsPage() {
       const asked = items.filter((visit) => visit.visitId === focusVisitId);
       if (asked.length > 0) return asked;
     }
-    if (group === "ALL") return items;
-    return items.filter((visit) => visit.conflicts.some((c) => conflictGroup(c.code) === group));
-  }, [items, group, focusVisitId]);
+    return items;
+  }, [items, focusVisitId]);
 
   const kandyPmsShortage = React.useMemo(
     () =>
@@ -236,7 +239,7 @@ export default function UnassignedVisitsPage() {
           code={error.code}
           onRetry={load}
         />
-      ) : filtered.length === 0 ? (
+      ) : visibleItems.length === 0 ? (
         <EmptyState
           title={items.length === 0 ? "Nothing unassigned" : "No visits match this filter"}
           description={
@@ -247,7 +250,7 @@ export default function UnassignedVisitsPage() {
         />
       ) : (
         <>
-          {focusVisitId && filtered.length === 1 ? (
+          {focusVisitId && visibleItems.length === 1 ? (
             // Says plainly why the list is one row long, and offers the way back.
             // A shortened list with no explanation reads as a broken page.
             <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -273,7 +276,7 @@ export default function UnassignedVisitsPage() {
           )}
 
           <ul className="space-y-4">
-            {filtered.map((visit) => (
+            {visibleItems.map((visit) => (
               <li key={visit.visitId} className="rounded-xl border bg-card p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>

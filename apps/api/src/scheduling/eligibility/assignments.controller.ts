@@ -19,6 +19,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { AssignmentsService } from './assignments.service';
 import { CONFLICT_CODES } from './conflict-codes';
+import { CONFLICT_GROUPS, UNASSIGNED_OPERATION_STATES } from './conflict-groups';
 import {
   AssignCrewDto,
   AssignmentDto,
@@ -141,6 +142,18 @@ export class AssignmentsController {
     required: false,
     enum: CONFLICT_CODES,
     description: 'Only visits with this recorded conflict code. Facets remain scoped to the other filters.',
+  })
+  @ApiQuery({
+    name: 'operationState',
+    required: false,
+    enum: UNASSIGNED_OPERATION_STATES,
+    description: 'Server-calculated queue state. EXCEPTION means persisted eligibility conflicts exist.',
+  })
+  @ApiQuery({
+    name: 'conflictGroup',
+    required: false,
+    enum: CONFLICT_GROUPS,
+    description: 'Only visits carrying a conflict code in this manager-facing group.',
   })
   @ApiQuery({
     name: 'withConflictsOnly',
