@@ -827,7 +827,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText(/Nothing has been written yet/)).toBeInTheDocument();
@@ -940,7 +940,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
     await user.click(screen.getByRole("button", { name: "Generate" }));
 
@@ -1181,7 +1181,7 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 

@@ -493,7 +493,7 @@ export default function VisitsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Visit Calendar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Generate Schedule</h1>
           {/* "Nobody is assigned here" was meant as "crew is not set on this
               screen" and read as "none of this work has a crew" — above tiles
               carrying crew badges and beside a filter that returns 66 staffed
@@ -505,7 +505,7 @@ export default function VisitsPage() {
         </div>
         <Button onClick={() => setGenerateOpen(true)}>
           <CalendarPlus className="h-4 w-4" />
-          Generate visits
+          Generate Schedule
         </Button>
       </div>
 
