@@ -108,16 +108,30 @@ test("dispatch board's manual override drawer has no serious accessibility viola
 test("schedule run publish confirmation dialog has no serious accessibility violations", async ({
   page,
 }) => {
+  // This test used to scan whichever draft run happened to be lying around,
+  // and skipped when there was none. That made it depend on the publish spec
+  // leaving its run unpublished, which is the opposite of what that spec is
+  // supposed to prove, and a runtime skip fails the strict policy anyway. It
+  // now starts the run it needs, so it stands on its own whatever else ran.
+  test.setTimeout(180_000);
+
   await page.goto("/schedule-history");
-  await page.waitForLoadState('networkidle');
-  const publishButton = page
-    .locator("li", { has: page.getByText("Draft — ready to publish") })
-    .first()
-    .getByRole("button", { name: "Publish" });
-  if ((await publishButton.count()) === 0) {
-    test.skip(true, "No draft run waiting to publish in this environment.");
-  }
-  await publishButton.click();
+  await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
+
+  const from = await page.locator("#run-from").inputValue();
+  const to = await page.locator("#run-to").inputValue();
+  const started = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname.endsWith("/schedule-runs"),
+  );
+  await page.getByRole("button", { name: /^Start run$/ }).click();
+  expect((await started).ok()).toBe(true);
+
+  const row = page.locator("li", { hasText: `${from} – ${to}` }).first();
+  await expect(row.getByText("Draft — ready to publish")).toBeVisible({ timeout: 120_000 });
+
+  await row.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByRole("button", { name: "Publish" })).toBeVisible();
   await expectNoSeriousViolations(page, "Publish confirmation dialog");
 });
