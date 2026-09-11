@@ -31,7 +31,6 @@ const PAGES = [
   { path: "/schedule-history", heading: "Schedule History" },
 ];
 
-
 for (const { path, heading } of PAGES) {
   test(`${path} has no serious accessibility violations`, async ({ page }) => {
     await page.goto(path);
@@ -39,31 +38,43 @@ for (const { path, heading } of PAGES) {
     // that would just tell us loading states are accessible, not the real
     // content managers spend their day looking at.
     await page.waitForLoadState("networkidle");
-    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: heading, exact: true }),
+    ).toBeVisible();
     await expectNoSeriousViolations(page, path);
   });
 }
 
-test("customer creation form has no serious accessibility violations", async ({ page }) => {
+test("customer creation form has no serious accessibility violations", async ({
+  page,
+}) => {
   await page.goto("/customers");
   await page.getByRole("button", { name: "Add customer" }).click();
   await expect(page.getByLabel("Customer name")).toBeVisible();
   await expectNoSeriousViolations(page, "Customer creation form");
 });
 
-test("service agreement creation form has no serious accessibility violations", async ({ page }) => {
+test("service agreement creation form has no serious accessibility violations", async ({
+  page,
+}) => {
   await page.goto("/service-agreements");
   await page.getByRole("button", { name: "Add agreement" }).click();
   await expect(page.locator("#customerId")).toBeVisible();
   await expectNoSeriousViolations(page, "Service agreement creation form");
 });
 
-test("visit generation dialog has no serious accessibility violations", async ({ page }) => {
+test("visit generation dialog has no serious accessibility violations", async ({
+  page,
+}) => {
   await page.goto("/visits");
   await page.getByRole("button", { name: "Generate visits" }).click();
-  await expect(page.getByRole("heading", { name: "Generate visits" })).toBeVisible();
   await expect(
-    page.getByText(/Nothing has been written yet\.|Could not work out what generation would change\./)
+    page.getByRole("heading", { name: "Generate visits" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      /Nothing has been written yet\.|Could not work out what generation would change\./,
+    ),
   ).toBeVisible({ timeout: 15_000 });
   await expectNoSeriousViolations(page, "Visit generation dialog");
 });
@@ -72,13 +83,19 @@ test("dispatch board's manual override drawer has no serious accessibility viola
   page,
 }) => {
   await page.goto("/dispatch-board");
-  await page.waitForLoadState('networkidle');
-  const editCrewButton = page.getByRole("button", { name: "Edit crew" }).first();
+  await page.waitForLoadState("networkidle");
+  const editCrewButton = page
+    .getByRole("button", { name: "Edit crew" })
+    .first();
   if ((await editCrewButton.count()) === 0) {
-    test.skip(true, "No scheduled visit for today in this environment — nothing to open.");
+    test.skip(
+      true,
+      "No scheduled visit for today in this environment — nothing to open.",
+    );
   }
   await editCrewButton.click();
-  await expect(page.getByText(/^Edit crew — /)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/^Edit crew — /)).toBeVisible({
+    timeout: 10_000,
+  });
   await expectNoSeriousViolations(page, "Manual override drawer");
 });
-
