@@ -99,43 +99,34 @@ const replacementOperation = {
 
 const plan: PublishedAssignmentRepairPlan = {
   planHash: "a".repeat(64),
+  isValid: true,
   sourceFingerprints: [
     { sourceAssignmentId: "assignment-future", fingerprint: "f".repeat(64) },
   ],
-  solver: { status: "FEASIBLE", solveSeconds: 0.24 },
   items: [
     {
       sourceAssignmentId: "assignment-future",
       visitId: "visit-future",
       visitDate: "2026-09-12",
-      repairability: "FUTURE",
+      customerName: "Harbour Offices",
+      siteName: "Tower A",
       action: "REPLACED",
-      replacement: replacementOperation.replacement,
-      preserved: {
-        crewEmployeeIds: ["employee-1", "employee-2"],
-        vehicleIds: [],
-        keptOriginalTime: true,
-      },
+      sourceFingerprint: "f".repeat(64),
+      isValid: true,
       conflicts: [],
+      timeScope: "FUTURE",
     },
     {
       sourceAssignmentId: "assignment-today",
       visitId: "visit-today",
       visitDate: "2026-09-10",
-      repairability: "CURRENT_DAY",
+      customerName: "City Hotel",
+      siteName: "Kitchen",
       action: "WITHDRAWN",
-      unassignedReasons: [
-        {
-          code: "NO_FEASIBLE_VEHICLE",
-          message: "No authorised driver and vehicle are available.",
-        },
-      ],
-      preserved: {
-        crewEmployeeIds: ["employee-3"],
-        vehicleIds: [],
-        keptOriginalTime: true,
-      },
+      sourceFingerprint: "t".repeat(64),
+      isValid: true,
       conflicts: [],
+      timeScope: "CURRENT_DAY",
     },
   ],
   operations: [
@@ -179,6 +170,78 @@ beforeEach(() => {
 });
 
 describe("PublishedAssignmentRepairsPage", () => {
+  it("renders and applies an HTTP-shaped current-day plan with its acknowledgement", async () => {
+    const httpPlan = {
+      planHash: "b".repeat(64),
+      isValid: true,
+      items: [
+        {
+          sourceAssignmentId: "assignment-today",
+          visitId: "visit-today",
+          visitDate: "2026-09-10",
+          customerName: "City Hotel",
+          siteName: "Kitchen",
+          action: "WITHDRAWN" as const,
+          sourceFingerprint: "t".repeat(64),
+          isValid: true,
+          conflicts: [],
+          timeScope: "CURRENT_DAY" as const,
+        },
+      ],
+      operations: [
+        {
+          sourceAssignmentId: "assignment-today",
+          action: "WITHDRAWN" as const,
+          unassignedReasons: [
+            {
+              code: "NO_FEASIBLE_VEHICLE",
+              message: "No authorised driver and vehicle are available.",
+            },
+          ],
+        },
+      ],
+      sourceFingerprints: [
+        { sourceAssignmentId: "assignment-today", fingerprint: "t".repeat(64) },
+      ],
+    };
+    vi.mocked(buildPublishedAssignmentRepairPlan).mockResolvedValue(httpPlan);
+    vi.mocked(applyPublishedAssignmentRepair).mockResolvedValue({
+      repairId: "repair-1",
+      planHash: httpPlan.planHash,
+      idempotencyKey: "browser-key",
+      communicationState: "APPLIED_PENDING_COMMUNICATION",
+      items: [],
+    });
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText(/Select City Hotel/));
+    await user.click(
+      screen.getByRole("checkbox", { name: /I understand today.s dispatched work/i }),
+    );
+    await user.click(screen.getByRole("button", { name: "Build repair plan" }));
+
+    const preview = await screen.findByRole("region", { name: "Repair plan preview" });
+    expect(within(preview).getByText("Withdraw to Unassigned Visits")).toBeInTheDocument();
+    expect(within(preview).getByText("NO_FEASIBLE_VEHICLE")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Repair reason"), {
+      target: { value: "Correct invalid vehicle allocations" },
+    });
+    await user.click(
+      screen.getByRole("checkbox", { name: /I confirm this will supersede published assignments/i }),
+    );
+    await user.click(screen.getByRole("button", { name: "Apply repair" }));
+
+    expect(applyPublishedAssignmentRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acknowledgeCurrentDay: true,
+        operations: httpPlan.operations,
+        planHash: httpPlan.planHash,
+        sourceFingerprints: httpPlan.sourceFingerprints,
+      }),
+    );
+  });
+
   it("groups findings into non-selectable history, today, and future work", async () => {
     await renderPage();
 
@@ -241,10 +304,8 @@ describe("PublishedAssignmentRepairsPage", () => {
     await user.click(screen.getByRole("button", { name: "Build repair plan" }));
 
     const preview = await screen.findByRole("region", { name: "Repair plan preview" });
-    expect(within(preview).getByText("Crew preserved")).toBeInTheDocument();
-    expect(within(preview).getByText("Time preserved")).toBeInTheDocument();
-    expect(within(preview).getByText("Vehicle changed")).toBeInTheDocument();
-    expect(within(preview).getByText("Van DAC-2485")).toBeInTheDocument();
+    expect(within(preview).getByText("employee-1, employee-2")).toBeInTheDocument();
+    expect(within(preview).getByText("vehicle-1")).toBeInTheDocument();
     expect(within(preview).getByText("Withdraw to Unassigned Visits")).toBeInTheDocument();
     expect(within(preview).getByText("NO_FEASIBLE_VEHICLE")).toBeInTheDocument();
     expect(within(preview).getByText(/No authorised driver and vehicle/)).toBeInTheDocument();

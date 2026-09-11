@@ -104,6 +104,9 @@ export interface PublishedAssignmentRepairApplyInput extends PublishedAssignment
 export interface PublishedAssignmentRepairPreviewItem {
   sourceAssignmentId: string;
   visitId: string;
+  visitDate: string;
+  customerName: string;
+  siteName: string;
   action: AssignmentRepairAction;
   sourceFingerprint: string;
   isValid: boolean;
@@ -496,6 +499,9 @@ export class PublishedAssignmentRepairService {
       items.push({
         sourceAssignmentId: source.id,
         visitId: source.generatedVisitId,
+        visitDate: source.generatedVisit.visitDate.toISOString().slice(0, 10),
+        customerName: source.generatedVisit.serviceAgreement.customer.name,
+        siteName: source.generatedVisit.serviceAgreement.serviceSite.name,
         action: operation.action,
         sourceFingerprint: fingerprintSource(source),
         timeScope: repairTimeScope(source.generatedVisit.visitDate),

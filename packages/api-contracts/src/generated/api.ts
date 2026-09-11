@@ -2270,6 +2270,10 @@ export interface components {
             sourceAssignmentId: string;
             /** Format: uuid */
             visitId: string;
+            /** Format: date */
+            visitDate: string;
+            customerName: string;
+            siteName: string;
             /** @enum {string} */
             action: "REPLACED" | "WITHDRAWN";
             sourceFingerprint: string;

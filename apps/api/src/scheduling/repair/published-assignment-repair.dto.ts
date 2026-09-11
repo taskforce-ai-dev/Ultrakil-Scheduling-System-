@@ -236,6 +236,9 @@ export class PublishedAssignmentFindingDto {
 export class PublishedAssignmentRepairPreviewItemDto {
   @ApiProperty({ type: String, format: 'uuid' }) sourceAssignmentId!: string;
   @ApiProperty({ type: String, format: 'uuid' }) visitId!: string;
+  @ApiProperty({ type: String, format: 'date' }) visitDate!: string;
+  @ApiProperty({ type: String }) customerName!: string;
+  @ApiProperty({ type: String }) siteName!: string;
   @ApiProperty({ enum: AssignmentRepairAction }) action!: AssignmentRepairAction;
   @ApiProperty({ type: String }) sourceFingerprint!: string;
   @ApiProperty({ type: Boolean }) isValid!: boolean;

@@ -6546,6 +6546,16 @@
             "type": "string",
             "format": "uuid"
           },
+          "visitDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
           "action": {
             "type": "string",
             "enum": [
@@ -6576,6 +6586,9 @@
         "required": [
           "sourceAssignmentId",
           "visitId",
+          "visitDate",
+          "customerName",
+          "siteName",
           "action",
           "sourceFingerprint",
           "isValid",
