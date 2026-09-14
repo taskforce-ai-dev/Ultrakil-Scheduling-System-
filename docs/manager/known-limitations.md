@@ -86,13 +86,15 @@ there is no UI for any of them today.
    has no active agreement or generated visit in this import, so the
    no-PMS outcome cannot be demonstrated with a live row.
 
-4. **Demo-seeded vehicles ship with no branch assigned**
-   (`pnpm db:seed:demo` leaves every vehicle's branch null), so the
-   assignment editor's vehicle picker — which filters by the visit's branch
-   — offers nothing until a vehicle has a branch. Worked around locally for
-   this UAT pass via direct database updates (not a code or seed-script
-   change). Worth a demo-seed follow-up so a fresh demo environment can
-   exercise vehicle assignment without a manual fix.
+4. **[Resolved] Vehicles with no recorded branch were never offered.**
+   Imported vehicles have no branch (the Technician Matrix does not state
+   one), and the assignment editor's vehicle picker filtered by the visit's
+   exact branch, so on real data it opened onto nothing while the
+   eligibility engine would have accepted those vehicles. The picker now
+   asks the API which vehicles can serve the branch (`servesBranch`): those
+   recorded in it plus those with none recorded. A vehicle recorded in a
+   different branch is still never offered, and an empty result is now
+   explained on screen rather than presented as an enabled control.
 
 5. **No inactive customer/site existed in demo data.** One site and one
    customer were deactivated directly in the local database to exercise
@@ -150,13 +152,15 @@ there is no UI for any of them today.
     demonstrated with a live row. The workforce audit still confirms zero
     PMS-qualified Kandy supervisors; no bypass was introduced.
 
-14. **[New, minor] DAC-2485's vehicle record shows "Unassigned branch,"
-    while all three of its authorized drivers are tagged "Colombo."**
-    Observed directly on the deployed vehicle detail page. Not confirmed
-    as a defect — could be a genuine gap in the vehicle's imported branch
-    field, or intentional (a vehicle not yet assigned to a branch can still
-    have branch-tagged authorized drivers). Worth a one-line confirmation
-    from the API/import owner before sign-off.
+14. **[Confirmed, expected] DAC-2485's vehicle record shows "Unassigned
+    branch," while all three of its authorized drivers are tagged "Colombo."**
+    Not a defect. The Technician Matrix records who may drive a vehicle but
+    never which branch the vehicle belongs to, so every imported vehicle
+    arrives with no branch until a manager records one under **Vehicles**.
+    Driver authorizations come from the matrix checkmarks and are
+    independent of the vehicle's branch. Such a vehicle can be offered for
+    any branch's work (see item 4) and publication flags it as unconfirmed
+    source data until its branch is recorded.
 
 15. **[Covered automatically] Driver removal/revalidation.** The manager UI
     regression removes the selected driver from the crew and verifies that
