@@ -106,10 +106,19 @@ export class EmployeeQueryDto extends PaginationQueryDto {
 }
 
 export class VehicleQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ enum: BranchCode })
+  @ApiPropertyOptional({ enum: BranchCode, description: 'Only vehicles recorded in exactly this branch.' })
   @IsOptional()
   @IsEnum(BranchCode)
   branch?: BranchCode;
+
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description:
+      'Vehicles that can serve work in this branch: those recorded in it, plus those with no recorded branch. The Technician Matrix never states a vehicle branch, so imported vehicles have none, and the eligibility engine treats that as unknown rather than wrong. This is the filter a picker should use; `branch` is the exact one.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  servesBranch?: BranchCode;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()

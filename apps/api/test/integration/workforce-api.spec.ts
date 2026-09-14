@@ -483,6 +483,73 @@ describe('availability', () => {
   });
 });
 
+describe('vehicles that can serve a branch', () => {
+  // The Technician Matrix never states a vehicle's branch, so imported
+  // vehicles have none. The eligibility engine treats that as unknown, not
+  // wrong. A picker filtering by exact branch therefore offered nothing on
+  // real data while the engine would have accepted every vehicle.
+  // This database keeps rows between runs, so codes must not collide.
+  const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const branchless = `SERVE-NONE-${suffix}`;
+  const colombo = `SERVE-CMB-${suffix}`;
+  let branchlessId: string;
+  let colomboId: string;
+
+  beforeAll(async () => {
+    const none = await request(http)
+      .post('/api/vehicles')
+      .set(auth(adminToken))
+      .send({ code: branchless, label: `Van( 04 People) ${branchless}`, seatCapacity: 4 });
+    expect(none.status).toBe(201);
+    branchlessId = none.body.id;
+    const cmb = await request(http)
+      .post('/api/vehicles')
+      .set(auth(adminToken))
+      .send({
+        code: colombo,
+        label: `Van( 04 People) ${colombo}`,
+        seatCapacity: 4,
+        branchCode: 'COLOMBO',
+      });
+    expect(cmb.status).toBe(201);
+    colomboId = cmb.body.id;
+  });
+
+  afterAll(async () => {
+    await prisma.vehicle.deleteMany({ where: { code: { in: [branchless, colombo] } } });
+  });
+
+  // Scoped by search so the assertion cannot fall off a page as this shared
+  // database grows — and so servesBranch is proven to survive alongside it.
+  const idsFor = async (query: string) => {
+    const res = await request(http)
+      .get(`/api/vehicles?${query}&search=${suffix}&pageSize=200`)
+      .set(auth(adminToken));
+    expect(res.status).toBe(200);
+    return new Set((res.body.items as Array<{ id: string }>).map((item) => item.id));
+  };
+
+  it('offers a vehicle with no recorded branch to every branch, as the engine would', async () => {
+    const cmbServed = await idsFor('servesBranch=COLOMBO');
+    expect(cmbServed.has(branchlessId)).toBe(true);
+    expect(cmbServed.has(colomboId)).toBe(true);
+    const kandy = await idsFor('servesBranch=KANDY');
+    expect(kandy.has(branchlessId)).toBe(true);
+    expect(kandy.has(colomboId)).toBe(false);
+  });
+
+  it('keeps the exact branch filter exact', async () => {
+    const exact = await idsFor('branch=COLOMBO');
+    expect(exact.has(colomboId)).toBe(true);
+    expect(exact.has(branchlessId)).toBe(false);
+  });
+
+  it('refuses a branch it does not know', async () => {
+    const res = await request(http).get('/api/vehicles?servesBranch=GALLE').set(auth(adminToken));
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('vehicle authorization', () => {
   beforeAll(async () => {
     const res = await request(http)
