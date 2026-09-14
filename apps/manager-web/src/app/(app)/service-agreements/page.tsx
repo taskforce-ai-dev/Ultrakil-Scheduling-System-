@@ -120,11 +120,19 @@ const AGREEMENT_STATUS_FILTER_LABEL: Record<AgreementStatusFilter, string> = {
  * the data — the API only rejects an end at or before a start — so say which
  * half is set rather than rounding it down to "no window".
  */
+// The API accepts an end at minute 1440, the following midnight. Hour 24 has
+// no clock reading of its own, and folding it into "12:00 PM" would show an
+// end-of-day window as ending at noon.
+function formatWindowMinute(minute: number): string {
+  return minute === 24 * 60 ? "midnight" : formatMinutes(minute);
+}
+
 function describeServiceWindow(agreement: ServiceAgreement): string {
   const { serviceWindowStartMinute: start, serviceWindowEndMinute: end } = agreement;
-  if (start != null && end != null) return `${formatMinutes(start)} – ${formatMinutes(end)}`;
-  if (start != null) return `From ${formatMinutes(start)}`;
-  if (end != null) return `Until ${formatMinutes(end)}`;
+  if (start != null && end != null)
+    return `${formatWindowMinute(start)} – ${formatWindowMinute(end)}`;
+  if (start != null) return `From ${formatWindowMinute(start)}`;
+  if (end != null) return `Until ${formatWindowMinute(end)}`;
   return "Site's hours apply";
 }
 

@@ -300,6 +300,30 @@ describe("ServiceAgreementsPage", () => {
     expect(within(row).queryByRole("button", { name: "Pause" })).toBeNull();
   });
 
+  it("renders a window ending at minute 1440 as ending at midnight, not noon", async () => {
+    // The API accepts 1440 as an end. Folding hour 24 into a 12-hour clock
+    // reads as 12:00 PM, which would show an end-of-day window ending at noon.
+    const untilMidnight = buildServiceAgreement({
+      id: "agreement-midnight",
+      customerName: "Harbour Logistics",
+      siteName: "Warehouse South",
+      serviceWindowStartMinute: 9 * 60,
+      serviceWindowEndMinute: 24 * 60,
+    });
+    vi.mocked(fetchServiceAgreements).mockResolvedValue({
+      items: [untilMidnight],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<ServiceAgreementsPage />);
+
+    const row = await screen.findByRole("row", { name: /Harbour Logistics/ });
+    expect(within(row).getByText("9:00 AM – midnight")).toBeInTheDocument();
+    expect(within(row).queryByText(/12:00 PM/)).not.toBeInTheDocument();
+  });
+
   it("shows each saved agreement's own crew size and service window, saying the site's hours apply when it has none (ULK-O08)", async () => {
     const withWindow = buildServiceAgreement({
       id: "agreement-window",
