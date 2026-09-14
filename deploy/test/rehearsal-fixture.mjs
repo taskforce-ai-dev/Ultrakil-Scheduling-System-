@@ -63,7 +63,11 @@ async function seed() {
     if (await db.customer.count({ where: { isActive: false } }) !== 1
       || await db.serviceSite.count({ where: { isActive: false } }) !== 2) throw new Error('Synthetic inactive import mismatch');
     const branch = await db.branch.findUniqueOrThrow({ where: { code: 'COLOMBO' } });
-    await db.vehicle.updateMany({ data: { branchId: branch.id } });
+    // The Technician Matrix never states a vehicle's branch, so every real
+    // imported vehicle arrives without one. Giving all five a branch here hid
+    // exactly that condition from the browser suite; the rented Bolero stays
+    // as the import left it so the vehicle picker is exercised on real terms.
+    await db.vehicle.updateMany({ where: { code: { not: 'DAC-2485' } }, data: { branchId: branch.id } });
     // Fixed fixture horizon only; import code continues to use actual runtime dates.
     await db.serviceAgreement.updateMany({ data: { startDate: new Date(`${day}T00:00:00Z`) } });
     const agreement = await db.serviceAgreement.findFirstOrThrow({ where: { customer: { name: 'Synthetic Active' } } });
