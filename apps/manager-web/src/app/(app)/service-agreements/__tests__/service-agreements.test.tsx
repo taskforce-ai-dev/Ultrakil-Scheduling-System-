@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -254,5 +254,88 @@ describe("ServiceAgreementsPage", () => {
     await user.click(screen.getByRole("button", { name: "Pause" }));
 
     expect(changeAgreementStatus).toHaveBeenCalledWith("agreement-1", { status: "PAUSED" });
+  });
+
+  it("reaches archived agreements through the Status filter and labels them in text (ULK-O08)", async () => {
+    // An import that reads an agreement as no longer serviced archives it, so
+    // "Archived" is also how an imported-inactive agreement is found.
+    const archived = buildServiceAgreement({
+      id: "agreement-archived",
+      customerName: "Harbour Logistics",
+      siteName: "Warehouse South",
+      status: "ARCHIVED",
+      isActive: false,
+    });
+    vi.mocked(fetchServiceAgreements).mockImplementation((query) =>
+      Promise.resolve(
+        query?.status === "ARCHIVED"
+          ? { items: [archived], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingAgreement], total: 1, page: 1, pageSize: 200 }
+      )
+    );
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+    // The default look never asked for archived rows at all.
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.not.objectContaining({ status: expect.anything() })
+    );
+
+    // The trigger must read as words, not as the enum value behind it.
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Active & paused");
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Archived" }));
+
+    expect(await screen.findByText("Harbour Logistics")).toBeInTheDocument();
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ARCHIVED" })
+    );
+
+    const row = screen.getByRole("row", { name: /Harbour Logistics/ });
+    // Labelled in text, not colour alone.
+    expect(within(row).getByText("Archived")).toBeInTheDocument();
+    // Read-only: an archived agreement offers no way back into scheduling.
+    expect(within(row).queryByRole("button", { name: "Resume" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Pause" })).toBeNull();
+  });
+
+  it("shows each saved agreement's own crew size and service window, saying the site's hours apply when it has none (ULK-O08)", async () => {
+    const withWindow = buildServiceAgreement({
+      id: "agreement-window",
+      customerName: "Harbour Logistics",
+      siteName: "Warehouse North",
+      crewSize: 3,
+      serviceWindowStartMinute: 9 * 60,
+      serviceWindowEndMinute: 13 * 60,
+    });
+    const withoutWindow = buildServiceAgreement({
+      id: "agreement-no-window",
+      customerName: "Peak Hotels",
+      siteName: "Rooftop Kitchen",
+      crewSize: 5,
+      serviceWindowStartMinute: null,
+      serviceWindowEndMinute: null,
+    });
+    vi.mocked(fetchServiceAgreements).mockResolvedValue({
+      items: [withWindow, withoutWindow],
+      total: 2,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<ServiceAgreementsPage />);
+
+    const windowRow = await screen.findByRole("row", { name: /Harbour Logistics/ });
+    expect(within(windowRow).getByText("3 people")).toBeInTheDocument();
+    expect(within(windowRow).getByText("9:00 AM – 1:00 PM")).toBeInTheDocument();
+
+    const noWindowRow = screen.getByRole("row", { name: /Peak Hotels/ });
+    // Its own crew size, not the other agreement's.
+    expect(within(noWindowRow).getByText("5 people")).toBeInTheDocument();
+    expect(within(noWindowRow).getByText("Site's hours apply")).toBeInTheDocument();
+    // And no invented window: not the other agreement's, and not a default
+    // like 08:00-17:00 dressed up as this agreement's fact.
+    expect(within(noWindowRow).queryByText(/AM|PM/)).toBeNull();
   });
 });

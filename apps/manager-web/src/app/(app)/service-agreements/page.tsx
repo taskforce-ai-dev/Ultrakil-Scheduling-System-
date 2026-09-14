@@ -94,6 +94,40 @@ const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
   ARCHIVED: "Archived",
 };
 
+/**
+ * The API has no "all statuses" mode: omitting `status` returns ACTIVE and
+ * PAUSED, and archived agreements are hidden (see
+ * `apps/api/src/catalog/agreements.service.ts`). An import marks an agreement
+ * it read as no longer serviced ARCHIVED — so "Archived" here is also the only
+ * manager-facing way to find an imported-inactive agreement. It is a
+ * deliberate, separate look, and it is read-only: an archived agreement offers
+ * no Pause/Resume control and is never schedulable.
+ */
+type AgreementStatusFilter = "CURRENT" | "ARCHIVED";
+// Base UI's <SelectValue> renders the raw value unless the root is given a
+// value -> label map; "CURRENT" is not something a manager should read.
+const AGREEMENT_STATUS_FILTER_LABEL: Record<AgreementStatusFilter, string> = {
+  CURRENT: "Active & paused",
+  ARCHIVED: "Archived",
+};
+
+/**
+ * An agreement's *own* service window, or a plain statement that it has none.
+ *
+ * Never substitute the site's hours (or a default like 08:00–17:00) as if they
+ * were the agreement's: imported default hours are unconfirmed elsewhere in the
+ * portal and are not this agreement's fact. A half-open window is possible in
+ * the data — the API only rejects an end at or before a start — so say which
+ * half is set rather than rounding it down to "no window".
+ */
+function describeServiceWindow(agreement: ServiceAgreement): string {
+  const { serviceWindowStartMinute: start, serviceWindowEndMinute: end } = agreement;
+  if (start != null && end != null) return `${formatMinutes(start)} – ${formatMinutes(end)}`;
+  if (start != null) return `From ${formatMinutes(start)}`;
+  if (end != null) return `Until ${formatMinutes(end)}`;
+  return "Site's hours apply";
+}
+
 const defaultValues: ServiceAgreementFormValues = {
   customerId: "",
   serviceSiteId: "",
@@ -134,6 +168,11 @@ export default function ServiceAgreementsPage() {
   const [skills, setSkills] = React.useState<SkillListItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<AgreementStatusFilter>("CURRENT");
+  // Switching the filter fires a second list request while the first may still
+  // be in flight; without this an older response can land last and repopulate
+  // the table with the rows the manager just filtered away.
+  const requestGeneration = React.useRef(0);
 
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -182,35 +221,46 @@ export default function ServiceAgreementsPage() {
   const selectedJobType = jobTypes.find((jobType) => jobType.id === jobTypeId);
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     Promise.all([
-      fetchServiceAgreements({ pageSize: 200 }),
+      fetchServiceAgreements({
+        pageSize: 200,
+        ...(statusFilter === "ARCHIVED" ? { status: "ARCHIVED" as const } : {}),
+      }),
       fetchCustomers({ pageSize: 200 }),
       fetchJobTypes(),
       fetchSkills(),
     ])
       .then(([agreementPage, customerPage, jobTypeList, skillList]) => {
+        if (generation !== requestGeneration.current) return;
         setAgreements(agreementPage.items);
         setCustomers(customerPage.items);
         setJobTypes(jobTypeList);
         setSkills(skillList);
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
-  }, []);
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
+  }, [statusFilter]);
 
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
     // effects are for.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
+    return () => {
+      requestGeneration.current += 1;
+    };
   }, [load]);
 
   // Keep the site selection valid whenever the customer changes.
@@ -344,6 +394,25 @@ export default function ServiceAgreementsPage() {
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
+        <div className="space-y-1.5">
+          <Label htmlFor="agreements-status">Status</Label>
+          <Select
+            items={AGREEMENT_STATUS_FILTER_LABEL}
+            value={statusFilter}
+            onValueChange={(value) => setStatusFilter(value as AgreementStatusFilter)}
+          >
+            <SelectTrigger id="agreements-status" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="CURRENT">Active &amp; paused</SelectItem>
+              <SelectItem value="ARCHIVED">Archived</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       {isLoading ? (
         <LoadingState rows={3} />
       ) : error ? (
@@ -354,12 +423,19 @@ export default function ServiceAgreementsPage() {
           onRetry={load}
         />
       ) : agreements.length === 0 ? (
-        <EmptyState
-          title="No service agreements yet"
-          description="Add an agreement to a customer to start generating recurring visits."
-          actionLabel="Add agreement"
-          onAction={openDrawer}
-        />
+        statusFilter === "ARCHIVED" ? (
+          <EmptyState
+            title="No archived agreements"
+            description="Nothing on record has been archived, by a manager or by an import."
+          />
+        ) : (
+          <EmptyState
+            title="No service agreements yet"
+            description="Add an agreement to a customer to start generating recurring visits."
+            actionLabel="Add agreement"
+            onAction={openDrawer}
+          />
+        )
       ) : (
         <Table>
           <TableHeader>
@@ -368,6 +444,11 @@ export default function ServiceAgreementsPage() {
               <TableHead>Site</TableHead>
               <TableHead>Job type</TableHead>
               <TableHead>Frequency</TableHead>
+              {/* ULK-O08: crew size and the service window are both set on
+                  Add agreement and were then invisible once saved. Read-only
+                  columns — editing an agreement is not part of this. */}
+              <TableHead>Crew size</TableHead>
+              <TableHead>Service window</TableHead>
               <TableHead>Allowed days</TableHead>
               <TableHead>Preferred days</TableHead>
               <TableHead>Status</TableHead>
@@ -382,6 +463,19 @@ export default function ServiceAgreementsPage() {
                 <TableCell>{agreement.jobTypeName}</TableCell>
                 <TableCell>
                   {agreement.frequencyCount}x / {agreement.frequencyUnit.toLowerCase()}
+                </TableCell>
+                <TableCell>
+                  {agreement.crewSize} {agreement.crewSize === 1 ? "person" : "people"}
+                </TableCell>
+                <TableCell
+                  className={
+                    agreement.serviceWindowStartMinute == null &&
+                    agreement.serviceWindowEndMinute == null
+                      ? "text-muted-foreground"
+                      : undefined
+                  }
+                >
+                  {describeServiceWindow(agreement)}
                 </TableCell>
                 <TableCell>
                   {agreement.allowedDays.map((day) => WEEKDAY_SHORT[day]).join(", ") || "—"}
