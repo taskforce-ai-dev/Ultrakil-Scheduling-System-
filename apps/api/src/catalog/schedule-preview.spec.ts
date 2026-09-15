@@ -1279,6 +1279,65 @@ describe('a slot a cancelled visit holds', () => {
     expect(preview.shortfalls[0].message).toContain('cancelled');
   });
 
+  it('blames the cancellation only when the period had days enough without it', () => {
+    // Monday is cancelled and Tuesday's window is an hour short of the ninety
+    // minutes the visit needs, so the period has exactly one usable day for
+    // the two visits it promises. The cancellation took one of them; the other
+    // was never there. Saying "held by cancelled visits" sends a manager to
+    // reinstate a visit that would still leave the week short.
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        frequencyCount: 2,
+        durationMinutes: 90,
+        allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+        siteWindows: [
+          { weekday: Weekday.MONDAY, startMinute: 8 * 60, endMinute: 17 * 60 },
+          { weekday: Weekday.TUESDAY, startMinute: 8 * 60, endMinute: 9 * 60 },
+        ],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+      }),
+    );
+
+    expect(preview.visits).toEqual([]);
+    expect(preview.shortfalls[0].reason).toBe('WINDOW_TOO_SHORT_FOR_VISIT');
+  });
+
+  it('still blames the cancellation when it took the period’s only placeable day', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+        durationMinutes: 90,
+        siteWindows: [
+          { weekday: Weekday.MONDAY, startMinute: 8 * 60, endMinute: 17 * 60 },
+          { weekday: Weekday.TUESDAY, startMinute: 8 * 60, endMinute: 9 * 60 },
+        ],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+      }),
+    );
+
+    expect(preview.visits).toEqual([]);
+    expect(preview.shortfalls[0].reason).toBe('PERIOD_HELD_BY_A_CANCELLED_VISIT');
+  });
+
+  it('says a booked date whose visit is cancelled is not quietly in order', () => {
+    // A booking bypasses the blocked slots deliberately — it cannot be moved.
+    // But the cancelled row still holds that (agreement, date, start time), so
+    // nothing can ever be planned on the date the customer agreed, and the
+    // plan reported the cancelled visit as already correct.
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY],
+        bookedDates: ['2026-09-14'],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+      }),
+    );
+
+    expect(preview.bookingIssues).toEqual([
+      expect.objectContaining({ date: '2026-09-14', reason: 'BOOKED_DATE_CANCELLED' }),
+    ]);
+    expect(preview.bookingIssues[0].message).toContain('2026-09-14');
+  });
+
   it('leaves the afternoon alone when only the morning was cancelled', () => {
     // A date is not a slot. A site served twice on one Monday has two of them,
     // and a cancellation in the morning says nothing about the afternoon.

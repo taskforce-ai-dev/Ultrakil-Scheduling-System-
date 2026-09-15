@@ -1702,7 +1702,7 @@ export interface components {
             requested: number;
             scheduled: number;
             /** @enum {string} */
-            reason: "NOT_ENOUGH_ALLOWED_DAYS" | "SITE_CLOSED_ON_ALLOWED_DAYS" | "WINDOW_TOO_SHORT_FOR_VISIT" | "BOOKED_BELOW_FREQUENCY";
+            reason: "NOT_ENOUGH_ALLOWED_DAYS" | "SITE_CLOSED_ON_ALLOWED_DAYS" | "WINDOW_TOO_SHORT_FOR_VISIT" | "BOOKED_BELOW_FREQUENCY" | "PERIOD_HELD_BY_A_CANCELLED_VISIT";
             /** @description Actionable explanation for a manager. */
             message: string;
         };
@@ -1867,10 +1867,10 @@ export interface components {
             /** Format: date */
             date: string;
             /**
-             * @description SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all.
+             * @description SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all; BOOKED_DATE_CANCELLED is a booked date whose visit is cancelled, so the day the customer agreed can never be served again.
              * @enum {string}
              */
-            reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT" | "AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS";
+            reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT" | "AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS" | "BOOKED_DATE_CANCELLED";
             message: string;
         };
         SkippedPeriodsDto: {

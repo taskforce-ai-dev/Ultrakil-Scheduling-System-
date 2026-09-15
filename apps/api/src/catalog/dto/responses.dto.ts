@@ -8,6 +8,8 @@ import {
   Weekday,
 } from '@prisma/client';
 
+import { SHORTFALL_REASONS, ShortfallReason } from '../schedule-preview';
+
 /**
  * Response shapes for the customer, site and agreement endpoints.
  *
@@ -337,14 +339,12 @@ export class PreviewShortfallDto {
 
   @ApiProperty({
     type: String,
-    enum: [
-      'NOT_ENOUGH_ALLOWED_DAYS',
-      'SITE_CLOSED_ON_ALLOWED_DAYS',
-      'WINDOW_TOO_SHORT_FOR_VISIT',
-      'BOOKED_BELOW_FREQUENCY',
-    ],
+    // The shared list, never a copy: a reason the preview can return and the
+    // contract does not admit is a client that cannot parse its own API, and
+    // PERIOD_HELD_BY_A_CANCELLED_VISIT was exactly that for a release.
+    enum: SHORTFALL_REASONS,
   })
-  reason!: string;
+  reason!: ShortfallReason;
 
   @ApiProperty({ type: String, description: 'Actionable explanation for a manager.' })
   message!: string;

@@ -1,5 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchCode, VisitPlacement } from '@prisma/client';
+
+import { BOOKING_ISSUE_REASONS } from '../../catalog/schedule-preview';
 import {
   ArrayMaxSize,
   IsArray,
@@ -170,13 +172,10 @@ class BookingWarningDto {
   @ApiProperty({ type: String, format: 'date' }) date!: string;
   @ApiProperty({
     type: String,
-    enum: [
-      'SITE_CLOSED_ON_BOOKED_DAY',
-      'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT',
-      'AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS',
-    ],
+    // The shared list, never a copy.
+    enum: BOOKING_ISSUE_REASONS,
     description:
-      "SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all.",
+      "SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all; BOOKED_DATE_CANCELLED is a booked date whose visit is cancelled, so the day the customer agreed can never be served again.",
   })
   reason!: string;
   @ApiProperty({ type: String }) message!: string;

@@ -193,29 +193,40 @@ export interface PreviewVisit {
   windowProvenance: DataProvenance;
 }
 
-export type ShortfallReason =
+/**
+ * Every reason a period can come up short, in one list.
+ *
+ * The list, not a union written out a second time in a DTO: the contract's
+ * enum is generated from this array, so a reason added here cannot go missing
+ * from the published contract — which is how `PERIOD_HELD_BY_A_CANCELLED_VISIT`
+ * came to be a reason the API could return and the contract did not admit.
+ */
+export const SHORTFALL_REASONS = [
   /** The period had allowed weekdays, but not enough of them. */
-  | 'NOT_ENOUGH_ALLOWED_DAYS'
+  'NOT_ENOUGH_ALLOWED_DAYS',
   /** Allowed weekdays existed but the site is shut on all of them. */
-  | 'SITE_CLOSED_ON_ALLOWED_DAYS'
+  'SITE_CLOSED_ON_ALLOWED_DAYS',
   /** The site is open, but never long enough for one visit. */
-  | 'WINDOW_TOO_SHORT_FOR_VISIT'
+  'WINDOW_TOO_SHORT_FOR_VISIT',
   /**
    * The workbook booked this period, but booked it fewer times than the
    * agreement's frequency promises. The bookings still stand — they are what
    * was actually agreed — but the gap is said out loud rather than left for a
    * manager to notice a quarter later.
    */
-  | 'BOOKED_BELOW_FREQUENCY'
+  'BOOKED_BELOW_FREQUENCY',
   /**
    * The days this period could have used are held by cancelled visits.
    *
    * A cancelled visit is never removed and never re-used, so the slot it
-   * occupies is spent. When it is the only day the period had, the period
-   * genuinely cannot be served — and saying nothing left the customer with a
-   * cancellation where a visit was due.
+   * occupies is spent. Reported only when the period had days enough without
+   * the cancellation: where it was short anyway, the cancellation is not what
+   * a manager has to fix, and reinstating the visit would still leave a gap.
    */
-  | 'PERIOD_HELD_BY_A_CANCELLED_VISIT';
+  'PERIOD_HELD_BY_A_CANCELLED_VISIT',
+] as const;
+
+export type ShortfallReason = (typeof SHORTFALL_REASONS)[number];
 
 export interface PreviewShortfall {
   /** First date of the period that came up short. */
@@ -235,11 +246,11 @@ export interface PreviewShortfall {
  * work, is a fact a manager has to be told — the alternative is a calendar
  * that looks fine and a crew that arrives to a locked door.
  */
-export type BookingIssueReason =
+export const BOOKING_ISSUE_REASONS = [
   /** The site has hours on record, but none for that weekday. */
-  | 'SITE_CLOSED_ON_BOOKED_DAY'
+  'SITE_CLOSED_ON_BOOKED_DAY',
   /** The recorded window that day is shorter than the visit needs. */
-  | 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT'
+  'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT',
   /**
    * The site is open long enough, but not while the agreement allows work.
    *
@@ -247,7 +258,20 @@ export type BookingIssueReason =
    * window too short sends a manager to widen opening hours that were never
    * the problem — what has to move is the agreement's own service window.
    */
-  | 'AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS';
+  'AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS',
+  /**
+   * The date is booked with the customer, and the visit on it is cancelled.
+   *
+   * A booking deliberately ignores the blocked slots: it cannot be moved, so
+   * the honest answer is the booked date reported as itself. But the cancelled
+   * row holds that (agreement, date, start time) for ever, so nothing new can
+   * ever be planned on the day the customer agreed — and the plan read the
+   * cancelled visit as the booking already satisfied, run after run.
+   */
+  'BOOKED_DATE_CANCELLED',
+] as const;
+
+export type BookingIssueReason = (typeof BOOKING_ISSUE_REASONS)[number];
 
 export interface PreviewBookingIssue {
   /** YYYY-MM-DD. */
@@ -536,6 +560,10 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   const blocked = new Set(
     (input.blockedSlots ?? []).map((slot) => slotKey(slot.date, slot.windowStartMinute)),
   );
+  // By date rather than by slot, because a booking is a commitment to a *day*:
+  // whichever of the day's slots the cancellation holds, the booked date can
+  // no longer be served by anything this run plans.
+  const blockedDates = new Set((input.blockedSlots ?? []).map((slot) => slot.date));
 
   const candidates: Candidate[] = [];
   // Tracked separately so a shortfall can say *why*: no allowed weekday at all
@@ -673,18 +701,30 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
         const candidate = byDate.get(date);
         if (candidate) {
           visits.push({ ...toVisit(candidate), placement: 'BOOKED' });
-          continue;
+        } else {
+          const fallback = bookedVisitWithoutAUsableWindow(
+            date,
+            period,
+            input,
+            preferred,
+            windowsByWeekday.get(weekdayOf(parseDateOnly(date))) ?? [],
+            hoursUnconfirmed,
+          );
+          visits.push(fallback.visit);
+          if (fallback.issue) bookingIssues.push(fallback.issue);
         }
-        const fallback = bookedVisitWithoutAUsableWindow(
-          date,
-          period,
-          input,
-          preferred,
-          windowsByWeekday.get(weekdayOf(parseDateOnly(date))) ?? [],
-          hoursUnconfirmed,
-        );
-        visits.push(fallback.visit);
-        if (fallback.issue) bookingIssues.push(fallback.issue);
+
+        if (blockedDates.has(date)) {
+          const planned = visits[visits.length - 1];
+          bookingIssues.push({
+            date,
+            reason: 'BOOKED_DATE_CANCELLED',
+            windowStartMinute: planned.windowStartMinute,
+            windowEndMinute: planned.windowEndMinute,
+            windowAssumed: planned.windowProvenance === DataProvenance.DEFAULTED,
+            message: `${date} is booked with the customer, but the visit on that date is cancelled. A cancelled visit is never removed and its slot can never be re-used, so nothing new can be planned on the day that was agreed — the calendar reads as already correct while the customer has no visit. Reinstate that visit, or agree another date with the customer.`,
+          });
+        }
       }
 
       // The bookings are honoured exactly as written — this is deliberately
@@ -724,7 +764,13 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     const placeable = allowedHere.filter(
       (candidate) => !blocked.has(slotKey(candidate.date, candidate.windowStartMinute)),
     );
-    const heldByACancellation = placeable.length < allowedHere.length;
+    // The cancellation is what this period is short by only when it had days
+    // enough without it. Where the period was short anyway — a weekday the
+    // site is shut on, a window an hour under the visit — reinstating the
+    // cancelled visit would still leave a gap, and naming the cancellation
+    // sends a manager to fix the one thing that is not the problem.
+    const heldByACancellation =
+      placeable.length < allowedHere.length && allowedHere.length >= input.frequencyCount;
     const picks = chooseForPeriod(
       placeable,
       input.frequencyCount,
