@@ -18,7 +18,6 @@ import {
   PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
-  periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
