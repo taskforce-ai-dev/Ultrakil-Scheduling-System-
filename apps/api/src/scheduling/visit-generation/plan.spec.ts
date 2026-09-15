@@ -109,6 +109,38 @@ describe('planGeneration', () => {
     ]);
   });
 
+  it('updates a visit whose date is right but whose stated reason is stale', () => {
+    // Placement is only an explanation — but an explanation that has gone
+    // wrong explains the visit wrongly, and a manager who cannot trust the
+    // label will stop reading it.
+    const plan = planGeneration([required({ placement: 'ANCHORED' })], [existing()]);
+
+    expect(plan.unchangedCount).toBe(0);
+    expect(plan.updates).toHaveLength(1);
+    expect(plan.updates[0].changes).toEqual([
+      { field: 'placement', from: 'EARLIEST', to: 'ANCHORED' },
+    ]);
+  });
+
+  it('reports a stale reason on a protected visit rather than rewriting it', () => {
+    const plan = planGeneration(
+      [required({ placement: 'ANCHORED' })],
+      [existing({ isLocked: true })],
+    );
+
+    expect(plan.updates).toEqual([]);
+    expect(plan.protectedVisits).toEqual([
+      {
+        visitId: 'visit-1',
+        serviceAgreementId: 'agreement-1',
+        visitDate: '2026-09-09',
+        protection: 'LOCKED',
+        wouldHave: 'UPDATE',
+        changes: [{ field: 'placement', from: 'EARLIEST', to: 'ANCHORED' }],
+      },
+    ]);
+  });
+
   it('removes a visit the agreement no longer asks for', () => {
     const plan = planGeneration([], [existing()]);
 
