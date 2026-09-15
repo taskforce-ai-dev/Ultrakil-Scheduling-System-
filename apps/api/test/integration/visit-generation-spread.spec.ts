@@ -210,13 +210,29 @@ beforeAll(async () => {
 afterAll(async () => {
   // This database is shared with the other integration suites, and a stray
   // book of sixty-five active agreements would quietly change their counts.
+  // Dependants first and by hand: the schema does cascade a customer's sites
+  // and their hours away, but a suite that leans on that has no way of
+  // noticing the day it stops being true.
   if (agreementIds.length > 0) {
     await prisma.generatedVisit.deleteMany({
       where: { serviceAgreementId: { in: agreementIds } },
     });
     await prisma.serviceAgreement.deleteMany({ where: { id: { in: agreementIds } } });
   }
-  if (customerId) await prisma.customer.delete({ where: { id: customerId } }).catch(() => undefined);
+  if (customerId) {
+    const siteIds = (
+      await prisma.serviceSite.findMany({ where: { customerId }, select: { id: true } })
+    ).map((site) => site.id);
+    if (siteIds.length > 0) {
+      await prisma.siteOperatingHours.deleteMany({
+        where: { serviceSiteId: { in: siteIds } },
+      });
+      await prisma.serviceSite.deleteMany({ where: { id: { in: siteIds } } });
+    }
+    // Not swallowed. A cleanup that fails quietly leaks into every suite that
+    // runs after it, and the counts it breaks look like someone else's bug.
+    await prisma.customer.delete({ where: { id: customerId } });
+  }
   if (jobTypeId) await prisma.jobType.delete({ where: { id: jobTypeId } }).catch(() => undefined);
   await prisma.user.deleteMany({ where: { email: ADMIN.email } });
   await prisma.$disconnect();

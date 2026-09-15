@@ -84,4 +84,14 @@ describe('readBookedDates', () => {
 
     expect(result).toEqual({ bookings: [], invalid: [] });
   });
+
+  it('will not let a mapping declare month columns without the year they belong to', () => {
+    // A day number with no year is not a date. Such a mapping used to read
+    // every booked cell in the sheet as nothing, without a word — so it now
+    // fails to compile instead. If this stops erroring, the guard is gone.
+    // @ts-expect-error month columns and their year are one fact, not two
+    const broken: AgreementSheetMapping = { ...MAPPING, year: undefined };
+
+    expect(broken.monthColumns).toBeDefined();
+  });
 });
