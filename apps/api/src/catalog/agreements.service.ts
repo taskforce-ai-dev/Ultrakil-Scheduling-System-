@@ -540,9 +540,12 @@ export class AgreementsService {
     });
 
     // The period index and the days a visit could have moved to are the load
-    // guard's working notes, not part of the contract.
+    // guard's working notes, not part of the contract. Booking issues belong
+    // to a generation run, which reports them against a whole horizon; this
+    // screen answers "what does this one agreement ask for?".
+    const { bookingIssues: _bookingIssues, ...rest } = preview;
     return {
-      ...preview,
+      ...rest,
       visits: preview.visits.map(
         ({ alternatives: _alternatives, periodIndex: _periodIndex, ...visit }) => visit,
       ),

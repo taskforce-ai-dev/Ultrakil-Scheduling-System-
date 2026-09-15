@@ -341,6 +341,7 @@ export class PreviewShortfallDto {
       'NOT_ENOUGH_ALLOWED_DAYS',
       'SITE_CLOSED_ON_ALLOWED_DAYS',
       'WINDOW_TOO_SHORT_FOR_VISIT',
+      'BOOKED_BELOW_FREQUENCY',
     ],
   })
   reason!: string;

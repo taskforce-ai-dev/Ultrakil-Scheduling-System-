@@ -152,7 +152,14 @@ export type ShortfallReason =
   /** Allowed weekdays existed but the site is shut on all of them. */
   | 'SITE_CLOSED_ON_ALLOWED_DAYS'
   /** The site is open, but never long enough for one visit. */
-  | 'WINDOW_TOO_SHORT_FOR_VISIT';
+  | 'WINDOW_TOO_SHORT_FOR_VISIT'
+  /**
+   * The workbook booked this period, but booked it fewer times than the
+   * agreement's frequency promises. The bookings still stand — they are what
+   * was actually agreed — but the gap is said out loud rather than left for a
+   * manager to notice a quarter later.
+   */
+  | 'BOOKED_BELOW_FREQUENCY';
 
 export interface PreviewShortfall {
   /** First date of the period that came up short. */
@@ -164,9 +171,40 @@ export interface PreviewShortfall {
   message: string;
 }
 
+/**
+ * Why a booked date could not be honoured on the site's own recorded hours.
+ *
+ * A booking is a commitment: the visit is planned whatever the hours say. But
+ * planning it on hours nobody recorded, or inside a window too short to do the
+ * work, is a fact a manager has to be told — the alternative is a calendar
+ * that looks fine and a crew that arrives to a locked door.
+ */
+export type BookingIssueReason =
+  /** The site has hours on record, but none for that weekday. */
+  | 'SITE_CLOSED_ON_BOOKED_DAY'
+  /** The recorded window that day is shorter than the visit needs. */
+  | 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT';
+
+export interface PreviewBookingIssue {
+  /** YYYY-MM-DD. */
+  date: string;
+  reason: BookingIssueReason;
+  /** The window the visit was actually planned on. */
+  windowStartMinute: number;
+  windowEndMinute: number;
+  /** True when that window is the disclosed 08:00-17:00 assumption. */
+  windowAssumed: boolean;
+  message: string;
+}
+
 export interface SchedulePreview {
   visits: PreviewVisit[];
   shortfalls: PreviewShortfall[];
+  /**
+   * Booked dates the site's recorded hours do not support. Never a reason to
+   * drop the visit; always a reason to say so.
+   */
+  bookingIssues: PreviewBookingIssue[];
   horizonStart: string;
   horizonEnd: string;
 }
@@ -405,6 +443,19 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
 
   const visits: PreviewVisit[] = [];
   const shortfalls: PreviewShortfall[] = [];
+  const bookingIssues: PreviewBookingIssue[] = [];
+
+  /**
+   * True when this period is a clipped piece of a week or month rather than a
+   * whole one. Such a period was never promised the full count, so counting
+   * its visits against the frequency would cry wolf.
+   */
+  const isClipped = (bounds: { start: string; end: string }): boolean => {
+    const isLastPeriod = bounds.end === toDateOnly(lastDate);
+    const isFirstPeriod = bounds.start === toDateOnly(effectiveStart);
+    if (!isLastPeriod && !isFirstPeriod) return false;
+    return !coversWholePeriod(bounds, input.frequencyUnit, interval);
+  };
 
   for (const [period, bounds] of [...periodBounds.entries()].sort((a, b) => a[0] - b[0])) {
     const inPeriod = byPeriod.get(period) ?? [];
@@ -424,15 +475,35 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
 
       for (const date of booked) {
         const candidate = byDate.get(date);
-        visits.push(
-          candidate
-            ? { ...toVisit(candidate), placement: 'BOOKED' }
-            : bookedVisitOnAClosedDay(date, period, input, preferred),
+        if (candidate) {
+          visits.push({ ...toVisit(candidate), placement: 'BOOKED' });
+          continue;
+        }
+        const fallback = bookedVisitWithoutAUsableWindow(
+          date,
+          period,
+          input,
+          preferred,
+          windowsByWeekday.get(weekdayOf(parseDateOnly(date))) ?? [],
+          hoursUnconfirmed,
         );
+        visits.push(fallback.visit);
+        if (fallback.issue) bookingIssues.push(fallback.issue);
       }
-      // Deliberately no shortfall. The workbook booked what it booked; calling
-      // that short of the frequency would raise an alarm on every agreement
-      // whose written frequency rounds its real pattern up.
+
+      // The bookings are honoured exactly as written — this is deliberately
+      // not re-planned. But a period booked fewer times than the agreement
+      // promises is a gap the customer is paying for, so it is reported.
+      if (booked.length < input.frequencyCount && !isClipped(bounds)) {
+        shortfalls.push({
+          periodStart: bounds.start,
+          periodEnd: bounds.end,
+          requested: input.frequencyCount,
+          scheduled: booked.length,
+          reason: 'BOOKED_BELOW_FREQUENCY',
+          message: `Only ${booked.length} of the ${input.frequencyCount} visit(s) this agreement promises between ${bounds.start} and ${bounds.end} are booked in the workbook. The booked dates are used exactly as written and no extra visit is planned — add the missing date to the workbook, or lower the frequency.`,
+        });
+      }
       continue;
     }
 
@@ -441,41 +512,34 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     // different commitment from two visits in a week, and the agreement asked
     // for the latter.
     const placeable = inPeriod.filter((candidate) => candidate.isAllowedDay);
-    const { chosen, anchored } = chooseForPeriod(
+    const picks = chooseForPeriod(
       placeable,
       input.frequencyCount,
       input.anchorDays ?? [],
     );
-    const chosenDates = new Set(chosen.map((candidate) => candidate.date));
+    const chosenDates = new Set(picks.map((pick) => pick.candidate.date));
     const alternatives = alternativesFrom(placeable, chosenDates);
 
     visits.push(
-      ...chosen.map((candidate) => ({
-        ...toVisit(candidate),
-        placement: anchored ? ('ANCHORED' as const) : ('EARLIEST' as const),
+      ...picks.map((pick) => ({
+        ...toVisit(pick.candidate),
+        placement: pick.placement,
         alternatives,
       })),
     );
 
-    if (chosen.length < input.frequencyCount) {
-      const isLastPeriod = bounds.end === toDateOnly(lastDate);
-      const isFirstPeriod = bounds.start === toDateOnly(effectiveStart);
-      // A clipped first or last period was never a whole week or month, so it
-      // was never promised the full count. Reporting it would cry wolf.
-      if (isLastPeriod || isFirstPeriod) {
-        const spansWholePeriod = coversWholePeriod(bounds, input.frequencyUnit, interval);
-        if (!spansWholePeriod) continue;
-      }
+    if (picks.length < input.frequencyCount) {
+      if (isClipped(bounds)) continue;
 
       shortfalls.push({
         periodStart: bounds.start,
         periodEnd: bounds.end,
         requested: input.frequencyCount,
-        scheduled: chosen.length,
+        scheduled: picks.length,
         ...explainShortfall({
           period,
           requested: input.frequencyCount,
-          scheduled: chosen.length,
+          scheduled: picks.length,
           bounds,
           hadAllowedDay: periodsWithAllowedDay.has(period),
           hadOpenDay: periodsWithOpenDay.has(period),
@@ -488,6 +552,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   return {
     visits: visits.sort((a, b) => a.date.localeCompare(b.date)),
     shortfalls,
+    bookingIssues: bookingIssues.sort((a, b) => a.date.localeCompare(b.date)),
     horizonStart: toDateOnly(effectiveStart),
     horizonEnd: toDateOnly(lastDate),
   };
@@ -504,6 +569,12 @@ function dayOfMonth(date: string): number {
   return Number.parseInt(date.slice(8, 10), 10);
 }
 
+/** One chosen day, and the reason it was chosen. */
+interface Pick {
+  candidate: Candidate;
+  placement: 'ANCHORED' | 'EARLIEST';
+}
+
 /**
  * Picks this period's days.
  *
@@ -513,23 +584,27 @@ function dayOfMonth(date: string): number {
  * crowding onto the day after the first. A preferred weekday still outranks
  * closeness to an anchor: the weekday is what the customer agreed to, the
  * anchor only describes where in the month the work usually falls.
+ *
+ * The reason is recorded per day, not per period. An agreement served four
+ * times a month with one known anchor gets one ANCHORED visit and three the
+ * anchors said nothing about; labelling all four ANCHORED would tell a manager
+ * the site's usual day explains a date it had no part in choosing.
  */
 function chooseForPeriod(
   placeable: Candidate[],
   count: number,
   anchorDays: number[],
-): { chosen: Candidate[]; anchored: boolean } {
-  const chosen: Candidate[] = [];
+): Pick[] {
+  const picks: Pick[] = [];
   const usedDates = new Set<string>();
-  let anchored = false;
 
-  const take = (candidate: Candidate) => {
+  const take = (candidate: Candidate, placement: 'ANCHORED' | 'EARLIEST') => {
     usedDates.add(candidate.date);
-    chosen.push(candidate);
+    picks.push({ candidate, placement });
   };
 
   for (const anchor of [...anchorDays].sort((a, b) => a - b)) {
-    if (chosen.length >= count) break;
+    if (picks.length >= count) break;
 
     const best = placeable
       .filter((candidate) => !usedDates.has(candidate.date))
@@ -543,17 +618,16 @@ function chooseForPeriod(
       })[0];
 
     if (!best) break;
-    anchored = true;
-    take(best);
+    take(best, 'ANCHORED');
   }
 
   for (const candidate of [...placeable].sort(rankCandidates)) {
-    if (chosen.length >= count) break;
+    if (picks.length >= count) break;
     if (usedDates.has(candidate.date)) continue;
-    take(candidate);
+    take(candidate, 'EARLIEST');
   }
 
-  return { chosen: chosen.sort((a, b) => a.date.localeCompare(b.date)), anchored };
+  return picks.sort((a, b) => a.candidate.date.localeCompare(b.candidate.date));
 }
 
 /** The period's other days, one entry per date, in date order. */
@@ -596,39 +670,104 @@ function toVisit(candidate: Candidate): PreviewVisit {
   };
 }
 
+/** Minutes-from-midnight as HH:MM, for a message a manager reads. */
+function clockText(minute: number): string {
+  const hours = Math.floor(minute / 60);
+  return `${String(hours).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
+
 /**
- * A booked date the site has no usable window on.
+ * A booked date no candidate was produced for.
  *
  * The customer has agreed the day; refusing to plan it would hide a visit
- * UltraKIL is committed to. So the disclosed 08:00-17:00 assumption is used
- * and the window is flagged DEFAULTED, exactly as it is for a site with no
- * recorded hours at all — visible as an assumption, never as a fact.
+ * UltraKIL is committed to. What the visit must *not* do is quietly swap the
+ * site's own recorded hours for the 08:00-17:00 assumption — a window recorded
+ * as 09:00-10:00 is a fact, and overwriting it with a made-up nine-hour day
+ * tells a manager the crew has all day when it has an hour.
+ *
+ * So: hours recorded for that weekday are used as they stand, however short,
+ * and keep their own provenance. Only a weekday with no recorded hours at all
+ * falls back to the assumption, flagged DEFAULTED. Either way the reason is
+ * returned as an issue, because neither case should be discovered on the day.
  */
-function bookedVisitOnAClosedDay(
+function bookedVisitWithoutAUsableWindow(
   date: string,
   period: number,
   input: SchedulePreviewInput,
   preferred: Set<Weekday>,
-): PreviewVisit {
-  const narrowed = effectiveWindows(
-    [ASSUMED_DAY_WINDOW],
-    input.agreementWindowStartMinute,
-    input.agreementWindowEndMinute,
-  );
-  const window = narrowed[0] ?? ASSUMED_DAY_WINDOW;
+  recorded: Array<DayWindow & { provenance?: DataProvenance }>,
+  hoursUnconfirmed: boolean,
+): { visit: PreviewVisit; issue: PreviewBookingIssue | null } {
   const weekday = weekdayOf(parseDateOnly(date));
 
-  return {
+  // The longest recorded window gives the visit its best chance; earliest
+  // start breaks a tie, so two runs pick the same one.
+  const best = [...recorded].sort(
+    (a, b) =>
+      b.endMinute - b.startMinute - (a.endMinute - a.startMinute) ||
+      a.startMinute - b.startMinute,
+  )[0];
+
+  const useRecorded = !hoursUnconfirmed && best !== undefined;
+  const source = useRecorded ? best : ASSUMED_DAY_WINDOW;
+  const window =
+    effectiveWindows(
+      [source],
+      input.agreementWindowStartMinute,
+      input.agreementWindowEndMinute,
+      // The agreement can only restrict, and here it has restricted the
+      // recorded window out of existence. The recorded window is still the
+      // truthful answer to "when is this site open?".
+    )[0] ?? source;
+
+  const windowProvenance = useRecorded
+    ? windowProvenanceOf({
+        hoursRecorded: true,
+        hoursProvenance: best.provenance,
+        agreementStart: input.agreementWindowStartMinute,
+        agreementEnd: input.agreementWindowEndMinute,
+        startMinute: window.startMinute,
+        endMinute: window.endMinute,
+      })
+    : DataProvenance.DEFAULTED;
+
+  const visit: PreviewVisit = {
     date,
     weekday,
     windowStartMinute: window.startMinute,
     windowEndMinute: window.endMinute,
     isPreferredDay: preferred.has(weekday),
-    windowProvenance: DataProvenance.DEFAULTED,
+    windowProvenance,
     placement: 'BOOKED',
     periodIndex: period,
     alternatives: [],
   };
+
+  // A site with no hours on record anywhere is already disclosed on every one
+  // of its visits; that is not news. The two cases worth a warning are a site
+  // whose hours say it is shut that weekday, and one whose hours are simply
+  // too short for the work.
+  if (hoursUnconfirmed) return { visit, issue: null };
+
+  const issue: PreviewBookingIssue = useRecorded
+    ? {
+        date,
+        reason: 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT',
+        windowStartMinute: window.startMinute,
+        windowEndMinute: window.endMinute,
+        windowAssumed: false,
+        message: `${date} is booked with the customer, but the site's recorded hours that day are only ${clockText(window.startMinute)}-${clockText(window.endMinute)} — less than the ${input.durationMinutes} minutes this visit needs. The visit is planned on the recorded window as it stands. Correct the hours or shorten the visit.`,
+      }
+    : {
+        date,
+        reason: 'SITE_CLOSED_ON_BOOKED_DAY',
+        windowStartMinute: window.startMinute,
+        windowEndMinute: window.endMinute,
+        windowAssumed: true,
+        message: `${date} is booked with the customer, but the site has no recorded opening hours on a ${weekday.toLowerCase()}. The visit is planned on the assumed ${clockText(ASSUMED_DAY_WINDOW.startMinute)}-${clockText(ASSUMED_DAY_WINDOW.endMinute)} day and marked unconfirmed. Record the site's hours for that day.`,
+      };
+
+  return { visit, issue };
 }
 
 /** True when the bounds cover a whole cycle, not a clipped piece of one. */
