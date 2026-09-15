@@ -145,6 +145,7 @@ async function main(): Promise<void> {
   log(`  job types   ${summary.jobTypesCreated} created`);
   log(`  agreements  ${summary.agreementsCreated} created, ${summary.agreementsUpdated} updated`);
   log(`  skipped     ${summary.agreementsSkipped} agreement row(s) needing a decision`);
+  log(`  bookings    ${summary.bookingsImported} date(s) already agreed with customers`);
   log();
   log('Branches, worked out from each site\'s town:');
   log(`  Colombo   ${summary.sitesInColombo}`);
