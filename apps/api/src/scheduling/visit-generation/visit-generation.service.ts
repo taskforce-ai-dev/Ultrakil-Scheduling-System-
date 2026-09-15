@@ -40,6 +40,7 @@ import {
   protectionReasonFor,
 } from './plan';
 import { AgreementPeriodShape, honourProtectedDates } from './protected-periods';
+import { AgreementLifetime, leftStandingBy, thisRunsToJudge } from './run-scope';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
@@ -152,8 +153,9 @@ export class VisitGenerationService {
     );
 
     const shapes = this.periodShapesFor(agreements);
+    const lives = lifetimes(agreements);
     const existing = around.filter((visit) =>
-      thisRunsToJudge(visit, dto, shapes, planned.periods, lifetimes(agreements)),
+      thisRunsToJudge(visit, dto, shapes, planned.periods, lives),
     );
 
     // A protected visit already covers its period, so the period's
@@ -166,7 +168,11 @@ export class VisitGenerationService {
     // in per-agreement planning can see that forty of them chose the same day,
     // and nothing in this run's own list can see the work already standing in
     // the calendar — so the guard is given both.
-    const standing = await this.loadStandingVisits(dto, agreements, window.from, window.to);
+    const standing = await this.loadStandingVisits(dto, agreements, window.from, window.to, {
+      shapes,
+      plannedPeriods: planned.periods,
+      lives,
+    });
     const guarded = applyDailyLoadGuard(honoured, this.dailyCap, standing);
     // A requirement pinned to a protected visit outside the run's range is
     // already satisfied by it. Left in, it would read as an addition on a day
@@ -439,6 +445,19 @@ export class VisitGenerationService {
    * about to choose, or it will anchor onto a full day and the next full run
    * will move the visit straight off it again.
    *
+   * Nor is it limited to *protected* work. The set the guard needs is the
+   * complement of the set the comparison judges: whatever this run will not be
+   * replacing is still on its day. A PENDING visit whose period this range
+   * holds only a slice of — a monthly visit met from a week view — is in
+   * neither set until you say so, and that gap is what made a week run and a
+   * month run disagree about how full the same Monday was. Such a visit stays
+   * out of `existing`, so it is never proposed for removal, and now counts
+   * towards its day, so it is never planned over either.
+   *
+   * Only days inside the run's own range, because those are the only days the
+   * guard may place anything on, and a day the run was never asked about is
+   * not its to warn about.
+   *
    * A cancelled visit is the one exception. It is protected, and it is never
    * removed, but the optimizer excludes it from the day's capacity and so must
    * the guard: counting one reserved a crew's worth of room for work nobody
@@ -450,6 +469,11 @@ export class VisitGenerationService {
     agreements: AgreementForGeneration[],
     from: Date,
     to: Date,
+    scope: {
+      shapes: Map<string, AgreementPeriodShape>;
+      plannedPeriods: Map<string, Set<number>>;
+      lives: Map<string, AgreementLifetime>;
+    },
   ): Promise<StandingVisit[]> {
     const inScope = new Set(agreements.map((agreement) => agreement.id));
 
@@ -474,20 +498,32 @@ export class VisitGenerationService {
     });
 
     return visits
-      .filter(
-        (visit) =>
-          !inScope.has(visit.serviceAgreementId) ||
+      .map((visit) => ({
+        serviceAgreementId: visit.serviceAgreementId,
+        branchCode: visit.branchCode,
+        visitDate: toDateOnly(visit.visitDate),
+        isInScope: inScope.has(visit.serviceAgreementId),
+        isProtected:
           protectionReasonFor({
             status: visit.status,
             isManuallyAdjusted: visit.isManuallyAdjusted,
             isLocked: visit.lockedAt !== null,
             hasAssignments: visit._count.assignments > 0,
           }) !== null,
+      }))
+      .filter(
+        (visit) =>
+          (visit.visitDate >= dto.from && visit.visitDate <= dto.to) ||
+          !visit.isInScope ||
+          visit.isProtected,
+      )
+      .filter((visit) =>
+        leftStandingBy(visit, dto, scope.shapes, scope.plannedPeriods, scope.lives),
       )
       .map((visit) => ({
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
-        visitDate: toDateOnly(visit.visitDate),
+        visitDate: visit.visitDate,
       }));
   }
 
@@ -822,7 +858,7 @@ function enclosingMonths(from: Date, to: Date): { from: Date; to: Date } {
 /** Each agreement's own first and last day, as the run reads them. */
 function lifetimes(
   agreements: AgreementForGeneration[],
-): Map<string, { start: string; end: string | null }> {
+): Map<string, AgreementLifetime> {
   return new Map(
     agreements.map((agreement) => [
       agreement.id,
@@ -832,46 +868,6 @@ function lifetimes(
       },
     ]),
   );
-}
-
-/**
- * Whether this run may propose anything about a visit already in the calendar.
- *
- * Three things have to hold. The visit is inside the run's own range — a run
- * changes nothing outside what it was asked about. Its agreement is in scope.
- * And the run planned the period the visit sits in: a visit standing in a
- * period this range holds only a slice of belongs to the run that can see that
- * period whole, and offering to delete it was how a month view proposed
- * removing the week a week view had just created.
- *
- * One exception, and it is not a period at all. A visit outside the
- * agreement's own start or end date is not waiting for a better run: no period
- * of that agreement will ever ask for it again, so it is this run's to remove.
- */
-function thisRunsToJudge(
-  visit: ExistingVisit,
-  range: { from: string; to: string },
-  shapes: Map<string, AgreementPeriodShape>,
-  plannedPeriods: Map<string, Set<number>>,
-  lives: Map<string, { start: string; end: string | null }>,
-): boolean {
-  if (visit.visitDate < range.from || visit.visitDate > range.to) return false;
-
-  const life = lives.get(visit.serviceAgreementId);
-  if (!life) return false;
-  if (visit.visitDate < life.start) return true;
-  if (life.end !== null && visit.visitDate > life.end) return true;
-
-  const shape = shapes.get(visit.serviceAgreementId);
-  if (!shape) return false;
-
-  const period = periodIndexOf(
-    parseDateOnly(visit.visitDate),
-    parseDateOnly(shape.anchor),
-    shape.frequencyUnit,
-    shape.frequencyInterval,
-  );
-  return plannedPeriods.get(visit.serviceAgreementId)?.has(period) ?? false;
 }
 
 /**
