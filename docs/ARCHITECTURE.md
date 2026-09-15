@@ -157,20 +157,66 @@ visit so a manager can see it.
    run moved it straight off again; placement flapped with whatever scope
    somebody happened to generate under.
 
-One more thing decides where a visit lands, and it is the range itself. A run
-plans only the periods its range holds **whole**. The calendar grid September
-is drawn on begins on 31 August and ends on 4 October; asked to generate that,
-the run used to plan the one-day stub of August as though it were the month,
-and the August visit already published on the 17th lay outside the range where
-neither the pinning nor the load guard could see it — two August visits, every
-press of the button. So: a period clipped by the horizon is left to the run
-that can see it whole, and a period clipped by the agreement's own first or
-last day is planned, because the agreement really does begin or end there. A
-booking inside such a stub still stands: a booked date is a commitment to a
-day, not a plan the run made. The portal sends the calendar month for a month
-view and its own seven days for a week view, and generation reads the existing
-and standing visits over the whole calendar months the range touches — what it
-may *change* is still exactly the range it was given.
+### What a period is
+
+A period is a **whole ISO week (Monday to Sunday) or a whole calendar month**,
+and an interval above one groups them from the agreement's **own start date**: a
+fortnightly agreement's fortnights are the two ISO weeks counted from the week
+it began in, and a quarterly agreement's quarters are the three-month blocks
+counted from the month it began in. `periodIndexOf` is the single definition,
+and the bookings, the anchors, the pinning, `honourProtectedDates` and the load
+guard all key by `(agreement, periodIndex)`, so they cannot disagree.
+
+Periods used to be phased from the run's own `from`, and that made the answer
+depend on who pressed the button. The portal's week view sent its Monday-to-
+Sunday week; the month view sent the calendar month; September began on a
+Tuesday, so the month view's buckets ran Tuesday to Monday. A weekly Mon–Fri
+agreement got Monday the 14th from one view and Tuesday the 15th from the
+other — a duplicate where the Monday was protected, and churn where it was not.
+Fortnightly and quarterly agreements, which the importer produces, generated
+nothing at all from any view: no portal range held one of their periods whole,
+and a clipped period is skipped. Anchoring periods to the agreement fixes all
+of it at once, because a fortnight then belongs to the agreement that sells it.
+
+### What a range may plan
+
+A run plans only the periods its range holds **whole**. The calendar grid
+September is drawn on begins on 31 August and ends on 4 October; asked to
+generate that, the run used to plan the one-day stub of August as though it
+were the month, and the August visit already published on the 17th lay outside
+the range where neither the pinning nor the load guard could see it — two
+August visits, every press of the button. So: a period clipped by the horizon
+is left to the run that can see it whole, and a period clipped by the
+agreement's own first or last day is planned, because the agreement really does
+begin or end there. A booking inside such a stub still stands: a booked date is
+a commitment to a day, not a plan the run made.
+
+With periods calendar-aligned, "whole" is a property of the range and the
+cadence alone, so the portal can choose ranges the two views agree about. **Both
+views send whole ISO weeks**: the week view sends its own seven days, and the
+month view sends the grid it already draws, which begins on a Monday, ends on a
+Sunday, and contains the whole calendar month. That range therefore holds a
+whole week for every weekly agreement, two whole fortnights, and a whole month
+for every monthly one — and a week generated from the week view and then from
+the month view is planned identically. The calendar month on its own would hold
+the month but neither end's week, which is exactly what made the two views
+disagree. Generation still reads the existing and standing visits over the
+whole calendar months the range touches; what it may *change* is still exactly
+the range it was given.
+
+Neither view holds a whole quarter. An agreement whose cadence the range cannot
+hold is not planned and is named in `skippedPeriods` — agreement, unit,
+interval, count — which the impact drawer renders by cadence as "Quarterly
+agreements need a range covering a whole quarter; 3 skipped". A bare zero there
+is indistinguishable from a calendar already in order, and that is how
+fortnightly and quarterly work went missing without a word.
+
+And the comparison against what already exists is limited, per agreement, to
+the periods that agreement actually planned. Without that, a month view offered
+to delete the week a week view had just created. The one exception is not a
+period at all: a visit outside the agreement's **own** start or end date is not
+waiting for a better run — no period will ever ask for it again — so it stays
+this run's to propose for removal.
 
 Confirming a generation run writes a `ScheduleRun` to account for what it did,
 which put it in Schedule History beside the solver's runs — where its
@@ -181,9 +227,26 @@ to MANUAL and neither writer sets anything else), so the read side derives the
 run's `kind` from the one relation that does: every optimiser run is created
 with a dispatch outbox row in the same transaction, and generation creates
 none. Deriving it rather than adding a column also settles the rows already in
-the database. A `VISIT_GENERATION` run carries a null `publishReadiness` —
+the database — with one gap. The outbox arrived with migration
+`20260908093000`, and every solve run before it has no row, which read those
+runs as generation. Two marks only a solve ever carries stand in: a queue
+delivery id (`jobId`), which generation never sets, and `visitsScheduled` above
+zero, which generation always leaves at zero. **A `kind` column written by both
+writers is the long-term answer**; this derivation is what can be had without a
+backfill, and it should be replaced the next time the schema moves. A `VISIT_GENERATION` run carries a null `publishReadiness` —
 there is no publication for it to be ready for — and the portal names it, counts
 the visits it generated, and offers no Publish.
+
+A cancelled visit is protected and never removed, and it satisfies no period —
+the work did not happen. Its **slot** is spent, though: a visit is identified by
+agreement, date and start time, so the cancelled row holds that identity for
+ever and the unique index forbids anything new on it. Generation used to match
+the period's requirement to the cancelled row, report it unchanged, and leave
+the week with no live visit at all, every run agreeing there was nothing to do.
+The cancelled slots are now passed into the preview as blocked, so the period
+takes another allowed day (and that day is never offered to the load guard
+either); where it has no other day, it is a shortfall saying the only visit is
+cancelled. A booked date is exempt, because a booking cannot be moved.
 
 A visit can breach the window/duration invariant without anyone having erred:
 a booked date on hours the site records as an hour is planned on those hours
@@ -230,6 +293,13 @@ a protected `visitDate` change — "generation would have moved it to the 18th".
 Without that, a visit a manager holds on a weekday the agreement no longer
 allows reads as unchanged on every run, and nothing ever prompts anyone to move
 it. Nothing is applied: a protected visit is still never written.
+
+It is reported **only when the keeper's weekday is not one the agreement still
+allows**. Remembering it whenever the two days merely differed told a manager
+who had moved a Monday visit to Wednesday, both allowed, that generation would
+have moved it back — on every run, for ever. A report that never goes away is
+one nobody reads, and it buried the case the report exists for: the visit
+stranded on a Saturday the agreement has since dropped.
 
 ---
 

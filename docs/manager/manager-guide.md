@@ -89,13 +89,32 @@ is not a schedule: generation creates the visits, and staffs nobody. There is
 nothing to publish on it, and no Publish button on it. To staff those visits,
 solve the range from the Schedule History page as usual.
 
-**What range gets generated.** In month view it is the calendar month you are
-looking at — September generates 1 to 30 September, even though the grid also
-shows the last days of August and the first of October. In week view it is
-that week. Whole weeks and whole months only: a run is never asked to plan a
-month it can see three days of, because the rest of that month's work is off
-screen where it cannot be checked against. If you want August generated, move
-to August.
+**What range gets generated, and what each view can plan.** A run plans only
+the periods it can see **whole**, and a period is a whole week (Monday to
+Sunday) or a whole calendar month, counted from the agreement's own start date
+— never from the range you happen to be generating.
+
+- **Week view** generates the seven days on screen. That is one whole week, so
+  it plans every weekly agreement in range and nothing longer: a fortnightly,
+  monthly or quarterly agreement has no whole cycle inside a single week.
+- **Month view** generates the whole grid you are looking at — including the
+  last days of the previous month and the first of the next, because the grid
+  begins on a Monday and ends on a Sunday. That gives it whole weeks *and* the
+  whole calendar month, so it plans weekly, fortnightly and monthly agreements
+  alike. Quarterly ones need a longer range.
+
+Because the two views measure periods the same way, they agree. Generate a week
+from the week view and then the month it sits in, or the other way round, and
+the second run has nothing to add and nothing to remove. Neither view ever
+proposes deleting work the other created: a visit in a period this range holds
+only part of is left to the run that can see that period whole.
+
+**When a range cannot plan an agreement at all**, the panel says so under **Not
+planned by this range** — *"Quarterly agreements need a range covering a whole
+quarter; 3 skipped."* Nothing is wrong with those agreements. Move to the month
+view, or ask for a longer range, and the run that covers a whole cycle will
+plan them. A silent zero would read exactly like a calendar already in order,
+which is why it is never left silent.
 
 ### Why a visit is on the date it is
 
@@ -128,7 +147,20 @@ Move it yourself if you want the new day.
 A **cancelled** visit is protected too: it is never deleted. But it does not
 count as that week's or month's visit, because the work did not happen — the
 period still asks for a visit, and the day it sits on is treated as free when
-the branch's daily limit is worked out.
+the branch's daily limit is worked out, both in the generation panel and on the
+calendar's own **Over the branch's daily limit** badge.
+
+Its *slot* is spent, though. A visit is identified by its agreement, its date
+and its start time, so the cancelled row keeps that day and time for ever and
+nothing new can be put on it. Generation therefore plans that period onto
+another day the agreement allows. Where the period has no other day — a weekly
+agreement allowed only Mondays, say — it reports a shortfall saying the only
+visit is cancelled. Reinstate it, or allow another weekday.
+
+The "generation would have moved it to…" line is shown only when the day your
+visit sits on is one the agreement **no longer allows**. Moving a visit from one
+allowed day to another is a choice the agreement is content with, and you are
+not told about it again on every run.
 
 If a single day still carries more work than the branch plans for, the
 generation panel says so by date, count and limit, under **Days over the
