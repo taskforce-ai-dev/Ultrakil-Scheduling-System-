@@ -498,6 +498,41 @@ describe("the visit detail drawer", () => {
 });
 
 describe("regeneration impact review", () => {
+  it("says which day a protected visit would have moved to", async () => {
+    // The visit is pinned to the manager's day so the period is not planned
+    // twice. That must not read as "nothing to see": the agreement points at
+    // another day now, and only the manager can move it.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        protectedVisits: [
+          {
+            visitId: "visit-held",
+            serviceAgreementId: "agreement-2",
+            customerName: "Union Bank Kadawatha",
+            siteName: "Kadawatha Branch",
+            visitDate: "2026-09-16",
+            protection: "LOCKED",
+            wouldHave: "UPDATE",
+            changes: [
+              { field: "visitDate", from: "2026-09-16", to: "2026-09-18" },
+              { field: "durationMinutes", from: "90", to: "120" },
+            ],
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText(/generation would have moved it to 2026-09-18/)
+    ).toBeInTheDocument();
+    expect(within(drawer).getByText(/durationMinutes 90 → 120/)).toBeInTheDocument();
+  });
+
+
   it("previews without writing, and lists every bucket", async () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(
       buildGenerationImpact({

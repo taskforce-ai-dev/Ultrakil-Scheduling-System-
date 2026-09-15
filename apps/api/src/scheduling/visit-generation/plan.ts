@@ -41,6 +41,16 @@ export interface RequiredVisit {
   periodIndex: number;
   /** The other days of the same period this visit could sit on. */
   alternatives: PreviewAlternative[];
+  /**
+   * The day this requirement was planned onto before a protected visit
+   * claimed its period, when the two differ.
+   *
+   * Pinning is what stops a re-planned period becoming one addition and one
+   * refused removal. It must not also make the difference invisible: a visit
+   * a manager holds on a weekday the agreement no longer allows would
+   * otherwise read as "unchanged", and nobody would ever move it.
+   */
+  pinnedFrom?: string;
 }
 
 /** A visit already in the calendar. */
@@ -225,14 +235,26 @@ export function planGeneration(
 
     matchedIds.add(found.id);
     const changes = diff(found, want);
-
-    if (changes.length === 0) {
-      plan.unchangedCount += 1;
-      continue;
-    }
-
     const protection = protectionReasonFor(found);
+
     if (protection) {
+      // The day generation had chosen, before this visit's protection pinned
+      // the period to the manager's day. Added here rather than in `diff`
+      // because it is only ever reported: an ordinary update would pick it up
+      // and promise a move that nothing performs.
+      if (want.pinnedFrom && want.pinnedFrom !== found.visitDate) {
+        changes.unshift({
+          field: 'visitDate',
+          from: found.visitDate,
+          to: want.pinnedFrom,
+        });
+      }
+
+      if (changes.length === 0) {
+        plan.unchangedCount += 1;
+        continue;
+      }
+
       plan.protectedVisits.push({
         visitId: found.id,
         serviceAgreementId: found.serviceAgreementId,
@@ -241,6 +263,11 @@ export function planGeneration(
         wouldHave: 'UPDATE',
         changes,
       });
+      continue;
+    }
+
+    if (changes.length === 0) {
+      plan.unchangedCount += 1;
       continue;
     }
 

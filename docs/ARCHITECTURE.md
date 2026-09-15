@@ -187,6 +187,13 @@ satisfies no period and reserves no room: the period still asks for its visit,
 and the day it sits on is counted as empty by the load guard, exactly as the
 optimizer counts it when it staffs the day.
 
+Pinning stops a duplicate; it must not also hide a difference. The pinned
+requirement remembers the day generation had chosen, and the plan reports it as
+a protected `visitDate` change — "generation would have moved it to the 18th".
+Without that, a visit a manager holds on a weekday the agreement no longer
+allows reads as unchanged on every run, and nothing ever prompts anyone to move
+it. Nothing is applied: a protected visit is still never written.
+
 ---
 
 ## Phase 2 compatibility

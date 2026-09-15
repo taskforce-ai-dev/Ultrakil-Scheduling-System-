@@ -689,6 +689,40 @@ describe('regeneration never loses manager-controlled work', () => {
     expect(survivor).not.toBeNull();
   });
 
+  it('says which day a protected visit would have moved to when the weekday changes', async () => {
+    // The visit is pinned, so the week is not re-planned around it and there
+    // is no duplicate. But the agreement no longer allows the day it sits on,
+    // and reporting that as "unchanged" is how a stale visit stays for ever.
+    const agreement = await createAgreement();
+    await confirm({ serviceAgreementIds: [agreement.id] });
+    await prisma.generatedVisit.updateMany({
+      where: { serviceAgreementId: agreement.id },
+      data: { lockedAt: new Date(), lockReason: 'held for the customer' },
+    });
+
+    await request(http)
+      .patch(`/api/service-agreements/${agreement.id}`)
+      .set(auth(adminToken))
+      .send({ allowedDays: [Weekday.FRIDAY], preferredDays: [] })
+      .expect(200);
+
+    const impact = await preview({ serviceAgreementIds: [agreement.id] });
+
+    expect(impact.body.additions).toHaveLength(0);
+    expect(impact.body.removals).toHaveLength(0);
+    expect(impact.body.protectedVisits).toHaveLength(4);
+
+    for (const entry of impact.body.protectedVisits) {
+      expect(entry.wouldHave).toBe('UPDATE');
+      const move = entry.changes.find(
+        (change: { field: string }) => change.field === 'visitDate',
+      );
+      expect(move.from).toBe(entry.visitDate);
+      // Wednesday as it stands; Friday is where the agreement now points.
+      expect(new Date(`${move.to}T00:00:00.000Z`).getUTCDay()).toBe(5);
+    }
+  });
+
   it('still wants a visit for the period a cancelled one was meant to cover', async () => {
     // A cancelled visit is protected — it is never removed — but it stands
     // for no work. Letting it satisfy its week left the customer with a

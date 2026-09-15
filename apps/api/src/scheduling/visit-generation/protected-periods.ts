@@ -29,6 +29,12 @@ import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
  * it is never removed — but it *satisfies* nothing: the work did not happen,
  * so the period still wants a visit, and pinning it to the cancelled row would
  * leave the customer with a cancellation where a visit was due.
+ *
+ * Pinning stops a duplicate; it must not also hide a difference. The day the
+ * generator had chosen is remembered on the pinned requirement, so the plan
+ * can still say which day the visit would have moved to — a protected visit
+ * held on a weekday the agreement no longer allows would otherwise read as
+ * "unchanged", and nobody would ever move it.
  */
 
 /** How an agreement's horizon is divided into periods. */
@@ -161,6 +167,11 @@ export function honourProtectedDates(
         placement: keeper.placement,
         // Never a candidate for the load guard: this date belongs to someone.
         alternatives: [],
+        // The day this period would have been planned onto, when pinning
+        // actually moved it. Reported, never applied.
+        ...(keeper.visitDate === pinned[index].visitDate
+          ? {}
+          : { pinnedFrom: pinned[index].visitDate }),
       };
     }
   }

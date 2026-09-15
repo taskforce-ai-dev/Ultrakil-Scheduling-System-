@@ -94,15 +94,23 @@ describe('honourProtectedDates', () => {
     it('leaves the month with exactly one visit', () => {
       const result = plan();
       const total =
-        result.additions.length + result.updates.length + result.unchangedCount;
+        result.additions.length +
+        result.updates.length +
+        result.unchangedCount +
+        result.protectedVisits.length;
       expect(total).toBe(1);
     });
   });
 
-  it('reads as unchanged when the agreement asks for nothing else', () => {
+  it('reads as unchanged when the day generation wanted is the day already held', () => {
+    const held = existing({
+      status: 'SCHEDULED',
+      placement: VisitPlacement.ANCHORED,
+    });
+    const sameDay = [required({ visitDate: '2026-09-09' })];
     const plan = planGeneration(
-      honourProtectedDates([required()], [existing({ status: 'SCHEDULED' })], monthly()),
-      [existing({ status: 'SCHEDULED' })],
+      honourProtectedDates(sameDay, [held], monthly()),
+      [held],
     );
 
     expect(plan.unchangedCount).toBe(1);
@@ -128,7 +136,10 @@ describe('honourProtectedDates', () => {
         visitDate: '2026-09-09',
         protection: 'ALREADY_SCHEDULED',
         wouldHave: 'UPDATE',
-        changes: [{ field: 'durationMinutes', from: 90, to: 150 }],
+        changes: [
+          { field: 'visitDate', from: '2026-09-09', to: '2026-09-16' },
+          { field: 'durationMinutes', from: 90, to: 150 },
+        ],
       }),
     ]);
     expect(plan.additions).toEqual([]);
@@ -214,10 +225,20 @@ describe('honourProtectedDates', () => {
     const plan = planGeneration(honourProtectedDates(twice, held, monthly()), held);
 
     expect(plan.additions).toEqual([]);
-    expect(plan.unchangedCount).toBe(2);
-    // The third is more than the agreement asks for. It is still never
-    // removed — it is reported, and left exactly where it is.
+    // Both are pinned, and both are reported as the moves they stand in for.
     expect(plan.protectedVisits).toEqual([
+      expect.objectContaining({
+        visitId: 'a',
+        wouldHave: 'UPDATE',
+        changes: [{ field: 'visitDate', from: '2026-09-09', to: '2026-09-07' }],
+      }),
+      expect.objectContaining({
+        visitId: 'b',
+        wouldHave: 'UPDATE',
+        changes: [{ field: 'visitDate', from: '2026-09-23', to: '2026-09-21' }],
+      }),
+      // The third is more than the agreement asks for. It is still never
+      // removed — it is reported, and left exactly where it is.
       expect.objectContaining({ visitId: 'c', wouldHave: 'REMOVE' }),
     ]);
     expect(plan.removals).toEqual([]);
@@ -249,7 +270,28 @@ describe('honourProtectedDates', () => {
     expect(pinned[0].windowEndMinute).toBe(720);
   });
 
-  it('reports no protected change at all on a second run over a hand-moved visit', () => {
+  it('says which day generation would have moved a protected visit to', () => {
+    // Pinning makes the protected visit satisfy its period, which is right.
+    // Reporting it as unchanged is not: the agreement no longer allows that
+    // weekday, and a manager who is never told will never move it.
+    const plan = planGeneration(
+      honourProtectedDates([required()], [existing({ isLocked: true })], monthly()),
+      [existing({ isLocked: true })],
+    );
+
+    expect(plan.protectedVisits).toEqual([
+      expect.objectContaining({
+        visitId: 'visit-1',
+        visitDate: '2026-09-09',
+        wouldHave: 'UPDATE',
+        changes: [{ field: 'visitDate', from: '2026-09-09', to: '2026-09-16' }],
+      }),
+    ]);
+    expect(plan.additions).toEqual([]);
+    expect(plan.removals).toEqual([]);
+  });
+
+  it('reports the move and nothing about the window of the day it was moved to', () => {
     // The phantom: the pinned requirement kept the end of the day the
     // generator had wanted, so a hand-move to a day the site shuts at noon
     // was reported as a windowEndMinute change on every run for ever — and a
@@ -260,8 +302,9 @@ describe('honourProtectedDates', () => {
       [shortDay],
     );
 
-    expect(plan.protectedVisits).toEqual([]);
-    expect(plan.unchangedCount).toBe(1);
+    expect(plan.protectedVisits[0].changes).toEqual([
+      { field: 'visitDate', from: '2026-09-09', to: '2026-09-16' },
+    ]);
   });
 
   it('reports nothing at all when the hours differ and the day does not', () => {

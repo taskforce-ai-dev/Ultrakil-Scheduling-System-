@@ -254,16 +254,36 @@ export function GenerationImpactDrawer({
             title="Protected — will not be touched"
             count={impact.protectedVisits.length}
           >
-            {capped(impact.protectedVisits).shown.map((visit) => (
-              <li key={visit.visitId}>
-                <span className="font-medium">{visit.visitDate}</span> — {visit.customerName}
-                <span className="text-muted-foreground">
-                  {" "}
-                  ({protectionLabel(visit.protection)}; generation would have{" "}
-                  {visit.wouldHave === "REMOVE" ? "removed" : "updated"} it)
-                </span>
-              </li>
-            ))}
+            {capped(impact.protectedVisits).shown.map((visit) => {
+              // A pinned visit satisfies its period, so it is never an
+              // addition and never a removal — which is exactly why the day
+              // the agreement now points at has to be said out loud. Left
+              // unsaid, a visit stranded on a weekday the agreement dropped
+              // reads as "nothing to do" on every run for ever.
+              const moved = visit.changes?.find((change) => change.field === "visitDate");
+              const rest = (visit.changes ?? []).filter(
+                (change) => change.field !== "visitDate"
+              );
+              return (
+                <li key={visit.visitId}>
+                  <span className="font-medium">{visit.visitDate}</span> — {visit.customerName}
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({protectionLabel(visit.protection)}; generation would have{" "}
+                    {visit.wouldHave === "REMOVE"
+                      ? "removed it"
+                      : moved
+                        ? `moved it to ${moved.to}`
+                        : "updated it"}
+                    {rest.length > 0 &&
+                      `: ${rest
+                        .map((change) => `${change.field} ${change.from} → ${change.to}`)
+                        .join(", ")}`}
+                    )
+                  </span>
+                </li>
+              );
+            })}
             {capped(impact.protectedVisits).hidden > 0 && (
               <li className="text-muted-foreground">
                 and {capped(impact.protectedVisits).hidden} more
