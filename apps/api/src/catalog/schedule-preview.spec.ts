@@ -544,3 +544,198 @@ describe('frequency intervals — the cycles UltraKIL actually sells', () => {
     });
   });
 });
+/**
+ * Placement — where in the period a visit lands.
+ *
+ * Before this, every period took its earliest allowed weekday, so every
+ * monthly agreement in the book landed in the first week of the month. The
+ * workbook itself never worked that way: it names the days it has booked, and
+ * those days are spread right across the month.
+ */
+describe('booked dates', () => {
+  const monthly = (overrides: Partial<SchedulePreviewInput> = {}) =>
+    buildInput({
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.MONTH,
+      allowedDays: [
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+      ],
+      preferredDays: [],
+      startDate: '2026-09-01',
+      // One whole month, so the assertions read as "this month's visits".
+      endDate: '2026-09-30',
+      horizonWeeks: 5,
+      ...overrides,
+    });
+
+  it('places exactly the booked date when the period has one', () => {
+    const preview = computeSchedulePreview(
+      monthly({ bookedDates: ['2026-09-17'] }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-17']);
+    expect(preview.visits[0].placement).toBe('BOOKED');
+  });
+
+  it('places every booked date in the period, not just the first', () => {
+    const preview = computeSchedulePreview(
+      monthly({ frequencyCount: 2, bookedDates: ['2026-09-04', '2026-09-21'] }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual([
+      '2026-09-04',
+      '2026-09-21',
+    ]);
+  });
+
+  it('honours a booked date even when the agreement does not allow that weekday', () => {
+    // The booking is a fact. A weekday rule inferred from other months does
+    // not get to overrule a day the customer has already agreed.
+    const preview = computeSchedulePreview(
+      monthly({ allowedDays: [Weekday.MONDAY], bookedDates: ['2026-09-19'] }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-19']);
+  });
+
+  it('uses the assumed window, disclosed as such, when the site is shut that day', () => {
+    const preview = computeSchedulePreview(
+      monthly({
+        // Saturday: no operating hours row at all.
+        bookedDates: ['2026-09-19'],
+      }),
+    );
+
+    expect(preview.visits[0].windowStartMinute).toBe(ASSUMED_DAY_WINDOW.startMinute);
+    expect(preview.visits[0].windowEndMinute).toBe(ASSUMED_DAY_WINDOW.endMinute);
+    expect(preview.visits[0].windowProvenance).toBe(DataProvenance.DEFAULTED);
+  });
+
+  it('keeps the site window for a booked date the site is open on', () => {
+    const preview = computeSchedulePreview(
+      monthly({ bookedDates: ['2026-09-17'] }),
+    );
+
+    expect(preview.visits[0].windowStartMinute).toBe(9 * 60);
+    expect(preview.visits[0].windowEndMinute).toBe(17 * 60);
+  });
+
+  it('ignores a booked date outside the horizon', () => {
+    const preview = computeSchedulePreview(
+      monthly({ bookedDates: ['2026-12-17'] }),
+    );
+
+    expect(preview.visits.every((visit) => visit.date <= '2026-09-30')).toBe(true);
+    expect(preview.visits.some((visit) => visit.placement === 'BOOKED')).toBe(false);
+  });
+
+  it('never offers a booked visit an alternative day to be moved to', () => {
+    const preview = computeSchedulePreview(
+      monthly({ bookedDates: ['2026-09-17'] }),
+    );
+
+    expect(preview.visits[0].alternatives).toEqual([]);
+  });
+});
+
+describe('anchors', () => {
+  const monthly = (overrides: Partial<SchedulePreviewInput> = {}) =>
+    buildInput({
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.MONTH,
+      allowedDays: [
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+      ],
+      preferredDays: [],
+      startDate: '2026-09-01',
+      // One whole month, so the assertions read as "this month's visits".
+      endDate: '2026-09-30',
+      horizonWeeks: 5,
+      ...overrides,
+    });
+
+  it('places an unbooked month near the anchor rather than at the earliest day', () => {
+    const preview = computeSchedulePreview(monthly({ anchorDays: [17] }));
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-17']);
+    expect(preview.visits[0].placement).toBe('ANCHORED');
+  });
+
+  it('keeps "the 5th and the 20th" as two separate anchors', () => {
+    const preview = computeSchedulePreview(
+      monthly({ frequencyCount: 2, anchorDays: [5, 20] }),
+    );
+
+    // 2026-09-05 is a Saturday and 2026-09-20 a Sunday, so the nearest
+    // allowed weekdays are the Friday before and the Monday after.
+    expect(preview.visits.map((visit) => visit.date)).toEqual([
+      '2026-09-04',
+      '2026-09-21',
+    ]);
+  });
+
+  it('still prefers a preferred weekday over a day closer to the anchor', () => {
+    const preview = computeSchedulePreview(
+      monthly({ preferredDays: [Weekday.WEDNESDAY], anchorDays: [17] }),
+    );
+
+    expect(preview.visits[0].weekday).toBe(Weekday.WEDNESDAY);
+  });
+
+  it('falls back to the earliest allowed day when there is no anchor', () => {
+    const preview = computeSchedulePreview(monthly());
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-01']);
+    expect(preview.visits[0].placement).toBe('EARLIEST');
+  });
+
+  it('anchors the months a booking does not cover, and books the ones it does', () => {
+    const preview = computeSchedulePreview(
+      monthly({
+        endDate: '2026-10-31',
+        horizonWeeks: 9,
+        bookedDates: ['2026-09-17'],
+        anchorDays: [17],
+      }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual([
+      '2026-09-17',
+      '2026-10-16',
+    ]);
+    expect(preview.visits.map((visit) => visit.placement)).toEqual([
+      'BOOKED',
+      'ANCHORED',
+    ]);
+  });
+
+  it('offers the other allowed days of the period as alternatives', () => {
+    const preview = computeSchedulePreview(monthly({ anchorDays: [17] }));
+
+    const alternatives = preview.visits[0].alternatives.map((day) => day.date);
+    expect(alternatives).toContain('2026-09-16');
+    expect(alternatives).toContain('2026-09-18');
+    expect(alternatives).not.toContain('2026-09-17');
+  });
+
+  it('never offers an alternative another visit of the same period already holds', () => {
+    const preview = computeSchedulePreview(
+      monthly({ frequencyCount: 2, anchorDays: [5, 20] }),
+    );
+
+    const chosen = preview.visits.map((visit) => visit.date);
+    for (const visit of preview.visits) {
+      for (const alternative of visit.alternatives) {
+        expect(chosen).not.toContain(alternative.date);
+      }
+    }
+  });
+});
