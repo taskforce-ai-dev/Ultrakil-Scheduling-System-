@@ -101,13 +101,23 @@ export function honourProtectedDates(
     );
 
     const movers = indices.filter((index) => !held.has(pinned[index].visitDate));
+    const seen = new Set<string>();
     const unmatched = group
       .filter((visit) => !held.has(visit.visitDate))
       .sort(
         (a, b) =>
           a.visitDate.localeCompare(b.visitDate) ||
           a.windowStartMinute - b.windowStartMinute,
-      );
+      )
+      // One slot per date and start time. Two protected visits sharing both
+      // are the same slot, and pinning two requirements onto it would make a
+      // pair of requirements that cannot be told apart.
+      .filter((visit) => {
+        const slot = `${visit.visitDate}|${visit.windowStartMinute}`;
+        if (seen.has(slot)) return false;
+        seen.add(slot);
+        return true;
+      });
 
     for (let slot = 0; slot < Math.min(movers.length, unmatched.length); slot += 1) {
       const index = movers[slot];
