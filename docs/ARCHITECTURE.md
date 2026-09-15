@@ -242,13 +242,16 @@ customer loses a visit with nothing said. Two things close it:
   the stub it is. The week view is untouched: it asks about its own seven days
   and no more, because a manager who generates a week must not find visits in
   the next one.
-- a range that clips a period of a **multi-week cadence** now says so even
-  when it planned that agreement's other periods, as `RANGE_CLIPS_A_PERIOD`.
-  A clipped *month* is the ordinary hand-off and stays silent — the
-  neighbouring grid sees it whole. A clipped fortnight may be nobody's, and
-  the impact drawer says as much: the advice for `RANGE_HOLDS_NO_WHOLE_PERIOD`
-  ("switch to the month view") is wrong here, because nothing shorter will
-  pick the period up. Generation still reads the existing and standing visits over the
+- a range that leaves a period of a **multi-week cadence** unfinished now says
+  so even when it planned that agreement's other periods, as
+  `RANGE_CLIPS_A_PERIOD`. Which edge clipped it says whose it is: a period cut
+  by the range's *start* belongs to the run before this one, whose range
+  reaches at least this one's first day, and is not reported; a period cut by
+  the range's *end* is the one at risk, because every later range begins after
+  it did. A clipped *month* is never reported either — the next grid holds the
+  calendar month whole by construction. The impact drawer gives it its own
+  advice, because the line for `RANGE_HOLDS_NO_WHOLE_PERIOD` ("switch to the
+  month view") is wrong here: nothing beginning later will pick the period up. Generation still reads the existing and standing visits over the
 whole calendar months the range touches; what it may *change* is still exactly
 the range it was given.
 

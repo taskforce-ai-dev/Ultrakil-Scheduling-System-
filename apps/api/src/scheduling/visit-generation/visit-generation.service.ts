@@ -356,26 +356,29 @@ export class VisitGenerationService {
           reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD',
           message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements need a range covering a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)}; ${from} to ${to} holds none, so nothing was planned for this agreement. Generate over a longer range.`,
         });
-      } else if (
-        preview.skippedPeriods.length > 0 &&
-        clippingOneMayLoseIt(agreement.frequencyUnit, agreement.frequencyInterval)
-      ) {
+      } else if (clippingOneMayLoseIt(agreement.frequencyUnit, agreement.frequencyInterval)) {
         // A period clipped at the edge of a month grid is normally handed over
-        // rather than lost: the neighbouring grid overlaps this one and sees
-        // it whole. Multi-week cadences are the exception. Two consecutive
-        // grids share no day when a month begins on a Monday — May 2026 ends
-        // on Sunday the 31st and June begins on Monday the 1st — and a
-        // fortnight straddling that seam is clipped in both, so no run ever
-        // plans it. The portal now asks for a week of overlap, and this says
-        // so out loud for every range that does not.
-        skipped.push({
-          serviceAgreementId: agreement.id,
-          frequencyUnit: agreement.frequencyUnit,
-          frequencyInterval: agreement.frequencyInterval,
-          periodsSkipped: preview.skippedPeriods.length,
-          reason: 'RANGE_CLIPS_A_PERIOD',
-          message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only part of ${spansOf(preview.skippedPeriods)}. Nothing was planned there, and no run whose range stops short of it will. Generate over a range that covers it whole.`,
-        });
+        // rather than lost, and *which* edge says whose it is. One clipped by
+        // the range's start belongs to the run before this one, whose range
+        // reaches at least this one's first day. One clipped by the range's
+        // end is the period at risk: every later range begins after it did, so
+        // unless something reaches past this last day, no run ever holds it
+        // whole. That is the May/June 2026 seam exactly — the May grid ends on
+        // Sunday the 31st, June's begins on Monday the 1st, and the fortnight
+        // from 25 May to 7 June is nobody's. Multi-week cadences only: a month
+        // clipped this way is always picked up by the next grid, which holds
+        // the calendar month whole by construction.
+        const unfinished = preview.skippedPeriods.filter((period) => period.end > to);
+        if (unfinished.length > 0) {
+          skipped.push({
+            serviceAgreementId: agreement.id,
+            frequencyUnit: agreement.frequencyUnit,
+            frequencyInterval: agreement.frequencyInterval,
+            periodsSkipped: unfinished.length,
+            reason: 'RANGE_CLIPS_A_PERIOD',
+            message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only the start of ${spansOf(unfinished)}. Nothing was planned there, and no run beginning later will hold it whole either. Generate over a range that reaches its last day.`,
+          });
+        }
       }
 
       for (const visit of preview.visits) {

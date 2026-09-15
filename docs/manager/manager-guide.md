@@ -124,10 +124,12 @@ plan them. A silent zero would read exactly like a calendar already in order,
 which is why it is never left silent.
 
 The same panel has a second, sharper line: *"Fortnightly agreements: 1
-fortnight cut in half by the ends of this range, and no shorter range will pick
-it up."* That one is not a hand-off. A cycle a range cuts in half is not
-waiting for a smaller range to find it, so switching views will not help —
-generate over a range that holds the whole cycle, or it stays unplanned.
+fortnight began inside this range and ends after it, and no run beginning later
+will hold it whole."* That one is not a hand-off. Every later run starts after
+that cycle did, so none of them can plan it — switching views will not help.
+Generate over a range that reaches the cycle's last day, or it stays unplanned.
+(A cycle cut at the *start* of a range is not reported: the run before this one
+covers it.)
 
 ### Why a visit is on the date it is
 

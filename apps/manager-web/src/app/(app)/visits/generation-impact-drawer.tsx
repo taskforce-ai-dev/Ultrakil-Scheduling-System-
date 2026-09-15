@@ -148,7 +148,7 @@ function skippedByCadence(
         key,
         text:
           reason === "RANGE_CLIPS_A_PERIOD"
-            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} cut in half by the ends of this range, and no shorter range will pick ${count === 1 ? "it" : "them"} up. Generate over a range that holds the whole ${span}.`
+            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} began inside this range and ${count === 1 ? "ends" : "end"} after it, and no run beginning later will hold ${count === 1 ? "it" : "them"} whole. Generate over a range that reaches the last day of the ${span}.`
             : `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
       };
     });
@@ -457,9 +457,10 @@ export function GenerationImpactDrawer({
             )}
             {anyClipped(impact.skippedPeriods) && (
               <li className="text-muted-foreground">
-                Nothing is wrong with these agreements either — but a cycle this range
-                cuts in half is not waiting for a shorter one. Generate over a range
-                that holds it whole, or it will not be planned at all.
+                Nothing is wrong with these agreements either — but a cycle that starts
+                inside this range and finishes after it is nobody&apos;s: every later run
+                begins after it did. Generate over a range that reaches its last day, or
+                it will not be planned at all.
               </li>
             )}
           </Section>

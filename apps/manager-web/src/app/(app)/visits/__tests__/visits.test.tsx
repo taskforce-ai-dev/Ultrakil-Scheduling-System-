@@ -875,10 +875,12 @@ describe("regeneration impact review", () => {
     await user.click(screen.getByRole("button", { name: "Generate visits" }));
     const drawer = await screen.findByRole("dialog");
 
-    expect(within(drawer).getByText(/cut in half by the ends of this range/)).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/began inside this range and ends after it/),
+    ).toBeInTheDocument();
     expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
     expect(
-      within(drawer).getByText(/a cycle this range cuts in half is not waiting for a shorter one/),
+      within(drawer).getByText(/every later run\s+begins after it did/),
     ).toBeInTheDocument();
   });
 

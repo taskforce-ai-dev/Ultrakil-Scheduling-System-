@@ -1458,6 +1458,19 @@ describe('the week view and the month view plan the same periods', () => {
       }),
     ]);
     expect(mayGrid.body.skippedPeriods[0].message).toContain('2026-06-07');
+    expect(mayGrid.body.skippedPeriods[0].periodsSkipped).toBe(1);
+
+    // The other edge is somebody else's. June's grid meets the same fortnight
+    // clipped at its *start*, and the May run is the one that owns it — saying
+    // it twice would have two runs each waiting for the other.
+    const juneGrid = await preview({
+      from: '2026-06-01',
+      to: '2026-07-05',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(juneGrid.status).toBe(200);
+    expect(juneGrid.body.skippedPeriods).toEqual([]);
 
     // And with the week of overlap the portal now asks for, the seam closes:
     // the fortnight is planned, by the run that can see it whole.
