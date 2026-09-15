@@ -29,9 +29,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   adjustVisit,
   ApiError,
+  fetchBranches,
   fetchCustomers,
   fetchJobTypes,
   fetchVisits,
+  type BranchListItem,
   type Customer,
   type JobType,
   type Visit,
@@ -206,6 +208,7 @@ export default function VisitsPage() {
   const [totalInRange, setTotalInRange] = React.useState(0);
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [jobTypes, setJobTypes] = React.useState<JobType[]>([]);
+  const [branches, setBranches] = React.useState<BranchListItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
 
@@ -245,12 +248,14 @@ export default function VisitsPage() {
       }),
       fetchCustomers({ pageSize: 200 }),
       fetchJobTypes(),
+      fetchBranches(),
     ])
-      .then(([visitPage, customerPage, jobTypeList]) => {
+      .then(([visitPage, customerPage, jobTypeList, branchList]) => {
         setVisits(visitPage.items);
         setTotalInRange(visitPage.total);
         setCustomers(customerPage.items);
         setJobTypes(jobTypeList);
+        setBranches(branchList);
       })
       .catch((caught: unknown) => {
         setError(
@@ -317,6 +322,34 @@ export default function VisitsPage() {
     }
     return grouped;
   }, [visible]);
+
+  /**
+   * Days carrying more work than their branch plans for.
+   *
+   * Counted from everything fetched for the range rather than from the
+   * filtered view: narrowing to one customer does not make a day less busy.
+   * Counted per branch too — the limit is a branch's day, and Colombo and
+   * Kandy never share a crew.
+   *
+   * Generation says this once, in a panel that closes. The day goes on
+   * carrying the work for weeks, so the calendar says it as well.
+   */
+  const overCapDays = React.useMemo(() => {
+    const caps = new Map(branches.map((entry) => [entry.code, entry.dailyVisitCap]));
+    const load = new Map<string, number>();
+    for (const visit of visits) {
+      const key = `${visit.branchCode}|${visit.visitDate}`;
+      load.set(key, (load.get(key) ?? 0) + 1);
+    }
+
+    const over = new Set<string>();
+    for (const [key, count] of load) {
+      const [branchCode, date] = key.split("|");
+      const cap = caps.get(branchCode as BranchListItem["code"]);
+      if (cap !== undefined && count > cap) over.add(date);
+    }
+    return over;
+  }, [visits, branches]);
 
   // Base UI's <SelectValue> renders the raw value unless the root is given a
   // value -> label map, which would show a customer's UUID on the trigger.
@@ -638,6 +671,12 @@ export default function VisitsPage() {
                             </span>
                           )}
                         </div>
+
+                        {overCapDays.has(day) && (
+                          <Badge variant="destructive" className="w-full justify-center">
+                            Over the branch&apos;s daily limit
+                          </Badge>
+                        )}
                         {shownVisits.map((visit) => (
                           <VisitChip
                             key={visit.id}

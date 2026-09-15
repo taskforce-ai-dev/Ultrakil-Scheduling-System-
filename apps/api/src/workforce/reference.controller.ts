@@ -1,6 +1,8 @@
 import { Controller, Get } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { BranchListItemDto, SkillListItemDto } from './dto/responses.dto';
+import { DEFAULT_DAILY_VISIT_CAP } from '../config/constants';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -11,7 +13,24 @@ import { PrismaService } from '../prisma/prisma.service';
 @ApiResponse({ status: 401, description: 'Missing or invalid token.' })
 @Controller()
 export class ReferenceController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  /**
+   * Most visits one branch's day is planned to carry.
+   *
+   * The same number the generator spreads work by. It is branch reference data
+   * as much as the supervisor count is: without it the calendar cannot say a
+   * day is over the limit, and the only place the limit was ever visible was
+   * the generation panel, which closes.
+   */
+  private get dailyVisitCap(): number {
+    return (
+      this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP
+    );
+  }
 
   @Get('branches')
   @ApiOperation({
@@ -44,6 +63,7 @@ export class ReferenceController {
       vehicleCount: branch._count.vehicles,
       pmsSupervisorCount:
         supervisors.find((s) => s.branchCode === branch.code)?._count._all ?? 0,
+      dailyVisitCap: this.dailyVisitCap,
     }));
   }
 

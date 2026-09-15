@@ -10,6 +10,7 @@ vi.mock("@/lib/api-client", async () => {
     fetchVisit: vi.fn(),
     fetchCustomers: vi.fn(),
     fetchJobTypes: vi.fn(),
+    fetchBranches: vi.fn(),
     lockVisit: vi.fn(),
     unlockVisit: vi.fn(),
     previewVisitGeneration: vi.fn(),
@@ -21,6 +22,7 @@ import VisitsPage from "../page";
 import {
   ApiError,
   confirmVisitGeneration,
+  fetchBranches,
   fetchCustomers,
   fetchJobTypes,
   fetchVisit,
@@ -101,6 +103,26 @@ beforeEach(() => {
     pageSize: 200,
   });
   vi.mocked(fetchJobTypes).mockResolvedValue([jobType, otherJobType]);
+  vi.mocked(fetchBranches).mockResolvedValue([
+    {
+      id: "branch-colombo",
+      code: "COLOMBO",
+      name: "Colombo",
+      employeeCount: 20,
+      vehicleCount: 5,
+      pmsSupervisorCount: 3,
+      dailyVisitCap: 2,
+    },
+    {
+      id: "branch-kandy",
+      code: "KANDY",
+      name: "Kandy",
+      employeeCount: 10,
+      vehicleCount: 2,
+      pmsSupervisorCount: 1,
+      dailyVisitCap: 2,
+    },
+  ]);
   vi.mocked(fetchVisit).mockReset();
   vi.mocked(lockVisit).mockReset();
   vi.mocked(previewVisitGeneration).mockReset();
@@ -674,7 +696,7 @@ describe("regeneration impact review", () => {
       within(drawer).getByText("Days over the branch's limit")
     ).toBeInTheDocument();
     expect(
-      within(drawer).getByText("2026-09-14, COLOMBO: 14 visits")
+      within(drawer).getByText("2026-09-14, COLOMBO: 14 visits — limit 12")
     ).toBeInTheDocument();
   });
 
@@ -785,5 +807,68 @@ describe("regeneration impact review", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("a day over the branch's limit", () => {
+  /** Three Colombo visits on one day, against a cap of two. */
+  const crowded = () => [
+    generated,
+    buildVisit({
+      id: "visit-crowd-1",
+      visitDate: "2026-09-09",
+      windowStartMinute: 630,
+      customerName: "Union Bank Kadawatha",
+      jobTypeName: "Rodent Control",
+    }),
+    buildVisit({
+      id: "visit-crowd-2",
+      visitDate: "2026-09-09",
+      windowStartMinute: 720,
+      customerName: "Union Bank Kadawatha",
+      jobTypeName: "Rodent Control",
+    }),
+  ];
+
+  it("says so on the day, not only in the generation panel", async () => {
+    // The generation warning is shown once and the panel closes. The day goes
+    // on carrying the work for weeks with nothing on the calendar saying so.
+    mockVisits(crowded());
+    await renderCalendar();
+
+    expect(
+      await within(grid()).findByText("Over the branch's daily limit")
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing on a day inside the limit", async () => {
+    mockVisits([generated, locked, staffed]);
+    await renderCalendar();
+
+    expect(
+      within(grid()).queryByText("Over the branch's daily limit")
+    ).not.toBeInTheDocument();
+  });
+
+  it("counts each branch's day on its own", async () => {
+    // Two Colombo and one Kandy on the same day is not three over a cap of
+    // two: the limit is a branch's day, and the branches never share a crew.
+    mockVisits([
+      ...crowded().slice(0, 2),
+      buildVisit({
+        id: "visit-kandy",
+        visitDate: "2026-09-09",
+        windowStartMinute: 810,
+        branchCode: "KANDY",
+        customerName: "Union Bank Kadawatha",
+        jobTypeName: "Rodent Control",
+      }),
+    ]);
+    await renderCalendar();
+
+    expect(
+      within(grid()).queryByText("Over the branch's daily limit")
+    ).not.toBeInTheDocument();
   });
 });

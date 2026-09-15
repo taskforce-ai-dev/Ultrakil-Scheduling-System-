@@ -131,10 +131,19 @@ period still asks for a visit, and the day it sits on is treated as free when
 the branch's daily limit is worked out.
 
 If a single day still carries more work than the branch plans for, the
-generation panel says so by date and count. That happens when the work on
-that day is already booked with customers, or is already in the calendar and
-not this run's to move: the system reports it rather than quietly moving a
-date somebody promised.
+generation panel says so by date, count and limit, under **Days over the
+branch's limit**. That happens when the work on that day is already booked
+with customers, is already in the calendar and not this run's to move, or —
+most often — belongs to weekly agreements allowed only one weekday, which have
+nowhere inside their week to move to. The system reports it rather than
+quietly moving a date somebody promised.
+
+That panel closes, and the day goes on carrying the work. So the calendar
+marks it too: a day over its branch's limit is badged **Over the branch's
+daily limit** in the visit calendar. The count is per branch — two Colombo and
+one Kandy visit on the same day is not three against one limit. (If the range
+holds more visits than the calendar has loaded, the banner above the grid says
+so, and the badge can only speak for what is loaded.)
 
 ### Two more things the generation panel tells you
 

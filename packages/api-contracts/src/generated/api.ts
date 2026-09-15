@@ -1513,6 +1513,8 @@ export interface components {
             vehicleCount: number;
             /** @description Active PMS-grade supervisors. A branch with zero cannot be scheduled at all — every job needs one. */
             pmsSupervisorCount: number;
+            /** @description Most visits this branch's day is planned to carry. Generation spreads work off a day above it and warns when it cannot; the calendar marks such a day so the limit is visible outside that one panel. */
+            dailyVisitCap: number;
         };
         SkillListItemDto: {
             /** @example MBR_FUMIGATION */

@@ -1185,6 +1185,68 @@ describe('a range that cuts a month in half', () => {
   });
 });
 
+describe('a day the spread cannot rescue', () => {
+  const cappedAt = (cap: number) =>
+    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
+      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+    } as unknown as ConfigService);
+
+  it('says so by date, count and cap before anything is confirmed', async () => {
+    // Weekly agreements allowed exactly one weekday have nowhere inside their
+    // week to move to, so the guard cannot spread them and the day stays over
+    // the cap. That is precisely when the manager has to be told, and it has
+    // to come out of a real preview rather than a fixture.
+    const week = { from: '2027-06-07', to: '2027-06-13' };
+    await prisma.generatedVisit.deleteMany({
+      where: {
+        branchCode: BranchCode.KANDY,
+        visitDate: {
+          gte: new Date(`${week.from}T00:00:00.000Z`),
+          lte: new Date(`${week.to}T00:00:00.000Z`),
+        },
+      },
+    });
+
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 Overcap ${suffix}`, branchCode: BranchCode.KANDY });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({
+        name: `C04 Overcap Site ${suffix}`,
+        branchCode: BranchCode.KANDY,
+        operatingHours: [
+          { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 1020 },
+        ],
+      });
+
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const agreement = await createAgreement({
+        serviceSiteId: site.body.id,
+        allowedDays: [Weekday.WEDNESDAY],
+        preferredDays: [],
+      });
+      ids.push(agreement.id);
+    }
+
+    const impact = await cappedAt(2).preview({ ...week, serviceAgreementIds: ids });
+
+    expect(impact.loadWarnings).toEqual([
+      expect.objectContaining({
+        branchCode: BranchCode.KANDY,
+        date: '2027-06-09', // the Wednesday
+        plannedCount: 3,
+        cap: 2,
+      }),
+    ]);
+    expect(impact.loadWarnings[0].message).toContain('2027-06-09');
+    expect(impact.loadWarnings[0].message).toContain('3 visits');
+  });
+});
+
 describe('a cancelled visit takes up no room in the day', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
