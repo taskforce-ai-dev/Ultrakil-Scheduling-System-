@@ -163,6 +163,29 @@ class BookingWarningDto {
   @ApiProperty({ type: String }) message!: string;
 }
 
+class SkippedPeriodsDto {
+  @ApiProperty({ type: String, format: 'uuid' }) serviceAgreementId!: string;
+  @ApiProperty({
+    type: String,
+    enum: ['WEEK', 'MONTH'],
+    description: 'The unit this agreement\'s cycle is counted in.',
+  })
+  frequencyUnit!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'How many units make one cycle: 2 with WEEK is fortnightly, 3 with MONTH quarterly.',
+  })
+  frequencyInterval!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'How many of this agreement\'s cycles the range holds only a slice of.',
+  })
+  periodsSkipped!: number;
+  @ApiProperty({ type: String, enum: ['RANGE_HOLDS_NO_WHOLE_PERIOD'] })
+  reason!: string;
+  @ApiProperty({ type: String }) message!: string;
+}
+
 export class GenerationImpactDto {
   @ApiProperty({ type: String, format: 'date' }) from!: string;
   @ApiProperty({ type: String, format: 'date' }) to!: string;
@@ -213,6 +236,13 @@ export class GenerationImpactDto {
       "Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only.",
   })
   bookingWarnings!: BookingWarningDto[];
+
+  @ApiProperty({
+    type: [SkippedPeriodsDto],
+    description:
+      'Agreements this range could plan nothing for, because it holds no whole cycle of theirs — a quarterly agreement asked about from a week view, say. Nothing is wrong with the agreement; the run that covers a whole quarter will plan it. Listed so a zero is never silent.',
+  })
+  skippedPeriods!: SkippedPeriodsDto[];
 
   @ApiProperty({
     type: Boolean,

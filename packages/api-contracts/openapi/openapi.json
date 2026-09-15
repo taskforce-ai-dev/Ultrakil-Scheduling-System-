@@ -4982,6 +4982,48 @@
           "message"
         ]
       },
+      "SkippedPeriodsDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "frequencyUnit": {
+            "type": "string",
+            "enum": [
+              "WEEK",
+              "MONTH"
+            ],
+            "description": "The unit this agreement's cycle is counted in."
+          },
+          "frequencyInterval": {
+            "type": "number",
+            "description": "How many units make one cycle: 2 with WEEK is fortnightly, 3 with MONTH quarterly."
+          },
+          "periodsSkipped": {
+            "type": "number",
+            "description": "How many of this agreement's cycles the range holds only a slice of."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "RANGE_HOLDS_NO_WHOLE_PERIOD"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "frequencyUnit",
+          "frequencyInterval",
+          "periodsSkipped",
+          "reason",
+          "message"
+        ]
+      },
       "GenerationImpactDto": {
         "type": "object",
         "properties": {
@@ -5049,6 +5091,13 @@
               "$ref": "#/components/schemas/BookingWarningDto"
             }
           },
+          "skippedPeriods": {
+            "description": "Agreements this range could plan nothing for, because it holds no whole cycle of theirs — a quarterly agreement asked about from a week view, say. Nothing is wrong with the agreement; the run that covers a whole quarter will plan it. Listed so a zero is never silent.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedPeriodsDto"
+            }
+          },
           "isPreview": {
             "type": "boolean",
             "description": "True when this was a preview. Nothing was written."
@@ -5072,6 +5121,7 @@
           "shortfalls",
           "loadWarnings",
           "bookingWarnings",
+          "skippedPeriods",
           "isPreview",
           "scheduleRunId"
         ]

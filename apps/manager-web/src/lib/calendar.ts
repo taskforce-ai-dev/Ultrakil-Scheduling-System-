@@ -86,22 +86,32 @@ export function rangeForView(
 /**
  * The inclusive range a generation run should be asked for.
  *
- * Not the same as `rangeForView`, and deliberately so. The grid a month is
- * drawn on begins on the last Monday of the previous month and ends in the
- * next: right for fetching visits, because those cells are real days a manager
- * can see — and wrong for generating, because a run given a one-day stub of
- * August plans it as though it were the month, while the August visit already
- * published on the 17th lies outside the range where nothing can see it.
+ * A run plans only the periods its range holds **whole**, and periods are
+ * calendar-aligned: a week is a Monday-to-Sunday ISO week, a month a calendar
+ * month, both counted from the agreement's own start rather than from the
+ * range. So the range has to be chosen to hold whole ones.
  *
- * A month generates the calendar month. A week generates its own seven days,
- * which are already whole.
+ * The month view sends the **grid** — the same days it draws. The grid begins
+ * on a Monday and ends on a Sunday, so it holds whole ISO weeks for every
+ * weekly and fortnightly agreement; and it contains the whole calendar month,
+ * so it holds a whole month for every monthly one. The calendar month on its
+ * own would do the second but not the first: 1-30 September holds no whole ISO
+ * week at either end, and a weekly agreement generated from the month view
+ * would plan a different set of weeks from the same agreement generated from
+ * the week view — a duplicate where the week view's visit was protected, churn
+ * where it was not.
+ *
+ * The week view sends its own seven days, which are one whole ISO week.
+ *
+ * Neither view holds a whole quarter, and only a month view holds a whole
+ * fortnight. An agreement whose cycle the range cannot hold is not planned and
+ * is reported in `skippedPeriods`, never silently.
  */
 export function rangeForGeneration(
   anchor: string,
   view: CalendarView
 ): { from: string; to: string } {
-  if (view === "week") return rangeForView(anchor, view);
-  return { from: startOfMonth(anchor), to: endOfMonth(anchor) };
+  return rangeForView(anchor, view);
 }
 
 /** Every day in the grid, in order. 7 for a week, 35 or 42 for a month. */

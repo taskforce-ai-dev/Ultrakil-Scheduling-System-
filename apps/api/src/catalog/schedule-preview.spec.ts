@@ -5,6 +5,7 @@ import {
   ASSUMED_DAY_WINDOW,
   computeSchedulePreview,
   effectiveWindows,
+  parseDateOnly,
 } from './schedule-preview';
 
 /** Mon–Fri 09:00–17:00, the ordinary case, unless a test says otherwise. */
@@ -1032,5 +1033,177 @@ describe('anchors', () => {
       'ANCHORED',
       'ANCHORED',
     ]);
+  });
+});
+
+describe('periods are the calendar\'s, not the range\'s', () => {
+  /**
+   * The regression this suite exists for.
+   *
+   * Periods used to be counted from the run's own `from`. The portal's week
+   * view sent its Monday-to-Sunday week and the month view sent the calendar
+   * month, so a weekly Mon-Fri agreement got Monday the 14th from one and —
+   * September starting on a Tuesday, which made the buckets run Tuesday to
+   * Monday — Tuesday the 15th from the other. Where the Monday was protected
+   * that was a duplicate; where it was not, the two views pushed the visit
+   * back and forth for ever.
+   *
+   * Periods are now whole ISO weeks and whole calendar months, anchored to the
+   * agreement's own start date, so no range can move them.
+   */
+  const weekly = (overrides: Partial<SchedulePreviewInput> = {}) =>
+    buildInput({
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      allowedDays: [
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+      ],
+      preferredDays: [],
+      startDate: '2026-01-05',
+      wholePeriodsOnly: true,
+      ...overrides,
+    });
+
+  /** The week view: one ISO week. */
+  const weekView = { from: '2026-09-14', to: '2026-09-20' };
+  /** The month view: the grid September is drawn on, whole ISO weeks and all. */
+  const monthView = { from: '2026-08-31', to: '2026-10-04' };
+
+  it('gives the week view and the month view the same day for the same week', () => {
+    const fromTheWeek = computeSchedulePreview(weekly(weekView));
+    const fromTheMonth = computeSchedulePreview(weekly(monthView));
+
+    expect(fromTheWeek.visits.map((visit) => visit.date)).toEqual(['2026-09-14']);
+    expect(
+      fromTheMonth.visits
+        .map((visit) => visit.date)
+        .filter((date) => date >= weekView.from && date <= weekView.to),
+    ).toEqual(['2026-09-14']);
+  });
+
+  it('gives them the same period index too, so pinning and the guard agree', () => {
+    const fromTheWeek = computeSchedulePreview(weekly(weekView));
+    const fromTheMonth = computeSchedulePreview(weekly(monthView));
+    const inThatWeek = fromTheMonth.visits.find((visit) => visit.date === '2026-09-14');
+
+    expect(inThatWeek?.periodIndex).toBe(fromTheWeek.visits[0].periodIndex);
+  });
+
+  it('plans every whole week of the grid, and no slice of one', () => {
+    const preview = computeSchedulePreview(weekly(monthView));
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual([
+      '2026-08-31',
+      '2026-09-07',
+      '2026-09-14',
+      '2026-09-21',
+      '2026-09-28',
+    ]);
+    expect(preview.skippedPeriods).toEqual([]);
+  });
+
+  it('phases a fortnight from the agreement, so two month runs do not reset it', () => {
+    const fortnightly = (range: { from: string; to: string }) =>
+      computeSchedulePreview(
+        weekly({ ...range, frequencyInterval: 2, allowedDays: [Weekday.MONDAY] }),
+      );
+
+    const september = fortnightly({ from: '2026-08-31', to: '2026-10-04' });
+    const october = fortnightly({ from: '2026-09-28', to: '2026-11-01' });
+
+    const dates = [
+      ...september.visits.map((visit) => visit.date),
+      ...october.visits.map((visit) => visit.date),
+    ];
+    // The October run re-plans the fortnight it shares with September on the
+    // same day, and carries on fourteen days at a time from there.
+    expect(dates).toEqual([
+      '2026-08-31',
+      '2026-09-14',
+      '2026-09-28',
+      '2026-10-12',
+    ]);
+
+    const daysApart = dates
+      .slice(1)
+      .map(
+        (date, index) =>
+          (parseDateOnly(date).getTime() - parseDateOnly(dates[index]).getTime()) /
+          (24 * 60 * 60 * 1000),
+      );
+    expect(daysApart).toEqual([14, 14, 14]);
+  });
+
+  it('plans a quarterly agreement exactly once per quarter over six months', () => {
+    const preview = computeSchedulePreview(
+      weekly({
+        frequencyUnit: FrequencyUnit.MONTH,
+        frequencyInterval: 3,
+        from: '2026-07-01',
+        to: '2026-12-31',
+      }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual([
+      '2026-07-01',
+      '2026-10-01',
+    ]);
+    // Quarters counted from January, the month the agreement began in.
+    expect(preview.plannedPeriods.map((period) => [period.start, period.end])).toEqual([
+      ['2026-07-01', '2026-09-30'],
+      ['2026-10-01', '2026-12-31'],
+    ]);
+  });
+
+  it('plans nothing for a quarterly agreement from a week view, and says why', () => {
+    const preview = computeSchedulePreview(
+      weekly({ frequencyUnit: FrequencyUnit.MONTH, frequencyInterval: 3, ...weekView }),
+    );
+
+    expect(preview.visits).toEqual([]);
+    expect(preview.plannedPeriods).toEqual([]);
+    expect(preview.skippedPeriods).toEqual([
+      {
+        periodIndex: 2,
+        start: '2026-07-01',
+        end: '2026-09-30',
+        reason: 'CLIPPED_BY_THE_HORIZON',
+      },
+    ]);
+  });
+
+  it('plans nothing for a fortnightly agreement from a week view either', () => {
+    const preview = computeSchedulePreview(
+      weekly({ frequencyInterval: 2, ...weekView }),
+    );
+
+    expect(preview.visits).toEqual([]);
+    expect(preview.skippedPeriods).toHaveLength(1);
+  });
+
+  it('plans a monthly agreement from the month view, and says nothing was skipped', () => {
+    const preview = computeSchedulePreview(
+      weekly({ frequencyUnit: FrequencyUnit.MONTH, ...monthView }),
+    );
+
+    // September is whole inside the grid; August and October are not, and are
+    // left to the runs that hold them.
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-01']);
+    expect(preview.plannedPeriods).toEqual([
+      { periodIndex: 8, start: '2026-09-01', end: '2026-09-30' },
+    ]);
+  });
+
+  it('reports the periods a monthly agreement plans, not the range it was given', () => {
+    const preview = computeSchedulePreview(
+      weekly({ frequencyUnit: FrequencyUnit.MONTH, ...monthView }),
+    );
+
+    expect(preview.plannedPeriods[0].start).toBe('2026-09-01');
+    expect(preview.plannedPeriods[0].end).toBe('2026-09-30');
   });
 });

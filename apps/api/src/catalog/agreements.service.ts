@@ -540,10 +540,17 @@ export class AgreementsService {
     });
 
     // The period index and the days a visit could have moved to are the load
-    // guard's working notes, not part of the contract. Booking issues belong
-    // to a generation run, which reports them against a whole horizon; this
-    // screen answers "what does this one agreement ask for?".
-    const { bookingIssues: _bookingIssues, ...rest } = preview;
+    // guard's working notes, not part of the contract, and so are the periods
+    // a run planned or skipped — this screen plans whole and partial periods
+    // alike. Booking issues belong to a generation run, which reports them
+    // against a whole horizon; this screen answers "what does this one
+    // agreement ask for?".
+    const {
+      bookingIssues: _bookingIssues,
+      plannedPeriods: _plannedPeriods,
+      skippedPeriods: _skippedPeriods,
+      ...rest
+    } = preview;
     return {
       ...rest,
       visits: preview.visits.map(

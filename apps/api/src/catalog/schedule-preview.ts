@@ -70,10 +70,19 @@ export interface SchedulePreviewInput {
   agreementWindowStartMinute: number | null;
   agreementWindowEndMinute: number | null;
   durationMinutes: number;
-  /** How far ahead to look. Defaults to 4 weeks. */
+  /**
+   * How far ahead to look. Defaults to 4 weeks.
+   *
+   * A convenience for the agreement screen, which asks "the next few weeks"
+   * and has no end date in mind. Generation knows exactly which day its range
+   * ends on and passes `to` instead — rounding 1-30 September up to five weeks
+   * would have the run believe it held the first days of October whole.
+   */
   horizonWeeks?: number;
   /** Where the horizon begins. Defaults to the agreement's start date. */
   from?: string;
+  /** Last day of the horizon, inclusive, YYYY-MM-DD. Overrides `horizonWeeks`. */
+  to?: string;
   /**
    * Dates already agreed with the customer, as YYYY-MM-DD.
    *
@@ -108,8 +117,15 @@ export interface SchedulePreviewInput {
    * The customer got two August visits every time the button was pressed.
    *
    * So generation sets this, and a period the run cannot see whole is left to
-   * the run that can. A period clipped by the agreement's *own* first or last
-   * day is not affected: the agreement really does begin, or end, there.
+   * the run that can — and named in `skippedPeriods`, so a range that holds no
+   * whole period for an agreement reports why rather than a bare zero. A
+   * period clipped by the agreement's *own* first or last day is not affected:
+   * the agreement really does begin, or end, there.
+   *
+   * Because periods are calendar-aligned, "whole" is a property of the range
+   * and the cadence alone. A whole ISO week is whole for every weekly
+   * agreement, a whole calendar month for every monthly one, and the portal's
+   * two views can therefore be made to plan exactly the same periods.
    */
   wholePeriodsOnly?: boolean;
 }
@@ -145,10 +161,11 @@ export interface PreviewVisit {
   /** Where this date came from. */
   placement: VisitPlacementKind;
   /**
-   * Which cycle of the horizon this visit belongs to, counted from the
-   * agreement's own first day. Two visits sharing a period are the same
+   * Which cycle this visit belongs to: the ISO week or calendar month counted
+   * from the agreement's own start. Two visits sharing a period are the same
    * week's or month's work, which is what the load guard needs to know before
-   * it moves one of them.
+   * it moves one of them — and, because the index does not depend on the range
+   * being generated, two runs over different ranges agree about it.
    */
   periodIndex: number;
   /**
@@ -225,6 +242,20 @@ export interface PreviewBookingIssue {
   message: string;
 }
 
+/** A period, by index and by the whole calendar span it covers. */
+export interface PreviewPeriod {
+  periodIndex: number;
+  /** YYYY-MM-DD, the period's own first day — not the range's. */
+  start: string;
+  /** YYYY-MM-DD, the period's own last day — not the range's. */
+  end: string;
+}
+
+/** A period this run left to the run that can see it whole. */
+export interface PreviewSkippedPeriod extends PreviewPeriod {
+  reason: 'CLIPPED_BY_THE_HORIZON';
+}
+
 export interface SchedulePreview {
   visits: PreviewVisit[];
   shortfalls: PreviewShortfall[];
@@ -233,6 +264,24 @@ export interface SchedulePreview {
    * drop the visit; always a reason to say so.
    */
   bookingIssues: PreviewBookingIssue[];
+  /**
+   * The periods this preview actually planned, whole spans and all.
+   *
+   * Generation compares what it requires against what already exists, and a
+   * visit outside the periods it planned is not its to judge: left in the
+   * comparison, an untouched visit sitting in a period the run skipped reads
+   * as no longer required and is proposed for removal.
+   */
+  plannedPeriods: PreviewPeriod[];
+  /**
+   * The periods the range holds only a slice of, so this run planned none of
+   * them. Empty unless `wholePeriodsOnly` is set.
+   *
+   * Reported rather than silently dropped: a quarterly agreement asked about
+   * from a week view can plan nothing at all, and a zero with no explanation
+   * is indistinguishable from a calendar that is already correct.
+   */
+  skippedPeriods: PreviewSkippedPeriod[];
   horizonStart: string;
   horizonEnd: string;
 }
@@ -313,31 +362,78 @@ export function windowProvenanceOf(input: {
   return statedByAgreement ? DataProvenance.MANAGER_CONFIRMED : DataProvenance.DEFAULTED;
 }
 
+/** Monday of the ISO week `date` falls in. UltraKIL's week starts Monday. */
+export function startOfIsoWeek(date: Date): Date {
+  const backToMonday = (date.getUTCDay() + 6) % 7;
+  return new Date(date.getTime() - backToMonday * DAY_MS);
+}
+
 /**
- * Identifies the cycle a date belongs to, relative to the horizon.
+ * Identifies the cycle a date belongs to.
  *
- * With an interval of 1 this is simply the week or month. With a larger one
- * the periods are grouped: an interval of 2 on WEEK puts a fortnight in one
- * bucket, so "one visit per fortnight" places one visit across both weeks
- * rather than one in each.
+ * Periods are **calendar-aligned and anchored to the agreement**, never to the
+ * range somebody happened to generate under. A WEEK period is a whole ISO week,
+ * Monday to Sunday; a MONTH period is a whole calendar month. With an interval
+ * above 1 the periods are grouped from the agreement's own start — a
+ * fortnightly agreement's fortnights are the two ISO weeks counted from the
+ * week it began in, and a quarterly agreement's quarters are the three-month
+ * blocks counted from the month it began in.
+ *
+ * Phasing them from the run's `from` instead is what made the portal's week and
+ * month views disagree: a weekly Mon-Fri agreement got Monday from a week view
+ * and, from a month view starting on a Tuesday, the following Tuesday — a
+ * duplicate where the Monday was protected, and churn where it was not.
+ *
+ * `anchor` is therefore the agreement's `startDate`. Dates before it yield
+ * negative indices, which is correct and never collides with a later period.
  */
 export function periodIndexOf(
   date: Date,
-  horizonStart: Date,
+  anchor: Date,
   unit: FrequencyUnit,
   interval: number,
 ): number {
   if (unit === FrequencyUnit.MONTH) {
-    const monthsFromStart =
-      (date.getUTCFullYear() - horizonStart.getUTCFullYear()) * 12 +
-      (date.getUTCMonth() - horizonStart.getUTCMonth());
-    return Math.floor(monthsFromStart / interval);
+    const monthsFromAnchor =
+      (date.getUTCFullYear() - anchor.getUTCFullYear()) * 12 +
+      (date.getUTCMonth() - anchor.getUTCMonth());
+    return Math.floor(monthsFromAnchor / interval);
   }
 
-  const weeksFromStart = Math.floor(
-    (date.getTime() - horizonStart.getTime()) / DAY_MS / 7,
+  const weeksFromAnchor = Math.round(
+    (startOfIsoWeek(date).getTime() - startOfIsoWeek(anchor).getTime()) / DAY_MS / 7,
   );
-  return Math.floor(weeksFromStart / interval);
+  return Math.floor(weeksFromAnchor / interval);
+}
+
+/**
+ * The whole calendar span a period covers, whatever range is being generated.
+ *
+ * The counterpart to `periodIndexOf`, and the reason a run can tell a period it
+ * holds whole from one it has only a slice of: the slice's first and last day
+ * inside the range say nothing on their own.
+ */
+export function periodBoundsOf(
+  periodIndex: number,
+  anchor: Date,
+  unit: FrequencyUnit,
+  interval: number,
+): { start: string; end: string } {
+  if (unit === FrequencyUnit.MONTH) {
+    const first = new Date(
+      Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + periodIndex * interval, 1),
+    );
+    const last = new Date(
+      Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + interval, 0),
+    );
+    return { start: toDateOnly(first), end: toDateOnly(last) };
+  }
+
+  const first = new Date(
+    startOfIsoWeek(anchor).getTime() + periodIndex * interval * 7 * DAY_MS,
+  );
+  const last = new Date(first.getTime() + (interval * 7 - 1) * DAY_MS);
+  return { start: toDateOnly(first), end: toDateOnly(last) };
 }
 
 /** One placeable day, before anything has been chosen. */
@@ -366,8 +462,13 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   const horizonStart = input.from ? parseDateOnly(input.from) : agreementStart;
   const effectiveStart = horizonStart > agreementStart ? horizonStart : agreementStart;
 
-  const horizonWeeks = input.horizonWeeks ?? 4;
-  const horizonEnd = new Date(effectiveStart.getTime() + horizonWeeks * 7 * DAY_MS - DAY_MS);
+  // The range's real last day when generation states it, and otherwise "a few
+  // weeks from here" for the agreement screen. Rounding the former up to whole
+  // weeks would have a run over 1-30 September believe it held October's first
+  // days whole.
+  const horizonEnd = input.to
+    ? parseDateOnly(input.to)
+    : new Date(effectiveStart.getTime() + (input.horizonWeeks ?? 4) * 7 * DAY_MS - DAY_MS);
   const agreementEnd = input.endDate ? parseDateOnly(input.endDate) : null;
   const lastDate =
     agreementEnd && agreementEnd < horizonEnd ? agreementEnd : horizonEnd;
@@ -413,7 +514,9 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     cursor <= lastDate;
     cursor = new Date(cursor.getTime() + DAY_MS)
   ) {
-    const period = periodIndexOf(cursor, effectiveStart, input.frequencyUnit, interval);
+    // Anchored to the agreement, never to the range: a fortnight belongs to
+    // the agreement that sells it, not to whoever pressed Generate.
+    const period = periodIndexOf(cursor, agreementStart, input.frequencyUnit, interval);
     const date = toDateOnly(cursor);
 
     const bounds = periodBounds.get(period);
@@ -472,51 +575,57 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   const visits: PreviewVisit[] = [];
   const shortfalls: PreviewShortfall[] = [];
   const bookingIssues: PreviewBookingIssue[] = [];
+  const plannedPeriods: PreviewPeriod[] = [];
+  const skippedPeriods: PreviewSkippedPeriod[] = [];
+
+  const firstDay = toDateOnly(effectiveStart);
+  const finalDay = toDateOnly(lastDate);
+  // Whether the range's own ends are the agreement's. A period cut short
+  // because the agreement begins or ends there is a real period; one cut short
+  // because the horizon does is a slice of somebody else's.
+  const startsWithTheAgreement = firstDay === toDateOnly(agreementStart);
+  const endsWithTheAgreement =
+    agreementEnd !== null && finalDay === toDateOnly(agreementEnd);
 
   /**
-   * True when this period is a clipped piece of a week or month rather than a
-   * whole one. Such a period was never promised the full count, so counting
-   * its visits against the frequency would cry wolf.
+   * True when the range holds only a slice of this period. Such a period was
+   * never promised the full count, so counting its visits against the
+   * frequency would cry wolf.
    */
-  const isClipped = (bounds: { start: string; end: string }): boolean => {
-    const isLastPeriod = bounds.end === toDateOnly(lastDate);
-    const isFirstPeriod = bounds.start === toDateOnly(effectiveStart);
-    if (!isLastPeriod && !isFirstPeriod) return false;
-    return !coversWholePeriod(bounds, input.frequencyUnit, interval);
-  };
+  const isClipped = (whole: PreviewPeriod): boolean =>
+    whole.start < firstDay || whole.end > finalDay;
 
   /**
    * True when a caller that plans only whole periods must skip this one.
    *
-   * That is: the period is a clipped piece of a week or month, and what
-   * clipped it was the horizon rather than the agreement's own first or last
-   * day. See `wholePeriodsOnly` for why generation asks for this and the
-   * agreement screen does not.
+   * That is: the range holds only a slice of the period, and what clipped it
+   * was the horizon rather than the agreement's own first or last day. See
+   * `wholePeriodsOnly` for why generation asks for this and the agreement
+   * screen does not.
    */
-  const clippedByTheHorizon = (bounds: { start: string; end: string }): boolean => {
+  const clippedByTheHorizon = (whole: PreviewPeriod): boolean => {
     if (!input.wholePeriodsOnly) return false;
-    if (!isClipped(bounds)) return false;
-
-    const isFirstPeriod = bounds.start === toDateOnly(effectiveStart);
-    const isLastPeriod = bounds.end === toDateOnly(lastDate);
-    const ownStart = toDateOnly(effectiveStart) === toDateOnly(agreementStart);
-    const ownEnd =
-      agreementEnd !== null && toDateOnly(lastDate) === toDateOnly(agreementEnd);
-
-    if (isFirstPeriod && !ownStart) return true;
-    if (isLastPeriod && !ownEnd) return true;
+    if (whole.start < firstDay && !startsWithTheAgreement) return true;
+    if (whole.end > finalDay && !endsWithTheAgreement) return true;
     return false;
   };
 
   for (const [period, bounds] of [...periodBounds.entries()].sort((a, b) => a[0] - b[0])) {
     const inPeriod = byPeriod.get(period) ?? [];
     const booked = bookedByPeriod.get(period) ?? [];
+    const whole: PreviewPeriod = {
+      periodIndex: period,
+      ...periodBoundsOf(period, agreementStart, input.frequencyUnit, interval),
+    };
 
     // A period the workbook has already booked is not planned at all. Its
     // visits are those dates, in that order, whatever the frequency says —
     // the frequency is a summary of what UltraKIL sells, the bookings are
     // what it actually agreed with this customer for these weeks.
     if (booked.length > 0) {
+      // A booked period is planned whatever the range holds of it: a booked
+      // date is a commitment to a day, not a plan the run made.
+      plannedPeriods.push(whole);
       const byDate = new Map<string, Candidate>();
       for (const candidate of [...inPeriod].sort(
         (a, b) => a.windowStartMinute - b.windowStartMinute,
@@ -545,7 +654,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
       // The bookings are honoured exactly as written — this is deliberately
       // not re-planned. But a period booked fewer times than the agreement
       // promises is a gap the customer is paying for, so it is reported.
-      if (booked.length < input.frequencyCount && !isClipped(bounds)) {
+      if (booked.length < input.frequencyCount && !isClipped(whole)) {
         shortfalls.push({
           periodStart: bounds.start,
           periodEnd: bounds.end,
@@ -558,10 +667,14 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
       continue;
     }
 
-    // A stub of a period the horizon sliced off belongs to the run that can
-    // see it whole. Bookings above are exempt: a booked date is a commitment
-    // to a day, not a plan the run made, and honouring it invents nothing.
-    if (clippedByTheHorizon(bounds)) continue;
+    // A slice of a period the horizon cut belongs to the run that can see it
+    // whole. Bookings above are exempt: a booked date is a commitment to a
+    // day, not a plan the run made, and honouring it invents nothing.
+    if (clippedByTheHorizon(whole)) {
+      skippedPeriods.push({ ...whole, reason: 'CLIPPED_BY_THE_HORIZON' });
+      continue;
+    }
+    plannedPeriods.push(whole);
 
     // Preferred weekdays first, then closest to an anchor, then earliest. At
     // most one visit per calendar day: two visits on one Tuesday is a
@@ -585,7 +698,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     );
 
     if (picks.length < input.frequencyCount) {
-      if (isClipped(bounds)) continue;
+      if (isClipped(whole)) continue;
 
       shortfalls.push({
         periodStart: bounds.start,
@@ -609,6 +722,8 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     visits: visits.sort((a, b) => a.date.localeCompare(b.date)),
     shortfalls,
     bookingIssues: bookingIssues.sort((a, b) => a.date.localeCompare(b.date)),
+    plannedPeriods: plannedPeriods.sort((a, b) => a.periodIndex - b.periodIndex),
+    skippedPeriods: skippedPeriods.sort((a, b) => a.periodIndex - b.periodIndex),
     horizonStart: toDateOnly(effectiveStart),
     horizonEnd: toDateOnly(lastDate),
   };
@@ -845,27 +960,6 @@ function bookedVisitWithoutAUsableWindow(
       };
 
   return { visit, issue };
-}
-
-/** True when the bounds cover a whole cycle, not a clipped piece of one. */
-function coversWholePeriod(
-  bounds: { start: string; end: string },
-  unit: FrequencyUnit,
-  interval: number,
-): boolean {
-  const start = parseDateOnly(bounds.start);
-  const end = parseDateOnly(bounds.end);
-  const days = Math.round((end.getTime() - start.getTime()) / DAY_MS) + 1;
-
-  if (unit === FrequencyUnit.WEEK) return days >= 7 * interval;
-
-  let daysInCycle = 0;
-  for (let offset = 0; offset < interval; offset += 1) {
-    daysInCycle += new Date(
-      Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + offset + 1, 0),
-    ).getUTCDate();
-  }
-  return days >= daysInCycle;
 }
 
 function explainShortfall(context: {

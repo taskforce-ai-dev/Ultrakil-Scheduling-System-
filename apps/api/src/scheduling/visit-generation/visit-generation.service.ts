@@ -65,6 +65,23 @@ interface BookingWarning {
   message: string;
 }
 
+/**
+ * An agreement the range could plan nothing for, and why.
+ *
+ * Not a shortfall: nothing here is wrong with the agreement. The range simply
+ * does not hold a whole quarter (or fortnight, or month) of it, and the run
+ * that can see one will plan it. Reported because the alternative is a zero
+ * indistinguishable from a calendar already in order.
+ */
+interface SkippedPeriods {
+  serviceAgreementId: string;
+  frequencyUnit: FrequencyUnit;
+  frequencyInterval: number;
+  periodsSkipped: number;
+  reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD';
+  message: string;
+}
+
 interface Shortfall {
   serviceAgreementId: string;
   customerName: string;
@@ -118,7 +135,6 @@ export class VisitGenerationService {
     const to = parseDateOnly(dto.to);
 
     const agreements = await this.loadAgreements(dto, from, to);
-    const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
 
     // What is already in the calendar, read over the whole calendar months the
     // horizon touches rather than the horizon itself. A run over 31 August to
@@ -126,11 +142,18 @@ export class VisitGenerationService {
     // pinning and the load guard both read August as empty.
     const window = enclosingMonths(from, to);
     const around = await this.loadExistingVisits(agreements, window.from, window.to);
-    // Only the run's own range is the run's to change. Comparing against a
-    // visit outside it would propose removing work nobody asked about.
-    const existing = around.filter(
-      (visit) => visit.visitDate >= dto.from && visit.visitDate <= dto.to,
-    );
+
+    const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
+
+    // Only the run's own range is the run's to change, and within it only the
+    // periods this run actually planned. A visit standing in a period the run
+    // left to another one is not obsolete — proposing it for removal was how a
+    // month view offered to delete the week a week view had just created.
+    const existing = around.filter((visit) => {
+      if (visit.visitDate < dto.from || visit.visitDate > dto.to) return false;
+      const span = planned.spans.get(visit.serviceAgreementId);
+      return span !== undefined && visit.visitDate >= span.from && visit.visitDate <= span.to;
+    });
 
     // A protected visit already covers its period, so the period's
     // requirement is pinned to that date rather than planned onto another one
@@ -139,7 +162,7 @@ export class VisitGenerationService {
     const honoured = honourProtectedDates(
       planned.required,
       around,
-      this.periodShapesFor(agreements, dto.from),
+      this.periodShapesFor(agreements),
     );
 
     // One cross-agreement pass, after every agreement has had its say. Nothing
@@ -168,13 +191,21 @@ export class VisitGenerationService {
     let scheduleRunId: string | null = null;
     if (actor) scheduleRunId = await this.apply(plan, dto, from, to, actor);
 
-    return this.toImpact(plan, shortfalls, guarded.warnings, planned.bookingWarnings, names, {
-      from: dto.from,
-      to: dto.to,
-      agreementsConsidered: agreements.length,
-      isPreview: actor === null,
-      scheduleRunId,
-    });
+    return this.toImpact(
+      plan,
+      shortfalls,
+      guarded.warnings,
+      planned.bookingWarnings,
+      planned.skipped,
+      names,
+      {
+        from: dto.from,
+        to: dto.to,
+        agreementsConsidered: agreements.length,
+        isPreview: actor === null,
+        scheduleRunId,
+      },
+    );
   }
 
   private assertDateRange(from: string, to: string): Date {
@@ -247,14 +278,15 @@ export class VisitGenerationService {
     required: RequiredVisit[];
     shortfalls: Shortfall[];
     bookingWarnings: BookingWarning[];
+    skipped: SkippedPeriods[];
+    /** The span of the periods each agreement actually planned. */
+    spans: Map<string, { from: string; to: string }>;
   } {
     const required: RequiredVisit[] = [];
     const shortfalls: Shortfall[] = [];
     const bookingWarnings: BookingWarning[] = [];
-
-    const horizonDays =
-      Math.round((parseDateOnly(to).getTime() - parseDateOnly(from).getTime()) / DAY_MS) + 1;
-    const horizonWeeks = Math.max(1, Math.ceil(horizonDays / 7));
+    const skipped: SkippedPeriods[] = [];
+    const spans = new Map<string, { from: string; to: string }>();
 
     for (const agreement of agreements) {
       const bookedDates = agreement.bookings.map((booking) => toDateOnly(booking.bookedDate));
@@ -280,8 +312,10 @@ export class VisitGenerationService {
         agreementWindowStartMinute: agreement.serviceWindowStartMinute,
         agreementWindowEndMinute: agreement.serviceWindowEndMinute,
         durationMinutes: agreement.durationMinutes,
-        horizonWeeks,
+        // The range's real last day. Rounded up to whole weeks, a run over
+        // 1-30 September believed it held the first days of October whole.
         from,
+        to,
         bookedDates,
         // Anchors only mean something over a month: they are a day of the
         // month, and a week holds at most seven of those in a row. A weekly
@@ -297,6 +331,32 @@ export class VisitGenerationService {
         // was planned as though it were the month.
         wholePeriodsOnly: true,
       });
+
+      // The periods this agreement actually planned, so an untouched visit
+      // outside them is left alone rather than proposed for removal.
+      if (preview.plannedPeriods.length > 0) {
+        const starts = preview.plannedPeriods.map((period) => period.start);
+        const ends = preview.plannedPeriods.map((period) => period.end);
+        spans.set(agreement.id, {
+          from: starts.reduce((a, b) => (a < b ? a : b)),
+          to: ends.reduce((a, b) => (a > b ? a : b)),
+        });
+      }
+
+      // A range holding no whole period of this agreement's cadence plans
+      // nothing at all. Said out loud: a quarterly agreement asked about from
+      // a week view is otherwise a silent zero no manager can tell from a
+      // calendar that is already correct.
+      if (preview.plannedPeriods.length === 0 && preview.skippedPeriods.length > 0) {
+        skipped.push({
+          serviceAgreementId: agreement.id,
+          frequencyUnit: agreement.frequencyUnit,
+          frequencyInterval: agreement.frequencyInterval,
+          periodsSkipped: preview.skippedPeriods.length,
+          reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD',
+          message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements need a range covering a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)}; ${from} to ${to} holds none, so nothing was planned for this agreement. Generate over a longer range.`,
+        });
+      }
 
       for (const visit of preview.visits) {
         // The preview counts whole cycles, so its last one can run past the
@@ -346,32 +406,30 @@ export class VisitGenerationService {
       }
     }
 
-    return { required, shortfalls, bookingWarnings };
+    return { required, shortfalls, bookingWarnings, skipped, spans };
   }
 
   /**
-   * How each agreement's horizon divides into periods.
+   * How each agreement's work divides into periods.
    *
    * The same arithmetic the preview uses, so a protected visit lands in the
-   * period the run planned for it rather than a period of its own.
+   * period the run planned for it rather than a period of its own — and
+   * anchored to the agreement, so it lands in the same period whatever range
+   * the run was given.
    */
   private periodShapesFor(
     agreements: AgreementForGeneration[],
-    from: string,
   ): Map<string, AgreementPeriodShape> {
     return new Map(
-      agreements.map((agreement) => {
-        const agreementStart = toDateOnly(agreement.startDate);
-        return [
-          agreement.id,
-          {
-            serviceAgreementId: agreement.id,
-            horizonStart: agreementStart > from ? agreementStart : from,
-            frequencyUnit: agreement.frequencyUnit,
-            frequencyInterval: agreement.frequencyInterval,
-          },
-        ];
-      }),
+      agreements.map((agreement) => [
+        agreement.id,
+        {
+          serviceAgreementId: agreement.id,
+          anchor: toDateOnly(agreement.startDate),
+          frequencyUnit: agreement.frequencyUnit,
+          frequencyInterval: agreement.frequencyInterval,
+        },
+      ]),
     );
   }
 
@@ -673,6 +731,7 @@ export class VisitGenerationService {
     shortfalls: Shortfall[],
     loadWarnings: DailyLoadWarning[],
     bookingWarnings: BookingWarning[],
+    skippedPeriods: SkippedPeriods[],
     names: Map<string, { customerName: string; siteName: string }>,
     meta: {
       from: string;
@@ -722,6 +781,7 @@ export class VisitGenerationService {
       shortfalls,
       loadWarnings,
       bookingWarnings,
+      skippedPeriods,
       isPreview: meta.isPreview,
       scheduleRunId: meta.scheduleRunId,
     };
@@ -759,6 +819,37 @@ function enclosingMonths(from: Date, to: Date): { from: Date; to: Date } {
     from: new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)),
     to: new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0)),
   };
+}
+
+/** "Quarterly", "Fortnightly" — the word UltraKIL sells the cadence by. */
+function cadenceName(unit: FrequencyUnit, interval: number): string {
+  const named: Record<string, string> = {
+    'WEEK|1': 'Weekly',
+    'WEEK|2': 'Fortnightly',
+    'MONTH|1': 'Monthly',
+    'MONTH|2': 'Two-monthly',
+    'MONTH|3': 'Quarterly',
+    'MONTH|6': 'Six-monthly',
+    'MONTH|12': 'Yearly',
+  };
+  return (
+    named[`${unit}|${interval}`] ??
+    `Every ${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
+  );
+}
+
+/** The span such an agreement needs a run to hold whole. */
+function cadenceNoun(unit: FrequencyUnit, interval: number): string {
+  const named: Record<string, string> = {
+    'WEEK|1': 'week',
+    'WEEK|2': 'fortnight',
+    'MONTH|1': 'month',
+    'MONTH|3': 'quarter',
+  };
+  return (
+    named[`${unit}|${interval}`] ??
+    `${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
+  );
 }
 
 function bookingWarningFrom(

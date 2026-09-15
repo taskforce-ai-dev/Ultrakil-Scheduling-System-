@@ -769,11 +769,15 @@ describe("regeneration impact review", () => {
     expect(confirmArgs).toEqual(previewArgs);
   });
 
-  it("generates the calendar month, not the grid the month is drawn on", async () => {
-    // The September grid runs 2026-08-31 to 2026-10-04. Handing that to
-    // generation makes it plan a one-day stub of August and four days of
-    // October as though they were months — and the August visit already
-    // published on the 17th is outside the range, so nothing can see it.
+  it("generates the whole grid, so the weeks it draws are weeks it plans", async () => {
+    // The September grid runs 2026-08-31 to 2026-10-04: whole Monday-to-Sunday
+    // weeks, and the whole calendar month inside them. A run plans only the
+    // periods it holds whole, and periods are calendar-aligned — so this range
+    // holds a whole week for every weekly agreement and a whole month for
+    // every monthly one, and the week view and the month view plan exactly the
+    // same weeks. The calendar month on its own held neither end's week, and a
+    // weekly agreement generated from the month view landed on a different day
+    // from the same agreement generated from the week view.
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
@@ -781,8 +785,71 @@ describe("regeneration impact review", () => {
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
-    expect(args.from).toBe("2026-09-01");
-    expect(args.to).toBe("2026-09-30");
+    expect(args.from).toBe("2026-08-31");
+    expect(args.to).toBe("2026-10-04");
+  });
+
+  it("starts the generated range on a Monday and ends it on a Sunday", async () => {
+    // The property that makes the two views agree, stated as itself.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await screen.findByText("Visits to create");
+
+    const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
+    expect(new Date(`${args.from}T00:00:00Z`).getUTCDay()).toBe(1);
+    expect(new Date(`${args.to}T00:00:00Z`).getUTCDay()).toBe(0);
+  });
+
+  it("names the agreements a range could plan nothing for", async () => {
+    // A quarterly agreement asked about from a week view plans nothing, and a
+    // zero with no explanation reads exactly like a calendar already in order.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        skippedPeriods: [
+          {
+            serviceAgreementId: "agreement-q1",
+            frequencyUnit: "MONTH",
+            frequencyInterval: 3,
+            periodsSkipped: 1,
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD",
+            message: "no whole quarter",
+          },
+          {
+            serviceAgreementId: "agreement-q2",
+            frequencyUnit: "MONTH",
+            frequencyInterval: 3,
+            periodsSkipped: 2,
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD",
+            message: "no whole quarter",
+          },
+          {
+            serviceAgreementId: "agreement-f1",
+            frequencyUnit: "WEEK",
+            frequencyInterval: 2,
+            periodsSkipped: 1,
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD",
+            message: "no whole fortnight",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(
+      within(drawer).getByText(
+        "Quarterly agreements need a range covering a whole quarter; 2 skipped."
+      )
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(
+        "Fortnightly agreements need a range covering a whole fortnight; 1 skipped."
+      )
+    ).toBeInTheDocument();
   });
 
   it("generates exactly the week the week view shows", async () => {
@@ -849,6 +916,44 @@ describe("a day over the branch's limit", () => {
     expect(
       within(grid()).queryByText("Over the branch's daily limit")
     ).not.toBeInTheDocument();
+  });
+
+  it("does not count a cancelled visit towards the day", async () => {
+    // The guard does not count it — cancelled work occupies no part of the day
+    // — so a badge that does contradicts the generator the manager is about to
+    // trust.
+    mockVisits([
+      ...crowded(),
+      buildVisit({
+        id: "visit-cancelled",
+        visitDate: "2026-09-10",
+        windowStartMinute: 630,
+        status: "CANCELLED",
+        customerName: "Union Bank Kadawatha",
+        jobTypeName: "Rodent Control",
+      }),
+      buildVisit({
+        id: "visit-live-1",
+        visitDate: "2026-09-10",
+        windowStartMinute: 720,
+        customerName: "Union Bank Kadawatha",
+        jobTypeName: "Rodent Control",
+      }),
+      buildVisit({
+        id: "visit-live-2",
+        visitDate: "2026-09-10",
+        windowStartMinute: 810,
+        customerName: "Union Bank Kadawatha",
+        jobTypeName: "Rodent Control",
+      }),
+    ]);
+    await renderCalendar();
+
+    // The 9th is genuinely over the cap; the 10th carries two live visits and
+    // one cancellation, which is not.
+    expect(await within(grid()).findAllByText("Over the branch's daily limit")).toHaveLength(
+      1
+    );
   });
 
   it("counts each branch's day on its own", async () => {

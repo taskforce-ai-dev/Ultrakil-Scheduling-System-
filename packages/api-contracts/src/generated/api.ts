@@ -1852,6 +1852,22 @@ export interface components {
             reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT" | "AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS";
             message: string;
         };
+        SkippedPeriodsDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            /**
+             * @description The unit this agreement's cycle is counted in.
+             * @enum {string}
+             */
+            frequencyUnit: "WEEK" | "MONTH";
+            /** @description How many units make one cycle: 2 with WEEK is fortnightly, 3 with MONTH quarterly. */
+            frequencyInterval: number;
+            /** @description How many of this agreement's cycles the range holds only a slice of. */
+            periodsSkipped: number;
+            /** @enum {string} */
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD";
+            message: string;
+        };
         GenerationImpactDto: {
             /** Format: date */
             from: string;
@@ -1874,6 +1890,8 @@ export interface components {
             loadWarnings: components["schemas"]["DailyLoadWarningDto"][];
             /** @description Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only. */
             bookingWarnings: components["schemas"]["BookingWarningDto"][];
+            /** @description Agreements this range could plan nothing for, because it holds no whole cycle of theirs — a quarterly agreement asked about from a week view, say. Nothing is wrong with the agreement; the run that covers a whole quarter will plan it. Listed so a zero is never silent. */
+            skippedPeriods: components["schemas"]["SkippedPeriodsDto"][];
             /** @description True when this was a preview. Nothing was written. */
             isPreview: boolean;
             /**

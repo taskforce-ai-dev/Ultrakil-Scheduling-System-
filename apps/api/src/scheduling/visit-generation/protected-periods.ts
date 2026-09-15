@@ -37,11 +37,15 @@ import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
  * "unchanged", and nobody would ever move it.
  */
 
-/** How an agreement's horizon is divided into periods. */
+/** How an agreement's work is divided into periods. */
 export interface AgreementPeriodShape {
   serviceAgreementId: string;
-  /** The first day of the agreement's own horizon, YYYY-MM-DD. */
-  horizonStart: string;
+  /**
+   * The agreement's own start date, YYYY-MM-DD — what the ISO weeks or
+   * calendar months are counted from. Never the run's range: a fortnight
+   * belongs to the agreement, not to whoever pressed Generate.
+   */
+  anchor: string;
   frequencyUnit: FrequencyUnit;
   frequencyInterval: number;
 }
@@ -83,7 +87,7 @@ export function honourProtectedDates(
 
     const period = periodIndexOf(
       parseDateOnly(visit.visitDate),
-      parseDateOnly(shape.horizonStart),
+      parseDateOnly(shape.anchor),
       shape.frequencyUnit,
       shape.frequencyInterval,
     );

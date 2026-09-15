@@ -37,7 +37,9 @@ function existing(overrides: Partial<ExistingVisit> = {}): ExistingVisit {
     id: 'visit-1',
     updatedAt: new Date('2026-09-01T00:00:00Z'),
     serviceAgreementId: AGREEMENT,
-    visitDate: '2026-09-09',
+    // A Saturday: a day this agreement does not allow, so pinning to it is
+    // something a manager needs telling about.
+    visitDate: '2026-09-12',
     windowStartMinute: 540,
     windowEndMinute: 1020,
     durationMinutes: 90,
@@ -57,7 +59,7 @@ const monthly = (): Map<string, AgreementPeriodShape> =>
       AGREEMENT,
       {
         serviceAgreementId: AGREEMENT,
-        horizonStart: '2026-09-01',
+        anchor: '2026-09-01',
         frequencyUnit: FrequencyUnit.MONTH,
         frequencyInterval: 1,
       },
@@ -107,7 +109,7 @@ describe('honourProtectedDates', () => {
       status: 'SCHEDULED',
       placement: VisitPlacement.ANCHORED,
     });
-    const sameDay = [required({ visitDate: '2026-09-09' })];
+    const sameDay = [required({ visitDate: '2026-09-12' })];
     const plan = planGeneration(
       honourProtectedDates(sameDay, [held], monthly()),
       [held],
@@ -133,11 +135,11 @@ describe('honourProtectedDates', () => {
     expect(plan.protectedVisits).toEqual([
       expect.objectContaining({
         visitId: 'visit-1',
-        visitDate: '2026-09-09',
+        visitDate: '2026-09-12',
         protection: 'ALREADY_SCHEDULED',
         wouldHave: 'UPDATE',
         changes: [
-          { field: 'visitDate', from: '2026-09-09', to: '2026-09-16' },
+          { field: 'visitDate', from: '2026-09-12', to: '2026-09-16' },
           { field: 'durationMinutes', from: 90, to: 150 },
         ],
       }),
@@ -153,12 +155,12 @@ describe('honourProtectedDates', () => {
       monthly(),
     );
 
-    expect(pinned[0].visitDate).toBe('2026-09-09');
+    expect(pinned[0].visitDate).toBe('2026-09-12');
     expect(pinned[0].alternatives).toEqual([]);
   });
 
   it('keeps the placement that actually explains the date', () => {
-    // A manager put the visit on the 9th. Calling that ANCHORED would credit
+    // A manager put the visit on the 12th. Calling that ANCHORED would credit
     // the anchor with a date it had no part in choosing.
     const pinned = honourProtectedDates(
       [required()],
@@ -201,7 +203,7 @@ describe('honourProtectedDates', () => {
   });
 
   it('changes nothing when the protected visit is already on the required day', () => {
-    const untouched = [required({ visitDate: '2026-09-09' })];
+    const untouched = [required({ visitDate: '2026-09-12' })];
     const pinned = honourProtectedDates(
       untouched,
       [existing({ isLocked: true })],
@@ -217,9 +219,9 @@ describe('honourProtectedDates', () => {
       required({ visitDate: '2026-09-21', periodIndex: 0 }),
     ];
     const held = [
-      existing({ id: 'a', visitDate: '2026-09-09', isLocked: true }),
-      existing({ id: 'b', visitDate: '2026-09-23', isLocked: true }),
-      existing({ id: 'c', visitDate: '2026-09-25', isLocked: true }),
+      existing({ id: 'a', visitDate: '2026-09-12', isLocked: true }),
+      existing({ id: 'b', visitDate: '2026-09-19', isLocked: true }),
+      existing({ id: 'c', visitDate: '2026-09-26', isLocked: true }),
     ];
 
     const plan = planGeneration(honourProtectedDates(twice, held, monthly()), held);
@@ -230,12 +232,12 @@ describe('honourProtectedDates', () => {
       expect.objectContaining({
         visitId: 'a',
         wouldHave: 'UPDATE',
-        changes: [{ field: 'visitDate', from: '2026-09-09', to: '2026-09-07' }],
+        changes: [{ field: 'visitDate', from: '2026-09-12', to: '2026-09-07' }],
       }),
       expect.objectContaining({
         visitId: 'b',
         wouldHave: 'UPDATE',
-        changes: [{ field: 'visitDate', from: '2026-09-23', to: '2026-09-21' }],
+        changes: [{ field: 'visitDate', from: '2026-09-19', to: '2026-09-21' }],
       }),
       // The third is more than the agreement asks for. It is still never
       // removed — it is reported, and left exactly where it is.
@@ -246,7 +248,7 @@ describe('honourProtectedDates', () => {
 
   it('keeps months apart — a protected March visit does not satisfy April', () => {
     const april = [required({ visitDate: '2026-10-14', periodIndex: 1 })];
-    const march = [existing({ visitDate: '2026-09-09', isLocked: true })];
+    const march = [existing({ visitDate: '2026-09-12', isLocked: true })];
 
     const pinned = honourProtectedDates(april, march, monthly());
 
@@ -282,9 +284,9 @@ describe('honourProtectedDates', () => {
     expect(plan.protectedVisits).toEqual([
       expect.objectContaining({
         visitId: 'visit-1',
-        visitDate: '2026-09-09',
+        visitDate: '2026-09-12',
         wouldHave: 'UPDATE',
-        changes: [{ field: 'visitDate', from: '2026-09-09', to: '2026-09-16' }],
+        changes: [{ field: 'visitDate', from: '2026-09-12', to: '2026-09-16' }],
       }),
     ]);
     expect(plan.additions).toEqual([]);
@@ -303,7 +305,7 @@ describe('honourProtectedDates', () => {
     );
 
     expect(plan.protectedVisits[0].changes).toEqual([
-      { field: 'visitDate', from: '2026-09-09', to: '2026-09-16' },
+      { field: 'visitDate', from: '2026-09-12', to: '2026-09-16' },
     ]);
   });
 
@@ -315,7 +317,7 @@ describe('honourProtectedDates', () => {
     });
     const plan = planGeneration(
       honourProtectedDates(
-        [required({ visitDate: '2026-09-09', windowEndMinute: 720 })],
+        [required({ visitDate: '2026-09-12', windowEndMinute: 720 })],
         [shortDay],
         monthly(),
       ),

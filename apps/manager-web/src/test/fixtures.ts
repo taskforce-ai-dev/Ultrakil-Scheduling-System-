@@ -444,6 +444,7 @@ export function buildGenerationImpact(overrides: Partial<GenerationImpact> = {})
     shortfalls: [],
     loadWarnings: [],
     bookingWarnings: [],
+    skippedPeriods: [],
     isPreview: true,
     scheduleRunId: null,
     ...overrides,

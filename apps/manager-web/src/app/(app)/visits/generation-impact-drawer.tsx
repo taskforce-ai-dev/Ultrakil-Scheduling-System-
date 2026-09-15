@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, CalendarX, Minus, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CalendarX,
+  Minus,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 
 import { AppDrawer } from "@/components/shared/app-drawer";
 import { LoadingState } from "@/components/shared/loading-state";
@@ -21,8 +29,9 @@ interface GenerationImpactDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /**
-   * The range to generate: whole calendar periods, not the grid the month is
-   * drawn on. See `rangeForGeneration`.
+   * The range to generate. Chosen to hold whole periods — whole ISO weeks
+   * either way, and the whole calendar month from a month view. See
+   * `rangeForGeneration`.
    */
   from: string;
   to: string;
@@ -84,6 +93,54 @@ const BOOKING_WARNING_TITLE: Record<string, string> = {
   AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS:
     "The agreement's window and the site's hours do not overlap",
 };
+
+/**
+ * The cadence an agreement is sold on, and the span a run has to hold whole
+ * before it can plan one.
+ *
+ * A manager does not think in units and intervals. "Quarterly agreements need a
+ * range covering a whole quarter" is the sentence that says what to do next.
+ */
+function cadence(unit: string, interval: number): { name: string; span: string } {
+  const known: Record<string, { name: string; span: string }> = {
+    "WEEK|1": { name: "Weekly", span: "week" },
+    "WEEK|2": { name: "Fortnightly", span: "fortnight" },
+    "MONTH|1": { name: "Monthly", span: "month" },
+    "MONTH|2": { name: "Two-monthly", span: "two months" },
+    "MONTH|3": { name: "Quarterly", span: "quarter" },
+    "MONTH|6": { name: "Six-monthly", span: "six months" },
+    "MONTH|12": { name: "Yearly", span: "year" },
+  };
+  const plural = unit === "WEEK" ? "weeks" : "months";
+  return (
+    known[`${unit}|${interval}`] ?? {
+      name: `Every ${interval} ${plural}`,
+      span: `${interval} ${plural}`,
+    }
+  );
+}
+
+/** One line per cadence, not one per agreement: the sentence is the same. */
+function skippedByCadence(
+  skipped: GenerationImpact["skippedPeriods"]
+): { key: string; text: string }[] {
+  const counts = new Map<string, number>();
+  for (const entry of skipped) {
+    const key = `${entry.frequencyUnit}|${entry.frequencyInterval}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => {
+      const [unit, interval] = key.split("|");
+      const { name, span } = cadence(unit, Number(interval));
+      return {
+        key,
+        text: `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
+      };
+    });
+}
 
 /** At most eight rows, then a count. A month on real data runs to hundreds. */
 function capped<T>(items: T[]): { shown: T[]; hidden: number } {
@@ -362,6 +419,23 @@ export function GenerationImpactDrawer({
             {capped(impact.bookingWarnings).hidden > 0 && (
               <li className="text-muted-foreground">
                 and {capped(impact.bookingWarnings).hidden} more
+              </li>
+            )}
+          </Section>
+
+          <Section
+            icon={CalendarClock}
+            title="Not planned by this range"
+            count={impact.skippedPeriods.length}
+          >
+            {skippedByCadence(impact.skippedPeriods).map((line) => (
+              <li key={line.key}>{line.text}</li>
+            ))}
+            {impact.skippedPeriods.length > 0 && (
+              <li className="text-muted-foreground">
+                Nothing is wrong with these agreements. Switch to the month view, or
+                generate over a longer range, and the run that covers a whole cycle will
+                plan them.
               </li>
             )}
           </Section>
