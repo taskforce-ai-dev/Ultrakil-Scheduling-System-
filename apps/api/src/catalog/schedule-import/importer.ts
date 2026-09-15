@@ -3,12 +3,15 @@ import {
   BranchCode,
   DataProvenance,
   DayRuleKind,
+  Prisma,
   PrismaClient,
   Weekday,
 } from '@prisma/client';
 
 import { decideBranch } from './branch-match';
 import { ParsedAgreement, ParsedSchedule } from './types';
+
+type TransactionClient = Prisma.TransactionClient;
 
 export interface ScheduleImportSummary {
   customersCreated: number;
@@ -20,6 +23,8 @@ export interface ScheduleImportSummary {
   agreementsUpdated: number;
   /** Rows the parser could not turn into an agreement without guessing. */
   agreementsSkipped: number;
+  /** Booked dates written from the workbook's month columns. */
+  bookingsImported: number;
   sitesInColombo: number;
   sitesInKandy: number;
   /** Sites whose town was not recognised; placed in Colombo for review. */
@@ -96,6 +101,7 @@ export async function importSchedule(
     agreementsCreated: 0,
     agreementsUpdated: 0,
     agreementsSkipped: 0,
+    bookingsImported: 0,
     sitesInColombo: 0,
     sitesInKandy: 0,
     sitesUncertain: 0,
@@ -309,6 +315,7 @@ export async function importSchedule(
 
         const dayRules = toDayRuleRows(allowedDays);
 
+        let agreementId: string;
         if (existingAgreement) {
           await tx.serviceAgreement.update({
             where: { id: existingAgreement.id },
@@ -317,9 +324,10 @@ export async function importSchedule(
               ...(preservesDayRules ? {} : { dayRules: { deleteMany: {}, create: dayRules } }),
             },
           });
+          agreementId = existingAgreement.id;
           summary.agreementsUpdated += 1;
         } else {
-          await tx.serviceAgreement.create({
+          const created = await tx.serviceAgreement.create({
             data: {
               ...data,
               crewSize: sourceCrewSize,
@@ -339,13 +347,56 @@ export async function importSchedule(
               dayRules: { create: dayRules },
             },
           });
+          agreementId = created.id;
           summary.agreementsCreated += 1;
         }
+
+        summary.bookingsImported += await writeSourceBookings(
+          tx,
+          agreementId,
+          agreement.bookedDates,
+        );
       }
     }, { timeout: 120_000 });
   }
 
   return summary;
+}
+
+/**
+ * Replaces an agreement's imported bookings with what the workbook now says.
+ *
+ * Delete-then-insert rather than upsert: a date the workbook has dropped must
+ * stop being a commitment, and there is no other way to notice its absence.
+ * The delete is narrowed to SOURCE, so a date a manager entered by hand is not
+ * the importer's to remove — and `skipDuplicates` leaves that manager row
+ * standing when the workbook happens to name the same day.
+ *
+ * Both statements run on the caller's transaction client, so an agreement is
+ * never left with its old bookings deleted and its new ones unwritten.
+ */
+async function writeSourceBookings(
+  tx: TransactionClient,
+  serviceAgreementId: string,
+  bookedDates: string[],
+): Promise<number> {
+  await tx.serviceAgreementBooking.deleteMany({
+    where: { serviceAgreementId, provenance: DataProvenance.SOURCE },
+  });
+
+  const dates = [...new Set(bookedDates)].sort();
+  if (dates.length === 0) return 0;
+
+  await tx.serviceAgreementBooking.createMany({
+    data: dates.map((date) => ({
+      serviceAgreementId,
+      bookedDate: new Date(`${date}T00:00:00.000Z`),
+      provenance: DataProvenance.SOURCE,
+    })),
+    skipDuplicates: true,
+  });
+
+  return dates.length;
 }
 
 function isImportable(agreement: ParsedAgreement): boolean {

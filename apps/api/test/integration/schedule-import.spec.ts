@@ -550,3 +550,102 @@ describe('records the workbook marks red', () => {
     ).toBe(false);
   });
 });
+
+/**
+ * The dates the workbook has already booked with the customer.
+ *
+ * These are commitments, so the test that matters is what a *second* import
+ * does to them: a date the workbook has dropped must stop being a commitment,
+ * and a date a manager entered must survive an import that never mentions it.
+ */
+describe('booked dates from the workbook', () => {
+  function scheduleWithBookings(bookedDates: string[]) {
+    const schedule = buildSchedule();
+    const customer = schedule.customers[0];
+    return {
+      ...schedule,
+      customers: [
+        {
+          ...customer,
+          agreements: customer.agreements.map((agreement) => ({
+            ...agreement,
+            bookedDates,
+          })),
+        },
+      ],
+    };
+  }
+
+  async function agreementId(): Promise<string> {
+    const agreement = await prisma.serviceAgreement.findFirstOrThrow({
+      where: { customer: { name: CUSTOMER } },
+    });
+    return agreement.id;
+  }
+
+  const asDates = (rows: { bookedDate: Date }[]) =>
+    rows.map((row) => row.bookedDate.toISOString().slice(0, 10)).sort();
+
+  it('persists one booking per booked date, marked as read from the workbook', async () => {
+    const summary = await importSchedule(
+      prisma,
+      scheduleWithBookings(['2026-01-05', '2026-01-20']),
+    );
+
+    expect(summary.bookingsImported).toBe(2);
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId() },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-05', '2026-01-20']);
+    expect(bookings.every((booking) => booking.provenance === 'SOURCE')).toBe(true);
+  });
+
+  it('replaces its own bookings on a re-import rather than accumulating them', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05', '2026-01-20']));
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-06']));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId() },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-06']);
+  });
+
+  it('leaves a booking a manager entered alone', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05']));
+    const id = await agreementId();
+    await prisma.serviceAgreementBooking.create({
+      data: {
+        serviceAgreementId: id,
+        bookedDate: new Date('2026-02-11T00:00:00.000Z'),
+        provenance: 'MANAGER_CONFIRMED',
+      },
+    });
+
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-06']));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: id },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-06', '2026-02-11']);
+    expect(
+      bookings.find((booking) => booking.provenance === 'MANAGER_CONFIRMED')
+        ?.bookedDate.toISOString()
+        .slice(0, 10),
+    ).toBe('2026-02-11');
+  });
+
+  it('clears its bookings when the workbook stops naming any', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05']));
+    await importSchedule(prisma, scheduleWithBookings([]));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId(), provenance: 'SOURCE' },
+    });
+
+    expect(bookings).toEqual([]);
+  });
+});

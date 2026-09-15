@@ -132,6 +132,10 @@ function fixture(state: Partial<ExistingState> = {}) {
       update: jest.fn(async () => ({ id: AGREEMENT_ID })),
       create: jest.fn(),
     },
+    serviceAgreementBooking: {
+      deleteMany: jest.fn(async () => ({ count: 0 })),
+      createMany: jest.fn(async () => ({ count: 0 })),
+    },
   };
 
   const prisma = {
