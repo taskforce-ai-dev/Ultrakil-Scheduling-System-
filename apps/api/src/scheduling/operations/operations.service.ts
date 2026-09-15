@@ -67,6 +67,15 @@ const OPERATIONS_INCLUDE = {
 
 type VisitRow = Prisma.GeneratedVisitGetPayload<{ include: typeof OPERATIONS_INCLUDE }>;
 
+/** The inclusive horizon a schedule run covered, as calendar dates. */
+interface ScheduleRunRange {
+  rangeStart: string;
+  rangeEnd: string;
+}
+
+const range = (ranges: Map<string, ScheduleRunRange>, id: string | null) =>
+  id === null ? undefined : ranges.get(id);
+
 @Injectable()
 export class OperationsService {
   constructor(private readonly prisma: PrismaService, private readonly eligibility: EligibilityService) {}
@@ -79,8 +88,11 @@ export class OperationsService {
       orderBy: [{ windowStartMinute: 'asc' }, { id: 'asc' }],
     });
     const lineageByVisit = await this.publishedLineageRows(visits.map((visit) => visit.id));
+    const runRanges = await this.scheduleRunRanges(visits);
     const items = await Promise.all(
-      visits.map((visit) => this.toItem(visit, lineageByVisit.get(visit.id) ?? [])),
+      visits.map((visit) =>
+        this.toItem(visit, lineageByVisit.get(visit.id) ?? [], runRanges),
+      ),
     );
     return {
       date: query.date,
@@ -117,7 +129,41 @@ export class OperationsService {
     return grouped;
   }
 
-  private async toItem(visit: VisitRow, lineageRows: PublishedLineageRow[]): Promise<OperationsDayItemDto> {
+  /**
+   * The horizon each of the day's schedule runs covered, in one query.
+   *
+   * A run is named on screen by its weeks and the moment it was published, not
+   * by its id — so the read model has to carry the weeks. One batched lookup
+   * per day, never one per visit: a day's nineteen visits usually come from
+   * one or two runs.
+   */
+  private async scheduleRunRanges(visits: VisitRow[]): Promise<Map<string, ScheduleRunRange>> {
+    const ids = [
+      ...new Set(
+        visits
+          .flatMap((visit) => visit.assignments)
+          .map((assignment) => assignment.scheduleRunId)
+          .filter((id): id is string => id !== null),
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+    const runs = await this.prisma.scheduleRun.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, rangeStart: true, rangeEnd: true },
+    });
+    return new Map(
+      runs.map((run) => [
+        run.id,
+        { rangeStart: toDateOnly(run.rangeStart), rangeEnd: toDateOnly(run.rangeEnd) },
+      ]),
+    );
+  }
+
+  private async toItem(
+    visit: VisitRow,
+    lineageRows: PublishedLineageRow[],
+    runRanges: Map<string, ScheduleRunRange>,
+  ): Promise<OperationsDayItemDto> {
     const dispatches = visit.assignments.filter((row) => DISPATCH_STATUSES.includes(row.status));
     const proposals = visit.assignments.filter((row) => PROPOSED_STATUSES.includes(row.status));
     const dispatch = selectDispatch(dispatches);
@@ -156,6 +202,8 @@ export class OperationsService {
             id: lineage.scheduleRunId,
             status: lineage.status,
             publishedAt: lineage.publishedAt?.toISOString() ?? null,
+            rangeStart: range(runRanges, lineage.scheduleRunId)?.rangeStart ?? null,
+            rangeEnd: range(runRanges, lineage.scheduleRunId)?.rangeEnd ?? null,
           }
         : null,
     };

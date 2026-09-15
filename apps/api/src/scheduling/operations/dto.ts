@@ -79,10 +79,33 @@ export class OperationsWarningDto {
   message!: string;
 }
 
+/**
+ * The schedule run an assignment came from, said in a manager's terms.
+ *
+ * The id is here because the portal links to Schedule History with it; it is
+ * never what a screen shows. A run is recognised by the weeks it covers and
+ * the moment it was published — "Published schedule 15-21 Sep, published 15
+ * Sep 20:05" — and a raw uuid printed nineteen times down a day's list told
+ * nobody anything they could act on.
+ */
 export class OperationsScheduleVersionDto {
   @ApiProperty({ type: String, nullable: true, format: 'uuid' }) id!: string | null;
   @ApiProperty({ enum: AssignmentStatus }) status!: AssignmentStatus;
   @ApiProperty({ type: String, nullable: true, format: 'date-time' }) publishedAt!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description: "First day of the run's horizon. Null when the assignment records no run.",
+  })
+  rangeStart!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description: "Last day of the run's horizon. Null when the assignment records no run.",
+  })
+  rangeEnd!: string | null;
 }
 
 export class OperationsPublishedAssignmentLineageEntryDto {

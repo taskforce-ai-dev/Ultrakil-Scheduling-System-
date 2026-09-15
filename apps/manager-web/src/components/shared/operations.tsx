@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock3, Info, Users, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { formatDayRange, formatStamp } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 import {
   isDispatchableOperation,
@@ -11,6 +13,7 @@ import {
   type OperationsDayItem,
   type OperationsDayResponse,
   type OperationsPublishedAssignmentProvenance,
+  type OperationsScheduleVersion,
 } from "@/lib/api-client";
 
 const STATE_LABELS: Record<OperationState, string> = {
@@ -88,17 +91,49 @@ function WarningList({ item }: { item: OperationsDayItem }) {
   );
 }
 
+const DISPATCHED_VERSION_STATUSES = ["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"];
+
+/**
+ * How a schedule run is named on screen.
+ *
+ * It used to be named by its id — "Published schedule version
+ * 6a1d0f2e-9c4b-…", nineteen times down a day's list, which tells a manager
+ * nothing they can do anything with and makes every row look different from
+ * every other. A run is recognised by the weeks it covers and the moment it
+ * was published, both of which the read model now carries; the id stays in the
+ * payload only because the link to Schedule History is built from the fact
+ * that a run exists, never printed.
+ */
+function scheduleRunLabel(version: OperationsScheduleVersion, isDispatched: boolean): string {
+  const horizon =
+    version.rangeStart && version.rangeEnd
+      ? ` ${formatDayRange(version.rangeStart, version.rangeEnd)}`
+      : "";
+  const status = version.status?.toUpperCase();
+
+  if (isDispatched) {
+    const stamp = version.publishedAt ? formatStamp(version.publishedAt) : "";
+    return `Published schedule${horizon}${stamp ? `, published ${stamp}` : ""}`;
+  }
+  const kind = status === "DRAFT" ? "Draft schedule" : "Schedule";
+  return `${kind}${horizon} — not dispatch truth`;
+}
+
 function ScheduleLineage({ item }: { item: OperationsDayItem }) {
   const version = item.scheduleVersion;
   if (!version) return null;
-  const versionName = version.version != null ? `v${version.version}` : version.id ?? "recorded";
-  const status = version.status?.toUpperCase();
-  if (["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
-    return <p className="mt-2 text-xs text-muted-foreground">Published schedule version {versionName}</p>;
-  }
+  const isDispatched = DISPATCHED_VERSION_STATUSES.includes(version.status?.toUpperCase());
+  const label = scheduleRunLabel(version, isDispatched);
+
   return (
     <p className="mt-2 text-xs text-muted-foreground">
-      {status === "DRAFT" ? "Draft schedule version" : "Schedule version"} {versionName} — not dispatch truth
+      {version.id ? (
+        <Link href="/schedule-history" className="underline underline-offset-2">
+          {label}
+        </Link>
+      ) : (
+        label
+      )}
     </p>
   );
 }

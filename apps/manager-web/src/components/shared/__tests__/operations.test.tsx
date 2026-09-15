@@ -63,7 +63,7 @@ describe("OperationsDayPanel", () => {
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
     const exception = screen.getByText("Exception customer").closest("li")!;
     expect(within(exception).getByText("Confirm branch")).toBeInTheDocument();
-    expect(within(exception).getByText(/Published schedule version/)).toBeInTheDocument();
+    expect(within(exception).getByText(/^Published schedule\b/)).toBeInTheDocument();
   });
 
   it("keeps the published crew visible after a visit is completed", () => {
@@ -113,8 +113,93 @@ describe("OperationsDayPanel", () => {
 
     const item = screen.getByText("Acknowledged customer").closest("li")!;
     expect(within(item).getByText("Crew assigned")).toBeInTheDocument();
-    expect(within(item).getByText("Published schedule version run-1")).toBeInTheDocument();
+    expect(within(item).getByText(/Published schedule/)).toBeInTheDocument();
     expect(within(item).queryByText(/not dispatch truth/)).not.toBeInTheDocument();
+  });
+
+  it("names the schedule run by its weeks and never by its id", () => {
+    const published = parseOperationsDay({
+      date: "2026-09-10",
+      items: [{
+        visit: { id: "named", customerName: "Named customer" },
+        state: "READY",
+        dispatchAssignment: {
+          id: "named-published",
+          status: "PUBLISHED",
+          crew: [{ fullName: "Named crew" }],
+          vehicles: [],
+        },
+        proposedAssignment: null,
+        violations: [],
+        warnings: [],
+        nextAction: "Dispatch the published assignment.",
+        scheduleVersion: {
+          id: "6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
+          status: "PUBLISHED",
+          publishedAt: "2026-09-15T12:05:00.000Z",
+          rangeStart: "2026-09-15",
+          rangeEnd: "2026-09-21",
+        },
+      }],
+    });
+
+    render(<OperationsDayPanel data={published} />);
+
+    const item = screen.getByText("Named customer").closest("li")!;
+    expect(
+      within(item).getByText(/^Published schedule 15–21 Sep, published \d{1,2} Sep \d{2}:\d{2}$/),
+    ).toBeInTheDocument();
+    // Schedule History is where the rest of the run's story is.
+    expect(within(item).getByRole("link", { name: /Published schedule 15–21 Sep/ })).toHaveAttribute(
+      "href",
+      "/schedule-history",
+    );
+  });
+
+  it("prints no uuid anywhere on a day of published work", () => {
+    const withRuns = parseOperationsDay({
+      date: "2026-09-10",
+      items: [
+        {
+          visit: { id: "one", customerName: "First customer" },
+          state: "READY",
+          dispatchAssignment: { id: "a1", status: "PUBLISHED", crew: [], vehicles: [] },
+          proposedAssignment: null,
+          violations: [],
+          warnings: [],
+          nextAction: "No action needed",
+          scheduleVersion: {
+            id: "6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
+            status: "PUBLISHED",
+            publishedAt: "2026-09-15T12:05:00.000Z",
+            rangeStart: "2026-09-15",
+            rangeEnd: "2026-09-21",
+          },
+        },
+        {
+          visit: { id: "two", customerName: "Second customer" },
+          state: "PROPOSED",
+          dispatchAssignment: null,
+          proposedAssignment: { id: "a2", status: "DRAFT", crew: [], vehicles: [] },
+          violations: [],
+          warnings: [],
+          nextAction: "Review and publish",
+          scheduleVersion: {
+            id: "e3c7b9a1-55d2-4e68-9b0c-71f4a8d2c603",
+            status: "DRAFT",
+            publishedAt: null,
+            rangeStart: "2026-09-28",
+            rangeEnd: "2026-10-04",
+          },
+        },
+      ],
+    });
+
+    const { container } = render(<OperationsDayPanel data={withRuns} />);
+
+    const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+    expect(container.textContent ?? "").not.toMatch(UUID);
+    expect(screen.getByText(/^Draft schedule 28 Sep – 4 Oct — not dispatch truth$/)).toBeInTheDocument();
   });
 });
 
@@ -193,7 +278,7 @@ describe("OperationsDayPanel published assignment lineage", () => {
 
     // Schedule-run history is a different thing and must survive.
     const item = screen.getByText("Corrected customer").closest("li")!;
-    expect(within(item).getByText("Published schedule version run-9")).toBeInTheDocument();
+    expect(within(item).getByText(/^Published schedule, published /)).toBeInTheDocument();
   });
 
   it("says plainly when the chain was truncated", () => {
@@ -263,6 +348,6 @@ describe("OperationsDayPanel published assignment lineage", () => {
 
     const item = screen.getByText("Fresh customer").closest("li")!;
     expect(within(item).getByText("No published assignment history for this visit yet.")).toBeInTheDocument();
-    expect(within(item).getByText(/Draft schedule version run-2/)).toBeInTheDocument();
+    expect(within(item).getByText("Draft schedule — not dispatch truth")).toBeInTheDocument();
   });
 });

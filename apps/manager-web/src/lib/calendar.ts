@@ -166,3 +166,42 @@ export function formatMinuteOfDay(minute: number): string {
   const rest = minute % 60;
   return `${String(hour).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
+
+const SHORT_MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * The span a schedule run covered, short enough to sit inside a sentence.
+ *
+ * "15–21 Sep" when the two ends share a month, "28 Sep – 4 Oct" when they do
+ * not, and the year said out loud only when the range crosses one — a run over
+ * the turn of the year is the one case where "29 Dec – 3 Jan" is ambiguous.
+ */
+export function formatDayRange(fromIso: string, toIso: string): string {
+  const from = parseDate(fromIso);
+  const to = parseDate(toIso);
+  const sameYear = from.getUTCFullYear() === to.getUTCFullYear();
+  const year = (date: Date) => (sameYear ? "" : ` ${date.getUTCFullYear()}`);
+  const month = (date: Date) => SHORT_MONTH_NAMES[date.getUTCMonth()];
+
+  if (sameYear && from.getUTCMonth() === to.getUTCMonth()) {
+    return `${from.getUTCDate()}–${to.getUTCDate()} ${month(to)}`;
+  }
+  return `${from.getUTCDate()} ${month(from)}${year(from)} – ${to.getUTCDate()} ${month(to)}${year(to)}`;
+}
+
+/**
+ * An instant, in the reader's own clock: "15 Sep 20:05".
+ *
+ * Unlike a visit date, a publication is a moment rather than a calendar day,
+ * so this one is deliberately *not* held in UTC — "published at 20:05" has to
+ * mean 20:05 where the manager is standing.
+ */
+export function formatStamp(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${at.getDate()} ${SHORT_MONTH_NAMES[at.getMonth()]} ${time}`;
+}

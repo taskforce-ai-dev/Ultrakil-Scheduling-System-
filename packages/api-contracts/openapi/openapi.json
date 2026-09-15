@@ -6762,12 +6762,26 @@
             "type": "string",
             "nullable": true,
             "format": "date-time"
+          },
+          "rangeStart": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "First day of the run's horizon. Null when the assignment records no run."
+          },
+          "rangeEnd": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "Last day of the run's horizon. Null when the assignment records no run."
           }
         },
         "required": [
           "id",
           "status",
-          "publishedAt"
+          "publishedAt",
+          "rangeStart",
+          "rangeEnd"
         ]
       },
       "OperationsPublishedAssignmentLineageEntryDto": {

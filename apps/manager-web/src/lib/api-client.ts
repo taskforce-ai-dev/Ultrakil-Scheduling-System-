@@ -146,6 +146,9 @@ export interface OperationsScheduleVersion {
   status: AssignmentStatus | "";
   predecessorId?: string | null;
   publishedAt: string | null;
+  /** The run's own horizon, which is how a screen names it. YYYY-MM-DD. */
+  rangeStart: string | null;
+  rangeEnd: string | null;
 }
 
 /**
@@ -455,6 +458,8 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
             : "",
           predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
           publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
+          rangeStart: typeof version.rangeStart === "string" ? version.rangeStart : null,
+          rangeEnd: typeof version.rangeEnd === "string" ? version.rangeEnd : null,
         }
       : null,
     publishedAssignmentLineage,

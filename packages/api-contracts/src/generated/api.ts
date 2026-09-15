@@ -2368,6 +2368,16 @@ export interface components {
             status: "DRAFT" | "PROPOSED" | "PUBLISHED" | "ACKNOWLEDGED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "SUPERSEDED";
             /** Format: date-time */
             publishedAt: string | null;
+            /**
+             * Format: date
+             * @description First day of the run's horizon. Null when the assignment records no run.
+             */
+            rangeStart: string | null;
+            /**
+             * Format: date
+             * @description Last day of the run's horizon. Null when the assignment records no run.
+             */
+            rangeEnd: string | null;
         };
         OperationsPublishedAssignmentLineageEntryDto: {
             /**
