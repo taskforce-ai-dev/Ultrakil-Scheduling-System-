@@ -74,6 +74,22 @@ async function renderBoard() {
 }
 
 describe("dispatch board", () => {
+  it("never says nobody is assigned here beside the crews it is listing", async () => {
+    await renderBoard();
+
+    // The board's own subject is who is on each visit — it lists a supervisor,
+    // a crew and an Edit crew button. The sentence it used to carry belongs to
+    // the Visits page, where the work really has nobody on it, and read as a
+    // flat contradiction of the rows underneath it.
+    expect(screen.queryByText(/Nobody is assigned here/)).not.toBeInTheDocument();
+    const staffedRow = screen.getByText("Cinnamon Grand Colombo").closest("tr")!;
+    expect(within(staffedRow).getByText("A Perera, N Fernando")).toBeInTheDocument();
+    expect(within(staffedRow).getByRole("button", { name: /Edit crew/ })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Visits still waiting for a crew are queued in Unassigned Visits/),
+    ).toBeInTheDocument();
+  });
+
   it("shows the supervisor, crew, and vehicle for a staffed visit", async () => {
     await renderBoard();
 

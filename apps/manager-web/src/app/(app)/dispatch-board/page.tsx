@@ -142,9 +142,16 @@ export default function DispatchBoardPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dispatch Board</h1>
+          {/*
+            The board's own subject is the crew on each visit: every row names a
+            supervisor, a crew and a vehicle, and Edit crew changes them here.
+            This line used to say "Nobody is assigned here", which is the Visits
+            page's sentence — true of generated work nobody has staffed yet, and
+            a flat contradiction of the nineteen staffed rows underneath it.
+          */}
           <p className="text-muted-foreground">
-            Who is on each scheduled visit. Nobody is assigned here — see Unassigned Visits for
-            work that still needs a crew.
+            Who is on each scheduled visit, and where to change it. Visits still waiting for a
+            crew are queued in Unassigned Visits.
           </p>
         </div>
 
