@@ -24,6 +24,7 @@ import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
  *
  * A period holding more protected visits than the agreement now asks for keeps
  * the surplus and reports it, exactly as before. Nothing here removes work.
+ *
  */
 
 /** How an agreement's horizon is divided into periods. */
@@ -37,6 +38,17 @@ export interface AgreementPeriodShape {
 
 const keyOf = (serviceAgreementId: string, period: number) =>
   `${serviceAgreementId}|${period}`;
+
+/**
+ * One slot in a period: a date *and* a start time.
+ *
+ * A date alone is not a slot. A site served morning and afternoon on the same
+ * Monday holds two protected visits that day, and keying by date let the
+ * morning one speak for both — the afternoon requirement was then planned onto
+ * some other day and the customer got a third visit.
+ */
+const slotOf = (visitDate: string, windowStartMinute: number) =>
+  `${visitDate}|${windowStartMinute}`;
 
 /**
  * Pins each period's requirement to the protected visit that already covers
@@ -97,13 +109,18 @@ export function honourProtectedDates(
               visit.windowStartMinute === pinned[index].windowStartMinute,
           ),
         )
-        .map((index) => pinned[index].visitDate),
+        .map((index) =>
+          slotOf(pinned[index].visitDate, pinned[index].windowStartMinute),
+        ),
     );
 
-    const movers = indices.filter((index) => !held.has(pinned[index].visitDate));
+    const movers = indices.filter(
+      (index) =>
+        !held.has(slotOf(pinned[index].visitDate, pinned[index].windowStartMinute)),
+    );
     const seen = new Set<string>();
     const unmatched = group
-      .filter((visit) => !held.has(visit.visitDate))
+      .filter((visit) => !held.has(slotOf(visit.visitDate, visit.windowStartMinute)))
       .sort(
         (a, b) =>
           a.visitDate.localeCompare(b.visitDate) ||
@@ -113,7 +130,7 @@ export function honourProtectedDates(
       // are the same slot, and pinning two requirements onto it would make a
       // pair of requirements that cannot be told apart.
       .filter((visit) => {
-        const slot = `${visit.visitDate}|${visit.windowStartMinute}`;
+        const slot = slotOf(visit.visitDate, visit.windowStartMinute);
         if (seen.has(slot)) return false;
         seen.add(slot);
         return true;
@@ -126,6 +143,11 @@ export function honourProtectedDates(
         ...pinned[index],
         visitDate: keeper.visitDate,
         windowStartMinute: keeper.windowStartMinute,
+        // The whole of the keeper's window, not half of it. Taking the date
+        // and the start but keeping the requirement's end invented a window
+        // nobody recorded — and, since a protected visit is never written,
+        // every run reported the same windowEndMinute change for ever.
+        windowEndMinute: keeper.windowEndMinute,
         // The manager chose the day, not the generator, so the placement on
         // record stays the one that explains it. Re-labelling it would put a
         // reason on the visit that had nothing to do with the date.

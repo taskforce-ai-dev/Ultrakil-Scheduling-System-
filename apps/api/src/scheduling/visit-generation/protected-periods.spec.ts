@@ -217,6 +217,73 @@ describe('honourProtectedDates', () => {
     expect(honourProtectedDates([required()], other, monthly())).toEqual([required()]);
   });
 
+  it('takes the whole window of the day it was pinned to, not half of it', () => {
+    // The keeper's day has its own hours. Copying the date and the start but
+    // leaving the requirement's end produced a window nobody ever recorded,
+    // and every run reported a protected windowEndMinute change that no run
+    // could ever apply — the same phantom, for ever.
+    const shortDay = existing({ isLocked: true, windowEndMinute: 720 });
+    const pinned = honourProtectedDates([required()], [shortDay], monthly());
+
+    expect(pinned[0].windowEndMinute).toBe(720);
+  });
+
+  it('reports no protected change at all on a second run over a hand-moved visit', () => {
+    // The phantom: the pinned requirement kept the end of the day the
+    // generator had wanted, so a hand-move to a day the site shuts at noon
+    // was reported as a windowEndMinute change on every run for ever — and a
+    // protected visit is never written, so it never went away.
+    const shortDay = existing({ isLocked: true, windowEndMinute: 720 });
+    const plan = planGeneration(
+      honourProtectedDates([required()], [shortDay], monthly()),
+      [shortDay],
+    );
+
+    expect(plan.protectedVisits).toEqual([]);
+    expect(plan.unchangedCount).toBe(1);
+  });
+
+  it('reports nothing at all when the hours differ and the day does not', () => {
+    const shortDay = existing({
+      isLocked: true,
+      windowEndMinute: 720,
+      placement: VisitPlacement.ANCHORED,
+    });
+    const plan = planGeneration(
+      honourProtectedDates(
+        [required({ visitDate: '2026-09-09', windowEndMinute: 720 })],
+        [shortDay],
+        monthly(),
+      ),
+      [shortDay],
+    );
+
+    expect(plan.protectedVisits).toEqual([]);
+    expect(plan.unchangedCount).toBe(1);
+  });
+
+  it('keeps both protected visits on a date they share with different starts', () => {
+    // Keyed by date alone, the second slot vanished: the morning visit made
+    // the date "held" and the afternoon one was filtered out of the pinning,
+    // so the requirement for it was planned onto another day and the customer
+    // got a third visit.
+    const twice = [
+      required({ visitDate: '2026-09-07', windowStartMinute: 540 }),
+      required({ visitDate: '2026-09-21', windowStartMinute: 540 }),
+    ];
+    const held = [
+      existing({ id: 'a', visitDate: '2026-09-07', windowStartMinute: 540, isLocked: true }),
+      existing({ id: 'b', visitDate: '2026-09-07', windowStartMinute: 780, isLocked: true }),
+    ];
+
+    const pinned = honourProtectedDates(twice, held, monthly());
+
+    expect(pinned.map((visit) => [visit.visitDate, visit.windowStartMinute])).toEqual([
+      ['2026-09-07', 540],
+      ['2026-09-07', 780],
+    ]);
+  });
+
   it('does not touch the list it was handed', () => {
     const input = [required()];
     honourProtectedDates(input, [existing({ isLocked: true })], monthly());

@@ -171,11 +171,15 @@ period. So **a protected visit satisfies its period**: the requirement for that
 (agreement, period) is pinned to the protected visit's date and start time
 rather than planned onto another day, it keeps the placement already on record
 (the manager chose the day, not the generator), and it is never offered to the
-load guard. Everything the agreement still owns — duration, crew size, the end
-of the window — comes from the agreement, so a genuine change is still reported
-as one and still not applied. A period holding more protected visits than the
-agreement now asks for keeps the surplus and reports it, exactly as before:
-nothing here removes work.
+load guard. The requirement takes that visit's whole window, both ends of it:
+the window belongs to the day, and a day the site shuts at noon does not get
+the closing time of the day the generator had in mind. What the agreement
+still owns — how long the visit is, how many people it needs — comes from the
+agreement, so a genuine change is still reported as one and still not applied.
+A period holding more protected visits than the agreement now asks for keeps
+the surplus and reports it, exactly as before: nothing here removes work. And
+a date is not a slot: a site served morning and afternoon on the same Monday
+holds two protected visits that day, and each satisfies one requirement.
 
 ---
 
