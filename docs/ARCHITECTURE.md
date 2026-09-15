@@ -172,6 +172,15 @@ view and its own seven days for a week view, and generation reads the existing
 and standing visits over the whole calendar months the range touches — what it
 may *change* is still exactly the range it was given.
 
+A visit can breach the window/duration invariant without anyone having erred:
+a booked date on hours the site records as an hour is planned on those hours
+deliberately. So a hand edit enforces the invariant only when the edit touches
+`windowStartMinute`, `windowEndMinute` or `durationMinutes` — validating it on
+every edit made such a visit uneditable, refusing a crew-size change for a
+window the manager had not touched. The breach is shown instead, as a badge on
+the visit itself, because the generation warning that raised it is gone the
+moment the panel closes.
+
 Regeneration's existing protections are untouched by all of this: a published,
 locked, hand-edited or already-staffed visit is reported and left exactly as it
 is, and a placement that would change shows up in the preview like any other

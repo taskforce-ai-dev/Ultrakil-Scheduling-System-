@@ -412,6 +412,39 @@ describe("the visit detail drawer", () => {
     expect(within(drawer).getByText("09:00 and 17:00")).toBeInTheDocument();
   });
 
+  it("says on the row when the window is shorter than the visit", async () => {
+    // A booked date on hours the site itself records as an hour is planned on
+    // those hours deliberately. The generation panel says so once, and then
+    // the panel closes; the visit carries the problem for weeks afterwards
+    // and nothing on it says a word.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-generated",
+        windowStartMinute: 540,
+        windowEndMinute: 600,
+        durationMinutes: 90,
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Window shorter than the visit")).toBeInTheDocument();
+  });
+
+  it("says nothing of the sort when the window comfortably holds the visit", async () => {
+    vi.mocked(fetchVisit).mockResolvedValue(buildVisitDetail({ id: "visit-generated" }));
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).queryByText("Window shorter than the visit")
+    ).not.toBeInTheDocument();
+  });
+
   it("says the date is a commitment when it came from a customer booking", async () => {
     vi.mocked(fetchVisit).mockResolvedValue(
       buildVisitDetail({ id: "visit-generated", placement: "BOOKED" })

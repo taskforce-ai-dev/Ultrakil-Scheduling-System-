@@ -191,23 +191,38 @@ export class VisitsService {
 
       const windowStart = dto.windowStartMinute ?? before.windowStartMinute;
       const windowEnd = dto.windowEndMinute ?? before.windowEndMinute;
-      if (windowEnd <= windowStart) {
-        throw new AppException(
-          'SERVICE_WINDOW_INVALID',
-          `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
-          HttpStatus.BAD_REQUEST,
-          { windowStart, windowEnd },
-        );
-      }
-
       const duration = dto.durationMinutes ?? before.durationMinutes;
-      if (duration > windowEnd - windowStart) {
-        throw new AppException(
-          'SERVICE_WINDOW_INVALID',
-          `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
-          HttpStatus.BAD_REQUEST,
-          { duration, windowMinutes: windowEnd - windowStart },
-        );
+
+      // Only an edit that touches the window or the duration has to satisfy
+      // the invariant. A visit can already breach it without anyone having
+      // made a mistake: a booked date on hours the site records as an hour is
+      // planned on those hours deliberately, and reported as a booking
+      // warning. Validating it on every edit made such a visit uneditable —
+      // a manager changing the crew size was refused for a window they had
+      // not touched and could not fix from that screen.
+      const touchesTheWindow =
+        dto.windowStartMinute !== undefined ||
+        dto.windowEndMinute !== undefined ||
+        dto.durationMinutes !== undefined;
+
+      if (touchesTheWindow) {
+        if (windowEnd <= windowStart) {
+          throw new AppException(
+            'SERVICE_WINDOW_INVALID',
+            `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
+            HttpStatus.BAD_REQUEST,
+            { windowStart, windowEnd },
+          );
+        }
+
+        if (duration > windowEnd - windowStart) {
+          throw new AppException(
+            'SERVICE_WINDOW_INVALID',
+            `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
+            HttpStatus.BAD_REQUEST,
+            { duration, windowMinutes: windowEnd - windowStart },
+          );
+        }
       }
 
       const visitDate = dto.visitDate

@@ -159,6 +159,18 @@ export function VisitDetailDrawer({
             <VisitStatusBadge status={visit.status} />
             <VisitOwnershipBadges visit={visit} />
             <CrewBadge visit={visit} />
+            {/*
+              A booked date on hours the site itself records as an hour is
+              planned on those hours deliberately — a booking is a commitment,
+              and inventing a nine-hour day in its place would be worse. The
+              generation panel warns about it once, and then it closes. The
+              visit carries the problem for weeks afterwards, so it says so
+              here too, in words rather than by leaving the arithmetic to the
+              reader.
+            */}
+            {visit.windowEndMinute - visit.windowStartMinute < visit.durationMinutes && (
+              <Badge variant="outline">Window shorter than the visit</Badge>
+            )}
           </div>
 
 

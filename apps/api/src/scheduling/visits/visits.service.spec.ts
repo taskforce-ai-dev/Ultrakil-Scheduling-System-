@@ -125,3 +125,46 @@ describe('VisitsService window provenance', () => {
     expect(data).not.toHaveProperty('windowProvenance');
   });
 });
+
+describe('VisitsService window invariants', () => {
+  /** A booked day whose recorded hours are shorter than the visit needs. */
+  const tooShort = () =>
+    visitRow({ windowStartMinute: 540, windowEndMinute: 600, durationMinutes: 90 });
+
+  it('lets a manager change the crew of a visit whose window is already short', async () => {
+    // The window came from a booking on hours the site itself records as an
+    // hour. It is reported as a booking warning, and it is not this edit's
+    // business — refusing the crew change left the visit uneditable for ever.
+    const { service, tx } = fixture(tooShort());
+
+    await service.adjust(VISIT_ID, { requiredCrewSize: 3 }, actor);
+
+    expect(dataOf(tx.generatedVisit.update as jest.Mock)).toMatchObject({
+      requiredCrewSize: 3,
+    });
+  });
+
+  it('still refuses an edit that makes the window too short for the visit', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { durationMinutes: 900 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
+  });
+
+  it('still refuses a narrowed window that no longer holds the visit', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { windowEndMinute: 500 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
+  });
+
+  it('still refuses a window that ends before it starts', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { windowStartMinute: 1020, windowEndMinute: 480 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
+  });
+});

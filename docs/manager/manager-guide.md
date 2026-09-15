@@ -143,6 +143,13 @@ expected a day. Recording the site's real hours clears the first two. The
 third is fixed on the agreement, by widening its service window — the hours
 were never the problem.
 
+The warning is on the panel, and the panel closes. So the visit itself carries
+it too: open a visit whose window is shorter than the work takes and it is
+badged **Window shorter than the visit**. You can still edit that visit —
+change its crew, move its date — without being made to fix the window first.
+Only an edit that actually touches the window or the duration has to leave the
+visit fitting inside it.
+
 **Booked fewer times than the frequency promises.** An agreement written as
 twice a week, with only one date booked in a week, appears under Conflicts.
 The booked dates are used exactly as the workbook wrote them and no extra
