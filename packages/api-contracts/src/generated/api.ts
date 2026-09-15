@@ -1700,7 +1700,7 @@ export interface components {
             requested: number;
             scheduled: number;
             /** @enum {string} */
-            reason: "NOT_ENOUGH_ALLOWED_DAYS" | "SITE_CLOSED_ON_ALLOWED_DAYS" | "WINDOW_TOO_SHORT_FOR_VISIT";
+            reason: "NOT_ENOUGH_ALLOWED_DAYS" | "SITE_CLOSED_ON_ALLOWED_DAYS" | "WINDOW_TOO_SHORT_FOR_VISIT" | "BOOKED_BELOW_FREQUENCY";
             /** @description Actionable explanation for a manager. */
             message: string;
         };
@@ -1838,6 +1838,18 @@ export interface components {
             cap: number;
             message: string;
         };
+        BookingWarningDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            /** Format: date */
+            date: string;
+            /**
+             * @description SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs.
+             * @enum {string}
+             */
+            reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT";
+            message: string;
+        };
         GenerationImpactDto: {
             /** Format: date */
             from: string;
@@ -1858,6 +1870,8 @@ export interface components {
             shortfalls: components["schemas"]["GenerationShortfallDto"][];
             /** @description Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only. */
             loadWarnings: components["schemas"]["DailyLoadWarningDto"][];
+            /** @description Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only. */
+            bookingWarnings: components["schemas"]["BookingWarningDto"][];
             /** @description True when this was a preview. Nothing was written. */
             isPreview: boolean;
             /**

@@ -442,6 +442,7 @@ export function buildGenerationImpact(overrides: Partial<GenerationImpact> = {})
     unchangedCount: 0,
     shortfalls: [],
     loadWarnings: [],
+    bookingWarnings: [],
     isPreview: true,
     scheduleRunId: null,
     ...overrides,

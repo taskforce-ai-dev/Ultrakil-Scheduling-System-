@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Minus, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CalendarX, Minus, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { AppDrawer } from "@/components/shared/app-drawer";
 import { LoadingState } from "@/components/shared/loading-state";
@@ -65,6 +65,19 @@ function Section({
 /** The API's removal reasons, in words a manager reads rather than an enum. */
 const REMOVAL_REASON: Record<string, string> = {
   NO_LONGER_REQUIRED: "the agreement no longer asks for it",
+};
+
+/**
+ * A booked date the site's own hours contradict, headlined in a few words.
+ *
+ * The visit is still planned — the booking is a commitment to the customer —
+ * so this is not a failure to fix before generating. It is the one thing a
+ * manager must know before a crew is sent: the door may be locked, or the
+ * window may be an hour rather than a day.
+ */
+const BOOKING_WARNING_TITLE: Record<string, string> = {
+  SITE_CLOSED_ON_BOOKED_DAY: "No hours recorded for that weekday",
+  WINDOW_TOO_SHORT_FOR_BOOKED_VISIT: "Recorded hours are shorter than the visit",
 };
 
 /** At most eight rows, then a count. A month on real data runs to hundreds. */
@@ -301,6 +314,28 @@ export function GenerationImpactDrawer({
             {capped(impact.loadWarnings).hidden > 0 && (
               <li className="text-muted-foreground">
                 and {capped(impact.loadWarnings).hidden} more
+              </li>
+            )}
+          </Section>
+
+          <Section
+            icon={CalendarX}
+            title="Booked on a day the site's hours do not allow"
+            count={impact.bookingWarnings.length}
+            tone="danger"
+          >
+            {capped(impact.bookingWarnings).shown.map((warning, index) => (
+              <li key={`${warning.serviceAgreementId}-${warning.date}-${index}`}>
+                <span className="font-medium">
+                  {warning.date} — {BOOKING_WARNING_TITLE[warning.reason] ?? "Hours do not fit"}
+                </span>
+                <br />
+                <span className="text-muted-foreground">{warning.message}</span>
+              </li>
+            ))}
+            {capped(impact.bookingWarnings).hidden > 0 && (
+              <li className="text-muted-foreground">
+                and {capped(impact.bookingWarnings).hidden} more
               </li>
             )}
           </Section>

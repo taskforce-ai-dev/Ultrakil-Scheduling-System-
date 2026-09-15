@@ -4510,7 +4510,8 @@
             "enum": [
               "NOT_ENOUGH_ALLOWED_DAYS",
               "SITE_CLOSED_ON_ALLOWED_DAYS",
-              "WINDOW_TOO_SHORT_FOR_VISIT"
+              "WINDOW_TOO_SHORT_FOR_VISIT",
+              "BOOKED_BELOW_FREQUENCY"
             ]
           },
           "message": {
@@ -4945,6 +4946,36 @@
           "message"
         ]
       },
+      "BookingWarningDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "SITE_CLOSED_ON_BOOKED_DAY",
+              "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT"
+            ],
+            "description": "SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "date",
+          "reason",
+          "message"
+        ]
+      },
       "GenerationImpactDto": {
         "type": "object",
         "properties": {
@@ -5005,6 +5036,13 @@
               "$ref": "#/components/schemas/DailyLoadWarningDto"
             }
           },
+          "bookingWarnings": {
+            "description": "Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookingWarningDto"
+            }
+          },
           "isPreview": {
             "type": "boolean",
             "description": "True when this was a preview. Nothing was written."
@@ -5027,6 +5065,7 @@
           "unchangedCount",
           "shortfalls",
           "loadWarnings",
+          "bookingWarnings",
           "isPreview",
           "scheduleRunId"
         ]

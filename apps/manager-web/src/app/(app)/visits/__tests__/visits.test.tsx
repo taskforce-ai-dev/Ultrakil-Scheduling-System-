@@ -439,6 +439,26 @@ describe("the visit detail drawer", () => {
     ).toBeInTheDocument();
   });
 
+  it("never puts a raw placement enum in front of a manager", async () => {
+    // A reason the API adds after this build ships still has to read as
+    // English. "SPREAD_BY_REGION" on a drawer is not a sentence.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      // Cast deliberately: the contract this build was generated from has no
+      // such member, which is exactly the situation being rehearsed.
+      buildVisitDetail({
+        id: "visit-generated",
+        placement: "SPREAD_BY_REGION" as "SPREAD",
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Placed by the generator")).toBeInTheDocument();
+    expect(within(drawer).queryByText(/SPREAD_BY_REGION/)).not.toBeInTheDocument();
+  });
+
   it("says why a protected visit will be left alone", async () => {
     vi.mocked(fetchVisit).mockResolvedValue(
       buildVisitDetail({
@@ -588,6 +608,40 @@ describe("regeneration impact review", () => {
     expect(
       within(drawer).getByText("2026-09-14, COLOMBO: 14 visits")
     ).toBeInTheDocument();
+  });
+
+  it("names a booked date the site's own hours contradict, without naming the customer", async () => {
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        bookingWarnings: [
+          {
+            serviceAgreementId: "agreement-7",
+            date: "2026-09-19",
+            reason: "SITE_CLOSED_ON_BOOKED_DAY",
+            message:
+              "2026-09-19 is booked with the customer, but the site has no recorded opening hours on a saturday. The visit is planned on the assumed 08:00-17:00 day and marked unconfirmed. Record the site's hours for that day.",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText("Booked on a day the site's hours do not allow")
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText("2026-09-19 — No hours recorded for that weekday")
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/no recorded opening hours on a saturday/)
+    ).toBeInTheDocument();
+    // Raw enums never reach a manager.
+    expect(
+      within(drawer).queryByText(/SITE_CLOSED_ON_BOOKED_DAY/)
+    ).not.toBeInTheDocument();
   });
 
   it("confirms exactly the range that was previewed", async () => {

@@ -133,7 +133,16 @@ export const PLACEMENT_LABEL: Record<string, string> = {
   EARLIEST: "First allowed day of the period",
 };
 
+/**
+ * A reason the API added after this build shipped still has to read as
+ * English. Showing the raw enum puts SPREAD_BY_REGION in front of a manager as
+ * though it were a sentence; "Placed by the generator" is true of every
+ * placement the API can invent, and says the one thing the label exists to
+ * say — that a person did not choose this date.
+ */
+const UNKNOWN_PLACEMENT_LABEL = "Placed by the generator";
+
 export function placementLabel(placement: string | null): string | null {
   if (!placement) return null;
-  return PLACEMENT_LABEL[placement] ?? placement;
+  return PLACEMENT_LABEL[placement] ?? UNKNOWN_PLACEMENT_LABEL;
 }
