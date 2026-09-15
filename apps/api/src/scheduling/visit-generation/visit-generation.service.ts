@@ -143,7 +143,12 @@ export class VisitGenerationService {
     const window = enclosingMonths(from, to);
     const around = await this.loadExistingVisits(agreements, window.from, window.to);
 
-    const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
+    const planned = this.requiredVisitsFor(
+      agreements,
+      dto.from,
+      dto.to,
+      cancelledSlotsBy(around),
+    );
 
     // Only the run's own range is the run's to change, and within it only the
     // periods this run actually planned. A visit standing in a period the run
@@ -274,6 +279,7 @@ export class VisitGenerationService {
     agreements: AgreementForGeneration[],
     from: string,
     to: string,
+    blockedSlots: Map<string, Array<{ date: string; windowStartMinute: number }>>,
   ): {
     required: RequiredVisit[];
     shortfalls: Shortfall[];
@@ -317,6 +323,7 @@ export class VisitGenerationService {
         from,
         to,
         bookedDates,
+        blockedSlots: blockedSlots.get(agreement.id) ?? [],
         // Anchors only mean something over a month: they are a day of the
         // month, and a week holds at most seven of those in a row. A weekly
         // agreement already visits every week, so it was never the source of
@@ -822,6 +829,29 @@ function enclosingMonths(from: Date, to: Date): { from: Date; to: Date } {
     from: new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)),
     to: new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0)),
   };
+}
+
+/**
+ * The slots cancelled visits hold, by agreement.
+ *
+ * A cancelled visit is never removed, and a visit is identified by agreement,
+ * date and start time — so the slot is spent. Handed to the preview, the
+ * period picks another allowed day instead of quietly reporting itself
+ * satisfied by work nobody will do.
+ */
+function cancelledSlotsBy(
+  visits: ExistingVisit[],
+): Map<string, Array<{ date: string; windowStartMinute: number }>> {
+  const slots = new Map<string, Array<{ date: string; windowStartMinute: number }>>();
+
+  for (const visit of visits) {
+    if (visit.status !== VisitStatus.CANCELLED) continue;
+    const list = slots.get(visit.serviceAgreementId) ?? [];
+    list.push({ date: visit.visitDate, windowStartMinute: visit.windowStartMinute });
+    slots.set(visit.serviceAgreementId, list);
+  }
+
+  return slots;
 }
 
 /** "Quarterly", "Fortnightly" — the word UltraKIL sells the cadence by. */

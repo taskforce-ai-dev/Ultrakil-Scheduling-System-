@@ -1207,3 +1207,107 @@ describe('periods are the calendar\'s, not the range\'s', () => {
     expect(preview.plannedPeriods[0].end).toBe('2026-09-30');
   });
 });
+
+describe('a slot a cancelled visit holds', () => {
+  /**
+   * A cancelled visit is never removed, and a visit is identified by
+   * agreement, date and start time — so the slot it sits on is spent. The
+   * period used to read as satisfied by it: unchanged, no live visit that
+   * week, and the unique index forbidding the addition that would have fixed
+   * it. Every run agreed there was nothing to do.
+   */
+  const weeklyMonToFri = (overrides: Partial<SchedulePreviewInput> = {}) =>
+    buildInput({
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      allowedDays: [
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+      ],
+      preferredDays: [],
+      startDate: '2026-09-07',
+      from: '2026-09-14',
+      to: '2026-09-20',
+      wholePeriodsOnly: true,
+      ...overrides,
+    });
+
+  it('takes another allowed day in the same period', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 9 * 60 }],
+      }),
+    );
+
+    expect(preview.visits.map((visit) => visit.date)).toEqual(['2026-09-15']);
+    expect(preview.shortfalls).toEqual([]);
+  });
+
+  it('is never offered as somewhere else in the period to move to', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 9 * 60 }],
+      }),
+    );
+
+    expect(preview.visits[0].alternatives.map((day) => day.date)).not.toContain(
+      '2026-09-14',
+    );
+  });
+
+  it('says so when it was the only day the period had', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 9 * 60 }],
+      }),
+    );
+
+    expect(preview.visits).toEqual([]);
+    expect(preview.shortfalls).toEqual([
+      expect.objectContaining({
+        periodStart: '2026-09-14',
+        periodEnd: '2026-09-20',
+        requested: 1,
+        scheduled: 0,
+        reason: 'PERIOD_HELD_BY_A_CANCELLED_VISIT',
+      }),
+    ]);
+    expect(preview.shortfalls[0].message).toContain('cancelled');
+  });
+
+  it('leaves the afternoon alone when only the morning was cancelled', () => {
+    // A date is not a slot. A site served twice on one Monday has two of them,
+    // and a cancellation in the morning says nothing about the afternoon.
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY],
+        siteWindows: [
+          { weekday: Weekday.MONDAY, startMinute: 8 * 60, endMinute: 12 * 60 },
+          { weekday: Weekday.MONDAY, startMinute: 13 * 60, endMinute: 17 * 60 },
+        ],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+      }),
+    );
+
+    expect(preview.visits.map((visit) => [visit.date, visit.windowStartMinute])).toEqual([
+      ['2026-09-14', 13 * 60],
+    ]);
+  });
+
+  it('still honours a booked date, because a booking cannot move', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        bookedDates: ['2026-09-14'],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 9 * 60 }],
+      }),
+    );
+
+    expect(preview.visits).toEqual([
+      expect.objectContaining({ date: '2026-09-14', placement: 'BOOKED' }),
+    ]);
+  });
+});

@@ -84,6 +84,16 @@ export interface SchedulePreviewInput {
   /** Last day of the horizon, inclusive, YYYY-MM-DD. Overrides `horizonWeeks`. */
   to?: string;
   /**
+   * Slots a cancelled visit already holds: no new visit can be planned onto
+   * one, because a visit is identified by agreement, date and start time and
+   * the cancelled row still occupies that identity.
+   *
+   * Without this the period read as satisfied — the cancelled visit matched
+   * the requirement — and the customer was left with a cancellation where a
+   * visit was due, every run agreeing there was nothing to do.
+   */
+  blockedSlots?: Array<{ date: string; windowStartMinute: number }>;
+  /**
    * Dates already agreed with the customer, as YYYY-MM-DD.
    *
    * A period holding one or more of these is not planned at all: its visits
@@ -196,7 +206,16 @@ export type ShortfallReason =
    * was actually agreed — but the gap is said out loud rather than left for a
    * manager to notice a quarter later.
    */
-  | 'BOOKED_BELOW_FREQUENCY';
+  | 'BOOKED_BELOW_FREQUENCY'
+  /**
+   * The days this period could have used are held by cancelled visits.
+   *
+   * A cancelled visit is never removed and never re-used, so the slot it
+   * occupies is spent. When it is the only day the period had, the period
+   * genuinely cannot be served — and saying nothing left the customer with a
+   * cancellation where a visit was due.
+   */
+  | 'PERIOD_HELD_BY_A_CANCELLED_VISIT';
 
 export interface PreviewShortfall {
   /** First date of the period that came up short. */
@@ -297,6 +316,16 @@ const WEEKDAY_BY_INDEX: Weekday[] = [
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * One slot: a date *and* a start time.
+ *
+ * A date alone is not a slot. A site served morning and afternoon on the same
+ * Monday holds two of them, and a cancellation in the morning says nothing
+ * about the afternoon.
+ */
+const slotKey = (date: string, windowStartMinute: number) =>
+  `${date}|${windowStartMinute}`;
 
 export function toDateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
@@ -501,6 +530,13 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   ].sort();
   const bookedSet = new Set(bookedInRange);
 
+  // Slots a cancelled visit holds. A booked date is deliberately not filtered
+  // by these: a booking cannot be moved to another day, so the honest answer
+  // there is the cancelled visit reported as itself, not a day nobody agreed.
+  const blocked = new Set(
+    (input.blockedSlots ?? []).map((slot) => slotKey(slot.date, slot.windowStartMinute)),
+  );
+
   const candidates: Candidate[] = [];
   // Tracked separately so a shortfall can say *why*: no allowed weekday at all
   // reads very differently from a site that is simply shut that week.
@@ -680,7 +716,15 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     // most one visit per calendar day: two visits on one Tuesday is a
     // different commitment from two visits in a week, and the agreement asked
     // for the latter.
-    const placeable = inPeriod.filter((candidate) => candidate.isAllowedDay);
+    //
+    // A slot a cancelled visit holds is not placeable. The cancelled row keeps
+    // the (agreement, date, start time) identity for ever, so planning onto it
+    // creates nothing and merely reports the period as already satisfied.
+    const allowedHere = inPeriod.filter((candidate) => candidate.isAllowedDay);
+    const placeable = allowedHere.filter(
+      (candidate) => !blocked.has(slotKey(candidate.date, candidate.windowStartMinute)),
+    );
+    const heldByACancellation = placeable.length < allowedHere.length;
     const picks = chooseForPeriod(
       placeable,
       input.frequencyCount,
@@ -712,6 +756,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
           bounds,
           hadAllowedDay: periodsWithAllowedDay.has(period),
           hadOpenDay: periodsWithOpenDay.has(period),
+          heldByACancellation,
           durationMinutes: input.durationMinutes,
         }),
       });
@@ -969,10 +1014,24 @@ function explainShortfall(context: {
   bounds: { start: string; end: string };
   hadAllowedDay: boolean;
   hadOpenDay: boolean;
+  /** At least one of this period's days was spent on a cancelled visit. */
+  heldByACancellation: boolean;
   durationMinutes: number;
 }): { reason: ShortfallReason; message: string } {
   const span = `${context.bounds.start} to ${context.bounds.end}`;
   const shortBy = context.requested - context.scheduled;
+
+  // Checked first: the site is open and the weekday allowed, so every other
+  // explanation would send a manager to fix something that is not broken.
+  if (context.heldByACancellation) {
+    return {
+      reason: 'PERIOD_HELD_BY_A_CANCELLED_VISIT',
+      message:
+        context.scheduled === 0
+          ? `The only visit between ${span} is cancelled, and a cancelled visit cannot be re-used or replaced on its own day. Reinstate it, or allow another weekday so the period can be served.`
+          : `Only ${context.scheduled} of ${context.requested} visit(s) fit between ${span} — short by ${shortBy}, because the remaining day(s) are held by cancelled visits. Reinstate them, or allow another weekday.`,
+    };
+  }
 
   if (!context.hadAllowedDay) {
     return {
