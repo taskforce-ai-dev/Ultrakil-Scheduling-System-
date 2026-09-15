@@ -3024,7 +3024,10 @@ export interface operations {
                 page?: number;
                 /** @description Up to 200 per page. */
                 pageSize?: number;
+                /** @description Only vehicles recorded in exactly this branch. */
                 branch?: "COLOMBO" | "KANDY";
+                /** @description Vehicles that can serve work in this branch: those recorded in it plus those with no recorded branch, which the eligibility engine treats as unknown rather than wrong. Use this for a picker; `branch` is the exact filter. */
+                servesBranch?: "COLOMBO" | "KANDY";
                 /** @description Defaults to true. */
                 active?: boolean;
                 /** @description Match on registration or label. */

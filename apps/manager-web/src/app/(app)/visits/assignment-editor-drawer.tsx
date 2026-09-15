@@ -167,31 +167,49 @@ export function AssignmentEditorDrawer({
     Partial<Record<LockScope, AssignmentLock | null>>
   >({});
 
+  // A slow response for a previous visit must not repopulate the drawer once
+  // a different visit is open — the picker would then offer another branch's
+  // vehicles and employees for this one.
+  const loadGenerationRef = React.useRef(0);
+
   const load = React.useCallback(() => {
     if (!visitId) return;
+    const generation = ++loadGenerationRef.current;
+    const current = () => generation === loadGenerationRef.current;
     setIsLoading(true);
     setLoadError(null);
     setSaveConflicts(null);
     Promise.all([fetchVisit(visitId), fetchVisitAssignment(visitId)])
       .then(([visitDetail, currentAssignment]) => {
+        if (!current()) return undefined;
         setVisit(visitDetail);
         setAssignment(currentAssignment);
         return fetchEmployees({ branch: visitDetail.branchCode, pageSize: 200 }).then(
           (page) => {
+            if (!current()) return undefined;
             setEmployees(page.items);
-            return fetchVehicles({ branch: visitDetail.branchCode, pageSize: 200 });
+            // The engine treats a vehicle with no recorded branch as unknown,
+            // not wrong (the Technician Matrix never states one). Asking only
+            // for vehicles *of* this branch returned none on real data and left
+            // an enabled picker that opened onto nothing.
+            return fetchVehicles({ servesBranch: visitDetail.branchCode, pageSize: 200 });
           }
         );
       })
-      .then((vehiclePage) => setVehicles(vehiclePage.items))
+      .then((vehiclePage) => {
+        if (vehiclePage && current()) setVehicles(vehiclePage.items);
+      })
       .catch((caught: unknown) => {
+        if (!current()) return;
         setLoadError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (current()) setIsLoading(false);
+      });
   }, [visitId]);
 
   React.useEffect(() => {
@@ -247,19 +265,49 @@ export function AssignmentEditorDrawer({
   // Base UI's <SelectValue> renders the raw value unless the root is given a
   // value -> label map, which would show an employee/vehicle's UUID on the
   // trigger instead of its name.
+  // Displayable is wider than selectable. The assignment read model names
+  // every vehicle it references, and a published or historical assignment may
+  // reference one the branch-serving list no longer offers. Its name still
+  // belongs on screen; it does not become an option.
+  // Nothing to choose from once loading is done. Rows an assignment already
+  // has still render (their names come from the assignment), but no new one
+  // can be added and no picker is offered that would open onto nothing.
+  const noVehicleCanServe = !isLoading && visit !== null && vehicles.length === 0;
+
+  // Same rule for people: the assignment names its own crew and drivers, and
+  // a published assignment may name someone the branch list or the authorized
+  // list no longer returns. Their names still belong on screen.
   const employeeLabels = React.useMemo(
     () =>
-      Object.fromEntries(
-        employees.map((employee) => [
+      Object.fromEntries([
+        ...(assignment?.crew ?? []).map((member) => [
+          member.employeeId,
+          member.isPmsSupervisor ? `${member.fullName} (PMS)` : member.fullName,
+        ]),
+        ...employees.map((employee) => [
           employee.id,
           employee.isPmsGrade ? `${employee.fullName} (PMS)` : employee.fullName,
-        ])
-      ),
-    [employees]
+        ]),
+      ]),
+    [assignment, employees]
   );
+  const assignedDriverLabels = React.useMemo(
+    () =>
+      Object.fromEntries(
+        (assignment?.vehicles ?? [])
+          .filter((entry) => entry.driverEmployeeId && entry.driverName)
+          .map((entry) => [entry.driverEmployeeId as string, entry.driverName as string])
+      ),
+    [assignment]
+  );
+
   const vehicleLabels = React.useMemo(
-    () => Object.fromEntries(vehicles.map((vehicle) => [vehicle.id, vehicle.label])),
-    [vehicles]
+    () =>
+      Object.fromEntries([
+        ...(assignment?.vehicles ?? []).map((entry) => [entry.vehicleId, entry.label]),
+        ...vehicles.map((vehicle) => [vehicle.id, vehicle.label]),
+      ]),
+    [assignment, vehicles]
   );
 
   // Every employee currently on the crew, regardless of the role they're
@@ -331,6 +379,9 @@ export function AssignmentEditorDrawer({
 
   const isPublicationHistory =
     assignment !== null && PUBLICATION_HISTORY_STATUSES.has(assignment.status);
+  // Only an editable assignment is told nothing can serve it; history is
+  // read-only and the advice would be about a record nobody can act on here.
+  const vehiclePickerBlocked = noVehicleCanServe && !isPublicationHistory;
 
   // Live validation: every edit is checked against the real eligibility
   // engine before Save is enabled, debounced so typing doesn't fire a
@@ -637,12 +688,36 @@ export function AssignmentEditorDrawer({
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Vehicles</h3>
-              <Button type="button" variant="outline" size="sm" onClick={addVehicleRow} disabled={isPublicationHistory}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (!vehiclePickerBlocked) addVehicleRow();
+                }}
+                disabled={isPublicationHistory}
+                // aria-disabled rather than disabled: a natively disabled
+                // button leaves the tab order, so its reason could never be
+                // read by the people it is meant for.
+                aria-disabled={vehiclePickerBlocked || undefined}
+                aria-describedby={vehiclePickerBlocked ? "no-vehicle-can-serve" : undefined}
+              >
                 <Plus aria-hidden="true" />
                 Add vehicle
               </Button>
             </div>
-            {vehicleRows.length === 0 && (
+            {vehiclePickerBlocked && (
+              // An enabled picker that opens onto nothing looks broken and
+              // explains nothing. Say what is missing and where to fix it.
+              <p id="no-vehicle-can-serve" role="status" className="text-sm text-muted-foreground">
+                No active vehicle can serve {visit?.branchCode ?? "this branch's"} work: none is
+                recorded for this branch or without a branch.{" "}
+                {vehicleRows.length > 0
+                  ? "The vehicle already on this assignment is shown by name and cannot be changed here; remove it, or record vehicle branches under Vehicles."
+                  : "Record vehicle branches under Vehicles, or dispatch a crew that can use public transport."}
+              </p>
+            )}
+            {!vehiclePickerBlocked && vehicleRows.length === 0 && (
               <p className="text-sm text-muted-foreground">
                 No vehicle assigned — a crew using public transport needs none.
               </p>
@@ -658,15 +733,21 @@ export function AssignmentEditorDrawer({
                 const eligibleDrivers = (drivers?.drivers ?? []).filter((driver) =>
                   crewEmployeeIds.has(driver.id)
                 );
-                const driverLabels = Object.fromEntries(
-                  eligibleDrivers.map((driver) => [driver.id, driver.fullName])
-                );
+                const driverLabels = {
+                  ...assignedDriverLabels,
+                  ...Object.fromEntries(
+                    eligibleDrivers.map((driver) => [driver.id, driver.fullName])
+                  ),
+                };
                 return (
                   <div key={row.key} className="flex items-center gap-2">
                     <Select
                       items={vehicleLabels}
                       value={row.vehicleId}
-                      disabled={isPublicationHistory}
+                      // With nothing to choose from, the trigger still names
+                      // the vehicle this row holds but never opens onto an
+                      // empty list.
+                      disabled={isPublicationHistory || noVehicleCanServe}
                       onValueChange={(value) => onVehicleChosen(row.key, value ?? "")}
                     >
                       <SelectTrigger aria-label="Vehicle" className="flex-1">

@@ -152,6 +152,45 @@ describe("CustomersPage", () => {
     expect(await screen.findByText("1 active, 1 inactive")).toBeInTheDocument();
   });
 
+  it("names every site under a customer and labels the inactive one in text, not a count alone (ULK-O08)", async () => {
+    vi.mocked(fetchCustomers).mockResolvedValue({
+      items: [
+        buildCustomer({
+          id: "customer-4",
+          name: "Harbour Logistics",
+          sites: [
+            buildServiceSite({ id: "site-open", name: "Warehouse North", isActive: true }),
+            buildServiceSite({ id: "site-shut", name: "Warehouse South", isActive: false }),
+          ],
+        }),
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<CustomersPage />);
+
+    const row = await screen.findByRole("row", { name: /Harbour Logistics/ });
+    // Which site is inactive, by name — the count alone never said.
+    expect(within(row).getByText("Warehouse North")).toBeInTheDocument();
+    expect(within(row).getByText("Warehouse South")).toBeInTheDocument();
+
+    // The label is text, so it survives greyscale and a colour-blind reader,
+    // and it sits on the inactive site rather than the active one. The
+    // customer itself is active, so the only other "Inactive" candidate in
+    // this row would be its status badge — which reads "Active".
+    const inactiveLabels = within(row).getAllByText("Inactive");
+    expect(inactiveLabels).toHaveLength(1);
+    expect(within(row).getByText("Active")).toBeInTheDocument();
+
+    const inactiveSiteItem = within(row).getByText("Warehouse South").closest("li");
+    expect(inactiveSiteItem).not.toBeNull();
+    expect(within(inactiveSiteItem as HTMLElement).getByText("Inactive")).toBeInTheDocument();
+    const activeSiteItem = within(row).getByText("Warehouse North").closest("li");
+    expect(within(activeSiteItem as HTMLElement).queryByText("Inactive")).toBeNull();
+  });
+
   it("defaults to active customers only, and switching to Inactive re-fetches and labels them in text (ULK-O09)", async () => {
     const inactiveCustomer = buildCustomer({
       id: "customer-inactive",

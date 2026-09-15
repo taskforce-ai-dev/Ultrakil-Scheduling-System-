@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -268,8 +268,32 @@ export default function CustomersPage() {
                     {/* Text, not just a count: an inactive site under an
                         active customer must be distinguishable without
                         opening anything or relying on colour. */}
-                    {activeSites} active
-                    {inactiveSites > 0 && `, ${inactiveSites} inactive`}
+                    <div>
+                      {activeSites} active
+                      {inactiveSites > 0 && `, ${inactiveSites} inactive`}
+                    </div>
+                    {/* ULK-O08: the count alone never says *which* site is
+                        inactive, and the master schedule only says it in red.
+                        Naming each site with a textual "Inactive" label is the
+                        whole fix — it stays read-only, so an inactive site is
+                        still excluded from every picker that creates new work
+                        (see the Add-agreement site filter) while its history
+                        remains inspectable. */}
+                    {customer.sites.length > 0 && (
+                      <ul className="mt-1.5 space-y-1">
+                        {customer.sites.map((site) => (
+                          <li key={site.id} className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-sm text-muted-foreground">{site.name}</span>
+                            {!site.isActive && (
+                              <Badge variant="outline">
+                                <XCircle aria-hidden="true" />
+                                Inactive
+                              </Badge>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </TableCell>
                   <TableCell>
                     <ActiveStatusBadge isActive={customer.isActive} activeLabel="Active" />

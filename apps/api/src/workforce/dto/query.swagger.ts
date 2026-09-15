@@ -104,6 +104,14 @@ export const ApiVehicleQuery = () =>
       name: 'branch',
       required: false,
       enum: Object.values(BranchCode),
+      description: 'Only vehicles recorded in exactly this branch.',
+    }),
+    ApiQuery({
+      name: 'servesBranch',
+      required: false,
+      enum: Object.values(BranchCode),
+      description:
+        'Vehicles that can serve work in this branch: those recorded in it plus those with no recorded branch, which the eligibility engine treats as unknown rather than wrong. Use this for a picker; `branch` is the exact filter.',
     }),
     ApiQuery({
       name: 'active',

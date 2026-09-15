@@ -119,6 +119,210 @@ async function addCrewMember(user: ReturnType<typeof userEvent.setup>, name: str
 }
 
 describe("AssignmentEditorDrawer", () => {
+  // UAT on staging: every imported vehicle has no recorded branch, because the
+  // Technician Matrix never states one. The drawer asked the API for vehicles
+  // *of* the visit's branch and got none, so "Choose a vehicle" opened an
+  // empty popup — an enabled control that silently did nothing. The engine's
+  // rule is that an unknown branch is unknown, not wrong, and the picker must
+  // ask the same question the engine answers.
+  it("asks for vehicles that can serve the visit's branch, not only those recorded in it", async () => {
+    await openDrawer();
+
+    expect(fetchVehicles).toHaveBeenCalledWith(
+      expect.objectContaining({ servesBranch: "COLOMBO" })
+    );
+    expect(vi.mocked(fetchVehicles).mock.calls[0][0]).not.toHaveProperty("branch");
+  });
+
+  it("opens the vehicle picker by mouse, lists vehicles by name, and selects one", async () => {
+    vi.mocked(fetchVehicles).mockResolvedValue({
+      items: [
+        buildVehicle({ id: "vehicle-1", label: "Van 253-4289", branchCode: "COLOMBO" }),
+        buildVehicle({ id: "vehicle-2", label: "Bolero DAC-2485", branchCode: null }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 200,
+    });
+    vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(
+      buildAuthorizedDrivers({
+        vehicle: { id: "vehicle-2", code: "DAC-2485", label: "Bolero DAC-2485", seatCapacity: 4 },
+        drivers: [
+          {
+            id: "employee-supervisor",
+            fullName: "A Perera",
+            gradeLabel: "SPMS",
+            isPmsGrade: true,
+            branchCode: "COLOMBO",
+            deploymentType: "MOBILE",
+            isActive: true,
+          },
+        ],
+        total: 1,
+      })
+    );
+    const { user } = await openDrawer();
+    await addCrewMember(user, "A Perera");
+
+    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
+    await user.click(screen.getByLabelText("Vehicle"));
+    expect(await screen.findByRole("option", { name: "Van 253-4289" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Bolero DAC-2485" }));
+
+    expect(screen.getByLabelText("Vehicle")).toHaveTextContent("Bolero DAC-2485");
+    await user.click(screen.getByLabelText("Driver"));
+    expect(await screen.findByRole("option", { name: "A Perera" })).toBeInTheDocument();
+  });
+
+  it("opens the vehicle picker from the keyboard as well", async () => {
+    vi.mocked(fetchVehicles).mockResolvedValue({
+      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289", branchCode: null })],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+    const { user } = await openDrawer();
+    await addCrewMember(user, "A Perera");
+
+    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
+    screen.getByLabelText("Vehicle").focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("option", { name: "Van 253-4289" })).toBeInTheDocument();
+  });
+
+  it("explains an empty vehicle list instead of offering a picker that does nothing", async () => {
+    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
+    const { user } = await openDrawer();
+    await addCrewMember(user, "A Perera");
+
+    expect(screen.queryByLabelText("Vehicle")).not.toBeInTheDocument();
+    const addVehicle = screen.getByRole("button", { name: "Add vehicle" });
+    // Marked, not natively disabled: it stays in the tab order so the reason
+    // beside it can actually be reached.
+    expect(addVehicle).toHaveAttribute("aria-disabled", "true");
+    await user.click(addVehicle);
+    expect(screen.queryByLabelText("Vehicle")).not.toBeInTheDocument();
+    const explanation = screen.getByRole("status");
+    expect(explanation).toHaveTextContent(/No active vehicle can serve COLOMBO work/i);
+    expect(explanation).toHaveTextContent(/Record vehicle branches under Vehicles/i);
+    expect(addVehicle).toHaveAccessibleDescription(/No active vehicle can serve/i);
+  });
+
+  it("names the vehicle a row already holds and does not open it onto an empty list", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "DRAFT",
+        vehicles: [
+          { vehicleId: "vehicle-held", label: "Van HV-0001", driverEmployeeId: null, driverName: null },
+        ],
+      })
+    );
+    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
+    const { user } = await openDrawer();
+
+    const vehicleControl = await screen.findByLabelText("Vehicle");
+    expect(vehicleControl).toHaveTextContent("Van HV-0001");
+    expect(vehicleControl).toBeDisabled();
+    await user.click(vehicleControl);
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/already on this assignment/i);
+  });
+
+  it("keeps the explanation out of read-only publication history", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(buildAssignment({ status: "PUBLISHED" }));
+    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
+    await openDrawer();
+    await screen.findByLabelText("Vehicle");
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("names crew members and drivers from the assignment even when the lists no longer return them", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "PUBLISHED",
+        crew: [
+          { employeeId: "employee-gone", fullName: "R Silva", role: "SUPERVISOR", isPmsSupervisor: true },
+        ],
+        vehicles: [
+          {
+            vehicleId: "vehicle-1",
+            label: "Van 253-4289",
+            driverEmployeeId: "employee-gone",
+            driverName: "R Silva",
+          },
+        ],
+      })
+    );
+    mockEmployeeList([supervisor, technician]);
+    vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(buildAuthorizedDrivers({ drivers: [] }));
+    await openDrawer();
+
+    expect(await screen.findByLabelText("Employee")).toHaveTextContent("R Silva (PMS)");
+    expect(screen.getByLabelText("Driver")).toHaveTextContent("R Silva");
+    expect(screen.queryByText(/employee-gone/)).not.toBeInTheDocument();
+  });
+
+  // UAT on staging: a published assignment's vehicle showed as a bare UUID.
+  // The read model already names the vehicle; the drawer was looking it up
+  // only in the currently selectable list, which need not contain it.
+  it("names an assigned vehicle from the assignment itself, even when it is not selectable now", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "PUBLISHED",
+        vehicles: [
+          {
+            vehicleId: "fea4792a-c979-49cd-abaa-9aa0ef4ac24f",
+            label: "Lorry KX-1010",
+            driverEmployeeId: "employee-1",
+            driverName: "A Perera",
+          },
+        ],
+      })
+    );
+    vi.mocked(fetchVehicles).mockResolvedValue({
+      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289" })],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+    await openDrawer();
+
+    const vehicleControl = await screen.findByLabelText("Vehicle");
+    expect(vehicleControl).toHaveTextContent("Lorry KX-1010");
+    expect(vehicleControl).not.toHaveTextContent("fea4792a");
+    expect(screen.queryByText(/fea4792a-c979/)).not.toBeInTheDocument();
+  });
+
+  it("does not make a historical vehicle selectable merely to name it", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "DRAFT",
+        vehicles: [
+          {
+            vehicleId: "vehicle-retired",
+            label: "Retired Van RX-0001",
+            driverEmployeeId: null,
+            driverName: null,
+          },
+        ],
+      })
+    );
+    vi.mocked(fetchVehicles).mockResolvedValue({
+      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289" })],
+      total: 1,
+      page: 1,
+      pageSize: 200,
+    });
+    const { user } = await openDrawer();
+
+    const vehicleControl = await screen.findByLabelText("Vehicle");
+    expect(vehicleControl).toHaveTextContent("Retired Van RX-0001");
+    await user.click(vehicleControl);
+    expect(await screen.findByRole("option", { name: "Van 253-4289" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Retired Van RX-0001" })).not.toBeInTheDocument();
+  });
+
   it("is an accessible replacement workflow: every control has a real label", async () => {
     const { user } = await openDrawer();
     await addCrewMember(user, "A Perera");

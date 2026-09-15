@@ -98,8 +98,13 @@ In the editor:
   actually eligible for this site's branch. An employee permanently
   stationed at a different site can still be selected here, but adding
   them produces a validation error explaining why (see section 5).
-- **Add vehicle** — only vehicles belonging to the visit's branch are
-  offered. Once a vehicle is chosen, the **Driver** dropdown next to it
+- **Add vehicle** — vehicles that can serve the visit's branch are offered:
+  those recorded in that branch, plus those with no recorded branch. The
+  Technician Matrix never states a vehicle's branch, so imported vehicles
+  arrive without one; an unknown branch is unknown, not wrong, and the
+  eligibility check applies the same reading. A vehicle recorded in a
+  *different* branch is never offered. If no active vehicle can serve the
+  branch, the drawer says so instead of offering an empty list. Once a vehicle is chosen, the **Driver** dropdown next to it
   only offers people who are *both* already on this crew *and* individually
   checked as authorized to drive that specific vehicle — never anyone else,
   even if they're authorized for a different vehicle.

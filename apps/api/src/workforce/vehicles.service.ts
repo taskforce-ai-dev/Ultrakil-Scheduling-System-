@@ -18,17 +18,27 @@ export class VehiclesService {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 50;
 
+    // Each optional filter that is itself a disjunction goes under one AND,
+    // so two of them can never overwrite each other's OR key on the object.
+    const clauses: Prisma.VehicleWhereInput[] = [];
+    // A vehicle with no recorded branch is unknown, not wrong — the same
+    // reading the eligibility engine applies. A picker asking what can
+    // serve this branch must get the same answer the engine would give.
+    if (query.servesBranch) {
+      clauses.push({ OR: [{ branch: { code: query.servesBranch } }, { branchId: null }] });
+    }
+    if (query.search) {
+      clauses.push({
+        OR: [
+          { code: { contains: query.search, mode: 'insensitive' } },
+          { label: { contains: query.search, mode: 'insensitive' } },
+        ],
+      });
+    }
     const where: Prisma.VehicleWhereInput = {
       ...(query.active === undefined ? { isActive: true } : { isActive: query.active }),
       ...(query.branch ? { branch: { code: query.branch } } : {}),
-      ...(query.search
-        ? {
-            OR: [
-              { code: { contains: query.search, mode: 'insensitive' } },
-              { label: { contains: query.search, mode: 'insensitive' } },
-            ],
-          }
-        : {}),
+      ...(clauses.length > 0 ? { AND: clauses } : {}),
     };
 
     const [total, items] = await Promise.all([

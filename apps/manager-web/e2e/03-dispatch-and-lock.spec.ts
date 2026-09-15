@@ -59,6 +59,42 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     await page.getByRole("option").first().click();
   }
 
+  if (strict) {
+    // UAT on staging: "Choose a vehicle" looked enabled and opened onto
+    // nothing, because every imported vehicle has no recorded branch and the
+    // picker asked only for vehicles *of* the branch. The synthetic Bolero is
+    // deliberately left without a branch (see deploy/test/rehearsal-fixture.mjs)
+    // so this is the real condition, not a friendlier one.
+    await drawer.getByRole('button', { name: 'Add vehicle' }).click();
+    const vehicleControl = drawer.getByLabel('Vehicle', { exact: true });
+    await vehicleControl.click();
+    const bolero = page.getByRole('option', { name: /DAC-?\s?2485/ });
+    await expect(bolero).toBeVisible();
+    await bolero.click();
+    await expect(vehicleControl).toContainText(/DAC-?\s?2485/);
+    await expect(vehicleControl).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+
+    // Driver choices are the checked crew members only. T M Supun is on this
+    // crew and is checked for the Bolero; Ajith Alwis is on the crew but is
+    // not checked for it, so he must not be offered.
+    const driverControl = drawer.getByLabel('Driver', { exact: true });
+    await driverControl.click();
+    await expect(page.getByRole('option', { name: 'T M Supun Tharaka Wijeweera', exact: true })).toBeVisible();
+    // Exactly one driver is offered: the crew member who is checked for
+    // this vehicle. Counting options is stronger than asserting one name is
+    // absent, which would also pass if the wrong popup were open.
+    await expect(page.getByRole('option')).toHaveCount(1);
+    // Choosing the vehicle already triggers a check with no driver, which is
+    // rightly ineligible; wait for the one that carries the chosen driver.
+    const vehicleChecked = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/assignment/check')
+      && Boolean(response.request().postDataJSON().vehicles?.[0]?.driverEmployeeId));
+    await page.getByRole('option', { name: 'T M Supun Tharaka Wijeweera', exact: true }).click();
+    const vehicleResult = await vehicleChecked;
+    expect(vehicleResult.ok()).toBe(true);
+    expect((await vehicleResult.json()).isEligible).toBe(true);
+  }
+
   await drawer.getByLabel("Reason for this change").fill("E2E: verifying the manual override path");
 
   const saveButton = drawer.getByRole("button", { name: "Save assignment" });
@@ -72,9 +108,14 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     await page.reload();
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('Ajith Alwis', { timeout: 10_000 });
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('T M Supun Tharaka Wijeweera');
-    // Reopen once more: persistent two-person crew and no self-overlap refusal.
+    // Reopen once more: persistent two-person crew, the saved vehicle shown by
+    // name rather than by id (it is still selectable here — the unit test
+    // covers the read-model label for a vehicle that is not), and no
+    // self-overlap refusal.
     await seededRow.getByRole('button', { name: 'Edit crew', exact: true }).click();
     await expect(drawer.getByLabel('Employee', { exact: true })).toHaveCount(2);
+    await expect(drawer.getByLabel('Vehicle', { exact: true })).toContainText(/DAC-?\s?2485/, { timeout: 10_000 });
+    await expect(drawer.getByLabel('Vehicle', { exact: true })).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
     await expect(drawer.getByText('This crew is eligible to take the visit.')).toBeVisible({ timeout: 10_000 });
     return;
   }

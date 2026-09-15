@@ -37,7 +37,7 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 | `employees` | One row per person in the technician matrix. `sourceKey` is the idempotency key for re-import. `isPmsGrade` marks a supervisor. `deploymentType` marks whether the person is mobile or permanently stationed. |
 | `employee_skills` | Normalised `skillCode` for matching, `skillLabel` for display. |
 | `permanent_assignments` | Employee ↔ site, with effective dates. A person with an active row here is never dispatched elsewhere. |
-| `vehicles` | One row per vehicle column in the matrix. `ownershipGroup` preserves the matrix heading; `branchId` stays null until confirmed because the matrix does not state it. |
+| `vehicles` | One row per vehicle column in the matrix. `ownershipGroup` preserves the matrix heading; `branchId` stays null until confirmed because the matrix does not state it. `GET /api/vehicles?branch=X` is the exact filter; `?servesBranch=X` returns vehicles recorded in X plus those with no recorded branch, which is what a picker for X's work should ask, matching the eligibility engine's reading that an unknown branch is unknown, not wrong. |
 | `vehicle_authorizations` | A checkmark: this employee may drive this vehicle. Authorization only — no ownership, no primary driver. |
 
 ### Customers

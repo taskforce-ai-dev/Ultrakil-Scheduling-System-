@@ -656,6 +656,20 @@
             "name": "branch",
             "required": false,
             "in": "query",
+            "description": "Only vehicles recorded in exactly this branch.",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "servesBranch",
+            "required": false,
+            "in": "query",
+            "description": "Vehicles that can serve work in this branch: those recorded in it plus those with no recorded branch, which the eligibility engine treats as unknown rather than wrong. Use this for a picker; `branch` is the exact filter.",
             "schema": {
               "enum": [
                 "COLOMBO",
