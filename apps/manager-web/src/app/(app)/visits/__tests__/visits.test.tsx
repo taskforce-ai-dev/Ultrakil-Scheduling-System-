@@ -561,6 +561,35 @@ describe("regeneration impact review", () => {
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
+  it("names a day still carrying more work than the branch plans for", async () => {
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        loadWarnings: [
+          {
+            branchCode: "COLOMBO",
+            date: "2026-09-14",
+            plannedCount: 14,
+            bookedCount: 14,
+            cap: 12,
+            message:
+              "2026-09-14 carries 14 visits in COLOMBO, over the 12 a day this branch plans for. Every one of them is a date already booked with the customer, so none was moved.",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText("Days over the branch's limit")
+    ).toBeInTheDocument();
+    expect(
+      within(drawer).getByText("2026-09-14, COLOMBO: 14 visits")
+    ).toBeInTheDocument();
+  });
+
   it("confirms exactly the range that was previewed", async () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(
       buildGenerationImpact({

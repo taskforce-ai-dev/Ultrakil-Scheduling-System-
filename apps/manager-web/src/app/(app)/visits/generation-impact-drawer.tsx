@@ -283,6 +283,28 @@ export function GenerationImpactDrawer({
             )}
           </Section>
 
+          <Section
+            icon={AlertTriangle}
+            title="Days over the branch's limit"
+            count={impact.loadWarnings.length}
+            tone="danger"
+          >
+            {capped(impact.loadWarnings).shown.map((warning, index) => (
+              <li key={`${warning.branchCode}-${warning.date}-${index}`}>
+                <span className="font-medium">
+                  {warning.date}, {warning.branchCode}: {warning.plannedCount} visits
+                </span>
+                <br />
+                <span className="text-muted-foreground">{warning.message}</span>
+              </li>
+            ))}
+            {capped(impact.loadWarnings).hidden > 0 && (
+              <li className="text-muted-foreground">
+                and {capped(impact.loadWarnings).hidden} more
+              </li>
+            )}
+          </Section>
+
           <p className="text-sm text-muted-foreground">
             {impact.unchangedCount} visits are already correct and need nothing.
           </p>
