@@ -1734,6 +1734,27 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        GenerateVisitsDto: {
+            /**
+             * Format: date
+             * @description First date of the planning horizon, inclusive. YYYY-MM-DD.
+             * @example 2026-09-07
+             */
+            from: string;
+            /**
+             * Format: date
+             * @description Last date of the planning horizon, inclusive. YYYY-MM-DD.
+             * @example 2026-10-04
+             */
+            to: string;
+            /**
+             * @description Limit the run to one branch. Omit for both.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit the run to particular agreements. Omit for every active agreement in range. */
+            serviceAgreementIds?: string[];
+        };
         PlannedVisitDto: {
             /** Format: uuid */
             serviceAgreementId: string;
@@ -4190,7 +4211,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateVisitsDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -4223,7 +4248,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GenerateVisitsDto"];
+            };
+        };
         responses: {
             200: {
                 headers: {

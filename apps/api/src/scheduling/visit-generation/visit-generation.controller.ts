@@ -1,5 +1,11 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -22,6 +28,10 @@ export class VisitGenerationController {
     description:
       'Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.',
   })
+  // Declared explicitly: without it the contract described the response and
+  // said nothing about the range being asked for, so `from` and `to` carried
+  // none of the date-only shape every comparison in generation assumes.
+  @ApiBody({ type: GenerateVisitsDto })
   @ApiResponse({ status: 200, type: GenerationImpactDto })
   @ApiResponse({
     status: 400,
@@ -39,6 +49,7 @@ export class VisitGenerationController {
     description:
       'Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.',
   })
+  @ApiBody({ type: GenerateVisitsDto })
   @ApiResponse({ status: 200, type: GenerationImpactDto })
   confirm(
     @Body() dto: GenerateVisitsDto,

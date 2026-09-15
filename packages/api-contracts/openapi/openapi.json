@@ -2004,6 +2004,16 @@
         "description": "Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.",
         "operationId": "VisitGenerationController_preview",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateVisitsDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -2038,6 +2048,16 @@
         "description": "Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.",
         "operationId": "VisitGenerationController_confirm",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateVisitsDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -4620,6 +4640,45 @@
           "updatedAt"
         ]
       },
+      "GenerateVisitsDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "example": "2026-09-07",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "First date of the planning horizon, inclusive. YYYY-MM-DD."
+          },
+          "to": {
+            "type": "string",
+            "example": "2026-10-04",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "Last date of the planning horizon, inclusive. YYYY-MM-DD."
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit the run to one branch. Omit for both."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit the run to particular agreements. Omit for every active agreement in range.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ]
+      },
       "PlannedVisitDto": {
         "type": "object",
         "properties": {
@@ -5029,11 +5088,13 @@
         "properties": {
           "from": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
           "to": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
           "agreementsConsidered": {
             "type": "number"

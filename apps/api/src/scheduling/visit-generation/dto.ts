@@ -7,23 +7,42 @@ import {
   IsEnum,
   IsOptional,
   IsUUID,
+  Matches,
 } from 'class-validator';
+
+/**
+ * A calendar day, and nothing else.
+ *
+ * Every date comparison in generation is a string comparison against
+ * `YYYY-MM-DD`, so an instant with a time or a zone — which `IsDateString`
+ * accepts on its own — would silently never match. The contract now says what
+ * the code has always assumed.
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
+const DATE_ONLY_MESSAGE = 'must be a calendar date in YYYY-MM-DD form';
 
 export class GenerateVisitsDto {
   @ApiProperty({
+    type: String,
     example: '2026-09-07',
     format: 'date',
-    description: 'First date of the planning horizon, inclusive.',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'First date of the planning horizon, inclusive. YYYY-MM-DD.',
   })
   @IsDateString()
+  @Matches(DATE_ONLY, { message: `from ${DATE_ONLY_MESSAGE}` })
   from!: string;
 
   @ApiProperty({
+    type: String,
     example: '2026-10-04',
     format: 'date',
-    description: 'Last date of the planning horizon, inclusive.',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'Last date of the planning horizon, inclusive. YYYY-MM-DD.',
   })
   @IsDateString()
+  @Matches(DATE_ONLY, { message: `to ${DATE_ONLY_MESSAGE}` })
   to!: string;
 
   @ApiPropertyOptional({
@@ -187,8 +206,11 @@ class SkippedPeriodsDto {
 }
 
 export class GenerationImpactDto {
-  @ApiProperty({ type: String, format: 'date' }) from!: string;
-  @ApiProperty({ type: String, format: 'date' }) to!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
   @ApiProperty({ type: Number }) agreementsConsidered!: number;
 
   @ApiProperty({ type: [PlannedVisitDto], description: 'Visits that would be created.' })
