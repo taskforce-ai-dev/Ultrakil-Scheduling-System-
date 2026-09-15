@@ -65,6 +65,7 @@ function servicedSchedule(): ParsedSchedule {
             },
             effort: { durationMinutes: 90, crewSize: 3 },
             endDate: null,
+            bookedDates: [],
             notes: null,
           },
         ],
