@@ -10,6 +10,7 @@ import {
   CrewBadge,
   VisitOwnershipBadges,
   VisitStatusBadge,
+  placementLabel,
   protectionLabel,
 } from "@/components/shared/visit-badges";
 import { Badge } from "@/components/ui/badge";
@@ -188,6 +189,9 @@ export function VisitDetailDrawer({
                   : visit.origin.allowedDaysAtGeneration
                       .map((day) => WEEKDAY_SHORT[day] ?? day)
                       .join(", ")}
+              </Row>
+              <Row label="Why this date">
+                {placementLabel(visit.placement) ?? "Not recorded"}
               </Row>
             </dl>
           </section>

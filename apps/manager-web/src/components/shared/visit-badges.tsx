@@ -118,3 +118,22 @@ export function protectionLabel(reason: string | null): string | null {
   if (!reason) return null;
   return PROTECTION_LABEL[reason] ?? reason;
 }
+
+/**
+ * Plain-language reason a visit sits on the date it does.
+ *
+ * The API decides the placement; this only puts it into words. A manager
+ * asking "why is this on the 17th?" needs to know first of all whether the
+ * date is a commitment to the customer or the system's own choice.
+ */
+export const PLACEMENT_LABEL: Record<string, string> = {
+  BOOKED: "Booked with the customer",
+  ANCHORED: "Near this site's usual day",
+  SPREAD: "Moved off a day that was full",
+  EARLIEST: "First allowed day of the period",
+};
+
+export function placementLabel(placement: string | null): string | null {
+  if (!placement) return null;
+  return PLACEMENT_LABEL[placement] ?? placement;
+}

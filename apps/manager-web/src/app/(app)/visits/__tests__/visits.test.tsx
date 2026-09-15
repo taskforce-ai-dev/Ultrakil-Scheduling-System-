@@ -412,6 +412,33 @@ describe("the visit detail drawer", () => {
     expect(within(drawer).getByText("09:00 and 17:00")).toBeInTheDocument();
   });
 
+  it("says the date is a commitment when it came from a customer booking", async () => {
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({ id: "visit-generated", placement: "BOOKED" })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(within(drawer).getByText("Why this date")).toBeInTheDocument();
+    expect(within(drawer).getByText("Booked with the customer")).toBeInTheDocument();
+  });
+
+  it("says when the system chose the date because another day was full", async () => {
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({ id: "visit-generated", placement: "SPREAD" })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+
+    const drawer = await screen.findByRole("dialog");
+    expect(
+      within(drawer).getByText("Moved off a day that was full")
+    ).toBeInTheDocument();
+  });
+
   it("says why a protected visit will be left alone", async () => {
     vi.mocked(fetchVisit).mockResolvedValue(
       buildVisitDetail({
@@ -467,6 +494,7 @@ describe("regeneration impact review", () => {
             requiredCrewSize: 2,
             branchCode: "COLOMBO",
             isPreferredDay: true,
+            placement: "ANCHORED",
           },
         ],
         removals: [
@@ -548,6 +576,7 @@ describe("regeneration impact review", () => {
             requiredCrewSize: 2,
             branchCode: "COLOMBO",
             isPreferredDay: true,
+            placement: "ANCHORED",
           },
         ],
       })
