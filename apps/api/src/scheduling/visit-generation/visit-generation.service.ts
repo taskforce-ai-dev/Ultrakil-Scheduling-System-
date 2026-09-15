@@ -361,6 +361,12 @@ export class VisitGenerationService {
    * agreement still has to see the other eleven visits on the Monday it is
    * about to choose, or it will anchor onto a full day and the next full run
    * will move the visit straight off it again.
+   *
+   * A cancelled visit is the one exception. It is protected, and it is never
+   * removed, but the optimizer excludes it from the day's capacity and so must
+   * the guard: counting one reserved a crew's worth of room for work nobody
+   * will do, and pushed the next agreement onto a day it had no reason to be
+   * on.
    */
   private async loadStandingVisits(
     dto: GenerateVisitsDto,
@@ -373,6 +379,8 @@ export class VisitGenerationService {
     const visits = await this.prisma.generatedVisit.findMany({
       where: {
         visitDate: { gte: from, lte: to },
+        // Cancelled work occupies no part of the day. Everything else does.
+        status: { not: VisitStatus.CANCELLED },
         // Branch isolation: a Kandy day says nothing about a Colombo one, and
         // a run scoped to a branch has no business reading the other's book.
         ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),

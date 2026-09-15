@@ -181,6 +181,12 @@ the surplus and reports it, exactly as before: nothing here removes work. And
 a date is not a slot: a site served morning and afternoon on the same Monday
 holds two protected visits that day, and each satisfies one requirement.
 
+A cancelled visit is the exception that proves the rule. It is protected, so
+it is never removed — but it stands for work that did not happen, so it
+satisfies no period and reserves no room: the period still asks for its visit,
+and the day it sits on is counted as empty by the load guard, exactly as the
+optimizer counts it when it staffs the day.
+
 ---
 
 ## Phase 2 compatibility

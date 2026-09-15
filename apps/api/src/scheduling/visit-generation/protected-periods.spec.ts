@@ -158,6 +158,27 @@ describe('honourProtectedDates', () => {
     expect(pinned[0].placement).toBe(VisitPlacement.BOOKED);
   });
 
+  it('does not let a cancelled visit stand in for the work', () => {
+    // A cancelled visit means the work did not happen. The period still wants
+    // a visit, so nothing is pinned to it — and the cancelled row is still
+    // never removed.
+    const cancelled = existing({ status: 'CANCELLED' });
+    const pinned = honourProtectedDates([required()], [cancelled], monthly());
+
+    expect(pinned[0].visitDate).toBe('2026-09-16');
+
+    const plan = planGeneration(pinned, [cancelled]);
+    expect(plan.additions).toHaveLength(1);
+    expect(plan.removals).toEqual([]);
+    expect(plan.protectedVisits).toEqual([
+      expect.objectContaining({
+        visitId: 'visit-1',
+        protection: 'CANCELLED',
+        wouldHave: 'REMOVE',
+      }),
+    ]);
+  });
+
   it('leaves an unprotected visit to be moved the ordinary way', () => {
     const plan = planGeneration(
       honourProtectedDates([required()], [existing()], monthly()),

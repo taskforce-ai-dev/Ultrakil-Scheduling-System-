@@ -689,6 +689,36 @@ describe('regeneration never loses manager-controlled work', () => {
     expect(survivor).not.toBeNull();
   });
 
+  it('still wants a visit for the period a cancelled one was meant to cover', async () => {
+    // A cancelled visit is protected — it is never removed — but it stands
+    // for no work. Letting it satisfy its week left the customer with a
+    // cancellation where a visit was due, and the run reported nothing to do.
+    const agreement = await createAgreement();
+    await confirm({ serviceAgreementIds: [agreement.id] });
+    await prisma.generatedVisit.updateMany({
+      where: { serviceAgreementId: agreement.id },
+      data: { status: VisitStatus.CANCELLED },
+    });
+
+    await request(http)
+      .patch(`/api/service-agreements/${agreement.id}`)
+      .set(auth(adminToken))
+      .send({ allowedDays: [Weekday.FRIDAY], preferredDays: [] })
+      .expect(200);
+
+    const impact = await preview({ serviceAgreementIds: [agreement.id] });
+
+    expect(impact.body.additions).toHaveLength(4);
+    // And the cancelled rows are still nobody's to delete.
+    expect(impact.body.removals).toHaveLength(0);
+    expect(
+      impact.body.protectedVisits.filter(
+        (entry: { protection: string; wouldHave: string }) =>
+          entry.protection === 'CANCELLED' && entry.wouldHave === 'REMOVE',
+      ),
+    ).toHaveLength(4);
+  });
+
   it.each([VisitStatus.PENDING, VisitStatus.UNASSIGNED])('removes an untouched %s visit the agreement no longer wants, having said so', async (status) => {
     const agreement = await createAgreement();
     await confirm({ serviceAgreementIds: [agreement.id] });
@@ -1050,6 +1080,71 @@ describe('a scoped run and a full run reach the same calendar', () => {
     expect(full.additions).toHaveLength(0);
     expect(full.removals).toHaveLength(0);
     expect(full.updates).toHaveLength(0);
+  });
+});
+
+describe('a cancelled visit takes up no room in the day', () => {
+  const cappedAt = (cap: number) =>
+    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
+      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+    } as unknown as ConfigService);
+
+  it('does not push the next run off a day whose only other visit was cancelled', async () => {
+    // The optimizer never staffs a cancelled visit, so counting one towards
+    // the daily cap reserved a crew's worth of room for work nobody will do —
+    // and pushed the next agreement onto a day it had no reason to be on.
+    const week = { from: '2027-05-03', to: '2027-05-09' };
+    await prisma.generatedVisit.deleteMany({
+      where: {
+        branchCode: BranchCode.KANDY,
+        visitDate: {
+          gte: new Date(`${week.from}T00:00:00.000Z`),
+          lte: new Date(`${week.to}T00:00:00.000Z`),
+        },
+      },
+    });
+
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 Cancelled ${suffix}`, branchCode: BranchCode.KANDY });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({
+        name: `C04 Cancelled Site ${suffix}`,
+        branchCode: BranchCode.KANDY,
+        operatingHours: [Weekday.WEDNESDAY, Weekday.THURSDAY].map((weekday) => ({
+          weekday,
+          opensAtMinute: 540,
+          closesAtMinute: 1020,
+        })),
+      });
+
+    const onTheDay = { serviceSiteId: site.body.id, allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY], preferredDays: [] };
+    const holder = await createAgreement(onTheDay);
+    const claimant = await createAgreement(onTheDay);
+
+    const generation = cappedAt(1);
+    const actor = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN.email } });
+
+    await generation.confirm({ ...week, serviceAgreementIds: [holder.id] }, actor);
+    const [held] = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: holder.id },
+    });
+    expect(held.visitDate.getUTCDay()).toBe(3); // Wednesday
+
+    await prisma.generatedVisit.update({
+      where: { id: held.id },
+      data: { status: VisitStatus.CANCELLED },
+    });
+
+    await generation.confirm({ ...week, serviceAgreementIds: [claimant.id] }, actor);
+    const [planned] = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: claimant.id },
+    });
+
+    expect(planned.visitDate.getUTCDay()).toBe(3);
   });
 });
 

@@ -25,6 +25,10 @@ import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
  * A period holding more protected visits than the agreement now asks for keeps
  * the surplus and reports it, exactly as before. Nothing here removes work.
  *
+ * One visit is deliberately outside the rule. A cancelled visit is protected —
+ * it is never removed — but it *satisfies* nothing: the work did not happen,
+ * so the period still wants a visit, and pinning it to the cancelled row would
+ * leave the customer with a cancellation where a visit was due.
  */
 
 /** How an agreement's horizon is divided into periods. */
@@ -62,7 +66,10 @@ export function honourProtectedDates(
   const protectedByPeriod = new Map<string, ExistingVisit[]>();
 
   for (const visit of existing) {
-    if (!protectionReasonFor(visit)) continue;
+    const protection = protectionReasonFor(visit);
+    if (!protection) continue;
+    // Protected, but not a stand-in for the work: see above.
+    if (protection === 'CANCELLED') continue;
     const shape = shapes.get(visit.serviceAgreementId);
     // An agreement outside this run plans nothing here, so there is nothing
     // of its to pin.
