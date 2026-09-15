@@ -18,6 +18,7 @@ import {
   PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
+  periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
@@ -150,25 +151,16 @@ export class VisitGenerationService {
       cancelledSlotsBy(around),
     );
 
-    // Only the run's own range is the run's to change, and within it only the
-    // periods this run actually planned. A visit standing in a period the run
-    // left to another one is not obsolete — proposing it for removal was how a
-    // month view offered to delete the week a week view had just created.
-    const existing = around.filter((visit) => {
-      if (visit.visitDate < dto.from || visit.visitDate > dto.to) return false;
-      const span = planned.spans.get(visit.serviceAgreementId);
-      return span !== undefined && visit.visitDate >= span.from && visit.visitDate <= span.to;
-    });
+    const shapes = this.periodShapesFor(agreements);
+    const existing = around.filter((visit) =>
+      thisRunsToJudge(visit, dto, shapes, planned.periods, lifetimes(agreements)),
+    );
 
     // A protected visit already covers its period, so the period's
     // requirement is pinned to that date rather than planned onto another one
     // — otherwise the old date is kept (it is protected) and the new one
     // created too, and the customer gets both.
-    const honoured = honourProtectedDates(
-      planned.required,
-      around,
-      this.periodShapesFor(agreements),
-    );
+    const honoured = honourProtectedDates(planned.required, around, shapes);
 
     // One cross-agreement pass, after every agreement has had its say. Nothing
     // in per-agreement planning can see that forty of them chose the same day,
@@ -285,14 +277,14 @@ export class VisitGenerationService {
     shortfalls: Shortfall[];
     bookingWarnings: BookingWarning[];
     skipped: SkippedPeriods[];
-    /** The span of the periods each agreement actually planned. */
-    spans: Map<string, { from: string; to: string }>;
+    /** Which of each agreement's periods this run actually planned. */
+    periods: Map<string, Set<number>>;
   } {
     const required: RequiredVisit[] = [];
     const shortfalls: Shortfall[] = [];
     const bookingWarnings: BookingWarning[] = [];
     const skipped: SkippedPeriods[] = [];
-    const spans = new Map<string, { from: string; to: string }>();
+    const periods = new Map<string, Set<number>>();
 
     for (const agreement of agreements) {
       const bookedDates = agreement.bookings.map((booking) => toDateOnly(booking.bookedDate));
@@ -340,15 +332,11 @@ export class VisitGenerationService {
       });
 
       // The periods this agreement actually planned, so an untouched visit
-      // outside them is left alone rather than proposed for removal.
-      if (preview.plannedPeriods.length > 0) {
-        const starts = preview.plannedPeriods.map((period) => period.start);
-        const ends = preview.plannedPeriods.map((period) => period.end);
-        spans.set(agreement.id, {
-          from: starts.reduce((a, b) => (a < b ? a : b)),
-          to: ends.reduce((a, b) => (a > b ? a : b)),
-        });
-      }
+      // sitting in one this run left alone is not proposed for removal.
+      periods.set(
+        agreement.id,
+        new Set(preview.plannedPeriods.map((period) => period.periodIndex)),
+      );
 
       // A range holding no whole period of this agreement's cadence plans
       // nothing at all. Said out loud: a quarterly agreement asked about from
@@ -413,7 +401,7 @@ export class VisitGenerationService {
       }
     }
 
-    return { required, shortfalls, bookingWarnings, skipped, spans };
+    return { required, shortfalls, bookingWarnings, skipped, periods };
   }
 
   /**
@@ -829,6 +817,61 @@ function enclosingMonths(from: Date, to: Date): { from: Date; to: Date } {
     from: new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)),
     to: new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0)),
   };
+}
+
+/** Each agreement's own first and last day, as the run reads them. */
+function lifetimes(
+  agreements: AgreementForGeneration[],
+): Map<string, { start: string; end: string | null }> {
+  return new Map(
+    agreements.map((agreement) => [
+      agreement.id,
+      {
+        start: toDateOnly(agreement.startDate),
+        end: agreement.endDate ? toDateOnly(agreement.endDate) : null,
+      },
+    ]),
+  );
+}
+
+/**
+ * Whether this run may propose anything about a visit already in the calendar.
+ *
+ * Three things have to hold. The visit is inside the run's own range — a run
+ * changes nothing outside what it was asked about. Its agreement is in scope.
+ * And the run planned the period the visit sits in: a visit standing in a
+ * period this range holds only a slice of belongs to the run that can see that
+ * period whole, and offering to delete it was how a month view proposed
+ * removing the week a week view had just created.
+ *
+ * One exception, and it is not a period at all. A visit outside the
+ * agreement's own start or end date is not waiting for a better run: no period
+ * of that agreement will ever ask for it again, so it is this run's to remove.
+ */
+function thisRunsToJudge(
+  visit: ExistingVisit,
+  range: { from: string; to: string },
+  shapes: Map<string, AgreementPeriodShape>,
+  plannedPeriods: Map<string, Set<number>>,
+  lives: Map<string, { start: string; end: string | null }>,
+): boolean {
+  if (visit.visitDate < range.from || visit.visitDate > range.to) return false;
+
+  const life = lives.get(visit.serviceAgreementId);
+  if (!life) return false;
+  if (visit.visitDate < life.start) return true;
+  if (life.end !== null && visit.visitDate > life.end) return true;
+
+  const shape = shapes.get(visit.serviceAgreementId);
+  if (!shape) return false;
+
+  const period = periodIndexOf(
+    parseDateOnly(visit.visitDate),
+    parseDateOnly(shape.anchor),
+    shape.frequencyUnit,
+    shape.frequencyInterval,
+  );
+  return plannedPeriods.get(visit.serviceAgreementId)?.has(period) ?? false;
 }
 
 /**
