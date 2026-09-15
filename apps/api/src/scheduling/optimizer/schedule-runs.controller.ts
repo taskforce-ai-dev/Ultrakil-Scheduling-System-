@@ -96,9 +96,22 @@ const RUN_KIND_INCLUDE = {
  * MANUAL and is left at the default by both — it has never told the two apart.
  * Deriving it here also settles the rows already in the database, which a new
  * column could not do without a backfill.
+ *
+ * The outbox is not quite the whole story, though. It arrived with migration
+ * `20260908093000`, and every optimiser run solved before that has no row —
+ * which would read those runs as visit generation and badge a real solve as a
+ * draft that scheduled nothing. Two marks only an optimiser run ever carries
+ * stand in for the missing row: a queue delivery id, which generation never
+ * sets, and visits actually scheduled, which generation leaves at zero.
+ *
+ * A `kind` column, written by both writers, is the long-term answer; see
+ * docs/ARCHITECTURE.md. Until then this is derivable from what is on record.
  */
 function kindOf(run: RunWithDispatch): ScheduleRunDto['kind'] {
-  return run.dispatchOutbox === null ? 'VISIT_GENERATION' : 'OPTIMIZER';
+  if (run.dispatchOutbox !== null) return 'OPTIMIZER';
+  if (run.jobId !== null) return 'OPTIMIZER';
+  if (run.visitsScheduled > 0) return 'OPTIMIZER';
+  return 'VISIT_GENERATION';
 }
 
 /** Only a finished, unpublished solve with results can still be published. */

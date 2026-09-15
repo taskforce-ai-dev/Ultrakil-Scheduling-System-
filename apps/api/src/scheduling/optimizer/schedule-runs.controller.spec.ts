@@ -32,6 +32,7 @@ function run(overrides: Partial<ScheduleRun> = {}): ScheduleRun {
     cancelRequestedAt: null,
     errorCode: null,
     errorMessage: null,
+    jobId: null,
     startedAt: null,
     finishedAt: null,
     createdAt: new Date('2027-03-01T00:00:00Z'),
@@ -291,6 +292,42 @@ describe('a visit-generation run is not an optimiser draft', () => {
       state: 'BLOCKED',
       code: 'ZERO_RESULTS',
     });
+  });
+
+  it('reads a solve from before the outbox existed as a solve', async () => {
+    // The outbox arrived with migration 20260908093000. Every optimiser run
+    // solved before it has no row, and reading those as generation badged a
+    // real schedule "Draft — no dispatchable assignments". The queue delivery
+    // id is a mark only a solve ever carries.
+    const page = await controllerFor([
+      {
+        ...run({ id: 'legacy-solve', visitsScheduled: 0, jobId: 'qstash-message-1' }),
+        dispatchOutbox: null,
+      },
+    ]).list({});
+
+    expect(page.items[0].kind).toBe('OPTIMIZER');
+  });
+
+  it('reads one with no delivery id but real results as a solve too', async () => {
+    // A run that scheduled visits scheduled them: generation writes a run to
+    // account for what it did and leaves visitsScheduled at zero, always.
+    const page = await controllerFor([
+      { ...run({ id: 'legacy-solve-2', visitsScheduled: 6 }), dispatchOutbox: null },
+    ]).list({});
+
+    expect(page.items[0].kind).toBe('OPTIMIZER');
+  });
+
+  it('still reads a generation run — no outbox, no delivery, no results — as generation', async () => {
+    const page = await controllerFor([
+      {
+        ...run({ id: 'generation', visitsScheduled: 0, jobId: null }),
+        dispatchOutbox: null,
+      },
+    ]).list({});
+
+    expect(page.items[0].kind).toBe('VISIT_GENERATION');
   });
 
   it('never reads assignments to judge a generation run', async () => {
