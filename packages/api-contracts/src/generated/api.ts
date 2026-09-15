@@ -1646,6 +1646,14 @@ export interface components {
              *     ]
              */
             requiredSkillCodes: string[];
+            /**
+             * @description Dates already agreed with the customer, read from the master schedule workbook. Read-only: generation places a visit on each of them rather than re-planning the period.
+             * @example [
+             *       "2026-01-05",
+             *       "2026-01-20"
+             *     ]
+             */
+            bookedDates: string[];
             notes: string | null;
             /** Format: date-time */
             createdAt: string;
@@ -1678,6 +1686,11 @@ export interface components {
             windowEndMinute: number;
             /** @description Fell on a preferred weekday, not merely an allowed one. */
             isPreferredDay: boolean;
+            /**
+             * @description Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.
+             * @enum {string}
+             */
+            placement: "BOOKED" | "ANCHORED" | "SPREAD" | "EARLIEST";
         };
         PreviewShortfallDto: {
             /** Format: date */
@@ -1733,6 +1746,11 @@ export interface components {
             branchCode: string;
             /** @description Fell on a preferred weekday rather than a merely allowed one. */
             isPreferredDay: boolean;
+            /**
+             * @description Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.
+             * @enum {string}
+             */
+            placement: "BOOKED" | "ANCHORED" | "SPREAD" | "EARLIEST";
         };
         VisitChangeDto: {
             field: string;
@@ -1753,6 +1771,11 @@ export interface components {
             branchCode: string;
             /** @description Fell on a preferred weekday rather than a merely allowed one. */
             isPreferredDay: boolean;
+            /**
+             * @description Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.
+             * @enum {string}
+             */
+            placement: "BOOKED" | "ANCHORED" | "SPREAD" | "EARLIEST";
             /** Format: uuid */
             visitId: string;
             changes: components["schemas"]["VisitChangeDto"][];
@@ -1804,6 +1827,17 @@ export interface components {
             reason: string;
             message: string;
         };
+        DailyLoadWarningDto: {
+            /** @enum {string} */
+            branchCode: "COLOMBO" | "KANDY";
+            /** Format: date */
+            date: string;
+            plannedCount: number;
+            /** @description How many of them are dates already booked, so unmovable. */
+            bookedCount: number;
+            cap: number;
+            message: string;
+        };
         GenerationImpactDto: {
             /** Format: date */
             from: string;
@@ -1822,6 +1856,8 @@ export interface components {
             unchangedCount: number;
             /** @description Periods that cannot hold the promised number of visits. Reported, never quietly dropped. */
             shortfalls: components["schemas"]["GenerationShortfallDto"][];
+            /** @description Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only. */
+            loadWarnings: components["schemas"]["DailyLoadWarningDto"][];
             /** @description True when this was a preview. Nothing was written. */
             isPreview: boolean;
             /**
@@ -1850,6 +1886,11 @@ export interface components {
             jobTypeName: string;
             /** @description The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered. */
             hoursUnconfirmed: boolean;
+            /**
+             * @description Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period.
+             * @enum {string}
+             */
+            placement: "BOOKED" | "ANCHORED" | "SPREAD" | "EARLIEST";
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */
@@ -1908,6 +1949,11 @@ export interface components {
             jobTypeName: string;
             /** @description The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered. */
             hoursUnconfirmed: boolean;
+            /**
+             * @description Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period.
+             * @enum {string}
+             */
+            placement: "BOOKED" | "ANCHORED" | "SPREAD" | "EARLIEST";
             /** @description True when regeneration will leave this visit alone. */
             isProtected: boolean;
             /** @description Why it is protected: LOCKED, MANUALLY_ADJUSTED, ALREADY_SCHEDULED… */

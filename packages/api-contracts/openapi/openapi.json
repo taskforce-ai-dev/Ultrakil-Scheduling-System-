@@ -4320,6 +4320,18 @@
               "type": "string"
             }
           },
+          "bookedDates": {
+            "example": [
+              "2026-01-05",
+              "2026-01-20"
+            ],
+            "description": "Dates already agreed with the customer, read from the master schedule workbook. Read-only: generation places a visit on each of them rather than re-planning the period.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date"
+            }
+          },
           "notes": {
             "type": "string",
             "nullable": true
@@ -4359,6 +4371,7 @@
           "allowedDays",
           "preferredDays",
           "requiredSkillCodes",
+          "bookedDates",
           "notes",
           "createdAt",
           "updatedAt"
@@ -4454,6 +4467,16 @@
           "isPreferredDay": {
             "type": "boolean",
             "description": "Fell on a preferred weekday, not merely an allowed one."
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
           }
         },
         "required": [
@@ -4461,7 +4484,8 @@
           "weekday",
           "windowStartMinute",
           "windowEndMinute",
-          "isPreferredDay"
+          "isPreferredDay",
+          "placement"
         ]
       },
       "PreviewShortfallDto": {
@@ -4625,6 +4649,16 @@
           "isPreferredDay": {
             "type": "boolean",
             "description": "Fell on a preferred weekday rather than a merely allowed one."
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
           }
         },
         "required": [
@@ -4637,7 +4671,8 @@
           "durationMinutes",
           "requiredCrewSize",
           "branchCode",
-          "isPreferredDay"
+          "isPreferredDay",
+          "placement"
         ]
       },
       "VisitChangeDto": {
@@ -4695,6 +4730,16 @@
             "type": "boolean",
             "description": "Fell on a preferred weekday rather than a merely allowed one."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
+          },
           "visitId": {
             "type": "string",
             "format": "uuid"
@@ -4717,6 +4762,7 @@
           "requiredCrewSize",
           "branchCode",
           "isPreferredDay",
+          "placement",
           "visitId",
           "changes"
         ]
@@ -4862,6 +4908,43 @@
           "message"
         ]
       },
+      "DailyLoadWarningDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedCount": {
+            "type": "number"
+          },
+          "bookedCount": {
+            "type": "number",
+            "description": "How many of them are dates already booked, so unmovable."
+          },
+          "cap": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "branchCode",
+          "date",
+          "plannedCount",
+          "bookedCount",
+          "cap",
+          "message"
+        ]
+      },
       "GenerationImpactDto": {
         "type": "object",
         "properties": {
@@ -4915,6 +4998,13 @@
               "$ref": "#/components/schemas/GenerationShortfallDto"
             }
           },
+          "loadWarnings": {
+            "description": "Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DailyLoadWarningDto"
+            }
+          },
           "isPreview": {
             "type": "boolean",
             "description": "True when this was a preview. Nothing was written."
@@ -4936,6 +5026,7 @@
           "protectedVisits",
           "unchangedCount",
           "shortfalls",
+          "loadWarnings",
           "isPreview",
           "scheduleRunId"
         ]
@@ -4997,6 +5088,16 @@
             "type": "boolean",
             "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -5047,6 +5148,7 @@
           "siteName",
           "jobTypeName",
           "hoursUnconfirmed",
+          "placement",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
@@ -5196,6 +5298,16 @@
             "type": "boolean",
             "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -5254,6 +5366,7 @@
           "siteName",
           "jobTypeName",
           "hoursUnconfirmed",
+          "placement",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",

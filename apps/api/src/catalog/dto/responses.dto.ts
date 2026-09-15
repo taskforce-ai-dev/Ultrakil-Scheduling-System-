@@ -4,6 +4,7 @@ import {
   BranchCode,
   DayRuleKind,
   FrequencyUnit,
+  VisitPlacement,
   Weekday,
 } from '@prisma/client';
 
@@ -250,6 +251,15 @@ export class ServiceAgreementDto {
   @ApiProperty({ type: [String], example: ['MBR_FUMIGATION'] })
   requiredSkillCodes!: string[];
 
+  @ApiProperty({
+    type: [String],
+    format: 'date',
+    example: ['2026-01-05', '2026-01-20'],
+    description:
+      'Dates already agreed with the customer, read from the master schedule workbook. Read-only: generation places a visit on each of them rather than re-planning the period.',
+  })
+  bookedDates!: string[];
+
   @ApiProperty({ type: String, nullable: true })
   notes!: string | null;
 
@@ -302,6 +312,14 @@ export class PreviewVisitDto {
     description: 'Fell on a preferred weekday, not merely an allowed one.',
   })
   isPreferredDay!: boolean;
+
+  @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
 }
 
 export class PreviewShortfallDto {

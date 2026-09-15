@@ -435,6 +435,7 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     siteName: visit.serviceAgreement.serviceSite.name,
     jobTypeName: visit.serviceAgreement.jobType.name,
     hoursUnconfirmed: visit.serviceAgreement.serviceSite._count.operatingHours === 0,
+    placement: visit.placement,
     isProtected: protection !== null,
     protectionReason: protection,
     isManuallyAdjusted: visit.isManuallyAdjusted,

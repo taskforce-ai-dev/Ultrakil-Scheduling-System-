@@ -32,6 +32,7 @@ export type AgreementWithRelations = Prisma.ServiceAgreementGetPayload<{
     jobType: { select: { id: true; name: true } };
     dayRules: true;
     requiredSkills: true;
+    bookings: true;
   };
 }>;
 
@@ -174,6 +175,12 @@ export function toAgreementDto(
     preferredDays,
     requiredSkillCodes: agreement.requiredSkills
       .map((skill) => skill.skillCode)
+      .sort(),
+    // Shown, never edited here: these are what the workbook agreed with the
+    // customer, and a manager changing one on this screen would be changing
+    // the schedule without saying so.
+    bookedDates: agreement.bookings
+      .map((booking) => toDateOnly(booking.bookedDate))
       .sort(),
     notes: agreement.notes,
     createdAt: agreement.createdAt.toISOString(),

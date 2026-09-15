@@ -3,6 +3,7 @@ import {
   AgreementStatus,
   DataProvenance,
   DayRuleKind,
+  FrequencyUnit,
   Prisma,
   Weekday,
 } from '@prisma/client';
@@ -11,6 +12,7 @@ import { AuditService, PrismaLike } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
 import { PrismaService } from '../prisma/prisma.service';
+import { anchorDaysFrom } from '../scheduling/visit-generation/anchors';
 import {
   AgreementWithRelations,
   sortWeekdays,
@@ -25,11 +27,8 @@ import {
   SchedulePreviewQueryDto,
   ServiceAgreementQueryDto,
 } from './dto/query.dto';
-import {
-  SchedulePreview,
-  computeSchedulePreview,
-  parseDateOnly,
-} from './schedule-preview';
+import { SchedulePreviewDto } from './dto/responses.dto';
+import { computeSchedulePreview, parseDateOnly } from './schedule-preview';
 
 const AGREEMENT_INCLUDE = {
   customer: { select: { id: true, name: true } },
@@ -37,6 +36,7 @@ const AGREEMENT_INCLUDE = {
   jobType: { select: { id: true, name: true } },
   dayRules: true,
   requiredSkills: true,
+  bookings: { orderBy: { bookedDate: 'asc' } },
 } satisfies Prisma.ServiceAgreementInclude;
 
 @Injectable()
@@ -499,11 +499,14 @@ export class AgreementsService {
   }
 
   /** What this agreement asks for, and anything it cannot deliver. */
-  async preview(id: string, query: SchedulePreviewQueryDto): Promise<SchedulePreview> {
+  async preview(id: string, query: SchedulePreviewQueryDto): Promise<SchedulePreviewDto> {
     const agreement = await this.load(id);
     const site = await this.loadSiteForAgreement(agreement.serviceSiteId);
+    const bookedDates = agreement.bookings.map((booking) =>
+      toDateOnly(booking.bookedDate),
+    );
 
-    return computeSchedulePreview({
+    const preview = computeSchedulePreview({
       frequencyCount: agreement.frequencyCount,
       frequencyUnit: agreement.frequencyUnit,
       frequencyInterval: agreement.frequencyInterval,
@@ -525,7 +528,25 @@ export class AgreementsService {
       durationMinutes: agreement.durationMinutes,
       horizonWeeks: query.horizonWeeks,
       from: query.from,
+      // The same inputs generation uses, so the dates a manager is shown here
+      // are the dates that will actually be created. The one thing this
+      // preview cannot know is the other agreements' days, so a visit the
+      // load guard would later spread still reads as anchored.
+      bookedDates,
+      anchorDays:
+        agreement.frequencyUnit === FrequencyUnit.MONTH
+          ? anchorDaysFrom(bookedDates, agreement.frequencyCount)
+          : [],
     });
+
+    // The period index and the days a visit could have moved to are the load
+    // guard's working notes, not part of the contract.
+    return {
+      ...preview,
+      visits: preview.visits.map(
+        ({ alternatives: _alternatives, periodIndex: _periodIndex, ...visit }) => visit,
+      ),
+    };
   }
 
   // --- Internals -----------------------------------------------------------

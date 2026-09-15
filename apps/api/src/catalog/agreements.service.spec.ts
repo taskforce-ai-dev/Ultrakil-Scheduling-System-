@@ -69,6 +69,7 @@ function agreementRow(overrides: Record<string, unknown> = {}) {
     jobType: { id: JOB_TYPE_ID, name: 'Job' },
     dayRules: [{ id: 'day-1', weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
     requiredSkills: [],
+    bookings: [],
     ...overrides,
   };
 }

@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchCode, VisitStatus } from '@prisma/client';
+import { BranchCode, VisitPlacement, VisitStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -189,6 +189,14 @@ export class VisitDto {
       'The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered.',
   })
   hoursUnconfirmed!: boolean;
+
+  @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
 
   @ApiProperty({
     type: Boolean,
