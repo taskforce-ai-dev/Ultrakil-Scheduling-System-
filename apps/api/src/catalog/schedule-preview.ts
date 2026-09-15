@@ -92,6 +92,26 @@ export interface SchedulePreviewInput {
    * agreement's dates — the caller owns where the anchors come from.
    */
   anchorDays?: number[];
+  /**
+   * Plan only the periods this horizon contains whole.
+   *
+   * Two callers ask two different questions. The agreement screen asks "when
+   * would we visit over the next few weeks?", and the honest answer for a
+   * monthly agreement previewed over four weeks is "once, around the 5th" —
+   * the horizon is a window onto the commitment, not a boundary of it.
+   *
+   * Generation asks "which visits does this range owe?", and there the edges
+   * matter: a run given the calendar *grid* for September starts on the 31st
+   * of August, and planning that one-day stub as though it were the month put
+   * a visit on the 31st while the August visit already published on the 17th
+   * lay outside the range, invisible to the pinning and to the load guard.
+   * The customer got two August visits every time the button was pressed.
+   *
+   * So generation sets this, and a period the run cannot see whole is left to
+   * the run that can. A period clipped by the agreement's *own* first or last
+   * day is not affected: the agreement really does begin, or end, there.
+   */
+  wholePeriodsOnly?: boolean;
 }
 
 /**
@@ -457,6 +477,29 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     return !coversWholePeriod(bounds, input.frequencyUnit, interval);
   };
 
+  /**
+   * True when a caller that plans only whole periods must skip this one.
+   *
+   * That is: the period is a clipped piece of a week or month, and what
+   * clipped it was the horizon rather than the agreement's own first or last
+   * day. See `wholePeriodsOnly` for why generation asks for this and the
+   * agreement screen does not.
+   */
+  const clippedByTheHorizon = (bounds: { start: string; end: string }): boolean => {
+    if (!input.wholePeriodsOnly) return false;
+    if (!isClipped(bounds)) return false;
+
+    const isFirstPeriod = bounds.start === toDateOnly(effectiveStart);
+    const isLastPeriod = bounds.end === toDateOnly(lastDate);
+    const ownStart = toDateOnly(effectiveStart) === toDateOnly(agreementStart);
+    const ownEnd =
+      agreementEnd !== null && toDateOnly(lastDate) === toDateOnly(agreementEnd);
+
+    if (isFirstPeriod && !ownStart) return true;
+    if (isLastPeriod && !ownEnd) return true;
+    return false;
+  };
+
   for (const [period, bounds] of [...periodBounds.entries()].sort((a, b) => a[0] - b[0])) {
     const inPeriod = byPeriod.get(period) ?? [];
     const booked = bookedByPeriod.get(period) ?? [];
@@ -506,6 +549,11 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
       }
       continue;
     }
+
+    // A stub of a period the horizon sliced off belongs to the run that can
+    // see it whole. Bookings above are exempt: a booked date is a commitment
+    // to a day, not a plan the run made, and honouring it invents nothing.
+    if (clippedByTheHorizon(bounds)) continue;
 
     // Preferred weekdays first, then closest to an anchor, then earliest. At
     // most one visit per calendar day: two visits on one Tuesday is a

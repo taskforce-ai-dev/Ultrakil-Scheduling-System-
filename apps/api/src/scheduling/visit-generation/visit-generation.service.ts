@@ -119,7 +119,18 @@ export class VisitGenerationService {
 
     const agreements = await this.loadAgreements(dto, from, to);
     const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
-    const existing = await this.loadExistingVisits(agreements, from, to);
+
+    // What is already in the calendar, read over the whole calendar months the
+    // horizon touches rather than the horizon itself. A run over 31 August to
+    // 4 October has to see the August visit published on the 17th, or the
+    // pinning and the load guard both read August as empty.
+    const window = enclosingMonths(from, to);
+    const around = await this.loadExistingVisits(agreements, window.from, window.to);
+    // Only the run's own range is the run's to change. Comparing against a
+    // visit outside it would propose removing work nobody asked about.
+    const existing = around.filter(
+      (visit) => visit.visitDate >= dto.from && visit.visitDate <= dto.to,
+    );
 
     // A protected visit already covers its period, so the period's
     // requirement is pinned to that date rather than planned onto another one
@@ -127,7 +138,7 @@ export class VisitGenerationService {
     // created too, and the customer gets both.
     const honoured = honourProtectedDates(
       planned.required,
-      existing,
+      around,
       this.periodShapesFor(agreements, dto.from),
     );
 
@@ -135,9 +146,14 @@ export class VisitGenerationService {
     // in per-agreement planning can see that forty of them chose the same day,
     // and nothing in this run's own list can see the work already standing in
     // the calendar — so the guard is given both.
-    const standing = await this.loadStandingVisits(dto, agreements, from, to);
+    const standing = await this.loadStandingVisits(dto, agreements, window.from, window.to);
     const guarded = applyDailyLoadGuard(honoured, this.dailyCap, standing);
-    const required = guarded.required;
+    // A requirement pinned to a protected visit outside the run's range is
+    // already satisfied by it. Left in, it would read as an addition on a day
+    // the run was never asked about.
+    const required = guarded.required.filter(
+      (visit) => visit.visitDate >= dto.from && visit.visitDate <= dto.to,
+    );
     const shortfalls = planned.shortfalls;
 
     const plan = planGeneration(required, existing);
@@ -275,6 +291,11 @@ export class VisitGenerationService {
           agreement.frequencyUnit === FrequencyUnit.MONTH
             ? anchorDaysFrom(bookedDates, agreement.frequencyCount)
             : [],
+        // A period this run cannot see whole belongs to the run that can. The
+        // portal's month view used to ask about the calendar grid, whose
+        // first cell is the last Monday of the previous month, and the stub
+        // was planned as though it were the month.
+        wholePeriodsOnly: true,
       });
 
       for (const visit of preview.visits) {
@@ -724,6 +745,22 @@ export class VisitGenerationService {
  * decision nobody made. The id resolves to the agreement for anyone entitled
  * to look it up.
  */
+/**
+ * The whole calendar months a range touches.
+ *
+ * Periods are months, and half a month tells the pinning and the load guard
+ * very little: a run over 31 August to 4 October that reads only its own range
+ * sees an empty August and plans a second visit into it. Widening the *read*
+ * costs one index scan and nothing else — what the run may change is still
+ * exactly its own range.
+ */
+function enclosingMonths(from: Date, to: Date): { from: Date; to: Date } {
+  return {
+    from: new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)),
+    to: new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0)),
+  };
+}
+
 function bookingWarningFrom(
   serviceAgreementId: string,
   issue: PreviewBookingIssue,

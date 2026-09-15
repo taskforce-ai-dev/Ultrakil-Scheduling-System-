@@ -40,6 +40,103 @@ function buildInput(overrides: Partial<SchedulePreviewInput> = {}): SchedulePrev
 }
 
 describe('schedule preview', () => {
+  describe('a period the run cannot see whole', () => {
+    /**
+     * The calendar grid for September starts on 2026-08-31, so the portal's
+     * month view used to hand generation a range whose first period is one
+     * day of August. The run plans that stub as if it were the month, and the
+     * August visit already published on the 17th lies outside the range —
+     * invisible to the pinning and to the load guard. The customer gets two
+     * August visits.
+     */
+    const monthly = (overrides = {}) =>
+      buildInput({
+        frequencyCount: 1,
+        frequencyUnit: FrequencyUnit.MONTH,
+        startDate: '2026-01-05',
+        allowedDays: [
+          Weekday.MONDAY,
+          Weekday.TUESDAY,
+          Weekday.WEDNESDAY,
+          Weekday.THURSDAY,
+          Weekday.FRIDAY,
+        ],
+        preferredDays: [],
+        from: '2026-08-31',
+        horizonWeeks: 5,
+        // The question generation asks: which visits does this range owe?
+        wholePeriodsOnly: true,
+        ...overrides,
+      });
+
+    it('plans nothing in a one-day stub at the start of the range', () => {
+      const preview = computeSchedulePreview(monthly());
+
+      expect(preview.visits.filter((visit) => visit.date < '2026-09-01')).toEqual([]);
+    });
+
+    it('still plans the whole month that follows it', () => {
+      const preview = computeSchedulePreview(monthly());
+
+      expect(
+        preview.visits.filter(
+          (visit) => visit.date >= '2026-09-01' && visit.date <= '2026-09-30',
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('plans nothing in the stub the range ends on either', () => {
+      const preview = computeSchedulePreview(monthly());
+
+      expect(preview.visits.filter((visit) => visit.date > '2026-09-30')).toEqual([]);
+    });
+
+    it('says nothing about a stub it did not plan', () => {
+      // A period nobody promised anything for is not a shortfall.
+      const preview = computeSchedulePreview(monthly());
+
+      expect(preview.shortfalls).toEqual([]);
+    });
+
+    it('plans a short first period when the agreement itself starts there', () => {
+      // Not a stub: the agreement genuinely begins on the 31st, and its first
+      // month is the piece of August it is in force for.
+      const preview = computeSchedulePreview(
+        monthly({ startDate: '2026-08-31' }),
+      );
+
+      expect(preview.visits.map((visit) => visit.date)).toContain('2026-08-31');
+    });
+
+    it('plans a short last period when the agreement itself ends there', () => {
+      const preview = computeSchedulePreview(
+        monthly({ from: '2026-09-01', endDate: '2026-10-02' }),
+      );
+
+      expect(preview.visits.filter((visit) => visit.date > '2026-09-30')).toHaveLength(1);
+    });
+
+    it('leaves the agreement screen alone: a window onto a month still shows it', () => {
+      // The agreement screen asks a different question — "when would we visit
+      // over the next few weeks?" — and "nothing, the month is only half in
+      // view" is not an answer a manager can use.
+      const preview = computeSchedulePreview(monthly({ wholePeriodsOnly: false }));
+
+      expect(preview.visits.length).toBeGreaterThan(1);
+    });
+
+    it('still honours a booking inside a stub, because a booking is not a plan', () => {
+      const preview = computeSchedulePreview(
+        monthly({ bookedDates: ['2026-08-31'] }),
+      );
+
+      expect(preview.visits).toContainEqual(
+        expect.objectContaining({ date: '2026-08-31', placement: 'BOOKED' }),
+      );
+    });
+  });
+
+
   describe('frequency', () => {
     it('places exactly the requested number of visits per week', () => {
       const preview = computeSchedulePreview(buildInput());

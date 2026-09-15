@@ -83,6 +83,14 @@ a safe change to an existing visit, what's no longer required (because an
 agreement changed or was paused), and what's protected and won't be
 touched (see "Locks," section 6).
 
+**What range gets generated.** In month view it is the calendar month you are
+looking at — September generates 1 to 30 September, even though the grid also
+shows the last days of August and the first of October. In week view it is
+that week. Whole weeks and whole months only: a run is never asked to plan a
+month it can see three days of, because the rest of that month's work is off
+screen where it cannot be checked against. If you want August generated, move
+to August.
+
 ### Why a visit is on the date it is
 
 Open a visit and the detail panel gives a one-line answer under **Why this
@@ -105,7 +113,16 @@ date**:
 A visit you have locked, edited by hand, or already staffed keeps its date
 even when the agreement would now put that period's visit somewhere else. It
 is not moved, and no second visit is created alongside it — your date *is*
-that week's or month's visit. The panel lists it under "Protected."
+that week's or month's visit. The panel lists it under "Protected," and tells
+you where the agreement now points: *"generation would have moved it to
+2026-09-18."* Nothing is done about it — the visit is yours — but if the
+agreement's allowed days have changed under it, that line is how you find out.
+Move it yourself if you want the new day.
+
+A **cancelled** visit is protected too: it is never deleted. But it does not
+count as that week's or month's visit, because the work did not happen — the
+period still asks for a visit, and the day it sits on is treated as free when
+the branch's daily limit is worked out.
 
 If a single day still carries more work than the branch plans for, the
 generation panel says so by date and count. That happens when the work on

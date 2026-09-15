@@ -157,6 +157,21 @@ visit so a manager can see it.
    run moved it straight off again; placement flapped with whatever scope
    somebody happened to generate under.
 
+One more thing decides where a visit lands, and it is the range itself. A run
+plans only the periods its range holds **whole**. The calendar grid September
+is drawn on begins on 31 August and ends on 4 October; asked to generate that,
+the run used to plan the one-day stub of August as though it were the month,
+and the August visit already published on the 17th lay outside the range where
+neither the pinning nor the load guard could see it — two August visits, every
+press of the button. So: a period clipped by the horizon is left to the run
+that can see it whole, and a period clipped by the agreement's own first or
+last day is planned, because the agreement really does begin or end there. A
+booking inside such a stub still stands: a booked date is a commitment to a
+day, not a plan the run made. The portal sends the calendar month for a month
+view and its own seven days for a week view, and generation reads the existing
+and standing visits over the whole calendar months the range touches — what it
+may *change* is still exactly the range it was given.
+
 Regeneration's existing protections are untouched by all of this: a published,
 locked, hand-edited or already-staffed visit is reported and left exactly as it
 is, and a placement that would change shows up in the preview like any other

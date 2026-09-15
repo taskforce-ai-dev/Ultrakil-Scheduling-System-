@@ -714,6 +714,35 @@ describe("regeneration impact review", () => {
     expect(confirmArgs).toEqual(previewArgs);
   });
 
+  it("generates the calendar month, not the grid the month is drawn on", async () => {
+    // The September grid runs 2026-08-31 to 2026-10-04. Handing that to
+    // generation makes it plan a one-day stub of August and four days of
+    // October as though they were months — and the August visit already
+    // published on the 17th is outside the range, so nothing can see it.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await screen.findByText("Visits to create");
+
+    const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
+    expect(args.from).toBe("2026-09-01");
+    expect(args.to).toBe("2026-09-30");
+  });
+
+  it("generates exactly the week the week view shows", async () => {
+    vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Week" }));
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await screen.findByText("Visits to create");
+
+    const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
+    expect(args.from).toBe("2026-09-14");
+    expect(args.to).toBe("2026-09-20");
+  });
+
   it("cancels without generating anything", async () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();

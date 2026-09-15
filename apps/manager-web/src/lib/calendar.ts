@@ -83,6 +83,27 @@ export function rangeForView(
   return { from, to: addDays(lastCellStart, 6) };
 }
 
+/**
+ * The inclusive range a generation run should be asked for.
+ *
+ * Not the same as `rangeForView`, and deliberately so. The grid a month is
+ * drawn on begins on the last Monday of the previous month and ends in the
+ * next: right for fetching visits, because those cells are real days a manager
+ * can see — and wrong for generating, because a run given a one-day stub of
+ * August plans it as though it were the month, while the August visit already
+ * published on the 17th lies outside the range where nothing can see it.
+ *
+ * A month generates the calendar month. A week generates its own seven days,
+ * which are already whole.
+ */
+export function rangeForGeneration(
+  anchor: string,
+  view: CalendarView
+): { from: string; to: string } {
+  if (view === "week") return rangeForView(anchor, view);
+  return { from: startOfMonth(anchor), to: endOfMonth(anchor) };
+}
+
 /** Every day in the grid, in order. 7 for a week, 35 or 42 for a month. */
 export function daysInView(anchor: string, view: CalendarView): string[] {
   const { from, to } = rangeForView(anchor, view);

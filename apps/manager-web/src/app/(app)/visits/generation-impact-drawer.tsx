@@ -20,7 +20,10 @@ import { notify } from "@/lib/notify";
 interface GenerationImpactDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The visible calendar range. Generation applies to exactly what is on screen. */
+  /**
+   * The range to generate: whole calendar periods, not the grid the month is
+   * drawn on. See `rangeForGeneration`.
+   */
   from: string;
   to: string;
   branchCode?: "COLOMBO" | "KANDY";

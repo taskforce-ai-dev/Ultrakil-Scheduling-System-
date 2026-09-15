@@ -46,6 +46,7 @@ import {
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
+  rangeForGeneration,
   rangeForView,
   todayIso,
   WEEKDAY_INITIALS,
@@ -228,6 +229,9 @@ export default function VisitsPage() {
   const isMovingRef = React.useRef(false);
 
   const { from, to } = rangeForView(anchor, view);
+  // What a run is asked for is not what the grid shows: see
+  // `rangeForGeneration`.
+  const generationRange = rangeForGeneration(anchor, view);
 
   const load = React.useCallback(() => {
     setIsLoading(true);
@@ -678,8 +682,8 @@ export default function VisitsPage() {
       <GenerationImpactDrawer
         open={generateOpen}
         onOpenChange={setGenerateOpen}
-        from={from}
-        to={to}
+        from={generationRange.from}
+        to={generationRange.to}
         branchCode={branch === "ALL" ? undefined : branch}
         onConfirmed={load}
       />

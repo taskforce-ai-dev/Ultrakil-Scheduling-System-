@@ -1117,6 +1117,74 @@ describe('a scoped run and a full run reach the same calendar', () => {
   });
 });
 
+describe('a range that cuts a month in half', () => {
+  /**
+   * The portal's month view used to hand generation the calendar *grid* —
+   * 2026-08-31 to 2026-10-04 for September. The August stub was planned as
+   * though it were the month, and the August visit already published on the
+   * 17th lay outside the range where neither the pinning nor the load guard
+   * could see it. Two August visits, every time the button was pressed.
+   */
+  const grid = { from: '2026-08-31', to: '2026-10-04' };
+
+  it('adds nothing to a month it can see only one day of', async () => {
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'MONTH',
+      allowedDays: [
+        Weekday.MONDAY,
+        Weekday.TUESDAY,
+        Weekday.WEDNESDAY,
+        Weekday.THURSDAY,
+        Weekday.FRIDAY,
+      ],
+      preferredDays: [],
+      startDate: '2026-01-05',
+    });
+    const branch = await prisma.branch.findUniqueOrThrow({
+      where: { code: BranchCode.COLOMBO },
+    });
+    const published = await prisma.generatedVisit.create({
+      data: {
+        serviceAgreementId: agreement.id,
+        branchId: branch.id,
+        branchCode: BranchCode.COLOMBO,
+        visitDate: new Date('2026-08-17T00:00:00.000Z'),
+        windowStartMinute: 540,
+        windowEndMinute: 1020,
+        durationMinutes: 90,
+        requiredCrewSize: 2,
+        status: VisitStatus.SCHEDULED,
+      },
+    });
+
+    const impact = await preview({ ...grid, serviceAgreementIds: [agreement.id] });
+
+    const august = impact.body.additions.filter(
+      (addition: { visitDate: string }) => addition.visitDate < '2026-09-01',
+    );
+    expect(august).toEqual([]);
+    // September, which the range does hold whole, is still planned.
+    expect(
+      impact.body.additions.filter(
+        (addition: { visitDate: string }) =>
+          addition.visitDate >= '2026-09-01' && addition.visitDate <= '2026-09-30',
+      ),
+    ).toHaveLength(1);
+    // And October, which it holds four days of, is left to the run that can
+    // see it whole.
+    expect(
+      impact.body.additions.filter(
+        (addition: { visitDate: string }) => addition.visitDate > '2026-09-30',
+      ),
+    ).toEqual([]);
+    // The published visit is untouched and unproposed either way.
+    expect(impact.body.removals).toEqual([]);
+
+    await prisma.generatedVisit.delete({ where: { id: published.id } });
+  });
+});
+
 describe('a cancelled visit takes up no room in the day', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
