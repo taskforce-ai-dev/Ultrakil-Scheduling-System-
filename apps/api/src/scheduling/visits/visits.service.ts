@@ -415,13 +415,6 @@ export class VisitsService {
 
 function toVisitDto(visit: VisitWithRelations): VisitDto {
   const protection = protectionReasonFor({
-    id: visit.id,
-    serviceAgreementId: visit.serviceAgreementId,
-    visitDate: toDateOnly(visit.visitDate),
-    windowStartMinute: visit.windowStartMinute,
-    windowEndMinute: visit.windowEndMinute,
-    durationMinutes: visit.durationMinutes,
-    requiredCrewSize: visit.requiredCrewSize,
     status: visit.status,
     isManuallyAdjusted: visit.isManuallyAdjusted,
     isLocked: visit.lockedAt !== null,

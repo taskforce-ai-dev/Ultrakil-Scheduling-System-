@@ -7,6 +7,7 @@
  * calendar the first one built. None of that is observable from a unit test.
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import {
   BranchCode,
@@ -442,6 +443,7 @@ describe('regeneration never loses manager-controlled work', () => {
       const generation = new VisitGenerationService(
         client,
         app.get(AuditService),
+        app.get(ConfigService),
       );
       const actor = await prisma.user.findUniqueOrThrow({
         where: { email: ADMIN.email },

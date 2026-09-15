@@ -76,6 +76,13 @@ export const authConfig = registerAs('auth', () => {
   };
 });
 
+export const visitGenerationConfig = registerAs('visitGeneration', () => {
+  const env = process.env as unknown as Env;
+  return {
+    dailyCap: Number(env.VISIT_GENERATION_DAILY_CAP),
+  };
+});
+
 export const importConfig = registerAs('import', () => {
   const env = process.env as unknown as Env;
   return {

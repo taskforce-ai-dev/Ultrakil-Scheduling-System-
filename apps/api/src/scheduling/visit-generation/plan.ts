@@ -1,4 +1,6 @@
-import { BranchCode, DataProvenance } from '@prisma/client';
+import { BranchCode, DataProvenance, VisitPlacement } from '@prisma/client';
+
+import { PreviewAlternative } from '../../catalog/schedule-preview';
 
 /**
  * Decides what a generation run would change, before anything is written.
@@ -29,6 +31,16 @@ export interface RequiredVisit {
   agreementVersionId: string | null;
   windowProvenance?: DataProvenance;
   isPreferredDay: boolean;
+  /** Why this date: a customer booking, an anchor, a spread, or the earliest. */
+  placement: VisitPlacement;
+  /**
+   * Which cycle of the agreement's horizon this visit belongs to. The load
+   * guard may only move a visit within its own period — a month's visit
+   * pushed into the next month is a different commitment.
+   */
+  periodIndex: number;
+  /** The other days of the same period this visit could sit on. */
+  alternatives: PreviewAlternative[];
 }
 
 /** A visit already in the calendar. */
@@ -43,6 +55,7 @@ export interface ExistingVisit {
   durationMinutes: number;
   requiredCrewSize: number;
   status: string;
+  placement: VisitPlacement;
   isManuallyAdjusted: boolean;
   isLocked: boolean;
   hasAssignments: boolean;
@@ -69,9 +82,15 @@ const PROTECTED_STATUSES: Record<string, ProtectionReason> = {
   CANCELLED: 'CANCELLED',
 };
 
+/** The handful of fields protection actually turns on. */
+export type ProtectableVisit = Pick<
+  ExistingVisit,
+  'status' | 'isManuallyAdjusted' | 'isLocked' | 'hasAssignments'
+>;
+
 /** Why this visit cannot be touched, or null when it can. */
 export function protectionReasonFor(
-  visit: Omit<ExistingVisit, 'updatedAt'>,
+  visit: ProtectableVisit,
 ): ProtectionReason | null {
   if (visit.isLocked) return 'LOCKED';
   if (visit.isManuallyAdjusted) return 'MANUALLY_ADJUSTED';
@@ -151,6 +170,15 @@ function diff(
       field: 'requiredCrewSize',
       from: existing.requiredCrewSize,
       to: required.requiredCrewSize,
+    });
+  }
+  // Placement is only an explanation, but a stale one explains the visit
+  // wrongly — and a manager who cannot trust the label will not read it.
+  if (existing.placement !== required.placement) {
+    changes.push({
+      field: 'placement',
+      from: existing.placement,
+      to: required.placement,
     });
   }
 

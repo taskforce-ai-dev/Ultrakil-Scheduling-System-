@@ -1,11 +1,14 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   AgreementStatus,
   DataProvenance,
   DayRuleKind,
+  FrequencyUnit,
   Prisma,
   ScheduleRunStatus,
   ScheduleRunTrigger,
+  VisitPlacement,
   VisitStatus,
 } from '@prisma/client';
 
@@ -19,7 +22,13 @@ import {
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import { anchorDaysFrom } from './anchors';
 import { GenerateVisitsDto, GenerationImpactDto } from './dto';
+import {
+  DEFAULT_DAILY_VISIT_CAP,
+  DailyLoadWarning,
+  applyDailyLoadGuard,
+} from './load-guard';
 import {
   ExistingVisit,
   GenerationPlan,
@@ -35,6 +44,9 @@ const AGREEMENT_INCLUDE = {
   customer: { select: { name: true } },
   serviceSite: { select: { name: true, operatingHours: true } },
   dayRules: true,
+  // The dates already agreed with the customer. Ordered so the anchors read
+  // from them are the same whichever run asks.
+  bookings: { orderBy: { bookedDate: 'asc' } },
 } satisfies Prisma.ServiceAgreementInclude;
 
 type AgreementForGeneration = Prisma.ServiceAgreementGetPayload<{
@@ -69,7 +81,15 @@ export class VisitGenerationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly config: ConfigService,
   ) {}
+
+  /** Most visits one branch's day may carry. Configurable; rarely configured. */
+  private get dailyCap(): number {
+    return (
+      this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP
+    );
+  }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
     return this.build(dto, null);
@@ -88,7 +108,12 @@ export class VisitGenerationService {
     const to = parseDateOnly(dto.to);
 
     const agreements = await this.loadAgreements(dto, from, to);
-    const { required, shortfalls } = this.requiredVisitsFor(agreements, dto.from, dto.to);
+    const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
+    // One cross-agreement pass, after every agreement has had its say. Nothing
+    // in per-agreement planning can see that forty of them chose the same day.
+    const guarded = applyDailyLoadGuard(planned.required, this.dailyCap);
+    const required = guarded.required;
+    const shortfalls = planned.shortfalls;
     const existing = await this.loadExistingVisits(agreements, from, to);
 
     const plan = planGeneration(required, existing);
@@ -103,7 +128,7 @@ export class VisitGenerationService {
     let scheduleRunId: string | null = null;
     if (actor) scheduleRunId = await this.apply(plan, dto, from, to, actor);
 
-    return this.toImpact(plan, shortfalls, names, {
+    return this.toImpact(plan, shortfalls, guarded.warnings, names, {
       from: dto.from,
       to: dto.to,
       agreementsConsidered: agreements.length,
@@ -187,6 +212,8 @@ export class VisitGenerationService {
     const horizonWeeks = Math.max(1, Math.ceil(horizonDays / 7));
 
     for (const agreement of agreements) {
+      const bookedDates = agreement.bookings.map((booking) => toDateOnly(booking.bookedDate));
+
       const preview = computeSchedulePreview({
         frequencyCount: agreement.frequencyCount,
         frequencyUnit: agreement.frequencyUnit,
@@ -210,6 +237,15 @@ export class VisitGenerationService {
         durationMinutes: agreement.durationMinutes,
         horizonWeeks,
         from,
+        bookedDates,
+        // Anchors only mean something over a month: they are a day of the
+        // month, and a week holds at most seven of those in a row. A weekly
+        // agreement already visits every week, so it was never the source of
+        // the pile-up — it is the monthly ones that all chose day one.
+        anchorDays:
+          agreement.frequencyUnit === FrequencyUnit.MONTH
+            ? anchorDaysFrom(bookedDates, agreement.frequencyCount)
+            : [],
       });
 
       for (const visit of preview.visits) {
@@ -234,6 +270,13 @@ export class VisitGenerationService {
           // derived and raised a source-data warning against them.
           windowProvenance: visit.windowProvenance,
           isPreferredDay: visit.isPreferredDay,
+          placement: VisitPlacement[visit.placement],
+          periodIndex: visit.periodIndex,
+          // Only a day still inside the requested horizon is somewhere the
+          // load guard may move this visit to.
+          alternatives: visit.alternatives.filter(
+            (alternative) => alternative.date >= from && alternative.date <= to,
+          ),
         });
       }
 
@@ -276,6 +319,7 @@ export class VisitGenerationService {
       durationMinutes: visit.durationMinutes,
       requiredCrewSize: visit.requiredCrewSize,
       status: visit.status,
+      placement: visit.placement,
       isManuallyAdjusted: visit.isManuallyAdjusted,
       isLocked: visit.lockedAt !== null,
       hasAssignments: visit._count.assignments > 0,
@@ -366,6 +410,7 @@ export class VisitGenerationService {
             durationMinutes: addition.required.durationMinutes,
             requiredCrewSize: addition.required.requiredCrewSize,
             windowProvenance: addition.required.windowProvenance ?? DataProvenance.UNKNOWN,
+            placement: addition.required.placement,
             status: VisitStatus.PENDING,
             generatedByRunId: run.id,
             agreementVersionId:
@@ -382,6 +427,7 @@ export class VisitGenerationService {
             durationMinutes: update.required.durationMinutes,
             requiredCrewSize: update.required.requiredCrewSize,
             windowProvenance: update.required.windowProvenance ?? DataProvenance.UNKNOWN,
+            placement: update.required.placement,
             generatedByRunId: run.id,
             agreementVersionId:
               currentVersions.get(update.required.serviceAgreementId) ?? null,
@@ -484,6 +530,7 @@ export class VisitGenerationService {
   private toImpact(
     plan: GenerationPlan,
     shortfalls: Shortfall[],
+    loadWarnings: DailyLoadWarning[],
     names: Map<string, { customerName: string; siteName: string }>,
     meta: {
       from: string;
@@ -508,12 +555,12 @@ export class VisitGenerationService {
       to: meta.to,
       agreementsConsidered: meta.agreementsConsidered,
       additions: plan.additions.map((addition) => ({
-        ...addition.required,
+        ...toPlannedVisit(addition.required),
         ...nameFor(addition.required.serviceAgreementId),
       })),
       updates: plan.updates.map((update) => ({
         visitId: update.visitId,
-        ...update.required,
+        ...toPlannedVisit(update.required),
         ...nameFor(update.required.serviceAgreementId),
         changes: asText(update.changes),
       })),
@@ -531,8 +578,31 @@ export class VisitGenerationService {
       })),
       unchangedCount: plan.unchangedCount,
       shortfalls,
+      loadWarnings,
       isPreview: meta.isPreview,
       scheduleRunId: meta.scheduleRunId,
     };
   }
+}
+
+/**
+ * A planned visit as the manager's screen sees it.
+ *
+ * The planner carries a period index and the days a visit could have moved to,
+ * neither of which is part of the contract. Spreading the whole requirement
+ * onto the wire would ship fields the OpenAPI document does not describe, and
+ * the first person to rely on one would find it gone the next release.
+ */
+function toPlannedVisit(required: RequiredVisit) {
+  return {
+    serviceAgreementId: required.serviceAgreementId,
+    visitDate: required.visitDate,
+    windowStartMinute: required.windowStartMinute,
+    windowEndMinute: required.windowEndMinute,
+    durationMinutes: required.durationMinutes,
+    requiredCrewSize: required.requiredCrewSize,
+    branchCode: required.branchCode,
+    isPreferredDay: required.isPreferredDay,
+    placement: required.placement,
+  };
 }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_DAILY_VISIT_CAP } from '../scheduling/visit-generation/load-guard';
 import {
   QSTASH_MAX_EXECUTION_SECONDS,
   QSTASH_MINIMUM_EXECUTION_SECONDS,
@@ -112,6 +113,20 @@ export const envSchema = z.object({
   SEED_ADMIN_NAME: z.string().default('UltraKIL Administrator'),
 
   TECHNICIAN_MATRIX_PATH: z.string().default('./data/technician-matrix.xlsx'),
+
+  /**
+   * Most visits one branch plans for in a single day.
+   *
+   * The default is the busiest day in the workbook's own July plan — 159
+   * visits over 28 days, never more than twelve on one of them. Generation
+   * spreads unbooked work off any day that would exceed it; dates already
+   * booked with a customer are kept and reported instead.
+   */
+  VISIT_GENERATION_DAILY_CAP: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_DAILY_VISIT_CAP),
 });
 
 export type Env = z.infer<typeof envSchema>;

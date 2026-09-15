@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchCode } from '@prisma/client';
+import { BranchCode, VisitPlacement } from '@prisma/client';
 import {
   ArrayMaxSize,
   IsArray,
@@ -68,6 +68,13 @@ class PlannedVisitDto {
     description: 'Fell on a preferred weekday rather than a merely allowed one.',
   })
   isPreferredDay!: boolean;
+  @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
 }
 
 class PlannedUpdateDto extends PlannedVisitDto {
@@ -125,6 +132,20 @@ class GenerationShortfallDto {
   @ApiProperty({ type: String }) message!: string;
 }
 
+class DailyLoadWarningDto {
+  @ApiProperty({ type: String, enum: Object.values(BranchCode) })
+  branchCode!: string;
+  @ApiProperty({ type: String, format: 'date' }) date!: string;
+  @ApiProperty({ type: Number }) plannedCount!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'How many of them are dates already booked, so unmovable.',
+  })
+  bookedCount!: number;
+  @ApiProperty({ type: Number }) cap!: number;
+  @ApiProperty({ type: String }) message!: string;
+}
+
 export class GenerationImpactDto {
   @ApiProperty({ type: String, format: 'date' }) from!: string;
   @ApiProperty({ type: String, format: 'date' }) to!: string;
@@ -161,6 +182,13 @@ export class GenerationImpactDto {
       'Periods that cannot hold the promised number of visits. Reported, never quietly dropped.',
   })
   shortfalls!: GenerationShortfallDto[];
+
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description:
+      'Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only.',
+  })
+  loadWarnings!: DailyLoadWarningDto[];
 
   @ApiProperty({
     type: Boolean,

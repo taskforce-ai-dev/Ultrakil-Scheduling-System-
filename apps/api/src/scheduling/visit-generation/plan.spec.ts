@@ -17,6 +17,9 @@ function required(overrides: Partial<RequiredVisit> = {}): RequiredVisit {
     branchCode: 'COLOMBO',
     agreementVersionId: 'version-1',
     isPreferredDay: true,
+    placement: 'EARLIEST',
+    periodIndex: 0,
+    alternatives: [],
     ...overrides,
   };
 }
@@ -32,6 +35,7 @@ function existing(overrides: Partial<ExistingVisit> = {}): ExistingVisit {
     durationMinutes: 90,
     requiredCrewSize: 2,
     status: 'PENDING',
+    placement: 'EARLIEST',
     isManuallyAdjusted: false,
     isLocked: false,
     hasAssignments: false,
