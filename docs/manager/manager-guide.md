@@ -83,6 +83,30 @@ a safe change to an existing visit, what's no longer required (because an
 agreement changed or was paused), and what's protected and won't be
 touched (see "Locks," section 6).
 
+### Why a visit is on the date it is
+
+Open a visit and the detail panel gives a one-line answer under **Why this
+date**:
+
+- **Booked with the customer** — this date came from the master schedule
+  workbook, where UltraKIL had already agreed it. It is a commitment. The
+  system never moves it, however busy the day gets.
+- **Near this site's usual day** — nothing was booked for that month, so the
+  visit was placed close to the days this site is normally served on, worked
+  out from the dates the workbook did book.
+- **Moved off a day that was full** — the visit could have sat on a busier
+  day, but that day had already reached the branch's daily limit, so it moved
+  to the quietest other day its agreement allows in the same week or month.
+- **First allowed day of the period** — nothing is booked for this agreement
+  and nothing is on record about its usual days, so it takes the first
+  allowed day. Adding the real dates to the workbook and re-importing is what
+  turns this into one of the answers above.
+
+If a single day still carries more work than the branch plans for, the
+generation panel says so by date and count. That only happens when the work
+on that day is already booked with customers: the system reports it rather
+than quietly moving a date somebody promised.
+
 ---
 
 ## 4. Reading the Dispatch Board and assigning a crew

@@ -89,12 +89,57 @@ Every hard rule is enforced in `apps/api`, in one place, with tests.
 | At least one PMS supervisor | `isPmsGrade` on Employee, denormalised to `AssignmentCrewMember.isPmsSupervisor` |
 | Authorized driver only      | `VehicleAuthorization` must exist for `AssignmentVehicle.driverEmployeeId`       |
 | Allowed vs preferred days   | `ServiceAgreementDayRule.kind` — `ALLOWED` filters, `PREFERRED` only ranks       |
+| Booked dates are facts      | `ServiceAgreementBooking` — a booked period's visits are exactly those dates     |
+| One day, one day's work     | `VISIT_GENERATION_DAILY_CAP` — the cross-agreement load guard in generation     |
 | Service hours               | `SiteOperatingHours` per weekday, plus the agreement's optional window           |
 | No double booking           | Overlap check across `Assignment.plannedStart`/`plannedEnd`                      |
 
 When a rule cannot be satisfied, the visit stays `UNASSIGNED` and a
 `VisitUnassignedReason` row records a stable code and a manager-readable
 explanation. **A rule is never relaxed to make the board look full.**
+
+---
+
+## Where a visit lands
+
+Frequency says how many visits a period needs. It never said which days, and
+taking the earliest allowed day of every period put forty-seven monthly
+agreements in the first week of the month — 192 visits in week one against 48,
+60, 74 and 25 in the weeks after, with single days carrying 28. The workbook's
+own plan for the same book of work is 159 visits over 28 days, never more than
+twelve on one of them.
+
+Placement is decided in three steps, and which one applied is recorded on the
+visit so a manager can see it.
+
+1. **Bookings win** (`BOOKED`). The master schedule's month columns hold the
+   days already agreed with each customer. A period holding one or more of
+   them requires exactly those dates — no re-planning — and a booked weekday
+   outranks the allowed-days rule, because that rule is usually inferred from
+   these very dates. A booked date the site has no window on still becomes a
+   visit, using the disclosed 08:00-17:00 assumption and flagged as such.
+2. **Anchors place the rest** (`ANCHORED`). For a month nothing is booked in,
+   `computeSchedulePreview` ranks candidates by preferred weekday, then by how
+   far the candidate's day of month sits from the agreement's anchor, then
+   earliest. Anchors come from the bookings: each month's booked days are
+   ranked within that month and the medians taken, so "the 5th and the 20th"
+   stays two anchors rather than collapsing into one day mid-month. An
+   agreement with no bookings keeps the old earliest-first behaviour
+   (`EARLIEST`). The preview stays pure — anchors are an input to it.
+3. **The load guard spreads what is left** (`SPREAD`). Each agreement is
+   planned alone, so nothing in step 2 can see that forty of them chose the
+   same Monday. `VisitGenerationService` runs one cross-agreement pass over
+   every planned visit: for a (branch, date) above `VISIT_GENERATION_DAILY_CAP`
+   — default 12, the workbook's own busiest day — it moves unbooked visits to
+   the emptiest other day inside their own period, lowest load then earliest,
+   taking agreements in id order so a second run makes the same moves. Booked
+   visits count towards the load and are never moved. A day left over the cap
+   comes back as a warning naming the date and the count, never a customer.
+
+Regeneration's existing protections are untouched by all of this: a published,
+locked, hand-edited or already-staffed visit is reported and left exactly as it
+is, and a placement that would change shows up in the preview like any other
+difference.
 
 ---
 

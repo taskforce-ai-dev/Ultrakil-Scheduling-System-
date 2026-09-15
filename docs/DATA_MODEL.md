@@ -57,12 +57,13 @@ Every table uses a UUID primary key and `createdAt` / `updatedAt` timestamps.
 | `service_agreement_required_skills` | Skills a crew member must hold for this agreement, on top of the job type's own requirement. |
 | `service_agreement_versions` | Append-only snapshot per version. A generated visit records the version it came from, so a schedule stays explainable after the agreement changes. |
 | `service_agreement_day_rules` | `ALLOWED` rows are hard constraints; `PREFERRED` rows only affect ranking. Kept as rows rather than a bitmask so the reason for a rejected day is explainable. |
+| `service_agreement_bookings` | One row per date the master schedule workbook has already agreed with the customer. `provenance` is `SOURCE` for an imported date; a re-import replaces only its own `SOURCE` rows. Unique per agreement and date. |
 
 ### Scheduling
 
 | Table | Purpose |
 | --- | --- |
-| `generated_visits` | One concrete visit produced from an agreement. Exists whether or not it can be staffed. `windowProvenance` records whether the window was derived from actual hours or the disclosed 08:00-17:00 fallback. |
+| `generated_visits` | One concrete visit produced from an agreement. Exists whether or not it can be staffed. `windowProvenance` records whether the window was derived from actual hours or the disclosed 08:00-17:00 fallback. `placement` records why the visit is on its date: `BOOKED`, `ANCHORED`, `SPREAD` or `EARLIEST`. |
 | `visit_unassigned_reasons` | Why a visit could not be staffed: a stable `code` plus a manager-readable `message`. This is what the Unassigned queue displays. |
 | `assignments` | A crew and vehicle proposal for one visit, with its lifecycle timestamps. |
 | `assignment_crew_members` | Who is on the crew, their role, and whether they are the PMS supervisor. |
@@ -101,6 +102,27 @@ people rather than duplicating them.
 `Employee.isPmsGrade` at assignment time. Two reasons: the "at least one PMS
 supervisor" check needs no join, and if someone's grade changes next year, last
 month's completed assignments still record who actually supervised them.
+
+**`service_agreement_bookings` keeps the days the workbook already sold.**
+The master schedule's twelve month columns hold the day numbers UltraKIL has
+agreed with each client — "10", or "5 & 20". They were previously read only to
+infer which weekdays a site is serviced on, and then discarded, so generation
+re-planned every month from the frequency and put every monthly agreement on
+the first allowed weekday of the month. Keeping the dates makes the difference
+between a plan and a commitment expressible: a booked date is placed exactly,
+and the months the workbook does not cover are placed near the days it does.
+
+A booking carries provenance for the same reason every other imported fact
+does. The importer owns its `SOURCE` rows and replaces them wholesale on each
+run — a date the workbook has dropped must stop being a commitment, and there
+is no other way to notice its absence — but it never touches a row a manager
+entered.
+
+**`GeneratedVisit.placement` is an explanation, not a rule.** Nothing branches
+on it; it exists so a manager asking "why is this on the 17th?" gets an answer
+without reading the generator. Rows created before it default to `EARLIEST`,
+which is exactly how they were placed, rather than to an `UNKNOWN` that would
+be less true.
 
 **`visit_unassigned_reasons` is a table, not a JSON column.** The dispatch board
 filters and counts by reason code, and the codes need to be queryable.
