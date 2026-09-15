@@ -838,6 +838,10 @@ model GeneratedVisit {
   @@index([branchId, visitDate, status])
   @@index([status])
   @@index([serviceAgreementId, visitDate])
+  /// The load guard reads every visit standing in a branch's horizon on every
+  /// generation run, by branch code and date. Without this it is a sequential
+  /// scan of the whole table each time.
+  @@index([branchCode, visitDate])
   @@map("generated_visits")
 }
 
