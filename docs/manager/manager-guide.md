@@ -100,8 +100,15 @@ Sunday) or a whole calendar month, counted from the agreement's own start date
 - **Month view** generates the whole grid you are looking at — including the
   last days of the previous month and the first of the next, because the grid
   begins on a Monday and ends on a Sunday. That gives it whole weeks *and* the
-  whole calendar month, so it plans weekly, fortnightly and monthly agreements
-  alike. Quarterly ones need a longer range.
+  whole calendar month, so it plans weekly and monthly agreements alike, and
+  fortnightly ones in almost every month. Quarterly ones need a longer range.
+
+  *Almost* every month, because a fortnight is counted from each agreement's
+  own start date and can straddle the join between two months. Where one
+  month's grid ends the day before the next begins — May 2026 ends on Sunday
+  31 May and June begins on Monday 1 June — the run reaches a week further so
+  that the fortnight across the join belongs to somebody. You will see visits
+  created in that extra week; they are the ones no other run would plan.
 
 Because the two views measure periods the same way, they agree. Generate a week
 from the week view and then the month it sits in, or the other way round, and
@@ -115,6 +122,12 @@ quarter; 3 skipped."* Nothing is wrong with those agreements. Move to the month
 view, or ask for a longer range, and the run that covers a whole cycle will
 plan them. A silent zero would read exactly like a calendar already in order,
 which is why it is never left silent.
+
+The same panel has a second, sharper line: *"Fortnightly agreements: 1
+fortnight cut in half by the ends of this range, and no shorter range will pick
+it up."* That one is not a hand-off. A cycle a range cuts in half is not
+waiting for a smaller range to find it, so switching views will not help —
+generate over a range that holds the whole cycle, or it stays unplanned.
 
 ### Why a visit is on the date it is
 
@@ -155,7 +168,18 @@ and its start time, so the cancelled row keeps that day and time for ever and
 nothing new can be put on it. Generation therefore plans that period onto
 another day the agreement allows. Where the period has no other day — a weekly
 agreement allowed only Mondays, say — it reports a shortfall saying the only
-visit is cancelled. Reinstate it, or allow another weekday.
+visit is cancelled. Reinstate it, or allow another weekday. If the period was
+short of days *anyway* — the site shut on the other allowed day, or open for
+less time than the visit needs — the shortfall names that instead, because
+reinstating the cancelled visit would still leave the week short.
+
+A **booked** date whose visit is cancelled is the one case a booking cannot
+answer for itself. The date is a commitment and is never moved, but the
+cancelled row holds that day for ever, so nothing can be planned on it again
+and the calendar would otherwise read as already correct while the customer
+has no visit. The panel names the date under the booking warnings — *"the
+visit on that booked date is cancelled"*. Reinstate that visit, or agree
+another date with the customer.
 
 The "generation would have moved it to…" line is shown only when the day your
 visit sits on is one the agreement **no longer allows**. Moving a visit from one
@@ -183,8 +207,8 @@ so, and the badge can only speak for what is loaded.)
 whatever the opening hours say — it is a commitment. But if the site has no
 hours recorded for that weekday, if the hours it does have are shorter than
 the visit needs, or if the agreement's own service window and the site's hours
-do not overlap at all, the panel names the date and says which of the three it
-is. The visit is planned either way, on the site's recorded window; this is
+do not overlap at all, the panel names the date and says which of them it is
+(a fourth, a booked date whose visit is cancelled, is described above). The visit is planned either way, on the site's recorded window; this is
 your warning that the crew may find a locked door, or an hour where they
 expected a day. Recording the site's real hours clears the first two. The
 third is fixed on the agreement, by widening its service window — the hours
@@ -210,7 +234,14 @@ frequency.
 **Dispatch Board** shows, for a given date and branch, every visit and who
 (if anyone) is on it. A visit with no crew shows a plain-language reason
 why, e.g. "No PMS supervisor." Click **Edit crew** to open the assignment
-editor.
+editor. Visits still waiting for a crew are queued on their own page,
+**Unassigned Visits**; the board itself is where the crew on a visit is read
+and changed.
+
+Under each visit the board names the schedule run its assignment came from by
+the weeks that run covered and when it was published — *"Published schedule
+15–21 Sep, published 15 Sep 20:05"* — and links to Schedule History for the
+rest of that run's story.
 
 In the editor:
 

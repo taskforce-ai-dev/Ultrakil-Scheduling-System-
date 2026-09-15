@@ -106,12 +106,29 @@ export function rangeForView(
  * Neither view holds a whole quarter, and only a month view holds a whole
  * fortnight. An agreement whose cycle the range cannot hold is not planned and
  * is reported in `skippedPeriods`, never silently.
+ *
+ * One seam has to be sewn shut by hand. A grid normally reaches into the next
+ * month — March's runs to 3 May, September's to 4 October — so consecutive
+ * month runs overlap and a period straddling the join is held whole by one of
+ * them. A month that *begins on a Monday* breaks that: May 2026's grid ends on
+ * Sunday 31 May and June's begins on Monday 1 June, with not a day in common.
+ * A fortnight straddling the seam — 25 May to 7 June — is clipped by the
+ * horizon in both, so neither run plans it, neither is "the run that can see it
+ * whole", and the customer loses a visit with nothing said. Where the grid ends
+ * the day before a month, the run therefore reaches one whole ISO week further.
+ * That week is a whole ISO week, so a weekly agreement plans it exactly as the
+ * week view would, and a monthly one still skips it as the stub it is.
  */
 export function rangeForGeneration(
   anchor: string,
   view: CalendarView
 ): { from: string; to: string } {
-  return rangeForView(anchor, view);
+  const range = rangeForView(anchor, view);
+  // The week view asks about its own seven days and no more: a manager who
+  // generates a week must not find visits in the next one.
+  if (view !== "month") return range;
+  const startsAMonth = addDays(range.to, 1).endsWith("-01");
+  return startsAMonth ? { ...range, to: addDays(range.to, 7) } : range;
 }
 
 /** Every day in the grid, in order. 7 for a week, 35 or 42 for a month. */

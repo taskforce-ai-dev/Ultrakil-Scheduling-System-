@@ -1885,8 +1885,11 @@ export interface components {
             frequencyInterval: number;
             /** @description How many of this agreement's cycles the range holds only a slice of. */
             periodsSkipped: number;
-            /** @enum {string} */
-            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD";
+            /**
+             * @description RANGE_HOLDS_NO_WHOLE_PERIOD is an agreement this range could plan nothing at all for. RANGE_CLIPS_A_PERIOD is one it planned some cycles of while cutting another in half — reported for cadences no neighbouring range is guaranteed to pick up.
+             * @enum {string}
+             */
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD" | "RANGE_CLIPS_A_PERIOD";
             message: string;
         };
         GenerationImpactDto: {

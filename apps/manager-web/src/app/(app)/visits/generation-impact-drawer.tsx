@@ -92,6 +92,7 @@ const BOOKING_WARNING_TITLE: Record<string, string> = {
   WINDOW_TOO_SHORT_FOR_BOOKED_VISIT: "Recorded hours are shorter than the visit",
   AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS:
     "The agreement's window and the site's hours do not overlap",
+  BOOKED_DATE_CANCELLED: "The visit on that booked date is cancelled",
 };
 
 /**
@@ -120,26 +121,42 @@ function cadence(unit: string, interval: number): { name: string; span: string }
   );
 }
 
-/** One line per cadence, not one per agreement: the sentence is the same. */
+/**
+ * One line per cadence and reason, not one per agreement: the sentence is the
+ * same, and the two reasons ask for different things.
+ *
+ * RANGE_HOLDS_NO_WHOLE_PERIOD is the ordinary hand-off — a quarterly agreement
+ * asked about from a week view, which the month view will plan. A range that
+ * *clips* a period is not a hand-off at all: nothing shorter picks it up, so
+ * telling a manager to switch views would be advice that does not work.
+ */
 function skippedByCadence(
   skipped: GenerationImpact["skippedPeriods"]
 ): { key: string; text: string }[] {
   const counts = new Map<string, number>();
   for (const entry of skipped) {
-    const key = `${entry.frequencyUnit}|${entry.frequencyInterval}`;
+    const key = `${entry.reason}|${entry.frequencyUnit}|${entry.frequencyInterval}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
 
   return [...counts.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, count]) => {
-      const [unit, interval] = key.split("|");
+      const [reason, unit, interval] = key.split("|");
       const { name, span } = cadence(unit, Number(interval));
       return {
         key,
-        text: `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
+        text:
+          reason === "RANGE_CLIPS_A_PERIOD"
+            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} cut in half by the ends of this range, and no shorter range will pick ${count === 1 ? "it" : "them"} up. Generate over a range that holds the whole ${span}.`
+            : `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
       };
     });
+}
+
+/** True when at least one entry is a period this range cut in half. */
+function anyClipped(skipped: GenerationImpact["skippedPeriods"]): boolean {
+  return skipped.some((entry) => entry.reason === "RANGE_CLIPS_A_PERIOD");
 }
 
 /** At most eight rows, then a count. A month on real data runs to hundreds. */
@@ -431,11 +448,18 @@ export function GenerationImpactDrawer({
             {skippedByCadence(impact.skippedPeriods).map((line) => (
               <li key={line.key}>{line.text}</li>
             ))}
-            {impact.skippedPeriods.length > 0 && (
+            {impact.skippedPeriods.length > 0 && !anyClipped(impact.skippedPeriods) && (
               <li className="text-muted-foreground">
                 Nothing is wrong with these agreements. Switch to the month view, or
                 generate over a longer range, and the run that covers a whole cycle will
                 plan them.
+              </li>
+            )}
+            {anyClipped(impact.skippedPeriods) && (
+              <li className="text-muted-foreground">
+                Nothing is wrong with these agreements either — but a cycle this range
+                cuts in half is not waiting for a shorter one. Generate over a range
+                that holds it whole, or it will not be planned at all.
               </li>
             )}
           </Section>

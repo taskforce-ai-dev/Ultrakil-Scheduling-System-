@@ -922,6 +922,19 @@ export default function ServiceAgreementsPage() {
               </FormField>
             </div>
 
+            {/*
+              The start date is not only when the work begins: `periodIndexOf`
+              counts a fortnightly agreement's fortnights and a quarterly one's
+              quarters from it, so moving it re-phases every future period —
+              and a visit already generated under the old phasing sits in a
+              period the next run no longer plans.
+            */}
+            <p className="text-xs text-muted-foreground" id="startDate-cycle-hint">
+              The start date also sets the cycle: a fortnightly or quarterly agreement counts
+              its fortnights and quarters from this day, so changing it re-phases every future
+              period and the next generation run may move visits.
+            </p>
+
             <FormField id="notes" label="Notes (optional)">
               <Textarea id="notes" {...register("notes")} />
             </FormField>

@@ -80,7 +80,7 @@ interface SkippedPeriods {
   frequencyUnit: FrequencyUnit;
   frequencyInterval: number;
   periodsSkipped: number;
-  reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD';
+  reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD' | 'RANGE_CLIPS_A_PERIOD';
   message: string;
 }
 
@@ -356,6 +356,26 @@ export class VisitGenerationService {
           periodsSkipped: preview.skippedPeriods.length,
           reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD',
           message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements need a range covering a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)}; ${from} to ${to} holds none, so nothing was planned for this agreement. Generate over a longer range.`,
+        });
+      } else if (
+        preview.skippedPeriods.length > 0 &&
+        clippingOneMayLoseIt(agreement.frequencyUnit, agreement.frequencyInterval)
+      ) {
+        // A period clipped at the edge of a month grid is normally handed over
+        // rather than lost: the neighbouring grid overlaps this one and sees
+        // it whole. Multi-week cadences are the exception. Two consecutive
+        // grids share no day when a month begins on a Monday — May 2026 ends
+        // on Sunday the 31st and June begins on Monday the 1st — and a
+        // fortnight straddling that seam is clipped in both, so no run ever
+        // plans it. The portal now asks for a week of overlap, and this says
+        // so out loud for every range that does not.
+        skipped.push({
+          serviceAgreementId: agreement.id,
+          frequencyUnit: agreement.frequencyUnit,
+          frequencyInterval: agreement.frequencyInterval,
+          periodsSkipped: preview.skippedPeriods.length,
+          reason: 'RANGE_CLIPS_A_PERIOD',
+          message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only part of ${spansOf(preview.skippedPeriods)}. Nothing was planned there, and no run whose range stops short of it will. Generate over a range that covers it whole.`,
         });
       }
 
@@ -908,6 +928,27 @@ function cadenceName(unit: FrequencyUnit, interval: number): string {
     named[`${unit}|${interval}`] ??
     `Every ${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
   );
+}
+
+/**
+ * Whether clipping one of this cadence's periods risks losing it altogether.
+ *
+ * A month is safe: consecutive month grids either overlap or abut, and the
+ * next run plans the month whole. A week is safe for the same reason — both
+ * views send whole ISO weeks. A cadence of *several* weeks is not: its periods
+ * are phased from the agreement's own start, so one can straddle the single
+ * seam where two month grids share no day, and be clipped by both.
+ */
+function clippingOneMayLoseIt(unit: FrequencyUnit, interval: number): boolean {
+  return unit === FrequencyUnit.WEEK && interval > 1;
+}
+
+/** "the fortnight 2026-05-25 to 2026-06-07", and the rest counted. */
+function spansOf(periods: Array<{ start: string; end: string }>): string {
+  const [first, ...rest] = periods;
+  const named = `${first.start} to ${first.end}`;
+  if (rest.length === 0) return named;
+  return `${named} (and ${rest.length} more)`;
 }
 
 /** The span such an agreement needs a run to hold whole. */

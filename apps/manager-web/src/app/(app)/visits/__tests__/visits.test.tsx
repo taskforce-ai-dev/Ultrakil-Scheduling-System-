@@ -852,6 +852,36 @@ describe("regeneration impact review", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not tell a manager to switch views for a cycle this range cut in half", async () => {
+    // A clipped fortnight is not waiting for a shorter range to find it: the
+    // advice that fits a quarterly agreement met from a week view is wrong
+    // here, and following it would leave the fortnight unplanned for good.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        skippedPeriods: [
+          {
+            serviceAgreementId: "agreement-f1",
+            frequencyUnit: "WEEK",
+            frequencyInterval: 2,
+            periodsSkipped: 1,
+            reason: "RANGE_CLIPS_A_PERIOD",
+            message: "holds only part of 2026-05-25 to 2026-06-07",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).getByText(/cut in half by the ends of this range/)).toBeInTheDocument();
+    expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/a cycle this range cuts in half is not waiting for a shorter one/),
+    ).toBeInTheDocument();
+  });
+
   it("generates exactly the week the week view shows", async () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();

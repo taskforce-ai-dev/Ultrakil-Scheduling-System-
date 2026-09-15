@@ -129,6 +129,19 @@ describe("ServiceAgreementsPage", () => {
     expect(siteTrigger).not.toHaveTextContent(site.id);
   });
 
+  it("says the start date sets the cycle, not only when the work begins", async () => {
+    // A fortnight belongs to the agreement: its periods are counted from this
+    // day. Moving it re-phases every future one, and the next generation run
+    // then plans different days — which is not something to discover from a
+    // calendar that has quietly moved.
+    await openForm();
+
+    expect(
+      screen.getByText(/The start date also sets the cycle/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/re-phases every future\s+period/)).toBeInTheDocument();
+  });
+
   it("requires a start date before saving", async () => {
     const user = await openForm();
 

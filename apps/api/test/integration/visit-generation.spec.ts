@@ -1423,6 +1423,60 @@ describe('the week view and the month view plan the same periods', () => {
     expect(impact.body.skippedPeriods[0].message).toContain('quarter');
   });
 
+  it('names a fortnight a month grid clipped, even though it planned the others', async () => {
+    // May 2026's grid ends on Sunday 31 May and June's begins on Monday 1
+    // June: the one seam between consecutive grids with no day in common. The
+    // fortnight from 25 May to 7 June is clipped by the horizon in both, so
+    // neither run plans it and neither is "the run that can see it whole".
+    // Because every other fortnight in the range was planned, the old rule —
+    // report only an agreement that planned nothing — said nothing at all,
+    // and the customer simply lost a visit.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 2,
+      allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+      preferredDays: [],
+      startDate: '2026-01-05',
+    });
+
+    const mayGrid = await preview({
+      from: '2026-04-27',
+      to: '2026-05-31',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(mayGrid.status).toBe(200);
+    // It did plan fortnights, so this is not the "nothing at all" case.
+    expect(mayGrid.body.additions.length).toBeGreaterThan(0);
+    expect(mayGrid.body.skippedPeriods).toEqual([
+      expect.objectContaining({
+        serviceAgreementId: agreement.id,
+        frequencyUnit: 'WEEK',
+        frequencyInterval: 2,
+        reason: 'RANGE_CLIPS_A_PERIOD',
+      }),
+    ]);
+    expect(mayGrid.body.skippedPeriods[0].message).toContain('2026-06-07');
+
+    // And with the week of overlap the portal now asks for, the seam closes:
+    // the fortnight is planned, by the run that can see it whole.
+    const sewnUp = await preview({
+      from: '2026-04-27',
+      to: '2026-06-07',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(sewnUp.status).toBe(200);
+    expect(sewnUp.body.skippedPeriods).toEqual([]);
+    expect(
+      sewnUp.body.additions.some(
+        (visit: { visitDate: string }) =>
+          visit.visitDate >= '2026-05-25' && visit.visitDate <= '2026-06-07',
+      ),
+    ).toBe(true);
+  });
+
   it('never offers to remove a visit standing in a period it did not plan', async () => {
     // The April grid ends mid-fortnight, so the fortnight beginning on
     // 2027-04-26 is left to the May run — which puts a visit on the 26th, a
