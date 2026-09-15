@@ -102,10 +102,32 @@ date**:
   allowed day. Adding the real dates to the workbook and re-importing is what
   turns this into one of the answers above.
 
+A visit you have locked, edited by hand, or already staffed keeps its date
+even when the agreement would now put that period's visit somewhere else. It
+is not moved, and no second visit is created alongside it — your date *is*
+that week's or month's visit. The panel lists it under "Protected."
+
 If a single day still carries more work than the branch plans for, the
-generation panel says so by date and count. That only happens when the work
-on that day is already booked with customers: the system reports it rather
-than quietly moving a date somebody promised.
+generation panel says so by date and count. That happens when the work on
+that day is already booked with customers, or is already in the calendar and
+not this run's to move: the system reports it rather than quietly moving a
+date somebody promised.
+
+### Two more things the generation panel tells you
+
+**Booked on a day the site's hours do not allow.** A booked date is honoured
+whatever the opening hours say — it is a commitment. But if the site has no
+hours recorded for that weekday, or the hours it does have are shorter than
+the visit needs, the panel names the date and says which. The visit is
+planned either way; this is your warning that the crew may find a locked door
+or an hour where they expected a day. Recording the site's real hours clears
+it.
+
+**Booked fewer times than the frequency promises.** An agreement written as
+twice a week, with only one date booked in a week, appears under Conflicts.
+The booked dates are used exactly as the workbook wrote them and no extra
+visit is invented — add the missing date to the workbook, or correct the
+frequency.
 
 ---
 

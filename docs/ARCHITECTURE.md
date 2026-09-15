@@ -116,8 +116,17 @@ visit so a manager can see it.
    days already agreed with each customer. A period holding one or more of
    them requires exactly those dates — no re-planning — and a booked weekday
    outranks the allowed-days rule, because that rule is usually inferred from
-   these very dates. A booked date the site has no window on still becomes a
-   visit, using the disclosed 08:00-17:00 assumption and flagged as such.
+   these very dates. A booked date the site has no usable window on still
+   becomes a visit, but not by inventing a day: hours recorded for that
+   weekday are used as they stand, however short, and keep their own
+   provenance; only a weekday with *no* hours on record falls back to the
+   disclosed 08:00-17:00 assumption, flagged `DEFAULTED`. Either way the
+   contradiction comes back as a booking warning naming the date and the
+   agreement — never the customer, because a warning outlives the screen it
+   was raised on. And a period booked fewer times than the frequency promises
+   is reported as a `BOOKED_BELOW_FREQUENCY` shortfall: the bookings still
+   stand exactly as written, and nothing extra is planned, but the gap is not
+   left for someone to notice a quarter later.
 2. **Anchors place the rest** (`ANCHORED`). For a month nothing is booked in,
    `computeSchedulePreview` ranks candidates by preferred weekday, then by how
    far the candidate's day of month sits from the agreement's anchor, then
@@ -125,7 +134,10 @@ visit so a manager can see it.
    ranked within that month and the medians taken, so "the 5th and the 20th"
    stays two anchors rather than collapsing into one day mid-month. An
    agreement with no bookings keeps the old earliest-first behaviour
-   (`EARLIEST`). The preview stays pure — anchors are an input to it.
+   (`EARLIEST`). The label is per visit, not per period: an agreement served
+   four times a month with one known anchor gets one `ANCHORED` visit and
+   three `EARLIEST` ones, because the anchor had no part in choosing the other
+   three. The preview stays pure — anchors are an input to it.
 3. **The load guard spreads what is left** (`SPREAD`). Each agreement is
    planned alone, so nothing in step 2 can see that forty of them chose the
    same Monday. `VisitGenerationService` runs one cross-agreement pass over
@@ -136,10 +148,34 @@ visit so a manager can see it.
    visits count towards the load and are never moved. A day left over the cap
    comes back as a warning naming the date and the count, never a customer.
 
+   The guard's picture of a day is not limited to the run's own list. Every
+   visit already standing in the horizon that the run will not be replacing —
+   protected work, and every agreement outside a scoped run — is counted
+   towards its day and barred as a destination for the agreement that already
+   holds it. Without that a run scoped to one agreement read every day as
+   empty, anchored onto a Monday already carrying twelve, and the next full
+   run moved it straight off again; placement flapped with whatever scope
+   somebody happened to generate under.
+
 Regeneration's existing protections are untouched by all of this: a published,
 locked, hand-edited or already-staffed visit is reported and left exactly as it
 is, and a placement that would change shows up in the preview like any other
 difference.
+
+One thing those protections needed in addition, once dates started moving. A
+visit is identified by agreement, date and start time, so a period re-planned
+onto another day is one addition and one removal — right for a visit the
+generator owns, wrong for one a manager owns, where the removal is refused and
+the addition goes ahead anyway and the customer ends up with two visits in one
+period. So **a protected visit satisfies its period**: the requirement for that
+(agreement, period) is pinned to the protected visit's date and start time
+rather than planned onto another day, it keeps the placement already on record
+(the manager chose the day, not the generator), and it is never offered to the
+load guard. Everything the agreement still owns — duration, crew size, the end
+of the window — comes from the agreement, so a genuine change is still reported
+as one and still not applied. A period holding more protected visits than the
+agreement now asks for keeps the surplus and reports it, exactly as before:
+nothing here removes work.
 
 ---
 

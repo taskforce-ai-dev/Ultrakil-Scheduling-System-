@@ -122,7 +122,12 @@ entered.
 on it; it exists so a manager asking "why is this on the 17th?" gets an answer
 without reading the generator. Rows created before it default to `EARLIEST`,
 which is exactly how they were placed, rather than to an `UNKNOWN` that would
-be less true.
+be less true. It is recorded per visit rather than per period, so an agreement
+served four times a month with one known anchor does not claim the anchor
+explains all four dates. And a protected visit keeps the placement already on
+record when regeneration pins that period's requirement to its date: the
+manager chose the day, and relabelling it would credit the generator with a
+decision it did not make.
 
 **`visit_unassigned_reasons` is a table, not a JSON column.** The dispatch board
 filters and counts by reason code, and the codes need to be queryable.
