@@ -1158,30 +1158,412 @@ describe('a range that cuts a month in half', () => {
       },
     });
 
-    const impact = await preview({ ...grid, serviceAgreementIds: [agreement.id] });
+    try {
+      const impact = await preview({ ...grid, serviceAgreementIds: [agreement.id] });
 
-    const august = impact.body.additions.filter(
-      (addition: { visitDate: string }) => addition.visitDate < '2026-09-01',
-    );
-    expect(august).toEqual([]);
-    // September, which the range does hold whole, is still planned.
-    expect(
-      impact.body.additions.filter(
-        (addition: { visitDate: string }) =>
-          addition.visitDate >= '2026-09-01' && addition.visitDate <= '2026-09-30',
-      ),
-    ).toHaveLength(1);
-    // And October, which it holds four days of, is left to the run that can
-    // see it whole.
-    expect(
-      impact.body.additions.filter(
-        (addition: { visitDate: string }) => addition.visitDate > '2026-09-30',
-      ),
-    ).toEqual([]);
-    // The published visit is untouched and unproposed either way.
-    expect(impact.body.removals).toEqual([]);
+      const august = impact.body.additions.filter(
+        (addition: { visitDate: string }) => addition.visitDate < '2026-09-01',
+      );
+      expect(august).toEqual([]);
+      // September, which the range does hold whole, is still planned.
+      expect(
+        impact.body.additions.filter(
+          (addition: { visitDate: string }) =>
+            addition.visitDate >= '2026-09-01' && addition.visitDate <= '2026-09-30',
+        ),
+      ).toHaveLength(1);
+      // And October, which it holds four days of, is left to the run that can
+      // see it whole.
+      expect(
+        impact.body.additions.filter(
+          (addition: { visitDate: string }) => addition.visitDate > '2026-09-30',
+        ),
+      ).toEqual([]);
+      // The published visit is untouched and unproposed either way.
+      expect(impact.body.removals).toEqual([]);
+    } finally {
+      // Cleaned up whatever the assertions did. A published August visit left
+      // behind by a failing run is a fixture every later test has to work
+      // around, and the first failure would cascade into several.
+      await prisma.generatedVisit.delete({ where: { id: published.id } });
+    }
+  });
+});
 
-    await prisma.generatedVisit.delete({ where: { id: published.id } });
+describe('the week view and the month view plan the same periods', () => {
+  /**
+   * The regression in full, end to end.
+   *
+   * Periods used to be phased from the run's own `from`, so the portal's two
+   * views disagreed about which days belonged to which week: generate a weekly
+   * Mon-Fri agreement from the week view and it took Monday; generate the same
+   * agreement from the month view, whose range began on a Tuesday, and it took
+   * Tuesday. One run undid the other for ever — or, where the Monday was
+   * protected, the customer was given both.
+   *
+   * April 2027: the grid runs 2027-03-29 to 2027-05-02, whole Monday-to-Sunday
+   * weeks with the whole calendar month inside them.
+   */
+  const monthView = { from: '2027-03-29', to: '2027-05-02' };
+  const weekViews = [
+    { from: '2027-03-29', to: '2027-04-04' },
+    { from: '2027-04-05', to: '2027-04-11' },
+    { from: '2027-04-12', to: '2027-04-18' },
+    { from: '2027-04-19', to: '2027-04-25' },
+    { from: '2027-04-26', to: '2027-05-02' },
+  ];
+
+  const weekdays = [
+    Weekday.MONDAY,
+    Weekday.TUESDAY,
+    Weekday.WEDNESDAY,
+    Weekday.THURSDAY,
+    Weekday.FRIDAY,
+  ];
+
+  /**
+   * Every cadence the importer actually produces, with how many periods the
+   * month view still has left to plan once every week view has run.
+   *
+   * A week view holds a whole week and nothing longer, so it plans every week
+   * of a weekly agreement and none of a fortnightly, monthly or quarterly one.
+   * The grid holds two whole fortnights and the whole of April; it holds no
+   * whole quarter, and says so instead of planning one.
+   */
+  const cadences = [
+    { label: 'weekly', frequencyUnit: 'WEEK', frequencyInterval: 1, leftForTheMonth: 0 },
+    { label: 'fortnightly', frequencyUnit: 'WEEK', frequencyInterval: 2, leftForTheMonth: 2 },
+    { label: 'monthly', frequencyUnit: 'MONTH', frequencyInterval: 1, leftForTheMonth: 1 },
+    { label: 'quarterly', frequencyUnit: 'MONTH', frequencyInterval: 3, leftForTheMonth: 0 },
+  ] as const;
+
+  const nothingToDo = (impact: {
+    additions: unknown[];
+    removals: unknown[];
+    updates: unknown[];
+  }) => ({
+    additions: impact.additions.length,
+    removals: impact.removals.length,
+    updates: impact.updates.length,
+  });
+
+  describe.each(cadences)('a $label agreement', (cadence) => {
+    let agreementId: string;
+
+    beforeAll(async () => {
+      const agreement = await createAgreement({
+        frequencyCount: 1,
+        frequencyUnit: cadence.frequencyUnit,
+        frequencyInterval: cadence.frequencyInterval,
+        allowedDays: weekdays,
+        preferredDays: [],
+        // Well clear of every other suite's horizon, and a Monday, so the
+        // agreement's own week is an ISO week.
+        startDate: '2027-01-04',
+      });
+      agreementId = agreement.id;
+    });
+
+    afterAll(async () => {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreementId },
+      });
+    });
+
+    afterEach(async () => {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreementId },
+      });
+    });
+
+    it('never undoes what the week views created, and settles after one month run', async () => {
+      for (const week of weekViews) {
+        await confirm({ ...week, serviceAgreementIds: [agreementId] });
+      }
+
+      const month = await preview({ ...monthView, serviceAgreementIds: [agreementId] });
+
+      // The month view can hold periods no week view could — a fortnight, a
+      // month — so it may still have work to add. What it must never do is
+      // remove or rewrite what the week views put in the calendar.
+      expect(month.body.removals).toEqual([]);
+      expect(month.body.updates).toEqual([]);
+      expect(month.body.additions).toHaveLength(cadence.leftForTheMonth);
+
+      await confirm({ ...monthView, serviceAgreementIds: [agreementId] });
+
+      // And with both views run, neither has anything left to say.
+      const again = await preview({ ...monthView, serviceAgreementIds: [agreementId] });
+      expect(nothingToDo(again.body)).toEqual({ additions: 0, removals: 0, updates: 0 });
+
+      for (const week of weekViews) {
+        const settled = await preview({ ...week, serviceAgreementIds: [agreementId] });
+        expect(nothingToDo(settled.body)).toEqual({
+          additions: 0,
+          removals: 0,
+          updates: 0,
+        });
+      }
+    });
+
+    it('has nothing left to do when the week views follow the month view', async () => {
+      await confirm({ ...monthView, serviceAgreementIds: [agreementId] });
+
+      for (const week of weekViews) {
+        const second = await preview({ ...week, serviceAgreementIds: [agreementId] });
+        expect(nothingToDo(second.body)).toEqual({
+          additions: 0,
+          removals: 0,
+          updates: 0,
+        });
+      }
+    });
+  });
+
+  it('keeps a fortnightly agreement on a fourteen-day cadence across two month runs', async () => {
+    // The month view is the only one that holds a whole fortnight, so two
+    // consecutive months are what a fortnightly agreement is actually built
+    // from. Phased from each run's own start they reset every month.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 2,
+      allowedDays: [Weekday.MONDAY],
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+
+    try {
+      await confirm({ ...monthView, serviceAgreementIds: [agreement.id] });
+      // May 2027's grid: 2027-04-26 to 2027-06-06.
+      await confirm({
+        from: '2027-04-26',
+        to: '2027-06-06',
+        serviceAgreementIds: [agreement.id],
+      });
+
+      const stored = await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreement.id },
+        orderBy: { visitDate: 'asc' },
+        select: { visitDate: true },
+      });
+      const dates = stored.map((visit) => visit.visitDate.toISOString().slice(0, 10));
+
+      expect(dates.length).toBeGreaterThan(2);
+      const gaps = dates
+        .slice(1)
+        .map(
+          (date, index) =>
+            (new Date(`${date}T00:00:00Z`).getTime() -
+              new Date(`${dates[index]}T00:00:00Z`).getTime()) /
+            (24 * 60 * 60 * 1000),
+        );
+      expect([...new Set(gaps)]).toEqual([14]);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
+  });
+
+  it('plans a quarterly agreement exactly once per quarter over six months', async () => {
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'MONTH',
+      frequencyInterval: 3,
+      allowedDays: weekdays,
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+
+    try {
+      // Two whole quarters, counted from the month the agreement began in.
+      await confirm({
+        from: '2027-04-01',
+        to: '2027-09-30',
+        serviceAgreementIds: [agreement.id],
+      });
+
+      const stored = await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreement.id },
+        orderBy: { visitDate: 'asc' },
+        select: { visitDate: true },
+      });
+      const months = stored.map((visit) => visit.visitDate.toISOString().slice(0, 7));
+
+      expect(months).toEqual(['2027-04', '2027-07']);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
+  });
+
+  it('says so, by cadence, when a range holds no whole period of an agreement', async () => {
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'MONTH',
+      frequencyInterval: 3,
+      allowedDays: weekdays,
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+
+    const impact = await preview({ ...weekViews[1], serviceAgreementIds: [agreement.id] });
+
+    expect(impact.body.additions).toEqual([]);
+    expect(impact.body.skippedPeriods).toEqual([
+      expect.objectContaining({
+        serviceAgreementId: agreement.id,
+        frequencyUnit: 'MONTH',
+        frequencyInterval: 3,
+        reason: 'RANGE_HOLDS_NO_WHOLE_PERIOD',
+      }),
+    ]);
+    expect(impact.body.skippedPeriods[0].message).toContain('quarter');
+  });
+
+  it('never offers to remove a visit standing in a period it did not plan', async () => {
+    // The April grid ends mid-fortnight, so the fortnight beginning on
+    // 2027-04-26 is left to the May run — which puts a visit on the 26th, a
+    // day the April range does cover. Judging that visit against April's own
+    // plan proposes deleting the work May just created.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 2,
+      allowedDays: [Weekday.MONDAY],
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+
+    try {
+      // May's grid: 2027-04-26 to 2027-06-06.
+      await confirm({
+        from: '2027-04-26',
+        to: '2027-06-06',
+        serviceAgreementIds: [agreement.id],
+      });
+      const fromMay = await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreement.id },
+        orderBy: { visitDate: 'asc' },
+        select: { visitDate: true },
+      });
+      expect(fromMay[0].visitDate.toISOString().slice(0, 10)).toBe('2027-04-26');
+
+      const april = await preview({ ...monthView, serviceAgreementIds: [agreement.id] });
+
+      expect(april.body.removals).toEqual([]);
+      // April plans its own two fortnights and leaves May's alone.
+      expect(april.body.additions).toHaveLength(2);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
+  });
+});
+
+describe('a cancelled visit on the day generation wants', () => {
+  /**
+   * A visit is identified by agreement, date and start time, so a cancelled
+   * visit keeps that identity for ever. Generation matched its requirement to
+   * the cancelled row and reported the period unchanged — no live visit that
+   * week, and the unique index forbidding the addition that would have fixed
+   * it.
+   */
+  it('plans another allowed day instead of reporting the period served', async () => {
+    const week = { from: '2027-02-01', to: '2027-02-07' };
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+    const branch = await prisma.branch.findUniqueOrThrow({
+      where: { code: BranchCode.COLOMBO },
+    });
+
+    try {
+      const cancelled = await prisma.generatedVisit.create({
+        data: {
+          serviceAgreementId: agreement.id,
+          branchId: branch.id,
+          branchCode: BranchCode.COLOMBO,
+          visitDate: new Date('2027-02-01T00:00:00.000Z'), // the Monday
+          windowStartMinute: 540,
+          windowEndMinute: 1020,
+          durationMinutes: 90,
+          requiredCrewSize: 2,
+          status: VisitStatus.CANCELLED,
+        },
+      });
+
+      const impact = await confirm({ ...week, serviceAgreementIds: [agreement.id] });
+
+      expect(impact.body.additions).toHaveLength(1);
+      expect(impact.body.additions[0].visitDate).toBe('2027-02-02'); // the Tuesday
+      expect(impact.body.unchangedCount).toBe(0);
+
+      const live = await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreement.id, status: { not: VisitStatus.CANCELLED } },
+      });
+      expect(live).toHaveLength(1);
+      // And the cancellation is still there, never removed.
+      expect(
+        await prisma.generatedVisit.count({ where: { id: cancelled.id } }),
+      ).toBe(1);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
+  });
+
+  it('says the only visit is cancelled when the period has no other day', async () => {
+    const week = { from: '2027-02-08', to: '2027-02-14' };
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      allowedDays: [Weekday.MONDAY],
+      preferredDays: [],
+      startDate: '2027-01-04',
+    });
+    const branch = await prisma.branch.findUniqueOrThrow({
+      where: { code: BranchCode.COLOMBO },
+    });
+
+    try {
+      await prisma.generatedVisit.create({
+        data: {
+          serviceAgreementId: agreement.id,
+          branchId: branch.id,
+          branchCode: BranchCode.COLOMBO,
+          visitDate: new Date('2027-02-08T00:00:00.000Z'),
+          windowStartMinute: 540,
+          windowEndMinute: 1020,
+          durationMinutes: 90,
+          requiredCrewSize: 2,
+          status: VisitStatus.CANCELLED,
+        },
+      });
+
+      const impact = await preview({ ...week, serviceAgreementIds: [agreement.id] });
+
+      expect(impact.body.additions).toEqual([]);
+      expect(impact.body.shortfalls).toEqual([
+        expect.objectContaining({
+          serviceAgreementId: agreement.id,
+          reason: 'PERIOD_HELD_BY_A_CANCELLED_VISIT',
+        }),
+      ]);
+      expect(impact.body.shortfalls[0].message).toContain('cancelled');
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
   });
 });
 
