@@ -2157,7 +2157,13 @@ export interface components {
             visitsConsidered: number;
             visitsScheduled: number;
             visitsUnassigned: number;
-            publishReadiness: components["schemas"]["PublishReadinessDto"];
+            /**
+             * @description What produced this run. OPTIMIZER is a solve, with assignments to review and publish. VISIT_GENERATION is the record of a confirmed "Generate visits" — it creates visits, never assignments, and has nothing to publish.
+             * @enum {string}
+             */
+            kind: "OPTIMIZER" | "VISIT_GENERATION";
+            /** @description Null for a VISIT_GENERATION run: there is no publication for it to be ready for, and reporting one as BLOCKED/ZERO_RESULTS told a manager a schedule had failed when none had been attempted. */
+            publishReadiness: components["schemas"]["PublishReadinessDto"] | null;
             /** @description True once published and frozen. */
             isPublished: boolean;
             /** Format: date-time */

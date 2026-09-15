@@ -75,21 +75,55 @@ const PROVENANCE_SELECT = {
   vehicles: { select: { vehicle: { select: { branchId: true } } } },
 } satisfies Prisma.AssignmentSelect;
 
-/** Only a finished, unpublished run with results can still be published. */
-function awaitsPublication(run: ScheduleRun): boolean {
+/**
+ * A run row, and the one relation that says what made it.
+ *
+ * Every optimiser run is created with a dispatch outbox row in the same
+ * transaction — that is how a solve gets delivered at all. A confirmed
+ * "Generate visits" writes a run to account for what it did and creates no
+ * outbox row, because there is nothing to dispatch.
+ */
+type RunWithDispatch = ScheduleRun & { dispatchOutbox: { id: string } | null };
+
+const RUN_KIND_INCLUDE = {
+  dispatchOutbox: { select: { id: true } },
+} satisfies Prisma.ScheduleRunInclude;
+
+/**
+ * What produced this run.
+ *
+ * Read from the dispatch outbox rather than from `trigger`, which defaults to
+ * MANUAL and is left at the default by both — it has never told the two apart.
+ * Deriving it here also settles the rows already in the database, which a new
+ * column could not do without a backfill.
+ */
+function kindOf(run: RunWithDispatch): ScheduleRunDto['kind'] {
+  return run.dispatchOutbox === null ? 'VISIT_GENERATION' : 'OPTIMIZER';
+}
+
+/** Only a finished, unpublished solve with results can still be published. */
+function awaitsPublication(run: RunWithDispatch): boolean {
   return (
+    kindOf(run) === 'OPTIMIZER' &&
     run.status === ScheduleRunStatus.SUCCEEDED &&
     run.publishedAt === null &&
     run.visitsScheduled > 0
   );
 }
 
+/**
+ * `kind` is passed in rather than derived, because three of the five callers
+ * already know it for certain: starting, cancelling and publishing are solver
+ * endpoints, and no generation run can ever reach them.
+ */
 function toDto(
   run: ScheduleRun,
-  warnings: ProvenanceWarning[] = [],
+  warnings: ProvenanceWarning[],
+  kind: ScheduleRunDto['kind'],
 ): ScheduleRunDto {
   return {
     id: run.id,
+    kind,
     status: run.status,
     rangeStart: run.rangeStart.toISOString().slice(0, 10),
     rangeEnd: run.rangeEnd.toISOString().slice(0, 10),
@@ -98,7 +132,11 @@ function toDto(
     visitsConsidered: run.visitsConsidered,
     visitsScheduled: run.visitsScheduled,
     visitsUnassigned: run.visitsUnassigned,
-    publishReadiness: publishReadiness(run, warnings),
+    // A generation run has no publication to be ready for. Computing one
+    // reported BLOCKED/ZERO_RESULTS on every single one of them — "this run
+    // produced no dispatchable assignments", about a run that was never
+    // trying to produce any.
+    publishReadiness: kind === 'OPTIMIZER' ? publishReadiness(run, warnings) : null,
     isPublished: run.publishedAt !== null,
     publishedAt: run.publishedAt?.toISOString() ?? null,
     supersededByRunId: run.supersededByRunId,
@@ -152,7 +190,7 @@ export class ScheduleRunsController {
     const run = await this.runs.create(dto, actor, this.dispatcher.provider);
     // A durable outbox now owns publish/recovery. Returning the queued run
     // retains the existing polling API even if the first remote publish fails.
-    return toDto((await this.dispatches.dispatch(run.id)) ?? run);
+    return toDto((await this.dispatches.dispatch(run.id)) ?? run, [], 'OPTIMIZER');
   }
 
   @Get('schedule-runs')
@@ -173,6 +211,7 @@ export class ScheduleRunsController {
       this.prisma.scheduleRun.count({ where }),
       this.prisma.scheduleRun.findMany({
         where,
+        include: RUN_KIND_INCLUDE,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -181,7 +220,7 @@ export class ScheduleRunsController {
 
     const warnings = await this.provenanceWarningsByRun(rows);
     return {
-      items: rows.map((run) => toDto(run, warnings.get(run.id) ?? [])),
+      items: rows.map((run) => toDto(run, warnings.get(run.id) ?? [], kindOf(run))),
       total,
       page,
       pageSize,
@@ -194,7 +233,7 @@ export class ScheduleRunsController {
    * warn about.
    */
   private async provenanceWarningsByRun(
-    runs: ScheduleRun[],
+    runs: RunWithDispatch[],
   ): Promise<Map<string, ProvenanceWarning[]>> {
     const runIds = runs.filter(awaitsPublication).map((run) => run.id);
     if (runIds.length === 0) return new Map();
@@ -226,9 +265,10 @@ export class ScheduleRunsController {
     await this.reconcileSelfHosted();
     const run = await this.prisma.scheduleRun.findUniqueOrThrow({
       where: { id },
+      include: RUN_KIND_INCLUDE,
     });
     const warnings = await this.provenanceWarningsByRun([run]);
-    return toDto(run, warnings.get(run.id) ?? []);
+    return toDto(run, warnings.get(run.id) ?? [], kindOf(run));
   }
 
   private async reconcileSelfHosted(): Promise<void> {
@@ -255,7 +295,7 @@ export class ScheduleRunsController {
   ): Promise<ScheduleRunDto> {
     const run = await this.runs.requestCancel(id, actor);
     await this.dispatches.cancel(run.id, run.jobId);
-    return toDto(run);
+    return toDto(run, [], 'OPTIMIZER');
   }
 
   private assertProviderRange(from: string, to: string): void {
@@ -305,7 +345,7 @@ export class ScheduleRunsController {
       dto.acknowledgePartial === true,
       dto.acknowledgeProvenance === true,
     );
-    return toDto(run, warnings);
+    return toDto(run, warnings, 'OPTIMIZER');
   }
 
   @Post('assignments/:id/lock')

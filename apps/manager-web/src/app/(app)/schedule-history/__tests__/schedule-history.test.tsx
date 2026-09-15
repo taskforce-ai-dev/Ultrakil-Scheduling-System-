@@ -406,3 +406,56 @@ describe("ScheduleHistoryPage", () => {
     expect(await screen.findByText("No schedule runs yet")).toBeInTheDocument();
   });
 });
+
+describe("a visit-generation run in the history", () => {
+  /**
+   * Confirming "Generate visits" writes a run to account for what it did.
+   * Listed beside the solver's runs it read as a failed schedule: "Draft — no
+   * dispatchable assignments · Considered: 105 · Scheduled: 0", directly above
+   * the real optimiser run.
+   */
+  const generation = () =>
+    buildScheduleRun({
+      id: "run-generation",
+      kind: "VISIT_GENERATION",
+      status: "SUCCEEDED",
+      visitsConsidered: 105,
+      visitsScheduled: 0,
+      visitsUnassigned: 0,
+      publishReadiness: null,
+      isPublished: false,
+    });
+
+  it("is named as visit generation", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+
+    expect(await screen.findByText("Visit generation")).toBeInTheDocument();
+  });
+
+  it("is never called a draft, and never blamed for having no assignments", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+    await screen.findByText("Visit generation");
+
+    expect(screen.queryByText(/Draft/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dispatchable assignments/)).not.toBeInTheDocument();
+  });
+
+  it("counts what it actually did", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+
+    expect(await screen.findByText("105 visits generated")).toBeInTheDocument();
+    expect(screen.queryByText("Scheduled: ")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unassigned: ")).not.toBeInTheDocument();
+  });
+
+  it("offers nothing to publish", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+    await screen.findByText("Visit generation");
+
+    expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+  });
+});

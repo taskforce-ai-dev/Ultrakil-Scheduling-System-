@@ -159,7 +159,20 @@ export class ScheduleRunDto {
   @ApiProperty({ type: Number }) visitsConsidered!: number;
   @ApiProperty({ type: Number }) visitsScheduled!: number;
   @ApiProperty({ type: Number }) visitsUnassigned!: number;
-  @ApiProperty({ type: PublishReadinessDto }) publishReadiness!: PublishReadinessDto;
+  @ApiProperty({
+    enum: ['OPTIMIZER', 'VISIT_GENERATION'],
+    description:
+      'What produced this run. OPTIMIZER is a solve, with assignments to review and publish. VISIT_GENERATION is the record of a confirmed "Generate visits" — it creates visits, never assignments, and has nothing to publish.',
+  })
+  kind!: 'OPTIMIZER' | 'VISIT_GENERATION';
+
+  @ApiProperty({
+    type: PublishReadinessDto,
+    nullable: true,
+    description:
+      'Null for a VISIT_GENERATION run: there is no publication for it to be ready for, and reporting one as BLOCKED/ZERO_RESULTS told a manager a schedule had failed when none had been attempted.',
+  })
+  publishReadiness!: PublishReadinessDto | null;
 
   @ApiProperty({ type: Boolean, description: 'True once published and frozen.' })
   isPublished!: boolean;

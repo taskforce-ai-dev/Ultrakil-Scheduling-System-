@@ -1388,4 +1388,30 @@ describe('the run is recorded', () => {
     expect(event).not.toBeNull();
     expect(event?.actorLabel).toContain(ADMIN.email);
   });
+
+  it('is listed in Schedule History as visit generation, not as a failed solve', async () => {
+    // It has no assignments and never will: generation creates visits and
+    // staffs nobody. Judged by the solver's yardstick it was badged "Draft —
+    // no dispatchable assignments" and blocked from publishing with
+    // ZERO_RESULTS — a manager reads that as a schedule that failed.
+    const agreement = await createAgreement();
+    const res = await confirm({ serviceAgreementIds: [agreement.id] });
+
+    const history = await request(http)
+      .get('/api/schedule-runs')
+      .set(auth(adminToken));
+
+    expect(history.status).toBe(200);
+    const listed = history.body.items.find(
+      (item: { id: string }) => item.id === res.body.scheduleRunId,
+    );
+    expect(listed.kind).toBe('VISIT_GENERATION');
+    expect(listed.publishReadiness).toBeNull();
+
+    const single = await request(http)
+      .get(`/api/schedule-runs/${res.body.scheduleRunId}`)
+      .set(auth(adminToken));
+    expect(single.body.kind).toBe('VISIT_GENERATION');
+    expect(single.body.publishReadiness).toBeNull();
+  });
 });

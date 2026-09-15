@@ -83,6 +83,12 @@ a safe change to an existing visit, what's no longer required (because an
 agreement changed or was paused), and what's protected and won't be
 touched (see "Locks," section 6).
 
+**Generation shows up in Schedule History.** Confirming a run writes a record
+there, badged **Visit generation** and counted as *"105 visits generated."* It
+is not a schedule: generation creates the visits, and staffs nobody. There is
+nothing to publish on it, and no Publish button on it. To staff those visits,
+solve the range from the Schedule History page as usual.
+
 **What range gets generated.** In month view it is the calendar month you are
 looking at — September generates 1 to 30 September, even though the grid also
 shows the last days of August and the first of October. In week view it is

@@ -135,10 +135,12 @@ describe('ScheduleRunsController QStash bounds', () => {
   });
 
   it('reads readiness for a page of runs with one scalar-only query, and skips runs with no decision left', async () => {
+    // Solver runs: each was dispatched, which is what makes it one.
+    const solved = { dispatchOutbox: { id: 'outbox' } };
     const rows = [
-      run({ id: 'draft-run' }),
-      run({ id: 'published-run', publishedAt: new Date('2027-03-02T10:00:00Z') }),
-      run({ id: 'empty-run', visitsScheduled: 0, visitsUnassigned: 4 }),
+      { ...run({ id: 'draft-run' }), ...solved },
+      { ...run({ id: 'published-run', publishedAt: new Date('2027-03-02T10:00:00Z') }), ...solved },
+      { ...run({ id: 'empty-run', visitsScheduled: 0, visitsUnassigned: 4 }), ...solved },
     ];
     const assignment = {
       findMany: jest.fn(async () => [
@@ -202,7 +204,8 @@ describe('ScheduleRunsController QStash bounds', () => {
         expect.objectContaining({ code: 'HOURS_UNCONFIRMED', affectedVisitCount: 1 }),
       ],
     });
-    expect(page.items[1].publishReadiness.provenanceWarnings).toEqual([]);
+    expect(page.items[1].publishReadiness).not.toBeNull();
+    expect(page.items[1].publishReadiness?.provenanceWarnings).toEqual([]);
     expect(page.items[2].publishReadiness).toMatchObject({ state: 'BLOCKED' });
   });
 
@@ -228,5 +231,90 @@ describe('ScheduleRunsController QStash bounds', () => {
     await controller.list({});
 
     expect(assignment.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('a visit-generation run is not an optimiser draft', () => {
+  /**
+   * Confirming "Generate visits" writes a `schedule_runs` row to account for
+   * what it did. Schedule History listed it beside the solver's runs, read its
+   * visitsScheduled of 0 and badged it "Draft — no dispatchable assignments" —
+   * which a manager reads as a schedule that failed.
+   *
+   * Every optimiser run is created with a dispatch outbox row, in the same
+   * transaction; generation creates none. That is what tells the two apart on
+   * the read side, without changing a thing about what generation records.
+   */
+  const controllerFor = (rows: unknown[], assignment = { findMany: jest.fn(async () => []) }) => {
+    const prisma = {
+      assignment,
+      scheduleRun: {
+        count: jest.fn(async () => rows.length),
+        findMany: jest.fn(async () => rows),
+        findUniqueOrThrow: jest.fn(async () => rows[0]),
+      },
+    };
+    return new ScheduleRunsController(
+      {} as ScheduleRunService,
+      { provider: 'qstash', enqueue: jest.fn(), cancel: jest.fn() },
+      {} as PublishingService,
+      prisma as unknown as PrismaService,
+      { reconcilePending: jest.fn() } as unknown as ScheduleRunDispatchService,
+    );
+  };
+
+  it('is reported as visit generation, not as a solver run', async () => {
+    const page = await controllerFor([
+      { ...run({ id: 'generation', visitsConsidered: 105, visitsScheduled: 0 }), dispatchOutbox: null },
+    ]).list({});
+
+    expect(page.items[0].kind).toBe('VISIT_GENERATION');
+  });
+
+  it('carries no publish readiness at all, rather than a blocked one', async () => {
+    // "This run produced no dispatchable assignments and cannot be published"
+    // is true of every generation run and useful about none of them.
+    const page = await controllerFor([
+      { ...run({ id: 'generation', visitsConsidered: 105, visitsScheduled: 0 }), dispatchOutbox: null },
+    ]).list({});
+
+    expect(page.items[0].publishReadiness).toBeNull();
+  });
+
+  it('leaves a solver run reading exactly as it did', async () => {
+    const page = await controllerFor([
+      { ...run({ id: 'solved', visitsScheduled: 0, visitsUnassigned: 4 }), dispatchOutbox: { id: 'outbox' } },
+    ]).list({});
+
+    expect(page.items[0].kind).toBe('OPTIMIZER');
+    expect(page.items[0].publishReadiness).toMatchObject({
+      state: 'BLOCKED',
+      code: 'ZERO_RESULTS',
+    });
+  });
+
+  it('never reads assignments to judge a generation run', async () => {
+    const assignment = { findMany: jest.fn(async () => []) };
+    await controllerFor(
+      [
+        { ...run({ id: 'generation', visitsScheduled: 0 }), dispatchOutbox: null },
+        { ...run({ id: 'publishable', visitsScheduled: 4 }), dispatchOutbox: { id: 'outbox' } },
+      ],
+      assignment,
+    ).list({});
+
+    const [args] = assignment.findMany.mock.calls[0] as unknown as [
+      { where: { scheduleRunId: { in: string[] } } },
+    ];
+    expect(args.where.scheduleRunId.in).toEqual(['publishable']);
+  });
+
+  it('says so on a single run too, not only in the list', async () => {
+    const dto = await controllerFor([
+      { ...run({ id: 'generation', visitsScheduled: 0 }), dispatchOutbox: null },
+    ]).get('generation');
+
+    expect(dto.kind).toBe('VISIT_GENERATION');
+    expect(dto.publishReadiness).toBeNull();
   });
 });

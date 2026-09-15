@@ -172,6 +172,19 @@ view and its own seven days for a week view, and generation reads the existing
 and standing visits over the whole calendar months the range touches — what it
 may *change* is still exactly the range it was given.
 
+Confirming a generation run writes a `ScheduleRun` to account for what it did,
+which put it in Schedule History beside the solver's runs — where its
+`visitsScheduled` of 0 was read by the solver's own yardstick and badged "Draft
+— no dispatchable assignments", directly above a real run. A manager reads that
+as a schedule that failed. `trigger` does not tell the two apart (it defaults
+to MANUAL and neither writer sets anything else), so the read side derives the
+run's `kind` from the one relation that does: every optimiser run is created
+with a dispatch outbox row in the same transaction, and generation creates
+none. Deriving it rather than adding a column also settles the rows already in
+the database. A `VISIT_GENERATION` run carries a null `publishReadiness` —
+there is no publication for it to be ready for — and the portal names it, counts
+the visits it generated, and offers no Publish.
+
 A visit can breach the window/duration invariant without anyone having erred:
 a booked date on hours the site records as an hour is planned on those hours
 deliberately. So a hand edit enforces the invariant only when the edit touches

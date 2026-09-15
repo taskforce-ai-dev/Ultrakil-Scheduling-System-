@@ -339,6 +339,7 @@ export function buildEligibilityResult(
 export function buildScheduleRun(overrides: Partial<ScheduleRun> = {}): ScheduleRun {
   return {
     id: "run-1",
+    kind: "OPTIMIZER",
     status: "SUCCEEDED",
     rangeStart: "2026-09-07",
     rangeEnd: "2026-09-13",

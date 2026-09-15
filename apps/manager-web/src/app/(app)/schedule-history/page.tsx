@@ -4,6 +4,7 @@ import * as React from "react";
 import {
   AlertTriangle,
   Ban,
+  CalendarPlus,
   CheckCircle2,
   CircleDashed,
   Loader2,
@@ -60,7 +61,24 @@ const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 /** How often the run list is re-fetched while anything is queued or running. */
 const POLL_INTERVAL_MS = 3000;
 
+/** True for the record a confirmed "Generate visits" leaves behind. */
+function isGeneration(run: ScheduleRun): boolean {
+  return run.kind === "VISIT_GENERATION";
+}
+
 function StatusBadge({ run }: { run: ScheduleRun }) {
+  // Generation creates visits, never assignments. Judging it by the solver's
+  // yardstick badged every single one "Draft — no dispatchable assignments",
+  // which reads as a schedule that failed — sitting directly above the real
+  // optimiser run, where it does the most damage.
+  if (isGeneration(run)) {
+    return (
+      <Badge variant="secondary">
+        <CalendarPlus className="h-3 w-3" aria-hidden="true" />
+        Visit generation
+      </Badge>
+    );
+  }
   if (run.status === "QUEUED") {
     return (
       <Badge variant="outline">
@@ -136,7 +154,12 @@ function StatusBadge({ run }: { run: ScheduleRun }) {
 }
 
 function canPublishRun(run: ScheduleRun): boolean {
-  return run.status === "SUCCEEDED" && !run.isPublished && run.visitsScheduled > 0;
+  return (
+    !isGeneration(run) &&
+    run.status === "SUCCEEDED" &&
+    !run.isPublished &&
+    run.visitsScheduled > 0
+  );
 }
 
 /**
@@ -496,26 +519,35 @@ export default function ScheduleHistoryPage() {
                     </div>
                   )}
 
-                  <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
-                    <div>
-                      <dt className="inline">Considered: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsConsidered}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Scheduled: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsScheduled}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Unassigned: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsUnassigned}
-                      </dd>
-                    </div>
-                  </dl>
+                  {isGeneration(run) ? (
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {run.visitsConsidered} visits generated
+                      </span>{" "}
+                      — nobody is assigned by generation. Solve this range to staff them.
+                    </p>
+                  ) : (
+                    <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+                      <div>
+                        <dt className="inline">Considered: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsConsidered}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline">Scheduled: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsScheduled}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline">Unassigned: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsUnassigned}
+                        </dd>
+                      </div>
+                    </dl>
+                  )}
 
                   {run.status === "FAILED" && (
                     <p className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm text-destructive">
