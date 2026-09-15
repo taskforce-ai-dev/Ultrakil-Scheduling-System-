@@ -146,6 +146,19 @@ class DailyLoadWarningDto {
   @ApiProperty({ type: String }) message!: string;
 }
 
+class BookingWarningDto {
+  @ApiProperty({ type: String, format: 'uuid' }) serviceAgreementId!: string;
+  @ApiProperty({ type: String, format: 'date' }) date!: string;
+  @ApiProperty({
+    type: String,
+    enum: ['SITE_CLOSED_ON_BOOKED_DAY', 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT'],
+    description:
+      'SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs.',
+  })
+  reason!: string;
+  @ApiProperty({ type: String }) message!: string;
+}
+
 export class GenerationImpactDto {
   @ApiProperty({ type: String, format: 'date' }) from!: string;
   @ApiProperty({ type: String, format: 'date' }) to!: string;
@@ -189,6 +202,13 @@ export class GenerationImpactDto {
       'Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only.',
   })
   loadWarnings!: DailyLoadWarningDto[];
+
+  @ApiProperty({
+    type: [BookingWarningDto],
+    description:
+      "Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only.",
+  })
+  bookingWarnings!: BookingWarningDto[];
 
   @ApiProperty({
     type: Boolean,

@@ -15,18 +15,20 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import {
+  PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
+import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
 import { GenerateVisitsDto, GenerationImpactDto } from './dto';
 import {
-  DEFAULT_DAILY_VISIT_CAP,
   DailyLoadWarning,
+  StandingVisit,
   applyDailyLoadGuard,
 } from './load-guard';
 import {
@@ -34,7 +36,9 @@ import {
   GenerationPlan,
   RequiredVisit,
   planGeneration,
+  protectionReasonFor,
 } from './plan';
+import { AgreementPeriodShape, honourProtectedDates } from './protected-periods';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
@@ -52,6 +56,14 @@ const AGREEMENT_INCLUDE = {
 type AgreementForGeneration = Prisma.ServiceAgreementGetPayload<{
   include: typeof AGREEMENT_INCLUDE;
 }>;
+
+/** A booked date the site's own hours do not support, named for a manager. */
+interface BookingWarning {
+  serviceAgreementId: string;
+  date: string;
+  reason: string;
+  message: string;
+}
 
 interface Shortfall {
   serviceAgreementId: string;
@@ -86,9 +98,7 @@ export class VisitGenerationService {
 
   /** Most visits one branch's day may carry. Configurable; rarely configured. */
   private get dailyCap(): number {
-    return (
-      this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP
-    );
+    return this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP;
   }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
@@ -109,12 +119,26 @@ export class VisitGenerationService {
 
     const agreements = await this.loadAgreements(dto, from, to);
     const planned = this.requiredVisitsFor(agreements, dto.from, dto.to);
+    const existing = await this.loadExistingVisits(agreements, from, to);
+
+    // A protected visit already covers its period, so the period's
+    // requirement is pinned to that date rather than planned onto another one
+    // — otherwise the old date is kept (it is protected) and the new one
+    // created too, and the customer gets both.
+    const honoured = honourProtectedDates(
+      planned.required,
+      existing,
+      this.periodShapesFor(agreements, dto.from),
+    );
+
     // One cross-agreement pass, after every agreement has had its say. Nothing
-    // in per-agreement planning can see that forty of them chose the same day.
-    const guarded = applyDailyLoadGuard(planned.required, this.dailyCap);
+    // in per-agreement planning can see that forty of them chose the same day,
+    // and nothing in this run's own list can see the work already standing in
+    // the calendar — so the guard is given both.
+    const standing = await this.loadStandingVisits(dto, agreements, from, to);
+    const guarded = applyDailyLoadGuard(honoured, this.dailyCap, standing);
     const required = guarded.required;
     const shortfalls = planned.shortfalls;
-    const existing = await this.loadExistingVisits(agreements, from, to);
 
     const plan = planGeneration(required, existing);
 
@@ -128,7 +152,7 @@ export class VisitGenerationService {
     let scheduleRunId: string | null = null;
     if (actor) scheduleRunId = await this.apply(plan, dto, from, to, actor);
 
-    return this.toImpact(plan, shortfalls, guarded.warnings, names, {
+    return this.toImpact(plan, shortfalls, guarded.warnings, planned.bookingWarnings, names, {
       from: dto.from,
       to: dto.to,
       agreementsConsidered: agreements.length,
@@ -203,9 +227,14 @@ export class VisitGenerationService {
     agreements: AgreementForGeneration[],
     from: string,
     to: string,
-  ): { required: RequiredVisit[]; shortfalls: Shortfall[] } {
+  ): {
+    required: RequiredVisit[];
+    shortfalls: Shortfall[];
+    bookingWarnings: BookingWarning[];
+  } {
     const required: RequiredVisit[] = [];
     const shortfalls: Shortfall[] = [];
+    const bookingWarnings: BookingWarning[] = [];
 
     const horizonDays =
       Math.round((parseDateOnly(to).getTime() - parseDateOnly(from).getTime()) / DAY_MS) + 1;
@@ -289,9 +318,92 @@ export class VisitGenerationService {
           ...shortfall,
         });
       }
+
+      for (const issue of preview.bookingIssues) {
+        if (issue.date > to) continue;
+        bookingWarnings.push(bookingWarningFrom(agreement.id, issue));
+      }
     }
 
-    return { required, shortfalls };
+    return { required, shortfalls, bookingWarnings };
+  }
+
+  /**
+   * How each agreement's horizon divides into periods.
+   *
+   * The same arithmetic the preview uses, so a protected visit lands in the
+   * period the run planned for it rather than a period of its own.
+   */
+  private periodShapesFor(
+    agreements: AgreementForGeneration[],
+    from: string,
+  ): Map<string, AgreementPeriodShape> {
+    return new Map(
+      agreements.map((agreement) => {
+        const agreementStart = toDateOnly(agreement.startDate);
+        return [
+          agreement.id,
+          {
+            serviceAgreementId: agreement.id,
+            horizonStart: agreementStart > from ? agreementStart : from,
+            frequencyUnit: agreement.frequencyUnit,
+            frequencyInterval: agreement.frequencyInterval,
+          },
+        ];
+      }),
+    );
+  }
+
+  /**
+   * Everything already in the horizon that this run will leave standing.
+   *
+   * Deliberately not limited to the agreements in scope. A run asked about one
+   * agreement still has to see the other eleven visits on the Monday it is
+   * about to choose, or it will anchor onto a full day and the next full run
+   * will move the visit straight off it again.
+   */
+  private async loadStandingVisits(
+    dto: GenerateVisitsDto,
+    agreements: AgreementForGeneration[],
+    from: Date,
+    to: Date,
+  ): Promise<StandingVisit[]> {
+    const inScope = new Set(agreements.map((agreement) => agreement.id));
+
+    const visits = await this.prisma.generatedVisit.findMany({
+      where: {
+        visitDate: { gte: from, lte: to },
+        // Branch isolation: a Kandy day says nothing about a Colombo one, and
+        // a run scoped to a branch has no business reading the other's book.
+        ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),
+      },
+      select: {
+        serviceAgreementId: true,
+        branchCode: true,
+        visitDate: true,
+        status: true,
+        isManuallyAdjusted: true,
+        lockedAt: true,
+        _count: { select: { assignments: true } },
+      },
+    });
+
+    return visits
+      .filter(
+        (visit) =>
+          !inScope.has(visit.serviceAgreementId) ||
+          protectionReasonFor({
+            status: visit.status,
+            isManuallyAdjusted: visit.isManuallyAdjusted,
+            isLocked: visit.lockedAt !== null,
+            hasAssignments: visit._count.assignments > 0,
+          }) !== null,
+      )
+      .map((visit) => ({
+        serviceAgreementId: visit.serviceAgreementId,
+        branchCode: visit.branchCode,
+        visitDate: toDateOnly(visit.visitDate),
+      }));
   }
 
   private async loadExistingVisits(
@@ -531,6 +643,7 @@ export class VisitGenerationService {
     plan: GenerationPlan,
     shortfalls: Shortfall[],
     loadWarnings: DailyLoadWarning[],
+    bookingWarnings: BookingWarning[],
     names: Map<string, { customerName: string; siteName: string }>,
     meta: {
       from: string;
@@ -579,6 +692,7 @@ export class VisitGenerationService {
       unchangedCount: plan.unchangedCount,
       shortfalls,
       loadWarnings,
+      bookingWarnings,
       isPreview: meta.isPreview,
       scheduleRunId: meta.scheduleRunId,
     };
@@ -593,6 +707,27 @@ export class VisitGenerationService {
  * onto the wire would ship fields the OpenAPI document does not describe, and
  * the first person to rely on one would find it gone the next release.
  */
+/**
+ * A booking issue as the impact report carries it.
+ *
+ * The agreement's id, never the customer's name: a warning outlives the screen
+ * it was raised on — it is logged, pasted into a message, read by someone who
+ * is not the manager — and a customer name travelling that far is a privacy
+ * decision nobody made. The id resolves to the agreement for anyone entitled
+ * to look it up.
+ */
+function bookingWarningFrom(
+  serviceAgreementId: string,
+  issue: PreviewBookingIssue,
+): BookingWarning {
+  return {
+    serviceAgreementId,
+    date: issue.date,
+    reason: issue.reason,
+    message: issue.message,
+  };
+}
+
 function toPlannedVisit(required: RequiredVisit) {
   return {
     serviceAgreementId: required.serviceAgreementId,

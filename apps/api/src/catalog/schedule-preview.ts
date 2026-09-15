@@ -293,7 +293,7 @@ export function windowProvenanceOf(input: {
  * bucket, so "one visit per fortnight" places one visit across both weeks
  * rather than one in each.
  */
-function periodIndex(
+export function periodIndexOf(
   date: Date,
   horizonStart: Date,
   unit: FrequencyUnit,
@@ -385,7 +385,7 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
     cursor <= lastDate;
     cursor = new Date(cursor.getTime() + DAY_MS)
   ) {
-    const period = periodIndex(cursor, effectiveStart, input.frequencyUnit, interval);
+    const period = periodIndexOf(cursor, effectiveStart, input.frequencyUnit, interval);
     const date = toDateOnly(cursor);
 
     const bounds = periodBounds.get(period);

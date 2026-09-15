@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_DAILY_VISIT_CAP } from '../scheduling/visit-generation/load-guard';
+import { DEFAULT_DAILY_VISIT_CAP } from './constants';
 import {
   QSTASH_MAX_EXECUTION_SECONDS,
   QSTASH_MINIMUM_EXECUTION_SECONDS,

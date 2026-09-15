@@ -29,7 +29,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../src/scheduling/visit-generation/load-guard';
+import { DEFAULT_DAILY_VISIT_CAP } from '../../src/config/constants';
 
 const prisma = new PrismaClient();
 

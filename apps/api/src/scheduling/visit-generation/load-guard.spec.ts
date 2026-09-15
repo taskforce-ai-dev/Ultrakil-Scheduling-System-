@@ -1,7 +1,8 @@
 import { BranchCode, DataProvenance, VisitPlacement, Weekday } from '@prisma/client';
 
 import { PreviewAlternative } from '../../catalog/schedule-preview';
-import { DEFAULT_DAILY_VISIT_CAP, applyDailyLoadGuard } from './load-guard';
+import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
+import { applyDailyLoadGuard } from './load-guard';
 import { RequiredVisit } from './plan';
 
 function alternative(date: string, overrides: Partial<PreviewAlternative> = {}): PreviewAlternative {
@@ -257,6 +258,115 @@ describe('applyDailyLoadGuard', () => {
           windowProvenance: DataProvenance.SOURCE,
         },
       ]);
+    });
+  });
+
+  describe('the rest of the calendar counts too', () => {
+    it('sees a day already holding work this run did not plan', () => {
+      // Cap 2. The 8th already carries one visit from an agreement outside
+      // this run, so it has room for exactly one more.
+      const result = applyDailyLoadGuard(
+        crowd(3, { alternatives: [alternative('2026-09-08')] }),
+        2,
+        [
+          {
+            serviceAgreementId: 'outside-this-run',
+            branchCode: BranchCode.COLOMBO,
+            visitDate: '2026-09-08',
+          },
+        ],
+      );
+
+      expect(countOn(result.required, '2026-09-08')).toBe(1);
+      expect(countOn(result.required, '2026-09-07')).toBe(2);
+    });
+
+    it('will not fill a standing day past the cap', () => {
+      const result = applyDailyLoadGuard(
+        crowd(4, { alternatives: [alternative('2026-09-08')] }),
+        2,
+        [
+          {
+            serviceAgreementId: 'outside-1',
+            branchCode: BranchCode.COLOMBO,
+            visitDate: '2026-09-08',
+          },
+          {
+            serviceAgreementId: 'outside-2',
+            branchCode: BranchCode.COLOMBO,
+            visitDate: '2026-09-08',
+          },
+        ],
+      );
+
+      // The 8th is full before the run starts, so nothing may move onto it.
+      expect(countOn(result.required, '2026-09-08')).toBe(0);
+      expect(result.warnings.map((warning) => warning.date)).toContain('2026-09-07');
+    });
+
+    it('will not move a visit onto a day its own agreement already stands on', () => {
+      const result = applyDailyLoadGuard(
+        [
+          ...crowd(2, { alternatives: [alternative('2026-09-08')] }),
+          visit({
+            serviceAgreementId: 'held',
+            alternatives: [alternative('2026-09-08')],
+          }),
+        ],
+        2,
+        [
+          {
+            serviceAgreementId: 'held',
+            branchCode: BranchCode.COLOMBO,
+            visitDate: '2026-09-08',
+          },
+        ],
+      );
+
+      const moved = result.required.filter((entry) => entry.visitDate === '2026-09-08');
+      expect(moved.map((entry) => entry.serviceAgreementId)).not.toContain('held');
+    });
+
+    it('counts a standing visit this run is re-planning only once', () => {
+      // The same visit, seen twice: once as the run's own requirement and once
+      // as a protected row already in the calendar.
+      const required = crowd(2);
+      const result = applyDailyLoadGuard(required, 2, [
+        {
+          serviceAgreementId: required[0].serviceAgreementId,
+          branchCode: BranchCode.COLOMBO,
+          visitDate: '2026-09-07',
+        },
+      ]);
+
+      expect(result.required).toEqual(required);
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('keeps the branches apart', () => {
+      const result = applyDailyLoadGuard(crowd(2), 2, [
+        {
+          serviceAgreementId: 'kandy-agreement',
+          branchCode: BranchCode.KANDY,
+          visitDate: '2026-09-07',
+        },
+      ]);
+
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('says in the warning that part of the day is not this run to move', () => {
+      const result = applyDailyLoadGuard(crowd(2, { alternatives: [] }), 2, [
+        {
+          serviceAgreementId: 'outside-this-run',
+          branchCode: BranchCode.COLOMBO,
+          visitDate: '2026-09-07',
+        },
+      ]);
+
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].plannedCount).toBe(3);
+      expect(result.warnings[0].message).toContain('already in the calendar');
     });
   });
 

@@ -23,13 +23,6 @@ import { RequiredVisit } from './plan';
  * regeneration report nothing to do.
  */
 
-/**
- * The busiest day in the workbook's own July plan: 159 visits over 28 days,
- * never more than twelve on one of them. It is UltraKIL's demonstrated
- * capacity rather than a number invented here.
- */
-export const DEFAULT_DAILY_VISIT_CAP = 12;
-
 /** A day that still carries more work than the cap allows. */
 export interface DailyLoadWarning {
   branchCode: BranchCode;
@@ -47,11 +40,20 @@ export interface LoadGuardResult {
   warnings: DailyLoadWarning[];
 }
 
-/** Reads the cap from the environment, falling back to the workbook's own. */
-export function dailyVisitCapFrom(value: string | undefined): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return DEFAULT_DAILY_VISIT_CAP;
-  return parsed;
+/**
+ * A visit already in the calendar that this run will not be replacing.
+ *
+ * Two kinds qualify: a protected visit, which stays whatever the run decides,
+ * and any visit of an agreement the run was not asked about — a run scoped to
+ * one agreement leaves every other agreement's work exactly where it is.
+ * Both occupy the day just as firmly as a visit this run planned, and a guard
+ * that cannot see them reads a day holding twelve as empty.
+ */
+export interface StandingVisit {
+  serviceAgreementId: string;
+  branchCode: BranchCode;
+  /** YYYY-MM-DD. */
+  visitDate: string;
 }
 
 const loadKey = (branchCode: BranchCode, date: string) => `${branchCode}|${date}`;
@@ -61,6 +63,7 @@ const periodKey = (visit: RequiredVisit) =>
 export function applyDailyLoadGuard(
   required: RequiredVisit[],
   cap: number,
+  standing: StandingVisit[] = [],
 ): LoadGuardResult {
   // Copies throughout: the caller's list is its own account of what the
   // agreements asked for, and a guard that edited it in place would make the
@@ -69,6 +72,9 @@ export function applyDailyLoadGuard(
 
   const load = new Map<string, number>();
   const usedDates = new Map<string, Set<string>>();
+  // How many of this run's own visits sit on each agreement-day, so a
+  // standing visit this run is re-planning is not counted a second time.
+  const planned = new Map<string, number>();
   for (const visit of visits) {
     const key = loadKey(visit.branchCode, visit.visitDate);
     load.set(key, (load.get(key) ?? 0) + 1);
@@ -76,6 +82,30 @@ export function applyDailyLoadGuard(
     const used = usedDates.get(period) ?? new Set<string>();
     used.add(visit.visitDate);
     usedDates.set(period, used);
+    const pair = `${visit.serviceAgreementId}|${visit.visitDate}`;
+    planned.set(pair, (planned.get(pair) ?? 0) + 1);
+  }
+
+  // The rest of the calendar. Counted towards each day, and barred as a
+  // destination for the agreement that already holds it, so a scoped run and
+  // a full run over the same horizon reach the same answer.
+  const standingByAgreement = new Map<string, Set<string>>();
+  const standingPerDay = new Map<string, number>();
+  for (const visit of standing) {
+    const dates = standingByAgreement.get(visit.serviceAgreementId) ?? new Set<string>();
+    dates.add(visit.visitDate);
+    standingByAgreement.set(visit.serviceAgreementId, dates);
+
+    const pair = `${visit.serviceAgreementId}|${visit.visitDate}`;
+    const alreadyPlanned = planned.get(pair) ?? 0;
+    if (alreadyPlanned > 0) {
+      planned.set(pair, alreadyPlanned - 1);
+      continue;
+    }
+
+    const key = loadKey(visit.branchCode, visit.visitDate);
+    load.set(key, (load.get(key) ?? 0) + 1);
+    standingPerDay.set(key, (standingPerDay.get(key) ?? 0) + 1);
   }
 
   const overloaded = [...load.entries()]
@@ -109,9 +139,13 @@ export function applyDailyLoadGuard(
 
       const period = periodKey(visit);
       const used = usedDates.get(period) ?? new Set<string>();
+      const occupied = standingByAgreement.get(visit.serviceAgreementId);
 
       const target = visit.alternatives
-        .filter((alternative) => !used.has(alternative.date))
+        .filter(
+          (alternative) =>
+            !used.has(alternative.date) && !occupied?.has(alternative.date),
+        )
         .map((alternative) => ({
           alternative,
           load: load.get(loadKey(visit.branchCode, alternative.date)) ?? 0,
@@ -172,6 +206,12 @@ export function applyDailyLoadGuard(
         visit.placement === VisitPlacement.BOOKED,
     ).length;
 
+    const standingCount = standingPerDay.get(key) ?? 0;
+    const alsoStanding =
+      standingCount > 0
+        ? ` ${standingCount} are already in the calendar and not this run's to move.`
+        : '';
+
     warnings.push({
       branchCode,
       date,
@@ -179,9 +219,9 @@ export function applyDailyLoadGuard(
       bookedCount,
       cap,
       message:
-        bookedCount >= count
-          ? `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. Every one of them is a date already booked with the customer, so none was moved.`
-          : `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. ${bookedCount} are already booked with the customer, and the rest had no other day inside their period to move to.`,
+        bookedCount + standingCount >= count
+          ? `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. None of them could be moved: ${bookedCount} are dates already booked with the customer.${alsoStanding}`
+          : `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. ${bookedCount} are already booked with the customer, and the rest had no other day inside their period to move to.${alsoStanding}`,
     });
   }
 
