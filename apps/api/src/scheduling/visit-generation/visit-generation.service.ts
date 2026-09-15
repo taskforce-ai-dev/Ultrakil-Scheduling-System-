@@ -428,6 +428,9 @@ export class VisitGenerationService {
           anchor: toDateOnly(agreement.startDate),
           frequencyUnit: agreement.frequencyUnit,
           frequencyInterval: agreement.frequencyInterval,
+          allowedDays: agreement.dayRules
+            .filter((rule) => rule.kind === DayRuleKind.ALLOWED)
+            .map((rule) => rule.weekday),
         },
       ]),
     );

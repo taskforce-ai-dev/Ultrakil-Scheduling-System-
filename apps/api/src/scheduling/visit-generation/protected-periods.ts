@@ -1,6 +1,6 @@
-import { FrequencyUnit } from '@prisma/client';
+import { FrequencyUnit, Weekday } from '@prisma/client';
 
-import { parseDateOnly, periodIndexOf } from '../../catalog/schedule-preview';
+import { parseDateOnly, periodIndexOf, weekdayOf } from '../../catalog/schedule-preview';
 import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
 
 /**
@@ -48,10 +48,29 @@ export interface AgreementPeriodShape {
   anchor: string;
   frequencyUnit: FrequencyUnit;
   frequencyInterval: number;
+  /**
+   * The weekdays the agreement still allows. A keeper on one of them is a day
+   * the agreement is content with, however it got there.
+   */
+  allowedDays: Weekday[];
 }
 
 const keyOf = (serviceAgreementId: string, period: number) =>
   `${serviceAgreementId}|${period}`;
+
+/**
+ * True when the day a protected visit is held on is still an allowed weekday.
+ *
+ * An agreement with no allowed weekdays at all plans nothing, so it has no
+ * opinion to report either: treated as content, rather than as objecting to
+ * every day there is.
+ */
+const allowsTheKeepersDay = (
+  shape: AgreementPeriodShape,
+  visitDate: string,
+): boolean =>
+  shape.allowedDays.length === 0 ||
+  shape.allowedDays.includes(weekdayOf(parseDateOnly(visitDate)));
 
 /**
  * One slot in a period: a date *and* a start time.
@@ -110,6 +129,8 @@ export function honourProtectedDates(
   const pinned = required.map((visit) => ({ ...visit }));
 
   for (const [key, group] of protectedByPeriod) {
+    // Every visit in the group shares an agreement — the key is built from it.
+    const shape = shapes.get(group[0].serviceAgreementId);
     const indices = (requiredByPeriod.get(key) ?? [])
       .slice()
       .sort((a, b) => pinned[a].visitDate.localeCompare(pinned[b].visitDate));
@@ -171,9 +192,16 @@ export function honourProtectedDates(
         placement: keeper.placement,
         // Never a candidate for the load guard: this date belongs to someone.
         alternatives: [],
-        // The day this period would have been planned onto, when pinning
-        // actually moved it. Reported, never applied.
-        ...(keeper.visitDate === pinned[index].visitDate
+        // The day this period would have been planned onto — but only when
+        // the keeper's own weekday is one the agreement no longer allows.
+        //
+        // A manager who moves a visit from Monday to Wednesday, both allowed,
+        // has made a choice the agreement is content with; reporting "would
+        // have moved it to Monday" on that, for ever, teaches managers to
+        // ignore the section. A visit stranded on a Saturday the agreement has
+        // since dropped is the case the report exists for.
+        ...(keeper.visitDate === pinned[index].visitDate ||
+        (shape !== undefined && allowsTheKeepersDay(shape, keeper.visitDate))
           ? {}
           : { pinnedFrom: pinned[index].visitDate }),
       };

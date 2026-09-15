@@ -1,4 +1,4 @@
-import { BranchCode, FrequencyUnit, VisitPlacement } from '@prisma/client';
+import { BranchCode, FrequencyUnit, VisitPlacement, Weekday } from '@prisma/client';
 
 import { ExistingVisit, RequiredVisit, planGeneration } from './plan';
 import { AgreementPeriodShape, honourProtectedDates } from './protected-periods';
@@ -53,7 +53,23 @@ function existing(overrides: Partial<ExistingVisit> = {}): ExistingVisit {
   };
 }
 
-const monthly = (): Map<string, AgreementPeriodShape> =>
+/**
+ * A monthly agreement served Monday to Friday.
+ *
+ * The keepers below sit on Saturdays — days this agreement does not allow —
+ * because that is the case the would-have-moved report exists for. A keeper on
+ * a weekday the agreement is content with is the other case, and has its own
+ * tests.
+ */
+const monthly = (
+  allowedDays: Weekday[] = [
+    Weekday.MONDAY,
+    Weekday.TUESDAY,
+    Weekday.WEDNESDAY,
+    Weekday.THURSDAY,
+    Weekday.FRIDAY,
+  ],
+): Map<string, AgreementPeriodShape> =>
   new Map([
     [
       AGREEMENT,
@@ -62,6 +78,7 @@ const monthly = (): Map<string, AgreementPeriodShape> =>
         anchor: '2026-09-01',
         frequencyUnit: FrequencyUnit.MONTH,
         frequencyInterval: 1,
+        allowedDays,
       },
     ],
   ]);
@@ -348,6 +365,54 @@ describe('honourProtectedDates', () => {
       ['2026-09-07', 540],
       ['2026-09-07', 780],
     ]);
+  });
+
+  describe('a hand-move the agreement is content with', () => {
+    // D2 gating. A manager who moves a visit from one allowed day to another
+    // has made a choice the agreement agrees with. Reporting "would have moved
+    // it back" on every run for ever teaches managers to skip the section —
+    // and buries the case that matters, a visit stranded on a weekday the
+    // agreement has since dropped.
+    const onAWednesday = existing({ visitDate: '2026-09-09', isLocked: true });
+
+    it('is not reported as a move generation would make', () => {
+      const plan = planGeneration(
+        honourProtectedDates([required()], [onAWednesday], monthly()),
+        [onAWednesday],
+      );
+
+      expect(plan.protectedVisits).toEqual([]);
+      expect(plan.unchangedCount).toBe(1);
+      expect(plan.additions).toEqual([]);
+      expect(plan.removals).toEqual([]);
+    });
+
+    it('is reported again the moment the agreement drops that weekday', () => {
+      const plan = planGeneration(
+        honourProtectedDates(
+          [required()],
+          [onAWednesday],
+          monthly([Weekday.MONDAY, Weekday.TUESDAY, Weekday.THURSDAY, Weekday.FRIDAY]),
+        ),
+        [onAWednesday],
+      );
+
+      expect(plan.protectedVisits).toEqual([
+        expect.objectContaining({
+          visitId: 'visit-1',
+          visitDate: '2026-09-09',
+          wouldHave: 'UPDATE',
+          changes: [{ field: 'visitDate', from: '2026-09-09', to: '2026-09-16' }],
+        }),
+      ]);
+    });
+
+    it('still pins the period, so nothing is duplicated', () => {
+      const pinned = honourProtectedDates([required()], [onAWednesday], monthly());
+
+      expect(pinned[0].visitDate).toBe('2026-09-09');
+      expect(pinned[0].pinnedFrom).toBeUndefined();
+    });
   });
 
   it('does not touch the list it was handed', () => {
