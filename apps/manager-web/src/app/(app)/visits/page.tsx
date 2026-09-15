@@ -333,11 +333,16 @@ export default function VisitsPage() {
    *
    * Generation says this once, in a panel that closes. The day goes on
    * carrying the work for weeks, so the calendar says it as well.
+   *
+   * Cancelled work occupies no part of the day, exactly as the guard reads it.
+   * Counting it here badged days the guard was perfectly happy with, and a
+   * badge the generator contradicts is worse than no badge at all.
    */
   const overCapDays = React.useMemo(() => {
     const caps = new Map(branches.map((entry) => [entry.code, entry.dailyVisitCap]));
     const load = new Map<string, number>();
     for (const visit of visits) {
+      if (visit.status === "CANCELLED") continue;
       const key = `${visit.branchCode}|${visit.visitDate}`;
       load.set(key, (load.get(key) ?? 0) + 1);
     }
