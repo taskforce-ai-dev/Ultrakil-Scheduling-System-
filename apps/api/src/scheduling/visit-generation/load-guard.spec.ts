@@ -207,6 +207,59 @@ describe('applyDailyLoadGuard', () => {
     expect(required.map((entry) => entry.visitDate)).toEqual(before);
   });
 
+  it('leaves a day sitting exactly on the cap alone', () => {
+    // The boundary the cap is defined at. One visit either side of it is the
+    // difference between a normal day and a day the guard rearranges.
+    const required = crowd(12);
+
+    const result = applyDailyLoadGuard(required, 12);
+
+    expect(countOn(result.required, '2026-09-07')).toBe(12);
+    expect(result.required).toEqual(required);
+    expect(result.warnings).toEqual([]);
+  });
+
+  describe('a moved visit takes its new day\'s window, and leaves its old one behind intact', () => {
+    const target = alternative('2026-09-08', {
+      weekday: Weekday.TUESDAY,
+      windowStartMinute: 13 * 60,
+      windowEndMinute: 18 * 60,
+      isPreferredDay: true,
+      windowProvenance: DataProvenance.MANAGER_CONFIRMED,
+    });
+
+    const moveOne = () =>
+      applyDailyLoadGuard(crowd(13, { alternatives: [target] }), 12).required.find(
+        (entry) => entry.placement === VisitPlacement.SPREAD,
+      )!;
+
+    it('wears the window, weekday flag and provenance of the day it moved to', () => {
+      expect(moveOne()).toMatchObject({
+        visitDate: '2026-09-08',
+        windowStartMinute: 13 * 60,
+        windowEndMinute: 18 * 60,
+        isPreferredDay: true,
+        windowProvenance: DataProvenance.MANAGER_CONFIRMED,
+      });
+    });
+
+    it('offers the day it left as an alternative described by that day, not the new one', () => {
+      // 2026-09-07 is a Monday and the visit sat on it 09:00-17:00. Reading
+      // these fields after the move gave Tuesday 13:00-18:00 — a day that
+      // never existed, which the next pass would have moved it back onto.
+      expect(moveOne().alternatives).toEqual([
+        {
+          date: '2026-09-07',
+          weekday: Weekday.MONDAY,
+          windowStartMinute: 9 * 60,
+          windowEndMinute: 17 * 60,
+          isPreferredDay: false,
+          windowProvenance: DataProvenance.SOURCE,
+        },
+      ]);
+    });
+  });
+
   it("defaults to the workbook's own busiest day", () => {
     expect(DEFAULT_DAILY_VISIT_CAP).toBe(12);
   });

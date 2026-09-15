@@ -1,5 +1,6 @@
-import { BranchCode, VisitPlacement } from '@prisma/client';
+import { BranchCode, DataProvenance, VisitPlacement } from '@prisma/client';
 
+import { parseDateOnly, weekdayOf } from '../../catalog/schedule-preview';
 import { RequiredVisit } from './plan';
 
 /**
@@ -125,11 +126,24 @@ export function applyDailyLoadGuard(
 
       if (!target) continue;
 
-      const from = visit.visitDate;
+      // Captured before anything is overwritten. The day being left behind
+      // becomes an alternative in its own right, and its window, weekday and
+      // provenance are its own — read them after the move and every one of
+      // them is the day the visit moved *to*, so a second pass would offer
+      // the visit a fictional day back.
+      const origin = {
+        date: visit.visitDate,
+        weekday: weekdayOf(parseDateOnly(visit.visitDate)),
+        windowStartMinute: visit.windowStartMinute,
+        windowEndMinute: visit.windowEndMinute,
+        isPreferredDay: visit.isPreferredDay,
+        windowProvenance: visit.windowProvenance ?? DataProvenance.UNKNOWN,
+      };
+
       const targetKey = loadKey(visit.branchCode, target.alternative.date);
       load.set(key, (load.get(key) ?? 1) - 1);
       load.set(targetKey, (load.get(targetKey) ?? 0) + 1);
-      used.delete(from);
+      used.delete(origin.date);
       used.add(target.alternative.date);
       usedDates.set(period, used);
 
@@ -142,20 +156,7 @@ export function applyDailyLoadGuard(
       // The day it came from is now free for it, and the day it went to is not.
       visit.alternatives = visit.alternatives
         .filter((alternative) => alternative.date !== target.alternative.date)
-        .concat(
-          from === target.alternative.date
-            ? []
-            : [
-                {
-                  date: from,
-                  weekday: target.alternative.weekday,
-                  windowStartMinute: visit.windowStartMinute,
-                  windowEndMinute: visit.windowEndMinute,
-                  isPreferredDay: visit.isPreferredDay,
-                  windowProvenance: target.alternative.windowProvenance,
-                },
-              ],
-        )
+        .concat(origin.date === target.alternative.date ? [] : [origin])
         .sort((a, b) => a.date.localeCompare(b.date));
     }
   }
