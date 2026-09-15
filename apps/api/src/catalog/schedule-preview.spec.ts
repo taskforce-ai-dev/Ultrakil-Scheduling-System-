@@ -854,6 +854,44 @@ describe('booked dates', () => {
       expect(preview.bookingIssues[0].message).toContain('saturday');
     });
 
+    it('says the agreement window and the site hours do not overlap, when that is what happened', () => {
+      // 09:00-10:00 on record, and an agreement that only allows 12:00-17:00.
+      // The hour is long enough for the visit; the two windows simply do not
+      // meet. Calling that "the recorded hours are shorter than the visit"
+      // sends a manager to widen hours that were never the problem.
+      const preview = computeSchedulePreview(
+        monthly({
+          durationMinutes: 60,
+          siteWindows: [
+            {
+              weekday: Weekday.THURSDAY,
+              startMinute: 9 * 60,
+              endMinute: 10 * 60,
+              provenance: DataProvenance.SOURCE,
+            },
+          ],
+          agreementWindowStartMinute: 12 * 60,
+          agreementWindowEndMinute: 17 * 60,
+          bookedDates: ['2026-09-17'],
+        }),
+      );
+
+      // The visit still stands, on the site's own recorded window.
+      expect(preview.visits).toContainEqual(
+        expect.objectContaining({
+          date: '2026-09-17',
+          placement: 'BOOKED',
+          windowStartMinute: 9 * 60,
+          windowEndMinute: 10 * 60,
+        }),
+      );
+      expect(preview.bookingIssues).toHaveLength(1);
+      expect(preview.bookingIssues[0].reason).toBe('AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS');
+      expect(preview.bookingIssues[0].message).toContain('12:00-17:00');
+      expect(preview.bookingIssues[0].message).toContain('09:00-10:00');
+      expect(preview.bookingIssues[0].message).not.toContain('less than');
+    });
+
     it('says nothing for a site whose hours nobody has recorded at all', () => {
       // Already disclosed on every visit that site has; repeating it per
       // booked date would bury the two cases that are actually news.

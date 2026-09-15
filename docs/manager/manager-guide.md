@@ -134,11 +134,14 @@ date somebody promised.
 
 **Booked on a day the site's hours do not allow.** A booked date is honoured
 whatever the opening hours say — it is a commitment. But if the site has no
-hours recorded for that weekday, or the hours it does have are shorter than
-the visit needs, the panel names the date and says which. The visit is
-planned either way; this is your warning that the crew may find a locked door
-or an hour where they expected a day. Recording the site's real hours clears
-it.
+hours recorded for that weekday, if the hours it does have are shorter than
+the visit needs, or if the agreement's own service window and the site's hours
+do not overlap at all, the panel names the date and says which of the three it
+is. The visit is planned either way, on the site's recorded window; this is
+your warning that the crew may find a locked door, or an hour where they
+expected a day. Recording the site's real hours clears the first two. The
+third is fixed on the agreement, by widening its service window — the hours
+were never the problem.
 
 **Booked fewer times than the frequency promises.** An agreement written as
 twice a week, with only one date booked in a week, appears under Conflicts.

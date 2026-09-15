@@ -203,7 +203,15 @@ export type BookingIssueReason =
   /** The site has hours on record, but none for that weekday. */
   | 'SITE_CLOSED_ON_BOOKED_DAY'
   /** The recorded window that day is shorter than the visit needs. */
-  | 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT';
+  | 'WINDOW_TOO_SHORT_FOR_BOOKED_VISIT'
+  /**
+   * The site is open long enough, but not while the agreement allows work.
+   *
+   * A distinct case, because the fix is a distinct one. Reporting it as a
+   * window too short sends a manager to widen opening hours that were never
+   * the problem — what has to move is the agreement's own service window.
+   */
+  | 'AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS';
 
 export interface PreviewBookingIssue {
   /** YYYY-MM-DD. */
@@ -737,6 +745,11 @@ function clockText(minute: number): string {
  * and keep their own provenance. Only a weekday with no recorded hours at all
  * falls back to the assumption, flagged DEFAULTED. Either way the reason is
  * returned as an issue, because neither case should be discovered on the day.
+ *
+ * Three reasons, not two. A site open 09:00-10:00 under an agreement that only
+ * allows 12:00-17:00 has hours long enough for the work and no overlap with
+ * the agreement at all; calling that "the recorded hours are shorter than the
+ * visit" sends a manager to widen hours that were never the problem.
  */
 function bookedVisitWithoutAUsableWindow(
   date: string,
@@ -758,15 +771,17 @@ function bookedVisitWithoutAUsableWindow(
 
   const useRecorded = !hoursUnconfirmed && best !== undefined;
   const source = useRecorded ? best : ASSUMED_DAY_WINDOW;
-  const window =
-    effectiveWindows(
-      [source],
-      input.agreementWindowStartMinute,
-      input.agreementWindowEndMinute,
-      // The agreement can only restrict, and here it has restricted the
-      // recorded window out of existence. The recorded window is still the
-      // truthful answer to "when is this site open?".
-    )[0] ?? source;
+  const narrowed = effectiveWindows(
+    [source],
+    input.agreementWindowStartMinute,
+    input.agreementWindowEndMinute,
+  )[0];
+  // The agreement can only restrict, and here it has restricted the recorded
+  // window out of existence. The recorded window is still the truthful answer
+  // to "when is this site open?", so the visit keeps it — and the mismatch is
+  // reported as itself rather than as hours that are too short.
+  const window = narrowed ?? source;
+  const agreementMissesTheHours = narrowed === undefined;
 
   const windowProvenance = useRecorded
     ? windowProvenanceOf({
@@ -796,6 +811,20 @@ function bookedVisitWithoutAUsableWindow(
   // whose hours say it is shut that weekday, and one whose hours are simply
   // too short for the work.
   if (hoursUnconfirmed) return { visit, issue: null };
+
+  if (useRecorded && agreementMissesTheHours) {
+    return {
+      visit,
+      issue: {
+        date,
+        reason: 'AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS',
+        windowStartMinute: window.startMinute,
+        windowEndMinute: window.endMinute,
+        windowAssumed: false,
+        message: `${date} is booked with the customer, but this agreement's service window of ${clockText(input.agreementWindowStartMinute ?? 0)}-${clockText(input.agreementWindowEndMinute ?? 0)} and the site's recorded hours that day of ${clockText(window.startMinute)}-${clockText(window.endMinute)} do not overlap. The visit is planned on the site's recorded window. Widen the agreement's service window, or correct the hours.`,
+      },
+    };
+  }
 
   const issue: PreviewBookingIssue = useRecorded
     ? {

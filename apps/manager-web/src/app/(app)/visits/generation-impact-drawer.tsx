@@ -81,6 +81,8 @@ const REMOVAL_REASON: Record<string, string> = {
 const BOOKING_WARNING_TITLE: Record<string, string> = {
   SITE_CLOSED_ON_BOOKED_DAY: "No hours recorded for that weekday",
   WINDOW_TOO_SHORT_FOR_BOOKED_VISIT: "Recorded hours are shorter than the visit",
+  AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS:
+    "The agreement's window and the site's hours do not overlap",
 };
 
 /** At most eight rows, then a count. A month on real data runs to hundreds. */

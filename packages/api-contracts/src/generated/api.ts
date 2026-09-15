@@ -1844,10 +1844,10 @@ export interface components {
             /** Format: date */
             date: string;
             /**
-             * @description SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs.
+             * @description SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all.
              * @enum {string}
              */
-            reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT";
+            reason: "SITE_CLOSED_ON_BOOKED_DAY" | "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT" | "AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS";
             message: string;
         };
         GenerationImpactDto: {
