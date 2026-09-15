@@ -256,6 +256,55 @@ describe("ServiceAgreementsPage", () => {
     expect(changeAgreementStatus).toHaveBeenCalledWith("agreement-1", { status: "PAUSED" });
   });
 
+  it("refreshes with the filter in force when a status change finishes, not the one it started under", async () => {
+    // A Pause request is still in flight when the manager switches to
+    // Archived. The refresh that follows the Pause must ask for archived
+    // rows; a stale one would ask for current rows and win the race, leaving
+    // current agreements on screen under a control that says Archived.
+    const archived = buildServiceAgreement({
+      id: "agreement-archived",
+      customerName: "Harbour Logistics",
+      siteName: "Warehouse South",
+      status: "ARCHIVED",
+      isActive: false,
+    });
+    vi.mocked(fetchServiceAgreements).mockImplementation((query) =>
+      Promise.resolve(
+        query?.status === "ARCHIVED"
+          ? { items: [archived], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingAgreement], total: 1, page: 1, pageSize: 200 }
+      )
+    );
+    let finishPause!: () => void;
+    vi.mocked(changeAgreementStatus).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishPause = () => resolve({ ...existingAgreement, status: "PAUSED" });
+        })
+    );
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+
+    await user.click(screen.getByRole("button", { name: "Pause" }));
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Archived" }));
+    await screen.findByText("Harbour Logistics");
+
+    const callsBefore = vi.mocked(fetchServiceAgreements).mock.calls.length;
+    finishPause();
+    await vi.waitFor(() =>
+      expect(vi.mocked(fetchServiceAgreements).mock.calls.length).toBeGreaterThan(callsBefore)
+    );
+    const lastQuery = vi.mocked(fetchServiceAgreements).mock.calls.at(-1)?.[0];
+    expect(lastQuery).toEqual(expect.objectContaining({ status: "ARCHIVED" }));
+
+    expect(await screen.findByText("Harbour Logistics")).toBeInTheDocument();
+    expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveTextContent("Archived");
+  });
+
   it("reaches archived agreements through the Status filter and labels them in text (ULK-O08)", async () => {
     // An import that reads an agreement as no longer serviced archives it, so
     // "Archived" is also how an imported-inactive agreement is found.

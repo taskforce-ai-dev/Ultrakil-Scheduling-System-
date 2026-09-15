@@ -261,6 +261,17 @@ export default function ServiceAgreementsPage() {
       });
   }, [statusFilter]);
 
+  // A handler that awaited a request resumes holding the `load` of the render
+  // it started in. If the Status filter changed meanwhile, that stale `load`
+  // would refresh with the old filter and win the generation race, showing
+  // current agreements under a control that says Archived. Refresh through
+  // the latest one instead.
+  const loadRef = React.useRef(load);
+  React.useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+  const reload = React.useCallback(() => loadRef.current(), []);
+
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
     // effects are for.
@@ -365,7 +376,7 @@ export default function ServiceAgreementsPage() {
 
   function handleDone() {
     setDrawerOpen(false);
-    load();
+    reload();
   }
 
   async function handleToggleStatus(agreement: ServiceAgreement) {
@@ -376,7 +387,7 @@ export default function ServiceAgreementsPage() {
     try {
       await changeAgreementStatus(agreement.id, { status: nextStatus });
       notify.success(`${agreement.customerName}'s agreement is now ${STATUS_LABEL[nextStatus]}.`);
-      load();
+      reload();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not change the status.");
     } finally {
