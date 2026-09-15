@@ -978,10 +978,20 @@ describe('a scoped run and a full run reach the same calendar', () => {
     } as unknown as ConfigService);
 
   it('does not move a visit back onto a full day just because the run was scoped', async () => {
-    const week = { from: '2026-09-07', to: '2026-09-13' };
-    // A branch of its own. The guard now counts every visit standing in the
-    // horizon, so a shared branch would make this assertion depend on whatever
-    // the rest of the suite happens to have left in the calendar.
+    // A branch and a week of its own, cleared first. The guard now counts
+    // every visit standing in the horizon — including whatever an earlier run
+    // of this suite left in the shared database — so an assertion about the
+    // cap biting has to own its slice of the calendar outright.
+    const week = { from: '2027-03-01', to: '2027-03-07' };
+    await prisma.generatedVisit.deleteMany({
+      where: {
+        branchCode: BranchCode.KANDY,
+        visitDate: {
+          gte: new Date(`${week.from}T00:00:00.000Z`),
+          lte: new Date(`${week.to}T00:00:00.000Z`),
+        },
+      },
+    });
     const customer = await request(http)
       .post('/api/customers')
       .set(auth(adminToken))
