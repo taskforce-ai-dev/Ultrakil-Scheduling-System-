@@ -262,7 +262,7 @@ export default function DispatchBoardPage() {
                 <TableHead>Customer / Site</TableHead>
                 <TableHead>Booked</TableHead>
                 <TableHead>Duration</TableHead>
-                <TableHead>Supervisor</TableHead>
+                <TableHead>PMS supervisor</TableHead>
                 <TableHead>Crew</TableHead>
                 <TableHead>Vehicle</TableHead>
                 <TableHead>Status</TableHead>
@@ -272,7 +272,17 @@ export default function DispatchBoardPage() {
             <TableBody>
               {sorted.map((visit) => {
                 const assignment = assignments[visit.id];
-                const supervisor = assignment?.crew.find((member) => member.isPmsSupervisor);
+                // The same rule the API's own read models use. This column
+                // answers "who holds the PMS grade on this visit", which is
+                // what the supervisor requirement is about; the Edit crew
+                // drawer's role labels answer "what job is each person doing".
+                // They named different people on the same visit while this
+                // took whoever came first in name order, so where the crew
+                // itself has a Supervisor row, that person wins.
+                const supervisor =
+                  assignment?.crew.find(
+                    (member) => member.isPmsSupervisor && member.role === "SUPERVISOR",
+                  ) ?? assignment?.crew.find((member) => member.isPmsSupervisor);
   
                 return (
                   <TableRow key={visit.id}>

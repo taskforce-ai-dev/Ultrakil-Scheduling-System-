@@ -225,6 +225,32 @@ function isPrismaUniqueConstraint(error: unknown): boolean {
  * under a long solve, and the cost of a crew sent somewhere they are not
  * allowed to be is far higher than the cost of checking twice.
  */
+/**
+ * Which member of a solved crew is the supervisor.
+ *
+ * The solver returns employee ids sorted by uuid and has no opinion about
+ * rank, so stamping SUPERVISOR on the first of them named whoever happened to
+ * sort first. On screen that put the Dispatch Board's Supervisor column — which
+ * reads the PMS grade — and the Edit crew drawer's role labels on the same
+ * visit in open disagreement: the column named the PMS-grade technician, the
+ * drawer called them a Technician and called somebody else Supervisor.
+ *
+ * The supervisor is the PMS-grade member, which is the grade the rule is
+ * actually about, and there is exactly one of them however many hold it. With
+ * no grade at all the first member keeps the role, so the output stays defined
+ * for a crew the eligibility engine would refuse anyway.
+ */
+export function solvedCrewRoles(
+  employeeIds: readonly string[],
+  isPmsGrade: (employeeId: string) => boolean,
+): { employeeId: string; role: CrewRole }[] {
+  const supervisorId = employeeIds.find(isPmsGrade) ?? employeeIds[0];
+  return employeeIds.map((employeeId) => ({
+    employeeId,
+    role: employeeId === supervisorId ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
+  }));
+}
+
 @Injectable()
 export class ScheduleRunService {
   private readonly logger = new Logger(ScheduleRunService.name);
@@ -565,6 +591,11 @@ export class ScheduleRunService {
     if (await this.isCancelled(runId)) return this.markCancelled(runId, lease);
 
     const byId = new Map(visits.map((visit) => [visit.id, visit]));
+    // Who actually holds the grade the supervisor rule is about. The solver
+    // answers with employee ids in its own order and says nothing about rank.
+    const pmsGradeById = new Map(
+      employees.map((employee) => [employee.id, employee.isPmsGrade]),
+    );
     const proposals: ProposedAssignment[] = [];
 
     for (const proposal of solution.assignments) {
@@ -591,10 +622,10 @@ export class ScheduleRunService {
       const dto = {
         plannedStartMinute: proposal.start_minute,
         plannedEndMinute: proposal.start_minute + visit.durationMinutes,
-        crew: proposal.employee_ids.map((employeeId, index) => ({
-          employeeId,
-          role: index === 0 ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
-        })),
+        crew: solvedCrewRoles(
+          proposal.employee_ids,
+          (employeeId) => pmsGradeById.get(employeeId) === true,
+        ),
         vehicles: proposal.vehicles.map((entry) => ({
           vehicleId: entry.vehicle_id,
           driverEmployeeId: entry.driver_employee_id,

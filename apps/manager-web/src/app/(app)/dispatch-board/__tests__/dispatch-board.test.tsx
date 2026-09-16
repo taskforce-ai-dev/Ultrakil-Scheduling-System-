@@ -99,6 +99,39 @@ describe("dispatch board", () => {
     expect(within(row).getByText("Van 253-4289 (A Perera)")).toBeInTheDocument();
   });
 
+  /**
+   * The column and the Edit crew drawer named different people on the same
+   * visit — the column reads the PMS grade, the drawer reads each crew row's
+   * role. The column now says which of the two it is showing, and picks the
+   * PMS-grade member the drawer also calls Supervisor when there is one.
+   */
+  it("says the supervisor it names is the PMS one", async () => {
+    await renderBoard();
+
+    expect(screen.getByRole("columnheader", { name: "PMS supervisor" })).toBeInTheDocument();
+  });
+
+  it("prefers the PMS-grade member the crew rows also call Supervisor", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        generatedVisitId: "visit-staffed",
+        crew: [
+          // Name order would reach Tech 13 first; the crew's own Supervisor row
+          // is Tech 22, and both hold the PMS grade.
+          { employeeId: "e-13", fullName: "Tech 13", role: "TECHNICIAN", isPmsSupervisor: true },
+          { employeeId: "e-22", fullName: "Tech 22", role: "SUPERVISOR", isPmsSupervisor: true },
+        ],
+        vehicles: [],
+      })
+    );
+    await renderBoard();
+
+    const row = screen.getByText("Cinnamon Grand Colombo").closest("tr")!;
+    const supervisorCell = within(row).getAllByRole("cell")[3];
+    expect(supervisorCell).toHaveTextContent("Tech 22");
+    expect(supervisorCell).not.toHaveTextContent("Tech 13");
+  });
+
   it("never implies a visit is staffed before an assignment exists", async () => {
     await renderBoard();
 

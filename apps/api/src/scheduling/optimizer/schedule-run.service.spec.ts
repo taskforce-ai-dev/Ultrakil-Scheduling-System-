@@ -2,6 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   AssignmentStatus,
   BranchCode,
+  CrewRole,
   LockScope,
   Prisma,
   ScheduleRunStatus,
@@ -17,7 +18,7 @@ import {
   ScheduleRunJobData,
   ScheduleRunProcessor,
 } from './schedule-run.processor';
-import { ScheduleRunService } from './schedule-run.service';
+import { ScheduleRunService, solvedCrewRoles } from './schedule-run.service';
 import {
   BULLMQ_EXECUTION_LEASE_SECONDS,
   BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
@@ -1686,5 +1687,45 @@ describe('the daily-cap backstop on a solver move', () => {
     // dated pays nothing for it.
     expect(f.generatedVisit.groupBy).not.toHaveBeenCalled();
     expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+  });
+});
+
+/**
+ * The Dispatch Board's Supervisor column reads the PMS grade; the Edit crew
+ * drawer reads the crew row's role. The solver was stamping SUPERVISOR on
+ * whoever came first in `employee_ids`, which the Python model sorts by
+ * employee UUID — so on the same visit the column named the PMS-grade person
+ * and the drawer called them a Technician while labelling somebody else
+ * Supervisor. The role now follows the grade that actually satisfies the rule.
+ */
+describe('solvedCrewRoles', () => {
+  const pms = (...ids: string[]) => (id: string) => ids.includes(id);
+
+  it('makes the PMS-grade member the supervisor, wherever the solver put them', () => {
+    expect(solvedCrewRoles(['tech-22', 'tech-13'], pms('tech-13'))).toEqual([
+      { employeeId: 'tech-22', role: CrewRole.TECHNICIAN },
+      { employeeId: 'tech-13', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('names exactly one supervisor when the crew holds more than one PMS grade', () => {
+    const roles = solvedCrewRoles(['a', 'b', 'c'], pms('b', 'c'));
+
+    expect(roles.filter((member) => member.role === CrewRole.SUPERVISOR)).toEqual([
+      { employeeId: 'b', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('falls back to the first member when no grade is known, rather than leaving nobody in charge', () => {
+    // The eligibility engine refuses a crew with no PMS grade, so this is a
+    // defined outcome for an impossible input, not a supported one.
+    expect(solvedCrewRoles(['a', 'b'], () => false)).toEqual([
+      { employeeId: 'a', role: CrewRole.SUPERVISOR },
+      { employeeId: 'b', role: CrewRole.TECHNICIAN },
+    ]);
+  });
+
+  it('has nothing to say about an empty crew', () => {
+    expect(solvedCrewRoles([], () => true)).toEqual([]);
   });
 });
