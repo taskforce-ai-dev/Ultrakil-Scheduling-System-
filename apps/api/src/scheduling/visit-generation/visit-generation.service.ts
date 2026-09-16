@@ -18,6 +18,7 @@ import {
   PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
+  periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
@@ -25,6 +26,7 @@ import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
+import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
 import { GenerateVisitsDto, GenerationImpactDto } from './dto';
 import {
   DailyLoadWarning,
@@ -144,14 +146,16 @@ export class VisitGenerationService {
     const window = enclosingMonths(from, to);
     const around = await this.loadExistingVisits(agreements, window.from, window.to);
 
+    const shapes = this.periodShapesFor(agreements);
+
     const planned = this.requiredVisitsFor(
       agreements,
       dto.from,
       dto.to,
       cancelledSlotsBy(around),
+      periodsHoldingAVisit(around, shapes),
     );
 
-    const shapes = this.periodShapesFor(agreements);
     const lives = lifetimes(agreements);
     const existing = around.filter((visit) =>
       thisRunsToJudge(visit, dto, shapes, planned.periods, lives),
@@ -167,12 +171,19 @@ export class VisitGenerationService {
     // in per-agreement planning can see that forty of them chose the same day,
     // and nothing in this run's own list can see the work already standing in
     // the calendar — so the guard is given both.
-    const standing = await this.loadStandingVisits(dto, agreements, window.from, window.to, {
+    const standing = await this.loadStandingVisits(dto, agreements, from, to, {
       shapes,
       plannedPeriods: planned.periods,
       lives,
     });
     const guarded = applyDailyLoadGuard(honoured, this.dailyCap, standing);
+    // A day the run was never asked about is not its to warn about. Standing
+    // work is already read over the range alone, but `honoured` can pin a
+    // requirement onto a protected visit outside it — which is dropped from
+    // the plan two lines below, and must not leave a warning behind either.
+    const loadWarnings = guarded.warnings.filter(
+      (warning) => warning.date >= dto.from && warning.date <= dto.to,
+    );
     // A requirement pinned to a protected visit outside the run's range is
     // already satisfied by it. Left in, it would read as an addition on a day
     // the run was never asked about.
@@ -196,7 +207,7 @@ export class VisitGenerationService {
     return this.toImpact(
       plan,
       shortfalls,
-      guarded.warnings,
+      loadWarnings,
       planned.bookingWarnings,
       planned.skipped,
       names,
@@ -277,6 +288,7 @@ export class VisitGenerationService {
     from: string,
     to: string,
     blockedSlots: Map<string, Array<{ date: string; windowStartMinute: number }>>,
+    occupiedPeriods: Map<string, Set<number>>,
   ): {
     required: RequiredVisit[];
     shortfalls: Shortfall[];
@@ -358,17 +370,17 @@ export class VisitGenerationService {
         });
       } else if (clippingOneMayLoseIt(agreement.frequencyUnit, agreement.frequencyInterval)) {
         // A period clipped at the edge of a month grid is normally handed over
-        // rather than lost, and *which* edge says whose it is. One clipped by
-        // the range's start belongs to the run before this one, whose range
-        // reaches at least this one's first day. One clipped by the range's
-        // end is the period at risk: every later range begins after it did, so
-        // unless something reaches past this last day, no run ever holds it
-        // whole. That is the May/June 2026 seam exactly — the May grid ends on
-        // Sunday the 31st, June's begins on Monday the 1st, and the fortnight
-        // from 25 May to 7 June is nobody's. Multi-week cadences only: a month
-        // clipped this way is always picked up by the next grid, which holds
-        // the calendar month whole by construction.
-        const unfinished = preview.skippedPeriods.filter((period) => period.end > to);
+        // rather than lost, and `clippedPeriodsAtRisk` keeps only the ones
+        // nobody is coming back for: one that begins before the week of
+        // overlap the next grid starts on, or one clipped at either edge that
+        // no visit of this agreement stands in. Multi-week cadences only: a
+        // month clipped this way is always picked up by the next grid, which
+        // holds the calendar month whole by construction.
+        const unfinished = clippedPeriodsAtRisk(preview.skippedPeriods, {
+          from,
+          to,
+          periodsHoldingAVisit: occupiedPeriods.get(agreement.id) ?? new Set<number>(),
+        });
         if (unfinished.length > 0) {
           skipped.push({
             serviceAgreementId: agreement.id,
@@ -376,7 +388,7 @@ export class VisitGenerationService {
             frequencyInterval: agreement.frequencyInterval,
             periodsSkipped: unfinished.length,
             reason: 'RANGE_CLIPS_A_PERIOD',
-            message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only the start of ${spansOf(unfinished)}. Nothing was planned there, and no run beginning later will hold it whole either. Generate over a range that reaches its last day.`,
+            message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only part of ${spansOf(unfinished)}. Nothing is planned there and no visit stands there: a ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} cut short at the end begins more than a week before this range ends, so the next month's grid will not hold it either, and one cut short at the start was already missed by the run before this one. Generate over a range that covers it end to end.`,
           });
         }
       }
@@ -478,7 +490,11 @@ export class VisitGenerationService {
    *
    * Only days inside the run's own range, because those are the only days the
    * guard may place anything on, and a day the run was never asked about is
-   * not its to warn about.
+   * not its to warn about. That is the whole range and nothing wider: the read
+   * used to widen to the enclosing calendar months for protected and
+   * out-of-scope work, which bought the guard nothing it could act on — every
+   * day it may move a visit to is inside the range — and cost an October view
+   * a warning about a September day.
    *
    * A cancelled visit is the one exception. It is protected, and it is never
    * removed, but the optimizer excludes it from the day's capacity and so must
@@ -533,12 +549,6 @@ export class VisitGenerationService {
             hasAssignments: visit._count.assignments > 0,
           }) !== null,
       }))
-      .filter(
-        (visit) =>
-          (visit.visitDate >= dto.from && visit.visitDate <= dto.to) ||
-          !visit.isInScope ||
-          visit.isProtected,
-      )
       .filter((visit) =>
         leftStandingBy(visit, dto, scope.shapes, scope.plannedPeriods, scope.lives),
       )
@@ -915,6 +925,44 @@ function cancelledSlotsBy(
   return slots;
 }
 
+/**
+ * The periods each agreement already has a visit in, by index.
+ *
+ * Read from the visits over the whole calendar months the range touches, so a
+ * period clipped at either edge of the range can still be looked up. This is
+ * what lets a clipped period be reported on evidence rather than on an
+ * assumption about which runs someone has pressed: a period holding a visit
+ * was handed over as designed, and an empty one was not.
+ *
+ * A cancelled visit does not count. It satisfies no period anywhere else in
+ * generation, and counting it here would say a customer is served when nobody
+ * is going.
+ */
+function periodsHoldingAVisit(
+  visits: ExistingVisit[],
+  shapes: Map<string, AgreementPeriodShape>,
+): Map<string, Set<number>> {
+  const held = new Map<string, Set<number>>();
+
+  for (const visit of visits) {
+    if (visit.status === VisitStatus.CANCELLED) continue;
+    const shape = shapes.get(visit.serviceAgreementId);
+    if (!shape) continue;
+
+    const period = periodIndexOf(
+      parseDateOnly(visit.visitDate),
+      parseDateOnly(shape.anchor),
+      shape.frequencyUnit,
+      shape.frequencyInterval,
+    );
+    const set = held.get(visit.serviceAgreementId) ?? new Set<number>();
+    set.add(period);
+    held.set(visit.serviceAgreementId, set);
+  }
+
+  return held;
+}
+
 /** "Quarterly", "Fortnightly" — the word UltraKIL sells the cadence by. */
 function cadenceName(unit: FrequencyUnit, interval: number): string {
   const named: Record<string, string> = {
@@ -930,19 +978,6 @@ function cadenceName(unit: FrequencyUnit, interval: number): string {
     named[`${unit}|${interval}`] ??
     `Every ${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
   );
-}
-
-/**
- * Whether clipping one of this cadence's periods risks losing it altogether.
- *
- * A month is safe: consecutive month grids either overlap or abut, and the
- * next run plans the month whole. A week is safe for the same reason — both
- * views send whole ISO weeks. A cadence of *several* weeks is not: its periods
- * are phased from the agreement's own start, so one can straddle the single
- * seam where two month grids share no day, and be clipped by both.
- */
-function clippingOneMayLoseIt(unit: FrequencyUnit, interval: number): boolean {
-  return unit === FrequencyUnit.WEEK && interval > 1;
 }
 
 /** "the fortnight 2026-05-25 to 2026-06-07", and the rest counted. */

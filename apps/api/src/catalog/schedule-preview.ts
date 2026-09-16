@@ -560,10 +560,6 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
   const blocked = new Set(
     (input.blockedSlots ?? []).map((slot) => slotKey(slot.date, slot.windowStartMinute)),
   );
-  // By date rather than by slot, because a booking is a commitment to a *day*:
-  // whichever of the day's slots the cancellation holds, the booked date can
-  // no longer be served by anything this run plans.
-  const blockedDates = new Set((input.blockedSlots ?? []).map((slot) => slot.date));
 
   const candidates: Candidate[] = [];
   // Tracked separately so a shortfall can say *why*: no allowed weekday at all
@@ -714,8 +710,15 @@ export function computeSchedulePreview(input: SchedulePreviewInput): SchedulePre
           if (fallback.issue) bookingIssues.push(fallback.issue);
         }
 
-        if (blockedDates.has(date)) {
-          const planned = visits[visits.length - 1];
+        // Keyed on the slot the booking is actually planned onto, not on the
+        // date. What makes this worth saying is that the cancelled row holds
+        // the very (agreement, date, start time) the booking needs, so nothing
+        // new can be created and the calendar reads as already correct. A
+        // cancellation somewhere else on the same day does not do that: the
+        // booking is planned on its own slot, the visit is created, and the
+        // sentence below would simply be false.
+        const planned = visits[visits.length - 1];
+        if (blocked.has(slotKey(date, planned.windowStartMinute))) {
           bookingIssues.push({
             date,
             reason: 'BOOKED_DATE_CANCELLED',

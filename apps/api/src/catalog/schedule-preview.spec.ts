@@ -1323,12 +1323,14 @@ describe('a slot a cancelled visit holds', () => {
     // A booking bypasses the blocked slots deliberately — it cannot be moved.
     // But the cancelled row still holds that (agreement, date, start time), so
     // nothing can ever be planned on the date the customer agreed, and the
-    // plan reported the cancelled visit as already correct.
+    // plan reported the cancelled visit as already correct. The site opens at
+    // 09:00, so 09:00 is the slot the booking is planned onto and the slot the
+    // cancellation has to hold for the sentence to be true.
     const preview = computeSchedulePreview(
       weeklyMonToFri({
         allowedDays: [Weekday.MONDAY],
         bookedDates: ['2026-09-14'],
-        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 9 * 60 }],
       }),
     );
 
@@ -1354,6 +1356,50 @@ describe('a slot a cancelled visit holds', () => {
 
     expect(preview.visits.map((visit) => [visit.date, visit.windowStartMinute])).toEqual([
       ['2026-09-14', 13 * 60],
+    ]);
+  });
+
+  it('says nothing about a booked date whose cancellation holds a different slot', () => {
+    // The warning claims nothing new can be planned on the day the customer
+    // agreed. Keyed on the date alone it fired whenever *any* of the day's
+    // slots was cancelled — including when the booking is planned onto the
+    // morning and the cancelled row holds the afternoon, where a visit really
+    // is created and the sentence is simply untrue.
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY],
+        bookedDates: ['2026-09-14'],
+        siteWindows: [
+          { weekday: Weekday.MONDAY, startMinute: 8 * 60, endMinute: 12 * 60 },
+          { weekday: Weekday.MONDAY, startMinute: 13 * 60, endMinute: 17 * 60 },
+        ],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 13 * 60 }],
+      }),
+    );
+
+    expect(preview.visits).toEqual([
+      expect.objectContaining({ date: '2026-09-14', windowStartMinute: 8 * 60 }),
+    ]);
+    expect(
+      preview.bookingIssues.filter((issue) => issue.reason === 'BOOKED_DATE_CANCELLED'),
+    ).toEqual([]);
+  });
+
+  it('still says so when the cancellation holds the very slot the booking is planned on', () => {
+    const preview = computeSchedulePreview(
+      weeklyMonToFri({
+        allowedDays: [Weekday.MONDAY],
+        bookedDates: ['2026-09-14'],
+        siteWindows: [
+          { weekday: Weekday.MONDAY, startMinute: 8 * 60, endMinute: 12 * 60 },
+          { weekday: Weekday.MONDAY, startMinute: 13 * 60, endMinute: 17 * 60 },
+        ],
+        blockedSlots: [{ date: '2026-09-14', windowStartMinute: 8 * 60 }],
+      }),
+    );
+
+    expect(preview.bookingIssues).toEqual([
+      expect.objectContaining({ date: '2026-09-14', reason: 'BOOKED_DATE_CANCELLED' }),
     ]);
   });
 
