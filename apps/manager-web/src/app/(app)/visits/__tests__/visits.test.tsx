@@ -935,6 +935,41 @@ describe("regeneration impact review", () => {
     expect(within(drawer).queryByText(/reaches its last day/)).not.toBeInTheDocument();
   });
 
+  it("counts cycles whose name is already plural without inventing an extra s", async () => {
+    // "2 three weekss". The count was appended with a bare "s", which reads
+    // correctly for "fortnight" and not at all for a span that is already a
+    // plural phrase.
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        skippedPeriods: [
+          {
+            serviceAgreementId: "agreement-w3a",
+            frequencyUnit: "WEEK",
+            frequencyInterval: 3,
+            periodsSkipped: 1,
+            reason: "RANGE_CLIPS_A_PERIOD",
+            message: "holds only part of it",
+          },
+          {
+            serviceAgreementId: "agreement-w3b",
+            frequencyUnit: "WEEK",
+            frequencyInterval: 3,
+            periodsSkipped: 1,
+            reason: "RANGE_CLIPS_A_PERIOD",
+            message: "holds only part of it",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).getByText(/2 three weeks run past an edge/)).toBeInTheDocument();
+    expect(drawer.textContent ?? "").not.toContain("weekss");
+  });
+
   it("generates exactly the week the week view shows", async () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();

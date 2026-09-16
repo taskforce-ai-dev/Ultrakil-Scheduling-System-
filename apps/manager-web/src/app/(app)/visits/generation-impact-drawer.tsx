@@ -102,15 +102,21 @@ const BOOKING_WARNING_TITLE: Record<string, string> = {
  * A manager does not think in units and intervals. "Quarterly agreements need a
  * range covering a whole quarter" is the sentence that says what to do next.
  */
-function cadence(unit: string, interval: number): { name: string; span: string } {
-  const known: Record<string, { name: string; span: string }> = {
-    "WEEK|1": { name: "Weekly", span: "week" },
-    "WEEK|2": { name: "Fortnightly", span: "fortnight" },
-    "MONTH|1": { name: "Monthly", span: "month" },
-    "MONTH|2": { name: "Two-monthly", span: "two months" },
-    "MONTH|3": { name: "Quarterly", span: "quarter" },
-    "MONTH|6": { name: "Six-monthly", span: "six months" },
-    "MONTH|12": { name: "Yearly", span: "year" },
+function cadence(
+  unit: string,
+  interval: number
+): { name: string; span: string; spans: string } {
+  // `span` names one cycle, `spans` names several. Appending an "s" at the
+  // call site worked for "fortnight" and produced "2 three weekss" for
+  // everything whose span is already a plural phrase.
+  const known: Record<string, { name: string; span: string; spans: string }> = {
+    "WEEK|1": { name: "Weekly", span: "week", spans: "weeks" },
+    "WEEK|2": { name: "Fortnightly", span: "fortnight", spans: "fortnights" },
+    "MONTH|1": { name: "Monthly", span: "month", spans: "months" },
+    "MONTH|2": { name: "Two-monthly", span: "two months", spans: "two months" },
+    "MONTH|3": { name: "Quarterly", span: "quarter", spans: "quarters" },
+    "MONTH|6": { name: "Six-monthly", span: "six months", spans: "six months" },
+    "MONTH|12": { name: "Yearly", span: "year", spans: "years" },
   };
   const plural = unit === "WEEK" ? "weeks" : "months";
   // Spelled the way it is spoken. "a whole 2 months" mixes a word and a digit
@@ -120,7 +126,9 @@ function cadence(unit: string, interval: number): { name: string; span: string }
   return (
     known[`${unit}|${interval}`] ?? {
       name: `Every ${counted} ${plural}`,
+      // Already a plural phrase — "three weeks" counts one cycle and many.
       span: `${counted} ${plural}`,
+      spans: `${counted} ${plural}`,
     }
   );
 }
@@ -151,12 +159,13 @@ function skippedByCadence(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, count]) => {
       const [reason, unit, interval] = key.split("|");
-      const { name, span } = cadence(unit, Number(interval));
+      const { name, span, spans } = cadence(unit, Number(interval));
+      const counted = `${count} ${count === 1 ? span : spans}`;
       return {
         key,
         text:
           reason === "RANGE_CLIPS_A_PERIOD"
-            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} ${count === 1 ? "runs" : "run"} past an edge of this range with no visit in ${count === 1 ? "it" : "them"}, and no neighbouring month's grid holds ${count === 1 ? "it" : "them"} whole either. Generate from the month ${count === 1 ? "it starts" : "they start"} in, or use a wider range, to plan ${count === 1 ? "it" : "them"}.`
+            ? `${name} agreements: ${counted} ${count === 1 ? "runs" : "run"} past an edge of this range with no visit in ${count === 1 ? "it" : "them"}, and no neighbouring month's grid holds ${count === 1 ? "it" : "them"} whole either. Generate from the month ${count === 1 ? "it starts" : "they start"} in, or use a wider range, to plan ${count === 1 ? "it" : "them"}.`
             : `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
       };
     });

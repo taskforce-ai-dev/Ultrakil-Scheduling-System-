@@ -452,13 +452,33 @@ describe("a visit-generation run in the history", () => {
     expect(screen.queryByText(/dispatchable assignments/)).not.toBeInTheDocument();
   });
 
-  it("counts what it actually did", async () => {
+  it("says what the number it prints actually counts", async () => {
+    // `visitsConsidered` is every visit the run accounted for — created,
+    // changed, removed, protected and already correct alike. Printing it as
+    // "105 visits generated" made a second run over the same range, which
+    // creates nothing, claim another 105: the page accounted for 210 where
+    // 105 exist. The number is honest, the word for it was not.
     mockRuns([generation()]);
     await renderPage();
 
-    expect(await screen.findByText("105 visits generated")).toBeInTheDocument();
+    expect(await screen.findByText(/105 visits considered/)).toBeInTheDocument();
+    expect(screen.queryByText(/105 visits generated/)).not.toBeInTheDocument();
     expect(screen.queryByText("Scheduled: ")).not.toBeInTheDocument();
     expect(screen.queryByText("Unassigned: ")).not.toBeInTheDocument();
+  });
+
+  it("does not claim a second run over the same range generated them all again", async () => {
+    // The shape that made it wrong: one run that created the work, and a
+    // second over the same range that created nothing and found all of it
+    // already correct. Both carry the same `visitsConsidered`.
+    mockRuns([
+      { ...generation(), id: "run-second" },
+      { ...generation(), id: "run-first" },
+    ]);
+    await renderPage();
+
+    expect(await screen.findAllByText(/105 visits considered/)).toHaveLength(2);
+    expect(screen.queryByText(/visits generated/)).not.toBeInTheDocument();
   });
 
   it("offers nothing to publish", async () => {

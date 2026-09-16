@@ -554,10 +554,21 @@ export default function ScheduleHistoryPage() {
 
                   {isGeneration(run) ? (
                     <p className="mt-3 text-sm text-muted-foreground">
+                      {/*
+                        * `visitsConsidered` is every visit the run accounted
+                        * for — created, changed, removed, protected and
+                        * already correct alike — so "visits generated" was
+                        * simply untrue of it. A second run over the same range
+                        * creates nothing and still carries the same number,
+                        * and the page then accounted for twice the work that
+                        * exists.
+                        */}
                       <span className="font-medium text-foreground">
-                        {run.visitsConsidered} visits generated
+                        {run.visitsConsidered} visits considered
                       </span>{" "}
-                      — nobody is assigned by generation. Solve this range to staff them.
+                      — every visit in the range, whether this run created it or
+                      found it already correct. Nobody is assigned by generation:
+                      solve this range to staff them.
                     </p>
                   ) : (
                     <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
