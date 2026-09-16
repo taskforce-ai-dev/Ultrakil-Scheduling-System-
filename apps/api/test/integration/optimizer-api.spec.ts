@@ -203,6 +203,60 @@ async function solve(): Promise<string> {
   return created.body.id as string;
 }
 
+/**
+ * A finished run holding one draft per visit, without going through the
+ * solver.
+ *
+ * Publication mechanics need a run with more than one visit in it, and a real
+ * solve over a week that already holds work is not a stable way to get one:
+ * the failure then reads as a solver result rather than the publication rule
+ * under test. Everything that matters here — the run's counters, the drafts'
+ * lineage, the crews — is stated outright.
+ */
+async function draftRunOver(visitIds: string[]): Promise<string> {
+  const run = await prisma.scheduleRun.create({
+    data: {
+      status: 'SUCCEEDED',
+      rangeStart: new Date(RANGE.from),
+      rangeEnd: new Date(RANGE.to),
+      branchCode: BranchCode.COLOMBO,
+      jobId: `c06-draft-${suffix}-${visitIds[0]}`,
+      visitsConsidered: visitIds.length,
+      visitsScheduled: visitIds.length,
+      visitsUnassigned: 0,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+    },
+  });
+  for (const [index, visitId] of visitIds.entries()) {
+    const visit = await prisma.generatedVisit.findUniqueOrThrow({ where: { id: visitId } });
+    // Sequenced so one crew can legally take every visit in the run.
+    const start = new Date(visit.visitDate.getTime() + (9 * 60 + index * 120) * 60_000);
+    await prisma.assignment.create({
+      data: {
+        generatedVisitId: visitId,
+        branchId: visit.branchId,
+        branchCode: visit.branchCode,
+        status: 'DRAFT',
+        scheduleRunId: run.id,
+        plannedStart: start,
+        plannedEnd: new Date(start.getTime() + 90 * 60_000),
+        crewMembers: {
+          create: [
+            { employeeId: supervisorIds[0], role: CrewRole.SUPERVISOR, isPmsSupervisor: true },
+            { employeeId: technicianIds[0], role: CrewRole.TECHNICIAN },
+          ],
+        },
+      },
+    });
+    await prisma.generatedVisit.update({
+      where: { id: visitId },
+      data: { status: 'SCHEDULED' },
+    });
+  }
+  return run.id;
+}
+
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     // A plain value carries no @Processor metadata, so BullMQ registers no
@@ -2194,6 +2248,103 @@ describe('publishing', () => {
       provenanceWarnings: [
         expect.objectContaining({ code: 'HOURS_UNCONFIRMED', affectedVisitCount: 1 }),
       ],
+    });
+  });
+
+  /**
+   * ULK: a hand edit made before the run goes out must go out with it.
+   *
+   * Changing a crew on the Dispatch Board replaces the run's draft with a new
+   * assignment. When that replacement forgot the run it replaced a draft in,
+   * publication — which freezes the run's own assignments — silently left the
+   * visit behind, and the run's counters went on claiming it as staffed. The
+   * crew was never told, and the screen said otherwise.
+   */
+  it('publishes the crew a manager set by hand, and counts exactly what it published', async () => {
+    const [visitId, handEditedVisitId] = [await makeVisit(), await makeVisit()];
+    const runId = await draftRunOver([visitId, handEditedVisitId]);
+
+    const edit = await request(http)
+      .put(`/api/visits/${handEditedVisitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        plannedStartMinute: 11 * 60,
+        plannedEndMinute: 12 * 60 + 30,
+        reason: 'Site asked for the other supervisor.',
+        crew: [
+          { employeeId: supervisorIds[1], role: 'SUPERVISOR' },
+          { employeeId: technicianIds[1], role: 'TECHNICIAN' },
+        ],
+      });
+    expect(edit.status).toBe(200);
+
+    const published = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ reason: 'Week of 1 March' });
+    expect(published.status).toBe(200);
+
+    // Both visits were given to a crew, the hand-edited one included.
+    const assignments = await prisma.assignment.findMany({
+      where: { generatedVisitId: { in: [visitId, handEditedVisitId] } },
+      include: { crewMembers: true },
+    });
+    expect(assignments).toHaveLength(2);
+    for (const assignment of assignments) {
+      expect(assignment.status).toBe('PUBLISHED');
+      expect(assignment.scheduleRunId).toBe(runId);
+    }
+    // The manager's choice is what went out, not the crew the solver picked.
+    const handEdited = assignments.find(
+      (assignment) => assignment.generatedVisitId === handEditedVisitId,
+    )!;
+    expect(handEdited.crewMembers.map((member) => member.employeeId).sort()).toEqual(
+      [supervisorIds[1], technicianIds[1]].sort(),
+    );
+
+    // "N of M visits have a crew. This is what the crews were given" is read
+    // straight off these counters, so they have to be what was published.
+    expect(published.body).toMatchObject({ visitsScheduled: 2, visitsUnassigned: 0 });
+    const event = await prisma.auditEvent.findFirstOrThrow({
+      where: { entityId: runId, action: 'schedule_run.published' },
+    });
+    expect((event.after as { snapshot: unknown[] }).snapshot).toHaveLength(2);
+    expect(
+      await prisma.assignmentNotificationOutbox.count({
+        where: { assignment: { generatedVisitId: handEditedVisitId } },
+      }),
+    ).toBe(2);
+  });
+
+  /**
+   * The other direction: a visit the run staffed that a manager then took the
+   * crew off. Nothing is published for it, so the run must not go on counting
+   * it as staffed — and a partial schedule is a decision, not a side effect.
+   */
+  it('refuses to report a visit as staffed when its crew was removed before publication', async () => {
+    const [visitId, strippedVisitId] = [await makeVisit(), await makeVisit()];
+    const runId = await draftRunOver([visitId, strippedVisitId]);
+    await request(http)
+      .delete(`/api/visits/${strippedVisitId}/assignment`)
+      .set(auth(adminToken))
+      .expect(204);
+
+    const unacknowledged = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ reason: 'Week of 1 March' });
+    expect(unacknowledged.status).toBe(409);
+    expect(unacknowledged.body.message).toContain('unassigned');
+
+    const published = await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ acknowledgePartial: true, reason: 'Going out one visit short.' });
+    expect(published.status).toBe(200);
+    expect(published.body).toMatchObject({
+      visitsConsidered: 2,
+      visitsScheduled: 1,
+      visitsUnassigned: 1,
     });
   });
 

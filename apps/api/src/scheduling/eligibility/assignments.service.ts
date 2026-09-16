@@ -174,6 +174,14 @@ export class AssignmentsService {
           branchId: visit.branchId,
           branchCode: visit.branchCode,
           status: AssignmentStatus.DRAFT,
+          // Changing a crew by hand replaces the run's draft; it does not take
+          // the visit out of the run. Forgetting the run here dropped the visit
+          // from the publication that followed — the run went on counting it as
+          // staffed while no crew had been told anything, and the visit stayed
+          // editable after the week was frozen, because nothing about it had
+          // ever been published. The replacement stands in the draft's place,
+          // lineage and all.
+          scheduleRunId: existing?.scheduleRunId ?? null,
           plannedStart: at(visit.visitDate, proposal.plannedStartMinute),
           plannedEnd: at(visit.visitDate, proposal.plannedEndMinute),
           crewMembers: {
