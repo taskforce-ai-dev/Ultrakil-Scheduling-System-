@@ -99,6 +99,9 @@ describe("ScheduleHistoryPage", () => {
     // The exact pile a manager reported: a failed attempt, a draft that staffed
     // everything, and below them the published run the crews actually got. The
     // list is honest history and answers none of "what are my crews doing".
+    // The clock is pinned inside the published run's week, because "in force"
+    // is a question about today.
+    vi.setSystemTime(new Date("2026-09-09T08:00:00.000Z"));
     const published = buildScheduleRun({
       id: "run-live", status: "SUCCEEDED", isPublished: true,
       publishedAt: "2026-09-08T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
@@ -117,6 +120,80 @@ describe("ScheduleHistoryPage", () => {
     // And the better draft is offered, not silently preferred.
     expect(within(current).getByText(/A newer draft is waiting/)).toBeInTheDocument();
     expect(within(current).getByText(/Nobody has been told about it/)).toBeInTheDocument();
+  });
+
+  /**
+   * "Current schedule" means the schedule in force today, not the schedule
+   * published most recently. Publishing a November week made the September
+   * week the crews were actually working vanish from the panel on the very day
+   * it was being worked.
+   */
+  it("names the published run covering today, not the one published most recently", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const inForce = buildScheduleRun({
+      id: "run-september", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-09-14", rangeEnd: "2026-09-20",
+      publishedAt: "2026-09-11T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
+    });
+    const november = buildScheduleRun({
+      id: "run-november", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-11-23", rangeEnd: "2026-11-29",
+      publishedAt: "2026-09-15T16:06:51.000Z", visitsScheduled: 28, visitsUnassigned: 1,
+    });
+    mockRuns([november, inForce]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/2026-09-14 – 2026-09-20/)).toBeInTheDocument();
+    expect(within(current).getByText(/11 of 17 visits have a crew/)).toBeInTheDocument();
+    expect(within(current).queryByText(/2026-11-23/)).not.toBeInTheDocument();
+  });
+
+  it("does not claim a future published week is what the crews are working now", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const november = buildScheduleRun({
+      id: "run-november", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-11-23", rangeEnd: "2026-11-29",
+      publishedAt: "2026-09-15T16:06:51.000Z", visitsScheduled: 28, visitsUnassigned: 1,
+    });
+    mockRuns([november]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/no published schedule covers today/i)).toBeInTheDocument();
+    expect(within(current).queryByText(/This is what the crews were given/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A generation run staffs nobody by definition — "0 of 0 staffed" is not a
+   * draft waiting on a decision, and offering it as one hid the real staffed
+   * draft sitting below it.
+   */
+  it("offers the newest draft that can actually be published, not a generation run", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const generationRun = buildScheduleRun({
+      id: "run-generation", kind: "VISIT_GENERATION", status: "SUCCEEDED", isPublished: false,
+      rangeStart: "2026-10-26", rangeEnd: "2026-12-06",
+      visitsConsidered: 105, visitsScheduled: 0, visitsUnassigned: 0, publishReadiness: null,
+    });
+    const staffedDraft = buildScheduleRun({
+      id: "run-draft", status: "SUCCEEDED", isPublished: false,
+      rangeStart: "2026-09-21", rangeEnd: "2026-09-27",
+      visitsScheduled: 17, visitsUnassigned: 0,
+    });
+    const live = buildScheduleRun({
+      id: "run-live", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-09-14", rangeEnd: "2026-09-20",
+      publishedAt: "2026-09-11T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
+    });
+    mockRuns([generationRun, staffedDraft, live]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    const waiting = within(current).getByText(/A newer draft is waiting/);
+    expect(waiting).toHaveTextContent("17 of 17 staffed for 2026-09-21 – 2026-09-27");
+    expect(within(current).queryByText(/0 of 0 staffed/)).not.toBeInTheDocument();
+    expect(within(current).queryByText(/2026-10-26/)).not.toBeInTheDocument();
   });
 
   it("says plainly when nothing is published, rather than implying the latest run is live", async () => {

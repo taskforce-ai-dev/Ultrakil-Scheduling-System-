@@ -192,7 +192,7 @@ function unconfirmedSourceWarnings(run: ScheduleRun | null) {
  * held in memory.
  */
 /**
- * Which run is actually in force, and whether something newer is waiting.
+ * Which run is actually in force today, and whether something newer is waiting.
  *
  * The page listed every run a range had ever had — published, draft and failed
  * together, newest first — which answers "what has happened" and not "what are
@@ -200,17 +200,39 @@ function unconfirmedSourceWarnings(run: ScheduleRun | null) {
  * of 17, with a later draft staffing 17 of 17 sitting above it and a failed
  * attempt above that, has no way to tell which one the crews were given.
  *
- * Live is the most recent published run. Anything successful and newer is a
- * proposal waiting on a decision; anything older is history.
+ * "In force" is a question about today, not about recency. Taking simply the
+ * most recently published run meant that publishing a November week made the
+ * September week the crews were working disappear from the panel on the day
+ * they were working it. So: the published run whose range covers today, and
+ * where several do, the one published last — a later publication over the same
+ * dates is what supersedes an earlier one. When none covers today the panel
+ * says so rather than naming a week nobody is working.
+ *
+ * `pending` is a draft a manager could actually act on, which is the same
+ * question the row's own Publish button asks. Without that it offered a
+ * visit-generation run — "0 of 0 staffed", because generation staffs nobody by
+ * definition — and hid the real staffed draft below it.
  */
-function currentSchedule(runs: ScheduleRun[]): {
+function currentSchedule(
+  runs: ScheduleRun[],
+  today: string,
+): {
   live: ScheduleRun | null;
   pending: ScheduleRun | null;
 } {
-  // The API returns newest first, which is the order these two want.
-  const live = runs.find((run) => run.isPublished) ?? null;
+  const covering = runs.filter(
+    (run) => run.isPublished && run.rangeStart <= today && today <= run.rangeEnd,
+  );
+  const live =
+    covering.reduce<ScheduleRun | null>(
+      (latest, run) =>
+        latest === null || (run.publishedAt ?? "") > (latest.publishedAt ?? "") ? run : latest,
+      null,
+    ) ?? null;
+  // The API returns newest first, so "newer than the one in force" is the
+  // slice above it. With nothing in force, every run is still to be decided.
   const newer = live ? runs.slice(0, runs.indexOf(live)) : runs;
-  const pending = newer.find((run) => run.status === "SUCCEEDED" && !run.isPublished) ?? null;
+  const pending = newer.find(canPublishRun) ?? null;
   return { live, pending };
 }
 
@@ -224,7 +246,10 @@ export default function ScheduleHistoryPage() {
   const focusRef = React.useRef<HTMLLIElement | null>(null);
 
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
-  const { live, pending } = React.useMemo(() => currentSchedule(runs), [runs]);
+  // Which day it is decides which schedule is in force, so it is read once per
+  // render rather than captured when the page mounted — a portal left open
+  // overnight would otherwise go on naming yesterday's week.
+  const { live, pending } = React.useMemo(() => currentSchedule(runs, todayIso()), [runs]);
   const [total, setTotal] = React.useState(0);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
@@ -476,6 +501,12 @@ export default function ScheduleHistoryPage() {
                 {live.rangeStart} – {live.rangeEnd}. {live.visitsScheduled} of{" "}
                 {live.visitsScheduled + live.visitsUnassigned} visits have a crew. This is what
                 the crews were given.
+              </p>
+            ) : runs.some((run) => run.isPublished) ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                No published schedule covers today, so no schedule is in force. Published runs
+                for other weeks are listed below; publish a run covering today and it becomes
+                the one the crews work to.
               </p>
             ) : (
               <p className="mt-1 text-sm text-muted-foreground">
