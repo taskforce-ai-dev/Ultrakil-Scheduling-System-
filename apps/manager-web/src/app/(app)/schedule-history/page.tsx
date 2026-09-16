@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -646,76 +647,78 @@ export default function ScheduleHistoryPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {publishTarget && publishTarget.visitsUnassigned > 0 && (
-            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                {publishTarget.visitsUnassigned}{" "}
-                {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
-                be staffed and will remain in the Unassigned queue after publishing.
-              </p>
-              <label htmlFor="partial-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
-                <Checkbox
-                  id="partial-publish-ack"
-                  checked={partialAcknowledged}
-                  onCheckedChange={(checked) => setPartialAcknowledged(checked === true)}
-                />
-                <span>I understand that unassigned visits will not be dispatched.</span>
-              </label>
-            </div>
-          )}
+          <DialogBody>
+            {publishTarget && publishTarget.visitsUnassigned > 0 && (
+              <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <p className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  {publishTarget.visitsUnassigned}{" "}
+                  {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
+                  be staffed and will remain in the Unassigned queue after publishing.
+                </p>
+                <label htmlFor="partial-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
+                  <Checkbox
+                    id="partial-publish-ack"
+                    checked={partialAcknowledged}
+                    onCheckedChange={(checked) => setPartialAcknowledged(checked === true)}
+                  />
+                  <span>I understand that unassigned visits will not be dispatched.</span>
+                </label>
+              </div>
+            )}
 
-          {unconfirmedSourceWarnings(publishTarget).length > 0 && (
-            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                Some of this schedule rests on source data nobody has confirmed. Publishing it
-                tells the crews to act on an assumption.
-              </p>
-              <ul className="ml-6 list-disc space-y-1">
-                {unconfirmedSourceWarnings(publishTarget).map((warning) => (
-                  <li key={warning.code}>
-                    {warning.message}{" "}
-                    <span className="font-medium">
-                      {warning.affectedVisitCount}{" "}
-                      {warning.affectedVisitCount === 1 ? "visit" : "visits"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <label
-                htmlFor="provenance-publish-ack"
-                className="flex items-start gap-2 font-medium text-foreground"
-              >
-                <Checkbox
-                  id="provenance-publish-ack"
-                  checked={provenanceAcknowledged}
-                  onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
-                />
-                <span>
-                  I understand this schedule uses source data that is not confirmed, and I am
-                  publishing it anyway.
-                </span>
-              </label>
-            </div>
-          )}
+            {unconfirmedSourceWarnings(publishTarget).length > 0 && (
+              <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <p className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  Some of this schedule rests on source data nobody has confirmed. Publishing it
+                  tells the crews to act on an assumption.
+                </p>
+                <ul className="ml-6 list-disc space-y-1">
+                  {unconfirmedSourceWarnings(publishTarget).map((warning) => (
+                    <li key={warning.code}>
+                      {warning.message}{" "}
+                      <span className="font-medium">
+                        {warning.affectedVisitCount}{" "}
+                        {warning.affectedVisitCount === 1 ? "visit" : "visits"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <label
+                  htmlFor="provenance-publish-ack"
+                  className="flex items-start gap-2 font-medium text-foreground"
+                >
+                  <Checkbox
+                    id="provenance-publish-ack"
+                    checked={provenanceAcknowledged}
+                    onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
+                  />
+                  <span>
+                    I understand this schedule uses source data that is not confirmed, and I am
+                    publishing it anyway.
+                  </span>
+                </label>
+              </div>
+            )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-reason">
-              {publishTarget && publishTarget.visitsUnassigned > 0
-                ? "Reason (required for partial schedules)"
-                : publishNeedsReason
-                  ? "Reason (required for unconfirmed source data)"
-                  : "Reason (optional)"}
-            </Label>
-            <Textarea
-              id="publish-reason"
-              value={publishReason}
-              onChange={(event) => setPublishReason(event.target.value)}
-              placeholder="Why is this being published now?"
-              aria-required={publishNeedsReason}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="publish-reason">
+                {publishTarget && publishTarget.visitsUnassigned > 0
+                  ? "Reason (required for partial schedules)"
+                  : publishNeedsReason
+                    ? "Reason (required for unconfirmed source data)"
+                    : "Reason (optional)"}
+              </Label>
+              <Textarea
+                id="publish-reason"
+                value={publishReason}
+                onChange={(event) => setPublishReason(event.target.value)}
+                placeholder="Why is this being published now?"
+                aria-required={publishNeedsReason}
+              />
+            </div>
+          </DialogBody>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setPublishTarget(null)}>

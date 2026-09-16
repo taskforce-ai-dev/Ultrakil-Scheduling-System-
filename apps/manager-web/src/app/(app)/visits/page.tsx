@@ -6,6 +6,7 @@ import { CalendarPlus, ChevronLeft, ChevronRight, Move } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -742,30 +743,32 @@ export default function VisitsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="move-date">New date</Label>
-            <Input
-              id="move-date"
-              type="date"
-              value={moveRequest?.targetDate ?? ""}
-              onChange={(event) =>
-                event.target.value &&
-                setMoveRequest((current) =>
-                  current ? { ...current, targetDate: event.target.value } : current
-                )
-              }
-            />
-          </div>
+          <DialogBody>
+            <div className="space-y-1.5">
+              <Label htmlFor="move-date">New date</Label>
+              <Input
+                id="move-date"
+                type="date"
+                value={moveRequest?.targetDate ?? ""}
+                onChange={(event) =>
+                  event.target.value &&
+                  setMoveRequest((current) =>
+                    current ? { ...current, targetDate: event.target.value } : current
+                  )
+                }
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="move-reason">Reason</Label>
-            <Textarea
-              id="move-reason"
-              value={moveReason}
-              onChange={(event) => setMoveReason(event.target.value)}
-              placeholder="Why is this visit moving?"
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="move-reason">Reason</Label>
+              <Textarea
+                id="move-reason"
+                value={moveReason}
+                onChange={(event) => setMoveReason(event.target.value)}
+                placeholder="Why is this visit moving?"
+              />
+            </div>
+          </DialogBody>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setMoveRequest(null)}>

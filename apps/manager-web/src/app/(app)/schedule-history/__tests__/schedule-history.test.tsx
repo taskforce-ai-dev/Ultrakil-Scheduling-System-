@@ -415,6 +415,70 @@ describe("ScheduleHistoryPage", () => {
 
     expect(await screen.findByText("No schedule runs yet")).toBeInTheDocument();
   });
+
+  it("keeps Publish out of the scrolling part of the dialog, however long the gate list", async () => {
+    // Measured on the live portal at 1280x720: a run with four
+    // unconfirmed-source sections pushed this button to y=745.5 — visible and
+    // enabled to anything that asked, and unclickable, because the point was
+    // off the bottom of the screen. The gate list is exactly what makes the
+    // dialog tall, so the more a schedule needed checking, the less
+    // publishable it became. The gates scroll; the decision does not move.
+    const run = buildScheduleRun({
+      id: "run-tall",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 3,
+      publishReadiness: {
+        state: "ACKNOWLEDGEMENT_REQUIRED",
+        code: "PARTIAL_RESULTS",
+        message: "This run left visits unassigned and rests on unconfirmed source data.",
+        requiresPartialAcknowledgement: true,
+        requiresProvenanceAcknowledgement: true,
+        provenanceWarnings: [
+          {
+            code: "CREW_SIZE_UNCONFIRMED",
+            message: "Crew size was not stated by the source and has not been confirmed.",
+            affectedVisitCount: 4,
+          },
+          {
+            code: "DAY_RULE_UNCONFIRMED",
+            message: "Allowed service days were inferred and have not been confirmed.",
+            affectedVisitCount: 6,
+          },
+          {
+            code: "DURATION_UNCONFIRMED",
+            message: "Visit duration was not stated by the source and has not been confirmed.",
+            affectedVisitCount: 9,
+          },
+          {
+            code: "HOURS_UNCONFIRMED",
+            message: "Opening hours for this visit are not confirmed.",
+            affectedVisitCount: 13,
+          },
+        ],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+
+    const body = document.querySelector("[data-slot=dialog-body]");
+    expect(body).not.toBeNull();
+
+    // Everything variable-length is inside the region that scrolls.
+    expect(body).toContainElement(screen.getByText(/Allowed service days were inferred/));
+    expect(body).toContainElement(screen.getByText(/could not\s+be staffed/));
+    expect(body).toContainElement(
+      screen.getByLabelText("Reason (required for partial schedules)"),
+    );
+
+    // The decision is not.
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    expect(body).not.toContainElement(publishButton);
+    expect(body).not.toContainElement(screen.getByRole("button", { name: "Cancel" }));
+    expect(document.querySelector("[data-slot=dialog-footer]")).toContainElement(publishButton);
+  });
 });
 
 describe("a visit-generation run in the history", () => {
