@@ -48,11 +48,14 @@ export function VisitStatusBadge({ status }: { status: VisitStatus }) {
  * unstaffed visit as covered.
  */
 export function CrewBadge({ visit }: { visit: Visit }) {
-  if (visit.assignmentCount > 0) {
+  // People, not assignment records. `assignmentCount` counts the latter — one
+  // record holds a whole crew — so a two-person job badged "1 crew member"
+  // beside a dispatch row naming both of them.
+  if (visit.assignedCrewCount > 0) {
     return (
       <Badge variant="success">
         <UserCheck aria-hidden="true" />
-        {visit.assignmentCount === 1 ? "1 crew member" : `${visit.assignmentCount} crew`}
+        {visit.assignedCrewCount === 1 ? "1 crew member" : `${visit.assignedCrewCount} crew`}
       </Badge>
     );
   }

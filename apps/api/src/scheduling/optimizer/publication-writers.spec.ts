@@ -59,6 +59,7 @@ function fixture() {
       dayRuleProvenance: DataProvenance.SOURCE as DataProvenance,
     },
     _count: { assignments: 1 },
+    assignments: [{ _count: { crewMembers: 2 } }],
   };
   const original = {
     id: 'draft',

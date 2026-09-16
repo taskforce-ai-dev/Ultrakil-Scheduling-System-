@@ -1958,7 +1958,10 @@ export interface components {
             manuallyAdjustedAt: string | null;
             isLocked: boolean;
             lockReason: string | null;
+            /** @description How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew. */
             assignmentCount: number;
+            /** @description How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize. */
+            assignedCrewCount: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -2034,7 +2037,10 @@ export interface components {
             manuallyAdjustedAt: string | null;
             isLocked: boolean;
             lockReason: string | null;
+            /** @description How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew. */
             assignmentCount: number;
+            /** @description How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize. */
+            assignedCrewCount: number;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */

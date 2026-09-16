@@ -236,6 +236,7 @@ export function buildVisit(overrides: Partial<Visit> = {}): Visit {
     isLocked: false,
     lockReason: null,
     assignmentCount: 0,
+    assignedCrewCount: 0,
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,

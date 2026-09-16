@@ -27,6 +27,15 @@ import {
   VisitQueryDto,
 } from './dto';
 
+/** The assignment a crew would turn up for, in the order `get` prefers. */
+const LIVE_CREW_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.DRAFT,
+  AssignmentStatus.PROPOSED,
+  AssignmentStatus.PUBLISHED,
+  AssignmentStatus.ACKNOWLEDGED,
+  AssignmentStatus.IN_PROGRESS,
+];
+
 const VISIT_INCLUDE = {
   serviceAgreement: {
     include: {
@@ -39,6 +48,22 @@ const VISIT_INCLUDE = {
   },
   agreementVersion: true,
   _count: { select: { assignments: true } },
+  /**
+   * How many people are actually on this visit.
+   *
+   * `_count.assignments` counts assignment *records*, one of which holds a
+   * whole crew — so the drawer printed "1 crew member" and "Crew needed: 2
+   * (1 assigned)" beside a dispatch row naming two people and a calendar tile
+   * badging 2, and a fully staffed job read as a man short. The crew is the
+   * crew of the assignment in force, which is the one the dispatch board and
+   * the calendar both already show.
+   */
+  assignments: {
+    where: { status: { in: LIVE_CREW_STATUSES } },
+    select: { _count: { select: { crewMembers: true } } },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    take: 1,
+  },
 } satisfies Prisma.GeneratedVisitInclude;
 
 type VisitWithRelations = Prisma.GeneratedVisitGetPayload<{
@@ -470,6 +495,7 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     isLocked: visit.lockedAt !== null,
     lockReason: visit.lockReason,
     assignmentCount: visit._count.assignments,
+    assignedCrewCount: visit.assignments[0]?._count.crewMembers ?? 0,
     createdAt: visit.createdAt.toISOString(),
     updatedAt: visit.updatedAt.toISOString(),
   };

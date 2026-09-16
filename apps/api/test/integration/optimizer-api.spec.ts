@@ -2389,6 +2389,40 @@ describe('publishing', () => {
     });
   });
 
+  /**
+   * ULK: one truth about how many people are on a visit.
+   *
+   * The visit read model only ever counted Assignment rows, and the drawer
+   * printed that number as "1 crew member" and "Crew needed: 2 (1 assigned)"
+   * beside a dispatch row listing two names and a calendar tile badging 2 —
+   * a fully staffed job reading as a man short.
+   */
+  it('counts the people on a visit, not the assignment records holding them', async () => {
+    const visitId = await makeVisit();
+    await draftRunOver([visitId]);
+
+    const visit = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+
+    expect(visit.status).toBe(200);
+    expect(visit.body).toMatchObject({
+      requiredCrewSize: 2,
+      assignedCrewCount: 2,
+      assignmentCount: 1,
+    });
+  });
+
+  it('reports nobody assigned for a visit with no live crew', async () => {
+    const visitId = await makeVisit();
+
+    const visit = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+
+    expect(visit.body).toMatchObject({ assignedCrewCount: 0, assignmentCount: 0 });
+  });
+
   it('refuses to publish the same run twice', async () => {
     await makeVisit();
     const runId = await solve();

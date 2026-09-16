@@ -219,7 +219,7 @@ export function VisitDetailDrawer({
               <Row label="Crew needed">
                 {visit.requiredCrewSize}{" "}
                 <span className="font-normal text-muted-foreground">
-                  ({visit.assignmentCount} assigned)
+                  ({visit.assignedCrewCount} assigned)
                 </span>
               </Row>
               <Row label="Branch">

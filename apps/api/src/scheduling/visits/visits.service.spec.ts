@@ -62,6 +62,8 @@ function visitRow(overrides: Record<string, unknown> = {}) {
       jobType: { name: 'Job' },
     },
     _count: { assignments: 0 },
+    // The live assignment's crew, as VISIT_INCLUDE reads it.
+    assignments: [],
     ...overrides,
   };
 }

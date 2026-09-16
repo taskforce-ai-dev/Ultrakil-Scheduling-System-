@@ -5284,7 +5284,12 @@
             "nullable": true
           },
           "assignmentCount": {
-            "type": "number"
+            "type": "number",
+            "description": "How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew."
+          },
+          "assignedCrewCount": {
+            "type": "number",
+            "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
           },
           "createdAt": {
             "type": "string",
@@ -5317,6 +5322,7 @@
           "isLocked",
           "lockReason",
           "assignmentCount",
+          "assignedCrewCount",
           "createdAt",
           "updatedAt"
         ]
@@ -5509,7 +5515,12 @@
             "nullable": true
           },
           "assignmentCount": {
-            "type": "number"
+            "type": "number",
+            "description": "How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew."
+          },
+          "assignedCrewCount": {
+            "type": "number",
+            "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
           },
           "createdAt": {
             "type": "string",
@@ -5550,6 +5561,7 @@
           "isLocked",
           "lockReason",
           "assignmentCount",
+          "assignedCrewCount",
           "createdAt",
           "updatedAt",
           "origin"

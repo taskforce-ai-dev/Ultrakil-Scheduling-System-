@@ -236,7 +236,18 @@ export class VisitDto {
   manuallyAdjustedAt!: string | null;
   @ApiProperty({ type: Boolean }) isLocked!: boolean;
   @ApiProperty({ type: String, nullable: true }) lockReason!: string | null;
-  @ApiProperty({ type: Number }) assignmentCount!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew.',
+  })
+  assignmentCount!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize.',
+  })
+  assignedCrewCount!: number;
 
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
   @ApiProperty({ type: String, format: 'date-time' }) updatedAt!: string;
