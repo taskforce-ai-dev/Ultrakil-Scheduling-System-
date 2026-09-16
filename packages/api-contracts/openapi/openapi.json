@@ -3580,7 +3580,7 @@
           },
           "label": {
             "type": "string",
-            "example": "Van( 04 People) 253-4289"
+            "example": "Van (4 People) 253-4289"
           },
           "seatCapacity": {
             "type": "number",
@@ -3780,7 +3780,7 @@
           },
           "label": {
             "type": "string",
-            "example": "Van( 04 People) 253-4289"
+            "example": "Van (4 People) 253-4289"
           },
           "seatCapacity": {
             "type": "number",

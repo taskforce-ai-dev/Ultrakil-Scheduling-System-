@@ -45,7 +45,7 @@ export class AuthorizedVehicleDto {
   @ApiProperty({ type: String, example: '253-4289' })
   code!: string;
 
-  @ApiProperty({ type: String, example: 'Van( 04 People) 253-4289' })
+  @ApiProperty({ type: String, example: 'Van (4 People) 253-4289' })
   label!: string;
 
   @ApiPropertyOptional({ type: Number, nullable: true, example: 4 })
@@ -160,7 +160,7 @@ export class VehicleDto {
   @ApiProperty({ type: String, example: '253-4289' })
   code!: string;
 
-  @ApiProperty({ type: String, example: 'Van( 04 People) 253-4289' })
+  @ApiProperty({ type: String, example: 'Van (4 People) 253-4289' })
   label!: string;
 
   @ApiPropertyOptional({ type: Number, nullable: true, example: 4 })

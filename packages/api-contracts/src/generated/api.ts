@@ -1393,7 +1393,7 @@ export interface components {
             id: string;
             /** @example 253-4289 */
             code: string;
-            /** @example Van( 04 People) 253-4289 */
+            /** @example Van (4 People) 253-4289 */
             label: string;
             /** @example 4 */
             seatCapacity?: number | null;
@@ -1465,7 +1465,7 @@ export interface components {
             id: string;
             /** @example 253-4289 */
             code: string;
-            /** @example Van( 04 People) 253-4289 */
+            /** @example Van (4 People) 253-4289 */
             label: string;
             /** @example 4 */
             seatCapacity?: number | null;

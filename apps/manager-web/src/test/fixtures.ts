@@ -33,7 +33,7 @@ export function buildVehicle(overrides: Partial<Vehicle> = {}): Vehicle {
   return {
     id: "vehicle-1",
     code: "253-4289",
-    label: "Van( 04 People) 253-4289",
+    label: "Van (4 People) 253-4289",
     seatCapacity: 4,
     branchCode: "COLOMBO",
     isActive: true,
@@ -74,7 +74,7 @@ export function buildAuthorizedDrivers(
     vehicle: {
       id: "vehicle-1",
       code: "253-4289",
-      label: "Van( 04 People) 253-4289",
+      label: "Van (4 People) 253-4289",
       seatCapacity: 4,
     },
     drivers: [],
@@ -300,7 +300,7 @@ export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment
     vehicles: [
       {
         vehicleId: "vehicle-1",
-        label: "Van( 04 People) 253-4289",
+        label: "Van (4 People) 253-4289",
         driverEmployeeId: "employee-1",
         driverName: "A Perera",
       },

@@ -58,7 +58,7 @@ function employee(overrides: Partial<EmployeeFacts> = {}): EmployeeFacts {
 function vehicle(overrides: Partial<VehicleFacts> = {}): VehicleFacts {
   return {
     id: 'veh-1',
-    label: 'Van (04 People) 253-4289',
+    label: 'Van (4 People) 253-4289',
     branchCode: 'COLOMBO',
     isActive: true,
     seatCapacity: 4,
@@ -443,7 +443,7 @@ describe('eligibility engine', () => {
   });
 
   describe('one vehicle per visit', () => {
-    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (02 People) DAG-3284' });
+    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (2 People) DAG-3284' });
 
     const twoVehicles = () =>
       evaluateAssignment(
