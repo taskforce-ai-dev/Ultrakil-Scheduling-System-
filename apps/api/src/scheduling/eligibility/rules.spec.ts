@@ -180,6 +180,32 @@ describe('eligibility engine', () => {
       expect(codesOf(result)).toContain('NO_PMS_SUPERVISOR_AVAILABLE');
     });
 
+    it('names grades a manager can actually find on the Workforce screen', () => {
+      // The advice used to read "Add a Senior PMS, PMS, Assistant PMS, SPMS or
+      // APMS from COLOMBO", and the Workforce screen's Grade column never
+      // shows "Senior PMS" or "Assistant PMS" — so three of the five names
+      // were unfindable, and none of them said what a PMS grade is for.
+      const second = employee({ id: 'tech-2', fullName: 'U Bandara' });
+      const result = evaluateAssignment(
+        proposal({
+          crew: [
+            { employeeId: TECHNICIAN.id, role: CrewRole.TECHNICIAN },
+            { employeeId: second.id, role: CrewRole.TECHNICIAN },
+          ],
+        }),
+        context({ employees: [TECHNICIAN, second] }),
+      );
+
+      const remediation = result.conflicts[0].remediation ?? '';
+      expect(remediation).toContain('COLOMBO');
+      expect(remediation).toContain('PMS, SPMS or APMS');
+      // Points at what the screen shows rather than at the project's internal
+      // canonical spellings.
+      expect(remediation).toContain('Grade column');
+      expect(remediation).not.toContain('Senior PMS');
+      expect(remediation).not.toContain('Assistant PMS');
+    });
+
     it('names the branch shortage when the branch employs no supervisor at all', () => {
       // Kandy's real situation. "Add a supervisor" is useless advice when the
       // branch has none, so this is a different problem with a different code.
@@ -366,6 +392,35 @@ describe('eligibility engine', () => {
       expect(codesOf(result)).toContain('NO_AUTHORIZED_DRIVER');
       // The way out is named, not left to the manager to work out.
       expect(result.conflicts[0].remediation).toContain('S Silva');
+    });
+
+    it('says "them", not "one of them", when one person is authorized', () => {
+      // "Synthetic Tech 01 in this crew is authorized — name one of them as
+      // the driver." One person is not a them-among-others.
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: TECHNICIAN.id }] }),
+        context({ employees: [authorizedSupervisor, TECHNICIAN] }),
+      );
+
+      expect(result.conflicts[0].remediation).toBe(
+        'S Silva in this crew is authorized — name them as the driver.',
+      );
+    });
+
+    it('keeps "one of them" when there is a choice to make', () => {
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: null }] }),
+        context({
+          employees: [
+            authorizedSupervisor,
+            { ...TECHNICIAN, authorizedVehicleIds: ['veh-1'] },
+          ],
+        }),
+      );
+
+      expect(result.conflicts[0].remediation).toBe(
+        'S Silva or T Fernando in this crew are authorized — name one of them as the driver.',
+      );
     });
 
     it('refuses a vehicle with no driver named', () => {

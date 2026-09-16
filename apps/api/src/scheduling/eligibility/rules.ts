@@ -1,5 +1,6 @@
 import { CrewRole, DeploymentType } from '@prisma/client';
 
+import { pmsSupervisorRemediation } from '../../workforce/pms-grade';
 import { Conflict, sortConflicts } from './conflict-codes';
 
 /**
@@ -305,7 +306,7 @@ export function evaluateAssignment(
       conflicts.push({
         code: 'NO_PMS_SUPERVISOR_AVAILABLE',
         message: `Every job needs a PMS-grade supervisor on site, and nobody in this crew is one.`,
-        remediation: `Add a Senior PMS, PMS, Assistant PMS, SPMS or APMS from ${visit.branchCode}.`,
+        remediation: pmsSupervisorRemediation(visit.branchCode),
         resources: { visitId: visit.id },
       });
     } else {
@@ -406,7 +407,14 @@ export function evaluateAssignment(
           : `${vehicle.label} has no authorized driver in this crew.`,
         remediation:
           anyAuthorized.length > 0
-            ? `${anyAuthorized.map((employee) => employee.fullName).join(' or ')} in this crew ${anyAuthorized.length === 1 ? 'is' : 'are'} authorized — name one of them as the driver.`
+            ? // One authorized person is not a them-among-others: "X is
+              // authorized — name one of them as the driver" asks a manager to
+              // choose from a list of one.
+              `${anyAuthorized.map((employee) => employee.fullName).join(' or ')} in this crew ${
+                anyAuthorized.length === 1
+                  ? 'is authorized — name them as the driver.'
+                  : 'are authorized — name one of them as the driver.'
+              }`
             : 'Add someone authorized for this vehicle to the crew, or use a vehicle the crew can drive.',
         resources: {
           visitId: visit.id,

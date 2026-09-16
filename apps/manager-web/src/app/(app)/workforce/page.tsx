@@ -139,6 +139,16 @@ export default function WorkforcePage() {
         <p className="text-muted-foreground">
           Employees, branch assignment, PMS grade and vehicle authorizations.
         </p>
+        {/* Said here because this is the screen a manager is sent to when the
+            eligibility engine asks for a PMS-grade supervisor, and nothing on
+            it explained what the grade was for. The grades named are the ones
+            the Grade column below actually prints — the project's canonical
+            list also holds "Senior PMS" and "Assistant PMS", spellings the
+            workforce matrix does not use. */}
+        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+          A PMS-grade employee is the one who can supervise a job — every visit needs one on
+          site. The Grade column shows PMS, SPMS or APMS.
+        </p>
         <p className="mt-2 max-w-2xl rounded-md border border-dashed bg-muted/40 p-3 text-sm text-muted-foreground">
           Vehicle authorization is a permission, not a live allocation. It does not mean the
           employee or vehicle is assigned to today&apos;s work; Dispatch Board shows the published

@@ -68,6 +68,20 @@ beforeEach(() => {
 });
 
 describe("WorkforcePage", () => {
+
+  it("says plainly what a PMS grade is for", async () => {
+    // The eligibility engine tells a manager to add a PMS-grade supervisor;
+    // nothing on the screen that lists grades said a PMS-grade person is the
+    // one who can supervise a job.
+    render(<WorkforcePage />);
+    await screen.findByRole("heading", { name: "Workforce" });
+
+    expect(
+      screen.getByText(
+        /A PMS-grade employee is the one who can supervise a job — every visit needs one on site\. The Grade column shows PMS, SPMS or APMS\./
+      )
+    ).toBeInTheDocument();
+  });
   it("lists all employees by default", async () => {
     render(<WorkforcePage />);
 
