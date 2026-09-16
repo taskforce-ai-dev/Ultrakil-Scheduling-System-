@@ -168,6 +168,26 @@ visit so a manager can see it.
      grid, then the same ISO week again offered two additions and two removals
      for work nobody had touched.
 
+   A requirement that lands on a protected visit's **own slot is that visit**,
+   and is no more the guard's to move than a booked one. Left movable, the
+   guard did two wrong things at once: it created a visit on the day it moved
+   to, while the protected one never went anywhere, and it read the day it
+   left as one place emptier than it is. Measured on a cap of two, a Monday
+   carrying three of the manager's own visits finished the run still carrying
+   three, with no warning at all, and a fourth visit on the Tuesday beside it.
+   `honourProtectedDates` therefore clears the alternatives of such a
+   requirement, exactly as it already did for one it pins *onto* a keeper —
+   "this date belongs to someone".
+
+   The count in a load warning is the day **as it will stand after the run**,
+   not as it stands now. A day whose extra visits this run is about to remove
+   is not over the cap and is not warned about; a day whose work the run
+   cannot touch is, and the count then equals the real occupancy. That is why
+   the same day can be reported from one range and not another: a range that
+   holds a weekly agreement's whole week re-plans it and drops the duplicates,
+   while a range that holds no whole week of it leaves every one of them
+   standing.
+
    Standing is read over the run's own range only — the whole range and
    nothing wider. Those are the days the guard may place anything on, and a
    day the run was never asked about is not its to warn about. The read used
@@ -188,6 +208,17 @@ it began in, and a quarterly agreement's quarters are the three-month blocks
 counted from the month it began in. `periodIndexOf` is the single definition,
 and the bookings, the anchors, the pinning, `honourProtectedDates` and the load
 guard all key by `(agreement, periodIndex)`, so they cannot disagree.
+
+Because the anchor is the agreement's `startDate`, **the importer must not
+touch it on a re-import**. It used to: one `startDate` was computed per import
+and written on updates as well as creates, so re-uploading a corrected workbook
+a week later moved every fortnightly agreement's boundaries by seven days and
+every quarterly one's by a month. Periods already planned became different
+periods, and the property this whole branch rests on — ask for the same range
+twice and nothing changes — did not survive a re-import. Weekly and monthly
+agreements were spared only because each week and each month is its own period,
+which is exactly why it went unnoticed. An existing agreement now keeps the
+anchor it has always had; only a newly created one takes the import's date.
 
 Because the phase belongs to the agreement, **editing an agreement's start date
 or its frequency interval re-phases every future period of it**: a fortnight

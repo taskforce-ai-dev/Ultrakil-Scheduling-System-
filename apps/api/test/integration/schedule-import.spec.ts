@@ -649,3 +649,113 @@ describe('booked dates from the workbook', () => {
     expect(bookings).toEqual([]);
   });
 });
+
+/**
+ * Re-importing the workbook must not move an agreement's period anchor.
+ *
+ * `periodIndexOf` counts an agreement's periods from its `startDate`: a
+ * fortnightly agreement's fortnights are the two ISO weeks from the week it
+ * began in. The importer stamped `startDate` with the day the import ran, on
+ * updates as well as creates, so re-uploading a corrected workbook a week
+ * later moved every fortnightly agreement's boundaries by seven days and every
+ * quarterly one's by a month. Periods already planned became different
+ * periods, and the property this whole branch rests on — ask for the same
+ * range twice and nothing changes — did not survive it.
+ */
+describe('a second import of the same workbook', () => {
+  const RE_IMPORT_CUSTOMER = `Re-import Co ${suffix}`;
+  /** A Monday, so the fortnights are countable by eye. */
+  const ANCHOR = '2026-01-12';
+  /** September 2026's grid: Monday to Sunday, containing the whole month. */
+  const GRID = { from: '2026-08-31', to: '2026-10-04' };
+
+  function fortnightlySchedule(): ParsedSchedule {
+    return buildSchedule({
+      customers: [
+        {
+          name: RE_IMPORT_CUSTOMER,
+          sourceSheet: 'Main',
+          isServiced: true,
+          sites: [
+            {
+              name: `${RE_IMPORT_CUSTOMER} — Head Office`,
+              addressLine: '2 Test Road, Colombo 03',
+              regionLabel: 'Metro',
+              locationCode: 'HO-2',
+              isServiced: true,
+            },
+          ],
+          agreements: [
+            {
+              siteName: `${RE_IMPORT_CUSTOMER} — Head Office`,
+              isServiced: true,
+              treatmentCodes: ['GPC'],
+              frequency: {
+                kind: 'parsed',
+                frequency: { count: 1, unit: FrequencyUnit.WEEK, interval: 2 },
+                source: 'Fortnightly',
+              },
+              dayRule: {
+                kind: 'parsed',
+                allowedDays: [Weekday.MONDAY, Weekday.THURSDAY],
+                source: 'Monday, Thursday',
+              },
+              effort: { durationMinutes: 90, crewSize: 2 },
+              endDate: null,
+              bookedDates: [],
+              notes: null,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  const generate = (path: 'preview' | 'confirm', agreementId: string) =>
+    request(http)
+      .post(`/api/visit-generation/${path}`)
+      .set(auth(adminToken))
+      .send({ ...GRID, serviceAgreementIds: [agreementId] });
+
+  it('leaves the anchor alone, so regenerating the same month changes nothing', async () => {
+    await importSchedule(prisma, fortnightlySchedule());
+    const created = await prisma.serviceAgreement.findFirstOrThrow({
+      where: { customer: { name: RE_IMPORT_CUSTOMER } },
+      select: { id: true },
+    });
+
+    try {
+      // Stand in for an agreement imported some months ago: the anchor it has
+      // always had, rather than the day this test happened to run.
+      await prisma.serviceAgreement.update({
+        where: { id: created.id },
+        data: { startDate: new Date(`${ANCHOR}T00:00:00.000Z`) },
+      });
+
+      const first = await generate('confirm', created.id);
+      expect(first.status).toBe(200);
+      expect(first.body.additions.length).toBeGreaterThan(0);
+
+      // The manager corrects a cell and uploads the workbook again.
+      await importSchedule(prisma, fortnightlySchedule());
+
+      const after = await prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { startDate: true },
+      });
+      expect(after.startDate.toISOString().slice(0, 10)).toBe(ANCHOR);
+
+      // And the same range is still in order: the fortnights are where they
+      // were, so there is nothing to add, change or remove.
+      const again = await generate('preview', created.id);
+      expect(again.status).toBe(200);
+      expect(again.body.additions).toEqual([]);
+      expect(again.body.updates).toEqual([]);
+      expect(again.body.removals).toEqual([]);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: created.id },
+      });
+    }
+  }, 180_000);
+});

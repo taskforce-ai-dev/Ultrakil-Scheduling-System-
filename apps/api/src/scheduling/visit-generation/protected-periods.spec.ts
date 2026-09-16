@@ -219,7 +219,12 @@ describe('honourProtectedDates', () => {
     expect(plan.removals).toHaveLength(1);
   });
 
-  it('changes nothing when the protected visit is already on the required day', () => {
+  it('moves nothing when the protected visit is already on the required day', () => {
+    // The date, the window and the placement all stay exactly as the run
+    // planned them — there is nothing to pin, because the run already asked
+    // for this very slot. The one thing that does change is that the
+    // requirement stops being the load guard's to move: it *is* the protected
+    // visit, and moving it would invent a second one.
     const untouched = [required({ visitDate: '2026-09-12' })];
     const pinned = honourProtectedDates(
       untouched,
@@ -227,7 +232,7 @@ describe('honourProtectedDates', () => {
       monthly(),
     );
 
-    expect(pinned).toEqual(untouched);
+    expect(pinned).toEqual([{ ...untouched[0], alternatives: [] }]);
   });
 
   it('pins as many days as the agreement asks for, and reports the surplus', () => {
@@ -412,6 +417,50 @@ describe('honourProtectedDates', () => {
 
       expect(pinned[0].visitDate).toBe('2026-09-09');
       expect(pinned[0].pinnedFrom).toBeUndefined();
+    });
+  });
+
+  /**
+   * A requirement that lands on a protected visit's own slot IS that visit.
+   *
+   * The load guard may move a requirement to another day in the same period.
+   * Do that to one of these and two things go wrong at once: a visit is
+   * created on the new day while the protected one stays where it is, and the
+   * guard treats the old day as a place freed up — when nothing left it. A day
+   * carrying three protected visits against a cap of two then ends the run
+   * still carrying three, with nothing said.
+   *
+   * A requirement pinned *onto* a keeper already has its alternatives cleared
+   * ("this date belongs to someone"). One that was already on the keeper's
+   * slot is the same situation and needs the same treatment.
+   */
+  describe('a requirement already standing on a protected slot', () => {
+    const onTheRequirementsOwnSlot = existing({
+      visitDate: '2026-09-16',
+      windowStartMinute: 540,
+      isLocked: true,
+    });
+
+    it('is left nowhere for the load guard to move it to', () => {
+      const pinned = honourProtectedDates(
+        [required()],
+        [onTheRequirementsOwnSlot],
+        monthly(),
+      );
+
+      expect(pinned[0].visitDate).toBe('2026-09-16');
+      expect(pinned[0].alternatives).toEqual([]);
+    });
+
+    it('leaves an ordinary requirement its alternatives', () => {
+      // Nothing protected in the period, so the guard is free as before.
+      const pinned = honourProtectedDates(
+        [required()],
+        [existing({ isLocked: true, visitDate: '2026-10-19' })],
+        monthly(),
+      );
+
+      expect(pinned[0].alternatives).toHaveLength(1);
     });
   });
 

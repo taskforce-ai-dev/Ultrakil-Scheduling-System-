@@ -152,6 +152,19 @@ export function honourProtectedDates(
         ),
     );
 
+    // A requirement already standing on a protected visit's own slot *is*
+    // that visit, so it is no more the load guard's to move than a pinned one
+    // is. Left movable, the guard both invents a visit on the day it moves to
+    // — the protected one never goes anywhere — and reads the day it left as
+    // one place emptier, which is how a day carrying three protected visits
+    // against a cap of two finished a run still carrying three, unwarned.
+    for (const index of indices) {
+      if (!held.has(slotOf(pinned[index].visitDate, pinned[index].windowStartMinute))) {
+        continue;
+      }
+      pinned[index] = { ...pinned[index], alternatives: [] };
+    }
+
     const movers = indices.filter(
       (index) =>
         !held.has(slotOf(pinned[index].visitDate, pinned[index].windowStartMinute)),

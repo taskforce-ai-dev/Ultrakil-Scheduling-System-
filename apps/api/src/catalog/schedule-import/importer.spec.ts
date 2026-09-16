@@ -44,6 +44,58 @@ describe('importSchedule transaction boundary', () => {
  * statements issued, not of the database. The integration suite proves the
  * same thing against real rows.
  */
+/** A recording stand-in for Prisma: what matters is the shape of the writes. */
+function fakePrisma() {
+  const booking = {
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    createMany: jest.fn().mockResolvedValue({ count: 0 }),
+  };
+  const tx = {
+    customer: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'customer-1' }),
+      update: jest.fn(),
+    },
+    serviceSite: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({
+        id: 'site-1',
+        branchId: 'colombo-branch',
+        branchCode: BranchCode.COLOMBO,
+      }),
+      update: jest.fn(),
+    },
+    jobType: {
+      findUniqueOrThrow: jest.fn().mockResolvedValue({
+        id: 'job-1',
+        defaultCrewSize: 2,
+        defaultDurationMinutes: 60,
+      }),
+    },
+    serviceAgreement: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
+      update: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
+    },
+    serviceAgreementBooking: booking,
+  };
+
+  const prisma = {
+    branch: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ id: 'colombo-branch', code: BranchCode.COLOMBO }]),
+    },
+    jobType: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest.fn().mockResolvedValue({ id: 'job-1' }),
+    },
+    $transaction: jest.fn(async (run: (client: unknown) => Promise<unknown>) => run(tx)),
+  };
+
+  return { prisma, tx, booking };
+}
+
 describe('importSchedule booking writes', () => {
   function scheduleWith(bookedDates: string[]): ParsedSchedule {
     return {
@@ -89,56 +141,6 @@ describe('importSchedule booking writes', () => {
     };
   }
 
-  function fakePrisma() {
-    const booking = {
-      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      createMany: jest.fn().mockResolvedValue({ count: 0 }),
-    };
-    const tx = {
-      customer: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: 'customer-1' }),
-        update: jest.fn(),
-      },
-      serviceSite: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({
-          id: 'site-1',
-          branchId: 'colombo-branch',
-          branchCode: BranchCode.COLOMBO,
-        }),
-        update: jest.fn(),
-      },
-      jobType: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue({
-          id: 'job-1',
-          defaultCrewSize: 2,
-          defaultDurationMinutes: 60,
-        }),
-      },
-      serviceAgreement: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
-        update: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
-      },
-      serviceAgreementBooking: booking,
-    };
-
-    const prisma = {
-      branch: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([{ id: 'colombo-branch', code: BranchCode.COLOMBO }]),
-      },
-      jobType: {
-        findUnique: jest.fn().mockResolvedValue(null),
-        create: jest.fn().mockResolvedValue({ id: 'job-1' }),
-      },
-      $transaction: jest.fn(async (run: (client: unknown) => Promise<unknown>) => run(tx)),
-    };
-
-    return { prisma, tx, booking };
-  }
 
   it('writes one SOURCE row per booked date', async () => {
     const { prisma, booking } = fakePrisma();
@@ -185,5 +187,101 @@ describe('importSchedule booking writes', () => {
 
     expect(booking.deleteMany).toHaveBeenCalledTimes(1);
     expect(booking.createMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The anchor a re-import must not move.
+ *
+ * `startDate` is not bookkeeping on this branch: `periodIndexOf` counts an
+ * agreement's periods from it, so a fortnightly agreement's fortnights are the
+ * two ISO weeks from the week it began in, and a quarterly agreement's
+ * quarters the three-month blocks from the month it began in. The importer
+ * stamped it with the day the import ran, for updates as well as creates — so
+ * re-uploading a corrected workbook a week later silently moved the period
+ * boundaries of every cadence with an interval above one, and the "ask for the
+ * same range twice and nothing changes" property did not survive it. Weekly
+ * and monthly agreements were spared only because each week and each month is
+ * its own period.
+ */
+describe('importSchedule and the period anchor', () => {
+  function scheduleForAnchor(): ParsedSchedule {
+    return {
+      customers: [
+        {
+          name: 'Anchor Co',
+          sourceSheet: 'Main',
+          isServiced: true,
+          sites: [
+            {
+              name: 'Head Office',
+              addressLine: null,
+              regionLabel: null,
+              locationCode: null,
+              isServiced: true,
+            },
+          ],
+          agreements: [
+            {
+              siteName: 'Head Office',
+              isServiced: true,
+              treatmentCodes: ['GPC'],
+              frequency: {
+                kind: 'parsed',
+                frequency: { count: 1, unit: FrequencyUnit.WEEK, interval: 2 },
+                source: 'Fortnightly',
+              },
+              dayRule: {
+                kind: 'parsed',
+                allowedDays: [Weekday.MONDAY],
+                source: 'Monday',
+              },
+              effort: { durationMinutes: 90, crewSize: 2 },
+              endDate: null,
+              bookedDates: [],
+              notes: null,
+            },
+          ],
+        },
+      ],
+      issues: [],
+      sheetSummary: [],
+    };
+  }
+
+  it('leaves an existing agreement the anchor it has always had', async () => {
+    const { prisma, tx } = fakePrisma();
+    tx.serviceAgreement.findFirst.mockResolvedValue({
+      id: 'agreement-1',
+      importedInactiveAt: null,
+      crewSizeProvenance: DataProvenance.SOURCE,
+      durationProvenance: DataProvenance.SOURCE,
+      dayRuleProvenance: DataProvenance.SOURCE,
+    });
+
+    await importSchedule(prisma as never, scheduleForAnchor());
+
+    expect(tx.serviceAgreement.update).toHaveBeenCalledTimes(1);
+    const { data } = tx.serviceAgreement.update.mock.calls[0][0] as {
+      data: Record<string, unknown>;
+    };
+    expect(data).not.toHaveProperty('startDate');
+    // The rest of the workbook's reading is still applied.
+    expect(data).toHaveProperty('endDate', null);
+    expect(data).toHaveProperty('frequencyInterval', 2);
+  });
+
+  it('gives a newly created agreement the day the import ran', async () => {
+    const { prisma, tx } = fakePrisma();
+
+    await importSchedule(prisma as never, scheduleForAnchor());
+
+    expect(tx.serviceAgreement.create).toHaveBeenCalledTimes(1);
+    const { data } = tx.serviceAgreement.create.mock.calls[0][0] as {
+      data: { startDate: Date };
+    };
+    expect(data.startDate).toEqual(
+      new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`),
+    );
   });
 });

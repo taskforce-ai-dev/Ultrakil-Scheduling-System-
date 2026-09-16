@@ -298,7 +298,6 @@ export async function importSchedule(
                     ? DataProvenance.DERIVED
                     : DataProvenance.SOURCE,
               }),
-          startDate,
           endDate: agreement.endDate
             ? new Date(`${agreement.endDate}T00:00:00.000Z`)
             : null,
@@ -317,6 +316,18 @@ export async function importSchedule(
 
         let agreementId: string;
         if (existingAgreement) {
+          // `startDate` is deliberately not in `data`, so it is not written
+          // here. It is the agreement's **period anchor**: `periodIndexOf`
+          // counts fortnights from the ISO week it began in and quarters from
+          // the month it began in. Stamping it with the day the import ran —
+          // which is what happened on every update — re-phased every cadence
+          // with an interval above one, so re-uploading a corrected workbook a
+          // week later moved the period boundaries of every fortnightly
+          // agreement by seven days and of every quarterly one by a month.
+          // Periods already planned became different periods, and the promise
+          // this whole branch rests on, that asking for the same range twice
+          // changes nothing, did not survive a re-import. An agreement keeps
+          // the anchor it has always had; only a new one takes today's date.
           await tx.serviceAgreement.update({
             where: { id: existingAgreement.id },
             data: {
@@ -330,6 +341,7 @@ export async function importSchedule(
           const created = await tx.serviceAgreement.create({
             data: {
               ...data,
+              startDate,
               crewSize: sourceCrewSize,
               crewSizeProvenance:
                 agreement.effort.crewSize === null

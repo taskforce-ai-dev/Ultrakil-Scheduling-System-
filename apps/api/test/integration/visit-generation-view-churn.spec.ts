@@ -370,6 +370,99 @@ describe('the week view and the month view over the same Monday', () => {
     await expectNoDayOverTheCap();
   }, 180_000);
 
+  it('warns about a day its own protected work leaves over the cap, and adds nothing beside it', async () => {
+    // Three visits of one agreement on one Monday, all the manager's own, in
+    // a week this range holds whole — so the run plans that period and the
+    // requirement it plans lands on one of those very slots.
+    //
+    // That requirement *is* the protected visit. Treating it as an ordinary
+    // plan let the guard move it to the Tuesday: a fourth visit appeared
+    // there, the three protected ones never budged, and the Monday was read
+    // as one place emptier than it is. It finished the run carrying three
+    // against a cap of two, and said nothing.
+    const day = '2026-06-22';
+    const branch = await prisma.branch.findUniqueOrThrow({
+      where: { code: BranchCode.KANDY },
+    });
+    const occupancyOn = (date: string) =>
+      prisma.generatedVisit.count({
+        where: {
+          branchCode: BranchCode.KANDY,
+          visitDate: new Date(`${date}T00:00:00.000Z`),
+          status: { not: 'CANCELLED' },
+        },
+      });
+
+    await prisma.generatedVisit.deleteMany({
+      where: { serviceAgreementId: { in: AGREEMENTS } },
+    });
+
+    try {
+      await prisma.generatedVisit.createMany({
+        data: [0, 1, 2].map((index) => ({
+          serviceAgreementId: WEEKLY,
+          branchId: branch.id,
+          branchCode: BranchCode.KANDY,
+          visitDate: new Date(`${day}T00:00:00.000Z`),
+          // The first shares the slot the run plans for this week; the other
+          // two are the manager's extra calls that day.
+          windowStartMinute: 8 * 60 + index * 60,
+          windowEndMinute: 17 * 60,
+          durationMinutes: 60,
+          requiredCrewSize: 1,
+          isManuallyAdjusted: true,
+        })),
+      });
+
+      const preview = await run('preview', GRID);
+
+      // The count the manager is shown is the count the day really carries.
+      const warning = preview.loadWarnings.find((entry) => entry.date === day);
+      expect(warning).toBeDefined();
+      expect(warning?.plannedCount).toBe(3);
+
+      // And nothing of this agreement's is planned elsewhere in that week to
+      // stand in for work that never moved.
+      expect(
+        preview.additions.filter(
+          (addition) =>
+            addition.serviceAgreementId === WEEKLY &&
+            addition.visitDate >= day &&
+            addition.visitDate <= '2026-06-28',
+        ),
+      ).toEqual([]);
+
+      await run('confirm', GRID);
+      expect(await occupancyOn(day)).toBe(3);
+      // Nothing of this agreement's was created beside the work that never
+      // moved. Another agreement's visit may well have been spread onto the
+      // Tuesday — that is the guard doing its job — but the day the protected
+      // visits sit on is not emptier for it.
+      expect(
+        await prisma.generatedVisit.count({
+          where: {
+            serviceAgreementId: WEEKLY,
+            visitDate: {
+              gte: new Date('2026-06-22T00:00:00.000Z'),
+              lte: new Date('2026-06-28T00:00:00.000Z'),
+            },
+          },
+        }),
+      ).toBe(3);
+
+      // Idempotent: asking for the same range again still has nothing to do.
+      const again = await run('preview', GRID);
+      expect(again.additions).toHaveLength(0);
+      expect(again.removals).toHaveLength(0);
+      expect(again.updates).toHaveLength(0);
+      expect(again.loadWarnings.find((entry) => entry.date === day)?.plannedCount).toBe(3);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: { in: AGREEMENTS } },
+      });
+    }
+  }, 180_000);
+
   it('says nothing about an over-full day outside the range it was asked about', async () => {
     // Standing work used to be read over the whole calendar months the range
     // touches, and every protected or out-of-scope visit in them was kept. The
