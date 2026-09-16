@@ -935,6 +935,66 @@ describe("regeneration impact review", () => {
     expect(within(drawer).queryByText(/reaches its last day/)).not.toBeInTheDocument();
   });
 
+  /**
+   * The preview told a manager standing in the month view to "Switch to the
+   * month view", and put "Nothing is wrong with these agreements" directly
+   * under a heading saying they had not been planned.
+   */
+  it("never tells a manager in the month view to switch to the month view", async () => {
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        skippedPeriods: [
+          {
+            serviceAgreementId: "agreement-q1",
+            frequencyUnit: "MONTH",
+            frequencyInterval: 3,
+            periodsSkipped: 1,
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD",
+            message: "no whole quarter in this range",
+          },
+        ],
+      })
+    );
+    // The calendar opens in the month view, which is where the advice was wrong.
+    const user = await renderCalendar();
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/Generate over a longer range/),
+    ).toBeInTheDocument();
+    // And it no longer shrugs "nothing is wrong" under "Not planned by this range".
+    expect(
+      within(drawer).queryByText(/^Nothing is wrong with these agreements\./),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still offers the month view to a manager standing in the week view", async () => {
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        skippedPeriods: [
+          {
+            serviceAgreementId: "agreement-q1",
+            frequencyUnit: "MONTH",
+            frequencyInterval: 3,
+            periodsSkipped: 1,
+            reason: "RANGE_HOLDS_NO_WHOLE_PERIOD",
+            message: "no whole quarter in this range",
+          },
+        ],
+      })
+    );
+    const user = await renderCalendar();
+    await user.click(screen.getByRole("button", { name: "Week" }));
+
+    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).getByText(/Switch to the month view/)).toBeInTheDocument();
+  });
+
   it("counts cycles whose name is already plural without inventing an extra s", async () => {
     // "2 three weekss". The count was appended with a bare "s", which reads
     // correctly for "fortnight" and not at all for a span that is already a

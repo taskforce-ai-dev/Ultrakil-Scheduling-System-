@@ -729,6 +729,7 @@ export default function VisitsPage() {
         onOpenChange={setGenerateOpen}
         from={generationRange.from}
         to={generationRange.to}
+        view={view}
         branchCode={branch === "ALL" ? undefined : branch}
         onConfirmed={load}
       />

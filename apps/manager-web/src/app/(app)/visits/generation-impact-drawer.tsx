@@ -22,7 +22,7 @@ import {
   previewVisitGeneration,
   type GenerationImpact,
 } from "@/lib/api-client";
-import { formatLongDate } from "@/lib/calendar";
+import { formatLongDate, type CalendarView } from "@/lib/calendar";
 import { notify } from "@/lib/notify";
 
 interface GenerationImpactDrawerProps {
@@ -35,6 +35,15 @@ interface GenerationImpactDrawerProps {
    */
   from: string;
   to: string;
+  /**
+   * The view the manager is standing in.
+   *
+   * The advice for a cycle no whole period of which fits the range is "widen
+   * the range", and from a week view the shortest way to do that is the month
+   * view. Without knowing the view, the drawer told managers already in the
+   * month view to switch to it — advice they had no way to follow.
+   */
+  view: CalendarView;
   branchCode?: "COLOMBO" | "KANDY";
   /** Called after a confirmed run, so the calendar reloads. */
   onConfirmed: () => void;
@@ -194,6 +203,7 @@ export function GenerationImpactDrawer({
   onOpenChange,
   from,
   to,
+  view,
   branchCode,
   onConfirmed,
 }: GenerationImpactDrawerProps) {
@@ -467,9 +477,17 @@ export function GenerationImpactDrawer({
             ))}
             {impact.skippedPeriods.length > 0 && !anyClipped(impact.skippedPeriods) && (
               <li className="text-muted-foreground">
-                Nothing is wrong with these agreements. Switch to the month view, or
-                generate over a longer range, and the run that covers a whole cycle will
-                plan them.
+                {/*
+                  * Said as what it is: the agreements are fine and the range is
+                  * too short to hold a whole cycle. "Nothing is wrong with
+                  * these agreements", full stop, directly under a heading
+                  * saying they were not planned, reads as a shrug.
+                  */}
+                These agreements are not in trouble — this range is simply too short to hold
+                a whole cycle of them.{" "}
+                {view === "week"
+                  ? "Switch to the month view, or generate over a longer range, and the run that covers a whole cycle will plan them."
+                  : "Generate over a longer range — one that covers a whole cycle — and they will be planned."}
               </li>
             )}
             {anyClipped(impact.skippedPeriods) && (
