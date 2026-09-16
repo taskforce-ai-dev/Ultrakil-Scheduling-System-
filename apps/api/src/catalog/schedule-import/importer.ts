@@ -113,6 +113,11 @@ export async function importSchedule(
   }
 
   const jobTypeIds = await ensureJobTypes(prisma, parsed, summary);
+  // Agreements whose imported bookings this run has already cleared. Two
+  // workbook rows can resolve to one agreement — the same site and treatment
+  // written twice — and clearing again on the second would throw away the
+  // dates the first just wrote.
+  const clearedOfSourceBookings = new Set<string>();
   const startDate = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
 
   for (const customer of parsed.customers) {
@@ -367,6 +372,7 @@ export async function importSchedule(
           tx,
           agreementId,
           agreement.bookedDates,
+          clearedOfSourceBookings,
         );
       }
     }, { timeout: 120_000 });
@@ -384,6 +390,17 @@ export async function importSchedule(
  * the importer's to remove — and `skipDuplicates` leaves that manager row
  * standing when the workbook happens to name the same day.
  *
+ * Cleared **once per agreement per import**, not once per workbook row. Two
+ * rows can resolve to the same agreement — the same site and treatment written
+ * twice, which the workbook does — and deleting again on the second threw away
+ * the dates the first had just written, so the agreement ended up with
+ * whichever row happened to come last.
+ *
+ * The count returned is the number of rows the database actually created, not
+ * the number of dates offered: `skipDuplicates` drops any the manager already
+ * holds, and reporting those as imported overstated the total in the summary a
+ * manager reads.
+ *
  * Both statements run on the caller's transaction client, so an agreement is
  * never left with its old bookings deleted and its new ones unwritten.
  */
@@ -391,15 +408,19 @@ async function writeSourceBookings(
   tx: TransactionClient,
   serviceAgreementId: string,
   bookedDates: string[],
+  alreadyCleared: Set<string>,
 ): Promise<number> {
-  await tx.serviceAgreementBooking.deleteMany({
-    where: { serviceAgreementId, provenance: DataProvenance.SOURCE },
-  });
+  if (!alreadyCleared.has(serviceAgreementId)) {
+    await tx.serviceAgreementBooking.deleteMany({
+      where: { serviceAgreementId, provenance: DataProvenance.SOURCE },
+    });
+    alreadyCleared.add(serviceAgreementId);
+  }
 
   const dates = [...new Set(bookedDates)].sort();
   if (dates.length === 0) return 0;
 
-  await tx.serviceAgreementBooking.createMany({
+  const written = await tx.serviceAgreementBooking.createMany({
     data: dates.map((date) => ({
       serviceAgreementId,
       bookedDate: new Date(`${date}T00:00:00.000Z`),
@@ -408,7 +429,7 @@ async function writeSourceBookings(
     skipDuplicates: true,
   });
 
-  return dates.length;
+  return written.count;
 }
 
 function isImportable(agreement: ParsedAgreement): boolean {

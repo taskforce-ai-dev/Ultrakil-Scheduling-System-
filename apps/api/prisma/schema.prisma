@@ -665,8 +665,6 @@ model ServiceAgreement {
   @@map("service_agreements")
 }
 
-/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
-/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
 /// A date the workbook has already booked with the customer.
 ///
 /// The master schedule's twelve month columns hold the day numbers UltraKIL
@@ -749,6 +747,10 @@ model ServiceAgreementVersion {
   @@map("service_agreement_versions")
 }
 
+/// Which weekdays an agreement may be served on.
+///
+/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
+/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
 model ServiceAgreementDayRule {
   id String @id @default(uuid()) @db.Uuid
 

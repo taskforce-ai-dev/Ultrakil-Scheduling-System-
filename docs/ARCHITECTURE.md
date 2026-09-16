@@ -127,6 +127,21 @@ visit so a manager can see it.
    is reported as a `BOOKED_BELOW_FREQUENCY` shortfall: the bookings still
    stand exactly as written, and nothing extra is planned, but the gap is not
    left for someone to notice a quarter later.
+   A protected visit elsewhere in the period does **not** quietly absorb a
+   booking. `honourProtectedDates` pins a period's requirement onto the
+   protected visit that covers it, and normally says nothing when the keeper's
+   weekday is one the agreement still allows — a manager who moved a visit
+   from Monday to Wednesday chose a day the agreement is content with, and
+   reporting it for ever teaches managers to skip the section. A booking is
+   not a weekday, it is a **date**: the customer agreed the 2nd, and a
+   scheduled visit on the 20th does not serve it. Exempting it silenced
+   everything at once — the date was pinned away, `placement` was copied from
+   the keeper so even that diff did not fire, and the plan counted the visit as
+   already correct, so the drawer read "1 visit is already correct and needs
+   nothing" while the agreed date got nothing. A displaced booking is now
+   always reported, as a protected visit carrying the date it would have been
+   on.
+
 2. **Anchors place the rest** (`ANCHORED`). For a month nothing is booked in,
    `computeSchedulePreview` ranks candidates by preferred weekday, then by how
    far the candidate's day of month sits from the agreement's anchor, then
@@ -314,6 +329,23 @@ customer loses a visit with nothing said. Two things close it:
   are asked about, so a book of weekly and monthly work costs no query at
   all.
 
+  Both halves are gated on the range **actually being one of those grids**:
+  `from` a Monday, `to` a Sunday, a whole calendar month in between, and not
+  ending the day before a month begins — that last being the single seam
+  `rangeForGeneration` sews shut by reaching a week further, so a range
+  arriving here unextended is not one the portal sent. `GenerateVisitsDto`
+  validates two dates and nothing more, and a contract client asking for May's
+  raw grid (27 April to 31 May) would otherwise have the fortnight from 25 May
+  suppressed on an overlap that range does not have. Anything not grid-shaped
+  reports every empty clipped period.
+
+  Verified across 2024-2032: the next grid's first day equals the Monday of
+  this grid's final week in all 108 months, and two-, three-, four- and
+  five-weekly cadences lose nothing. A **six-weekly** cadence is a different
+  case — 70 of its periods are *deferred* by one month rather than lost, since
+  a period longer than a grid can miss one grid and be caught by the next. The
+  importer produces no six-weekly agreements, so this is left as it stands.
+
   A clipped *month* is never reported at all — the next grid holds the
   calendar month whole by construction. The impact drawer gives the clipped
   case its own advice, because the line for `RANGE_HOLDS_NO_WHOLE_PERIOD`
@@ -322,9 +354,12 @@ customer loses a visit with nothing said. Two things close it:
   over a range that reaches its last day" — in the month view a manager picks
   a month, not a range — so it names the month to generate from instead.
 
-Generation still reads the existing and standing visits over the whole
-calendar months the range touches; what it may *change* is still exactly the
-range it was given, and now so is what it may warn about.
+Generation reads the **existing** visits — the ones it may propose changing or
+removing — over the whole calendar months the range touches, because half a
+month tells the pinning very little. **Standing** work, which is the load
+guard's picture of a day, is read over the run's own range and no wider: those
+are the only days the guard may place anything on. What a run may *change* is
+exactly the range it was given, and so now is what it may warn about.
 
 Neither view holds a whole quarter. An agreement whose cadence the range cannot
 hold is not planned and is named in `skippedPeriods` — agreement, unit,

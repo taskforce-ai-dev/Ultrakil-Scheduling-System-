@@ -191,6 +191,92 @@ describe('importSchedule booking writes', () => {
 });
 
 /**
+ * Two workbook rows that resolve to one agreement.
+ *
+ * The master schedule writes the same site and treatment more than once, and
+ * each row carries its own booked dates. Clearing the agreement's imported
+ * bookings per *row* meant the second row's delete threw away what the first
+ * had just written, so the agreement kept whichever row came last. And the
+ * count reported to the manager was the number of dates offered rather than
+ * the number of rows the database created, which `skipDuplicates` can cut.
+ */
+describe('importSchedule booking writes across rows of one agreement', () => {
+  function twoRows(first: string[], second: string[]): ParsedSchedule {
+    const agreementRow = (bookedDates: string[]) => ({
+      siteName: 'Head Office',
+      isServiced: true,
+      treatmentCodes: ['GPC'],
+      frequency: {
+        kind: 'parsed' as const,
+        frequency: { count: 1, unit: FrequencyUnit.MONTH, interval: 1 },
+        source: 'Monthly',
+      },
+      dayRule: {
+        kind: 'parsed' as const,
+        allowedDays: [Weekday.MONDAY],
+        source: 'Monday',
+      },
+      effort: { durationMinutes: 90, crewSize: 2 },
+      endDate: null,
+      bookedDates,
+      notes: null,
+    });
+
+    return {
+      customers: [
+        {
+          name: 'Twice Co',
+          sourceSheet: 'Main',
+          isServiced: true,
+          sites: [
+            {
+              name: 'Head Office',
+              addressLine: null,
+              regionLabel: null,
+              locationCode: null,
+              isServiced: true,
+            },
+          ],
+          agreements: [agreementRow(first), agreementRow(second)],
+        },
+      ],
+      issues: [],
+      sheetSummary: [],
+    };
+  }
+
+  it('clears the agreement once, so the first row\'s dates survive the second', async () => {
+    const { prisma, booking } = fakePrisma();
+    booking.createMany.mockImplementation(
+      async ({ data }: { data: unknown[] }) => ({ count: data.length }),
+    );
+
+    await importSchedule(prisma as never, twoRows(['2026-01-05'], ['2026-02-09']));
+
+    expect(booking.deleteMany).toHaveBeenCalledTimes(1);
+    expect(booking.createMany).toHaveBeenCalledTimes(2);
+    const written = booking.createMany.mock.calls.flatMap(
+      ([call]: [{ data: { bookedDate: Date }[] }]) =>
+        call.data.map((row) => row.bookedDate.toISOString().slice(0, 10)),
+    );
+    expect(written).toEqual(['2026-01-05', '2026-02-09']);
+  });
+
+  it('counts the rows the database created, not the dates it was offered', async () => {
+    const { prisma, booking } = fakePrisma();
+    // The manager already holds one of these days, so the insert skips it.
+    booking.createMany.mockResolvedValue({ count: 1 });
+
+    const summary = await importSchedule(
+      prisma as never,
+      twoRows(['2026-01-05', '2026-01-20'], []),
+    );
+
+    expect(summary.bookingsImported).toBe(1);
+  });
+});
+
+/**
  * The anchor a re-import must not move.
  *
  * `startDate` is not bookkeeping on this branch: `periodIndexOf` counts an
