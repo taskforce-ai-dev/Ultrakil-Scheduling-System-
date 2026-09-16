@@ -123,7 +123,17 @@ describe('dailyCapRefusal', () => {
     expect(refusal.code).toBe('DAILY_VISIT_CAP_REACHED');
     expect(refusal.message).toContain('2026-09-17');
     expect(refusal.message).toContain('12 visits in COLOMBO');
-    expect(refusal.message).toContain('stayed on 2026-09-21');
+    expect(refusal.message).toContain('2026-09-21');
+  });
+
+  it('leads with the day the visit is actually on', () => {
+    // Read beside a visit dated the 21st, "The scheduler planned this visit
+    // for 2026-09-17…" put a date the visit is not on in the first six words,
+    // and it registered as the visit's own. The day it is on comes first.
+    expect(refusal.message.indexOf('2026-09-21')).toBeLessThan(
+      refusal.message.indexOf('2026-09-17'),
+    );
+    expect(refusal.message.startsWith('This visit is on 2026-09-21')).toBe(true);
   });
 
   it('offers both ways out, because either one actually works', () => {

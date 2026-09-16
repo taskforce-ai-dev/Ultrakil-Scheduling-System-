@@ -90,6 +90,12 @@ export function branchDayKey(branchCode: BranchCode, date: string): string {
  * the day that was full, what it was full of, and where the visit stayed. The
  * remediation offers both ways out, because either one genuinely works —
  * empty the day the scheduler wanted, or crew the visit where it is.
+ *
+ * The day the visit is actually on comes first, and is the only date in the
+ * opening sentence. Leading with the proposed date — "The scheduler planned
+ * this visit for 2026-09-16…" — put a day the visit is *not* on in the first
+ * six words, and read beside a visit dated the 18th that date registered as
+ * the visit's own.
  */
 export function dailyCapRefusal(input: {
   visitId: string;
@@ -104,7 +110,7 @@ export function dailyCapRefusal(input: {
 }): Conflict {
   return {
     code: 'DAILY_VISIT_CAP_REACHED',
-    message: `The scheduler planned this visit for ${input.proposedDate}, but that day already carries ${input.carrying} ${input.carrying === 1 ? 'visit' : 'visits'} in ${input.branchCode}, the ${input.cap} a day this branch plans for. The visit stayed on ${input.keptDate}.`,
+    message: `This visit is on ${input.keptDate}, where it was generated. The scheduler wanted to move it to ${input.proposedDate}, but that day already carries ${input.carrying} ${input.carrying === 1 ? 'visit' : 'visits'} in ${input.branchCode}, the ${input.cap} a day this branch plans for, so the move was refused.`,
     remediation: `Move or cancel work already on ${input.proposedDate} to make room, or assign a crew that can serve this visit on ${input.keptDate}.`,
     resources: { visitId: input.visitId },
   };
