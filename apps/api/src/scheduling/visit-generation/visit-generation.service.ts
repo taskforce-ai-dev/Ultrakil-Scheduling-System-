@@ -26,6 +26,7 @@ import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
+import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
 import { GenerateVisitsDto, GenerationImpactDto } from './dto';
 import {
@@ -388,7 +389,7 @@ export class VisitGenerationService {
             frequencyInterval: agreement.frequencyInterval,
             periodsSkipped: unfinished.length,
             reason: 'RANGE_CLIPS_A_PERIOD',
-            message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only part of ${spansOf(unfinished)}. Nothing is planned there and no visit stands there: a ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} cut short at the end begins more than a week before this range ends, so the next month's grid will not hold it either, and one cut short at the start was already missed by the run before this one. Generate over a range that covers it end to end.`,
+            message: `${cadenceName(agreement.frequencyUnit, agreement.frequencyInterval)} agreements are planned a whole ${cadenceNoun(agreement.frequencyUnit, agreement.frequencyInterval)} at a time, and ${from} to ${to} holds only part of ${spansOf(unfinished)}. Nothing is planned there, no visit stands there, and no neighbouring month's grid holds it whole either. Generate from the month it starts in, or use a wider range, to plan it.`,
           });
         }
       }
@@ -961,45 +962,6 @@ function periodsHoldingAVisit(
   }
 
   return held;
-}
-
-/** "Quarterly", "Fortnightly" — the word UltraKIL sells the cadence by. */
-function cadenceName(unit: FrequencyUnit, interval: number): string {
-  const named: Record<string, string> = {
-    'WEEK|1': 'Weekly',
-    'WEEK|2': 'Fortnightly',
-    'MONTH|1': 'Monthly',
-    'MONTH|2': 'Two-monthly',
-    'MONTH|3': 'Quarterly',
-    'MONTH|6': 'Six-monthly',
-    'MONTH|12': 'Yearly',
-  };
-  return (
-    named[`${unit}|${interval}`] ??
-    `Every ${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
-  );
-}
-
-/** "the fortnight 2026-05-25 to 2026-06-07", and the rest counted. */
-function spansOf(periods: Array<{ start: string; end: string }>): string {
-  const [first, ...rest] = periods;
-  const named = `${first.start} to ${first.end}`;
-  if (rest.length === 0) return named;
-  return `${named} (and ${rest.length} more)`;
-}
-
-/** The span such an agreement needs a run to hold whole. */
-function cadenceNoun(unit: FrequencyUnit, interval: number): string {
-  const named: Record<string, string> = {
-    'WEEK|1': 'week',
-    'WEEK|2': 'fortnight',
-    'MONTH|1': 'month',
-    'MONTH|3': 'quarter',
-  };
-  return (
-    named[`${unit}|${interval}`] ??
-    `${interval} ${unit === FrequencyUnit.WEEK ? 'weeks' : 'months'}`
-  );
 }
 
 function bookingWarningFrom(

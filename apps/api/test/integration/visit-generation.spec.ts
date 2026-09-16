@@ -1423,14 +1423,131 @@ describe('the week view and the month view plan the same periods', () => {
     expect(impact.body.skippedPeriods[0].message).toContain('quarter');
   });
 
-  it('names a fortnight a month grid clipped, even though it planned the others', async () => {
-    // May 2026's grid ends on Sunday 31 May and June's begins on Monday 1
-    // June: the one seam between consecutive grids with no day in common. The
-    // fortnight from 25 May to 7 June is clipped by the horizon in both, so
-    // neither run plans it and neither is "the run that can see it whole".
-    // Because every other fortnight in the range was planned, the old rule —
-    // report only an agreement that planned nothing — said nothing at all,
-    // and the customer simply lost a visit.
+  it('says nothing about a fortnight the next month\'s grid will hold whole', async () => {
+    // The portal's month ranges overlap by exactly one ISO week: a grid that
+    // ends the day before a month begins reaches a week further, so the next
+    // grid always begins on the Monday of this range's final week. A fortnight
+    // is fourteen days, so one cut by this range's end always began inside
+    // that week of overlap — and the next grid plans it whole. Warning about
+    // it sent a manager to widen a range that had lost nothing: on the
+    // walkthrough database every single clipped-fortnight warning was false.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 2,
+      allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+      preferredDays: [],
+      startDate: '2026-01-12',
+    });
+
+    // May's range: the grid ends on Sunday 31 May, and because June begins the
+    // next day it reaches a whole week further, to 7 June.
+    const may = await preview({
+      from: '2026-04-27',
+      to: '2026-06-07',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(may.status).toBe(200);
+    expect(may.body.additions.length).toBeGreaterThan(0);
+    // The fortnight 1-14 June is cut by the last day, and June's grid plans
+    // it: nothing is at risk and nothing is said.
+    expect(may.body.skippedPeriods).toEqual([]);
+
+    const june = await preview({
+      from: '2026-06-01',
+      to: '2026-07-05',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(june.status).toBe(200);
+    expect(
+      june.body.additions.some(
+        (visit: { visitDate: string }) =>
+          visit.visitDate >= '2026-06-01' && visit.visitDate <= '2026-06-14',
+      ),
+    ).toBe(true);
+  });
+
+  it('names a cycle of three weeks that really does fall between two grids', async () => {
+    // Three weeks is longer than the week of overlap, so such a period can
+    // begin before the Monday the next grid starts on and be clipped by both.
+    // April 2026's grid runs 30 March to 3 May; the period 20 April to 10 May
+    // begins a week before May's grid does, and no run ever holds it whole.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 3,
+      allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+      preferredDays: [],
+      startDate: '2026-01-05',
+    });
+
+    const april = await preview({
+      from: '2026-03-30',
+      to: '2026-05-03',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(april.status).toBe(200);
+    // It did plan other cycles, so this is not the "nothing at all" case.
+    expect(april.body.additions.length).toBeGreaterThan(0);
+    expect(april.body.skippedPeriods).toEqual([
+      expect.objectContaining({
+        serviceAgreementId: agreement.id,
+        frequencyUnit: 'WEEK',
+        frequencyInterval: 3,
+        reason: 'RANGE_CLIPS_A_PERIOD',
+        periodsSkipped: 1,
+      }),
+    ]);
+    expect(april.body.skippedPeriods[0].message).toContain('2026-04-20 to 2026-05-10');
+    // The advice a manager can act on from the month view they are standing
+    // in — never "reach past this range's last day", which the month view has
+    // no control over.
+    expect(april.body.skippedPeriods[0].message).toContain('month it starts in');
+  });
+
+  it('names the first period of an agreement created after the previous month was generated', async () => {
+    // The start-clipped edge used to be silent on the grounds that the run
+    // before this one covers it. That run may predate the agreement. Created
+    // on 28 May starting the 27th, this agreement's first fortnight is 25 May
+    // to 7 June — May was generated on the 1st, June's run meets the period
+    // clipped at the start, and the customer's first fortnight gets nothing
+    // from anybody.
+    const agreement = await createAgreement({
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      frequencyInterval: 2,
+      allowedDays: [Weekday.MONDAY, Weekday.TUESDAY],
+      preferredDays: [],
+      startDate: '2026-05-27',
+    });
+
+    const june = await preview({
+      from: '2026-06-01',
+      to: '2026-07-05',
+      serviceAgreementIds: [agreement.id],
+    });
+
+    expect(june.status).toBe(200);
+    expect(june.body.skippedPeriods).toEqual([
+      expect.objectContaining({
+        serviceAgreementId: agreement.id,
+        frequencyUnit: 'WEEK',
+        frequencyInterval: 2,
+        reason: 'RANGE_CLIPS_A_PERIOD',
+        periodsSkipped: 1,
+      }),
+    ]);
+    expect(june.body.skippedPeriods[0].message).toContain('2026-05-25 to 2026-06-07');
+  });
+
+  it('says nothing about a start-clipped period the run before this one planned', async () => {
+    // The ordinary hand-off, and the reason the rule asks the calendar rather
+    // than reasoning about which runs were pressed. May plans the fortnight
+    // that straddles the seam; June meets the same fortnight clipped at its
+    // start and has nothing to report, because a visit is standing in it.
     const agreement = await createAgreement({
       frequencyCount: 1,
       frequencyUnit: 'WEEK',
@@ -1440,54 +1557,34 @@ describe('the week view and the month view plan the same periods', () => {
       startDate: '2026-01-05',
     });
 
-    const mayGrid = await preview({
-      from: '2026-04-27',
-      to: '2026-05-31',
-      serviceAgreementIds: [agreement.id],
-    });
+    try {
+      const may = await confirm({
+        from: '2026-04-27',
+        to: '2026-06-07',
+        serviceAgreementIds: [agreement.id],
+      });
+      expect(may.status).toBe(200);
+      expect(may.body.skippedPeriods).toEqual([]);
+      expect(
+        may.body.additions.some(
+          (visit: { visitDate: string }) =>
+            visit.visitDate >= '2026-05-25' && visit.visitDate <= '2026-06-07',
+        ),
+      ).toBe(true);
 
-    expect(mayGrid.status).toBe(200);
-    // It did plan fortnights, so this is not the "nothing at all" case.
-    expect(mayGrid.body.additions.length).toBeGreaterThan(0);
-    expect(mayGrid.body.skippedPeriods).toEqual([
-      expect.objectContaining({
-        serviceAgreementId: agreement.id,
-        frequencyUnit: 'WEEK',
-        frequencyInterval: 2,
-        reason: 'RANGE_CLIPS_A_PERIOD',
-      }),
-    ]);
-    expect(mayGrid.body.skippedPeriods[0].message).toContain('2026-06-07');
-    expect(mayGrid.body.skippedPeriods[0].periodsSkipped).toBe(1);
+      const june = await preview({
+        from: '2026-06-01',
+        to: '2026-07-05',
+        serviceAgreementIds: [agreement.id],
+      });
 
-    // The other edge is somebody else's. June's grid meets the same fortnight
-    // clipped at its *start*, and the May run is the one that owns it — saying
-    // it twice would have two runs each waiting for the other.
-    const juneGrid = await preview({
-      from: '2026-06-01',
-      to: '2026-07-05',
-      serviceAgreementIds: [agreement.id],
-    });
-
-    expect(juneGrid.status).toBe(200);
-    expect(juneGrid.body.skippedPeriods).toEqual([]);
-
-    // And with the week of overlap the portal now asks for, the seam closes:
-    // the fortnight is planned, by the run that can see it whole.
-    const sewnUp = await preview({
-      from: '2026-04-27',
-      to: '2026-06-07',
-      serviceAgreementIds: [agreement.id],
-    });
-
-    expect(sewnUp.status).toBe(200);
-    expect(sewnUp.body.skippedPeriods).toEqual([]);
-    expect(
-      sewnUp.body.additions.some(
-        (visit: { visitDate: string }) =>
-          visit.visitDate >= '2026-05-25' && visit.visitDate <= '2026-06-07',
-      ),
-    ).toBe(true);
+      expect(june.status).toBe(200);
+      expect(june.body.skippedPeriods).toEqual([]);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
   });
 
   it('never offers to remove a visit standing in a period it did not plan', async () => {

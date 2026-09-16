@@ -100,6 +100,56 @@ function dataOf(mock: jest.Mock): Record<string, unknown> {
   return (mock.mock.calls[0][0] as { data: Record<string, unknown> }).data;
 }
 
+/**
+ * The run that generated a visit, named the way a screen can print it.
+ *
+ * The detail panel used to render `generatedByRunId` as a raw uuid under
+ * "Schedule run". A uuid tells a manager nothing they can act on, and the run
+ * is recognised — everywhere else in the portal — by the weeks it covered. So
+ * the origin carries the run's own horizon, and the id stays in the payload
+ * for links and is never printed.
+ */
+describe('VisitsService origin', () => {
+  function detailFixture(row: Record<string, unknown>, run: unknown) {
+    const prisma = {
+      generatedVisit: { findUnique: jest.fn(async () => row) },
+      scheduleRun: { findUnique: jest.fn(async () => run) },
+    };
+    const service = new VisitsService(
+      prisma as unknown as PrismaService,
+      { record: jest.fn() } as unknown as AuditService,
+      { evaluate: jest.fn() } as unknown as EligibilityService,
+    );
+    return { service, prisma };
+  }
+
+  it("carries the generating run's own horizon, so a screen never prints its id", async () => {
+    const { service } = detailFixture(
+      visitRow({ generatedByRunId: '66666666-6666-4666-8666-666666666666' }),
+      {
+        rangeStart: new Date('2026-09-15T00:00:00.000Z'),
+        rangeEnd: new Date('2026-09-21T00:00:00.000Z'),
+      },
+    );
+
+    const detail = await service.get(VISIT_ID);
+
+    expect(detail.origin.generatedByRunRangeStart).toBe('2026-09-15');
+    expect(detail.origin.generatedByRunRangeEnd).toBe('2026-09-21');
+  });
+
+  it('leaves the horizon null for a visit no run generated', async () => {
+    const { service, prisma } = detailFixture(visitRow(), null);
+
+    const detail = await service.get(VISIT_ID);
+
+    expect(detail.origin.generatedByRunRangeStart).toBeNull();
+    expect(detail.origin.generatedByRunRangeEnd).toBeNull();
+    // Nothing to look up, so nothing is asked for.
+    expect(prisma.scheduleRun.findUnique).not.toHaveBeenCalled();
+  });
+});
+
 describe('VisitsService window provenance', () => {
   it('records a hand-corrected window as manager confirmed', async () => {
     const { service, tx } = fixture();

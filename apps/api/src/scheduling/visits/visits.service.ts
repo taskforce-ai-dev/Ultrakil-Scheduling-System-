@@ -149,6 +149,16 @@ export class VisitsService {
   async get(id: string): Promise<VisitDetailDto> {
     const visit = await this.load(id);
     const agreement = visit.serviceAgreement;
+    // The run's own horizon, because that is how every screen in the portal
+    // names a run — "Schedule run 15-21 Sep". A uuid tells a manager nothing
+    // they can act on. Looked up here rather than joined into VISIT_INCLUDE:
+    // this is one visit, and the list has no use for it.
+    const run = visit.generatedByRunId
+      ? await this.prisma.scheduleRun.findUnique({
+          where: { id: visit.generatedByRunId },
+          select: { rangeStart: true, rangeEnd: true },
+        })
+      : null;
     const snapshot = (visit.agreementVersion?.snapshot ?? null) as {
       allowedDays?: string[];
     } | null;
@@ -171,6 +181,8 @@ export class VisitsService {
         allowedDaysAtGeneration: snapshot?.allowedDays ?? [],
         generatedAt: visit.createdAt.toISOString(),
         generatedByRunId: visit.generatedByRunId,
+        generatedByRunRangeStart: run ? toDateOnly(run.rangeStart) : null,
+        generatedByRunRangeEnd: run ? toDateOnly(run.rangeEnd) : null,
       },
     };
   }

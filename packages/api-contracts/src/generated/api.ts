@@ -1984,8 +1984,21 @@ export interface components {
             allowedDaysAtGeneration: string[];
             /** Format: date-time */
             generatedAt: string | null;
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description The schedule run that generated this visit. For links only — a screen names a run by the weeks it covered, never by its id.
+             */
             generatedByRunId: string | null;
+            /**
+             * Format: date
+             * @description First day of that run's horizon, which is how a screen names it. Null when no run generated this visit.
+             */
+            generatedByRunRangeStart: string | null;
+            /**
+             * Format: date
+             * @description Last day of that run's horizon. Null when no run generated this visit.
+             */
+            generatedByRunRangeEnd: string | null;
         };
         VisitDetailDto: {
             /** Format: uuid */

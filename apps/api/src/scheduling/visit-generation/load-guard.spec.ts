@@ -355,6 +355,44 @@ describe('applyDailyLoadGuard', () => {
       expect(result.warnings).toEqual([]);
     });
 
+    it('never counts out a kind of visit the day has none of', () => {
+      // "None of them could be moved: 0 are dates already booked with the
+      // customer. 3 are already in the calendar" makes a dispatcher stop and
+      // work out what a zero means. A clause with nothing behind it is not
+      // said at all — and one kind covering the whole day says "all".
+      const result = applyDailyLoadGuard(crowd(1, { alternatives: [] }).map((entry) => ({
+        ...entry,
+        visitDate: '2026-09-09',
+      })), 2, ['a', 'b', 'c'].map((id) => ({
+        serviceAgreementId: `outside-this-run-${id}`,
+        branchCode: BranchCode.COLOMBO,
+        visitDate: '2026-09-07',
+      })));
+
+      const warning = result.warnings.find((entry) => entry.date === '2026-09-07');
+      expect(warning?.bookedCount).toBe(0);
+      expect(warning?.message).not.toMatch(/\b0 /);
+      expect(warning?.message).toContain(
+        "None of them could be moved: all 3 are already in the calendar and not this run's to move.",
+      );
+    });
+
+    it('counts both kinds out when the day really has both', () => {
+      const result = applyDailyLoadGuard(
+        crowd(1, { alternatives: [], placement: VisitPlacement.BOOKED }),
+        2,
+        ['a', 'b'].map((id) => ({
+          serviceAgreementId: `outside-this-run-${id}`,
+          branchCode: BranchCode.COLOMBO,
+          visitDate: '2026-09-07',
+        })),
+      );
+
+      expect(result.warnings[0].message).toContain(
+        "None of them could be moved: 1 is a date already booked with the customer, and 2 are already in the calendar and not this run's to move.",
+      );
+    });
+
     it('says in the warning that part of the day is not this run to move', () => {
       const result = applyDailyLoadGuard(crowd(2, { alternatives: [] }), 2, [
         {

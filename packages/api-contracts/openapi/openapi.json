@@ -5386,7 +5386,20 @@
           "generatedByRunId": {
             "type": "string",
             "nullable": true,
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The schedule run that generated this visit. For links only — a screen names a run by the weeks it covered, never by its id."
+          },
+          "generatedByRunRangeStart": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "First day of that run's horizon, which is how a screen names it. Null when no run generated this visit."
+          },
+          "generatedByRunRangeEnd": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "Last day of that run's horizon. Null when no run generated this visit."
           }
         },
         "required": [
@@ -5398,7 +5411,9 @@
           "frequencyLabel",
           "allowedDaysAtGeneration",
           "generatedAt",
-          "generatedByRunId"
+          "generatedByRunId",
+          "generatedByRunRangeStart",
+          "generatedByRunRangeEnd"
         ]
       },
       "VisitDetailDto": {

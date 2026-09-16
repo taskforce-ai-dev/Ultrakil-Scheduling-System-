@@ -52,6 +52,13 @@ const CAP = 2;
  * the week view's own range. Two views, the same Monday.
  */
 const WEEK = { from: '2026-06-01', to: '2026-06-07' };
+/**
+ * The second week of the same grid. The fortnightly agreement's fortnight runs
+ * 8-21 June, so the month run plans a visit into this week that a week view
+ * cannot see the period of — a PENDING visit standing in a week view, which is
+ * the exact shape the churn came from.
+ */
+const WEEK2 = { from: '2026-06-08', to: '2026-06-14' };
 const GRID = { from: '2026-06-01', to: '2026-07-05' };
 
 /**
@@ -103,6 +110,21 @@ async function run(path: 'preview' | 'confirm', range: { from: string; to: strin
   const response = await generate(path, range);
   expect(response.status).toBe(200);
   return response.body as Impact;
+}
+
+/**
+ * No day over the cap — asserted after every confirm, not only at the end.
+ *
+ * A calendar that breaches the cap in the middle and is tidied by a later run
+ * is not the promise: each run leaves the calendar it was given in order, and
+ * a single check at the end cannot tell the two apart.
+ */
+async function expectNoDayOverTheCap(): Promise<void> {
+  const perDay = new Map<string, number>();
+  for (const visit of await visitsNow()) {
+    perDay.set(visit.date, (perDay.get(visit.date) ?? 0) + 1);
+  }
+  expect([...perDay.entries()].filter(([, count]) => count > CAP)).toEqual([]);
 }
 
 async function visitsNow(): Promise<{ agreement: string; date: string }[]> {
@@ -279,6 +301,7 @@ describe('the week view and the month view over the same Monday', () => {
     const firstWeek = await run('confirm', WEEK);
     expect(firstWeek.additions).toHaveLength(1);
     expect(firstWeek.additions[0].visitDate).toBe('2026-06-01');
+    await expectNoDayOverTheCap();
 
     // Month view: now the two monthly agreements want that same Monday, which
     // puts three visits on a day the branch plans two for. The guard moves the
@@ -292,6 +315,8 @@ describe('the week view and the month view over the same Monday', () => {
           addition.serviceAgreementId === WEEKLY && addition.visitDate === '2026-06-02',
       ),
     ).toBe(true);
+
+    await expectNoDayOverTheCap();
 
     const afterMonth = await visitsNow();
     expect(afterMonth.filter((visit) => visit.date === '2026-06-01')).toHaveLength(2);
@@ -313,17 +338,81 @@ describe('the week view and the month view over the same Monday', () => {
     expect(weekConfirmed.additions).toHaveLength(0);
     expect(weekConfirmed.removals).toHaveLength(0);
     expect(weekConfirmed.updates).toHaveLength(0);
+    await expectNoDayOverTheCap();
 
     const monthAgain = await run('preview', GRID);
     expect(monthAgain.additions).toHaveLength(0);
     expect(monthAgain.removals).toHaveLength(0);
     expect(monthAgain.updates).toHaveLength(0);
 
+    // A second cycle, a week further on. The month run planned the
+    // fortnightly agreement's 8-21 June fortnight into this week, and a week
+    // view holds no whole fortnight — so that visit is PENDING, is not this
+    // run's to judge, and is exactly the kind the guard used to count nowhere.
+    const secondWeek = await run('preview', WEEK2);
+    expect(secondWeek.additions).toHaveLength(0);
+    expect(secondWeek.removals).toHaveLength(0);
+    expect(secondWeek.updates).toHaveLength(0);
+
+    const secondWeekConfirmed = await run('confirm', WEEK2);
+    expect(secondWeekConfirmed.additions).toHaveLength(0);
+    expect(secondWeekConfirmed.removals).toHaveLength(0);
+    expect(secondWeekConfirmed.updates).toHaveLength(0);
+    await expectNoDayOverTheCap();
+
+    // And the month still agrees with it afterwards.
+    const monthAfterSecondWeek = await run('preview', GRID);
+    expect(monthAfterSecondWeek.additions).toHaveLength(0);
+    expect(monthAfterSecondWeek.removals).toHaveLength(0);
+    expect(monthAfterSecondWeek.updates).toHaveLength(0);
+
     // Nothing was bought with an over-full day, and nothing was left silent.
-    const perDay = new Map<string, number>();
-    for (const visit of await visitsNow()) {
-      perDay.set(visit.date, (perDay.get(visit.date) ?? 0) + 1);
+    await expectNoDayOverTheCap();
+  }, 180_000);
+
+  it('says nothing about an over-full day outside the range it was asked about', async () => {
+    // Standing work used to be read over the whole calendar months the range
+    // touches, and every protected or out-of-scope visit in them was kept. The
+    // guard then warned about every over-cap day it could see, so a manager
+    // generating one week was shown a warning for a day two weeks later that
+    // this view cannot act on at all.
+    const crowded = '2026-06-15';
+    const branch = await prisma.branch.findUniqueOrThrow({
+      where: { code: BranchCode.KANDY },
+    });
+
+    try {
+      await prisma.generatedVisit.createMany({
+        data: [MONTHLY_A, MONTHLY_B, FORTNIGHTLY].map((serviceAgreementId, index) => ({
+          serviceAgreementId,
+          branchId: branch.id,
+          branchCode: BranchCode.KANDY,
+          visitDate: new Date(`${crowded}T00:00:00.000Z`),
+          windowStartMinute: 8 * 60 + index * 60,
+          windowEndMinute: 17 * 60,
+          durationMinutes: 60,
+          requiredCrewSize: 1,
+          // Manager's own work, so it stands whatever any run decides — the
+          // case the old read kept deliberately.
+          isManuallyAdjusted: true,
+        })),
+      });
+
+      const week = await run('preview', WEEK);
+
+      expect(week.loadWarnings.map((warning) => warning.date)).not.toContain(crowded);
+      expect(
+        week.loadWarnings.filter(
+          (warning) => warning.date < WEEK.from || warning.date > WEEK.to,
+        ),
+      ).toEqual([]);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: {
+          serviceAgreementId: { in: AGREEMENTS },
+          visitDate: new Date(`${crowded}T00:00:00.000Z`),
+        },
+      });
     }
-    expect(Math.max(...perDay.values())).toBeLessThanOrEqual(CAP);
   }, 180_000);
 });

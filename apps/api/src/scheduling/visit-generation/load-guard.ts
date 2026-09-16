@@ -207,10 +207,41 @@ export function applyDailyLoadGuard(
     ).length;
 
     const standingCount = standingPerDay.get(key) ?? 0;
-    const alsoStanding =
-      standingCount > 0
-        ? ` ${standingCount} are already in the calendar and not this run's to move.`
-        : '';
+    // Only the kinds the day actually has. "0 are dates already booked with
+    // the customer" reads as a fact to be worked out rather than one to act
+    // on: a dispatcher has to stop and decide the zero means nothing. And
+    // "all" when one kind covers the whole day, because "19 are already in the
+    // calendar" out of 19 invites a reader to go looking for the other two.
+    const clause = (n: number, kind: 'booked' | 'standing', all = false): string => {
+      const head = all ? `all ${n} are` : n === 1 ? '1 is' : `${n} are`;
+      return kind === 'booked'
+        ? `${head} ${!all && n === 1 ? 'a date' : 'dates'} already booked with the customer`
+        : `${head} already in the calendar and not this run's to move`;
+    };
+
+    const over = `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for.`;
+
+    let message: string;
+    if (bookedCount + standingCount >= count) {
+      // Every visit on the day is one or the other, so name them and stop.
+      const accountedFor =
+        standingCount === 0
+          ? [clause(count, 'booked', true)]
+          : bookedCount === 0
+            ? [clause(count, 'standing', true)]
+            : [clause(bookedCount, 'booked'), clause(standingCount, 'standing')];
+      message = `${over} None of them could be moved: ${accountedFor.join(', and ')}.`;
+    } else {
+      message = [
+        over,
+        bookedCount > 0
+          ? `${clause(bookedCount, 'booked')}, and the rest had no other day inside their period to move to.`
+          : 'None of them had another day inside their period to move to.',
+        standingCount > 0 ? `${clause(standingCount, 'standing')}.` : null,
+      ]
+        .filter((sentence): sentence is string => sentence !== null)
+        .join(' ');
+    }
 
     warnings.push({
       branchCode,
@@ -218,10 +249,7 @@ export function applyDailyLoadGuard(
       plannedCount: count,
       bookedCount,
       cap,
-      message:
-        bookedCount + standingCount >= count
-          ? `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. None of them could be moved: ${bookedCount} are dates already booked with the customer.${alsoStanding}`
-          : `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for. ${bookedCount} are already booked with the customer, and the rest had no other day inside their period to move to.${alsoStanding}`,
+      message,
     });
   }
 
