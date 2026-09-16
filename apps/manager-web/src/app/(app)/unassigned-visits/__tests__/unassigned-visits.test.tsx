@@ -194,6 +194,45 @@ describe("unassigned visits queue", () => {
     expect(screen.getByText("Grandview Hotel")).toBeInTheDocument();
   });
 
+  /**
+   * "Narrow the branch filter to see the rest" was advice that could not
+   * work — everything in the pilot is one branch — and it never mentioned
+   * the pager at the very bottom, which is the actual way to see rows 26
+   * onwards.
+   */
+  it("says how to reach the rest of the queue: the pager, not the branch", async () => {
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall], 70);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.getByText(/Showing 2 of 70 unassigned visits/)).toBeInTheDocument();
+    expect(screen.getByText(/pager at the end of this list/)).toBeInTheDocument();
+    expect(screen.queryByText(/Narrow the branch filter/)).not.toBeInTheDocument();
+  });
+
+  it("always reports how many there are, even when they all fit on one page", async () => {
+    // A filtered queue that fits showed no total at all, so a coordinator
+    // could not tell 2 from 2-of-70 without scrolling to look for a pager.
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall]);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.getByText("All 2 unassigned visits are shown.")).toBeInTheDocument();
+  });
+
+  it("offers the backlog nobody has looked at as a conflict choice", async () => {
+    // 63 of 70 queued visits carry no conflicts at all. Without this the
+    // Conflict type filter could only name the seven that need a decision.
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Conflict type"));
+    await user.click(await screen.findByRole("option", { name: "Not yet checked" }));
+
+    const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(lastCall).toMatchObject({ checked: false, page: 1 });
+    expect(lastCall).not.toHaveProperty("conflictGroup");
+  });
+
   it("asks the server for an operation state rather than sending a status", async () => {
     const user = await renderPage();
 

@@ -36,7 +36,16 @@ import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-type GroupFilter = "ALL" | ConflictGroup;
+/**
+ * "All", one of the engine's conflict groups, or the backlog nobody has
+ * looked at yet.
+ *
+ * NOT_CHECKED is not a conflict — it is the absence of one, which is what 63
+ * of 70 queued visits are. Without it this filter could only name the handful
+ * that need a decision, and the untouched backlog could not be separated out
+ * at all. It goes to the server as `checked=false`, the API's own spelling.
+ */
+type GroupFilter = "ALL" | "NOT_CHECKED" | ConflictGroup;
 /**
  * The server's two operation states, plus "no preference". Both names come
  * from the API (`operationState` on every row and on the filter), so the page
@@ -66,6 +75,7 @@ const STATE_LABELS: Record<StateFilter, string> = {
 // value -> label map, which would show the raw group code on the trigger.
 const GROUP_LABELS: Record<GroupFilter, string> = {
   ALL: "All conflict types",
+  NOT_CHECKED: "Not yet checked",
   ...CONFLICT_GROUP_LABEL,
 };
 
@@ -134,7 +144,11 @@ export default function UnassignedVisitsPage() {
           ...(date ? { from: date, to: date } : {}),
           ...(branch === "ALL" ? {} : { branchCode: branch }),
           ...(status === "ALL" ? {} : { operationState: status }),
-          ...(group === "ALL" ? {} : { conflictGroup: group }),
+          ...(group === "ALL"
+            ? {}
+            : group === "NOT_CHECKED"
+              ? { checked: false }
+              : { conflictGroup: group }),
         };
     fetchUnassignedVisits(query)
       .then((page) => {
@@ -331,6 +345,7 @@ export default function UnassignedVisitsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All conflict types</SelectItem>
+              <SelectItem value="NOT_CHECKED">Not yet checked</SelectItem>
               {CONFLICT_GROUPS.map((g) => (
                 <SelectItem key={g} value={g}>
                   {CONFLICT_GROUP_LABEL[g]}
@@ -392,11 +407,25 @@ export default function UnassignedVisitsPage() {
               </Button>
             </p>
           ) : (
-            total > items.length && (
+            /* Always a count, and always a way to reach the rest.
+               "Narrow the branch filter" was advice that could not work —
+               everything in the pilot is one branch — and it never mentioned
+               the pager at the very bottom, which is the only thing that
+               reaches row 26. And when a filtered queue fitted on one page
+               the whole line disappeared, so a manager could not tell 2 from
+               2 of 70. */
+            total > items.length ? (
               <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                Showing {items.length} of {total} unassigned visits. Narrow the branch filter to see
-                the rest.
+                Showing {items.length} of {total} unassigned visits — page {page} of{" "}
+                {Math.max(1, Math.ceil(total / PAGE_SIZE))}. Use the pager at the end of this list
+                to see the rest, or narrow the filters above.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {total === 1
+                  ? "The 1 unassigned visit matching these filters is shown."
+                  : `All ${total} unassigned visits are shown.`}
               </p>
             )
           )}
