@@ -78,6 +78,72 @@ describe("ServiceAgreementsPage", () => {
     expect(screen.getByText("Termite Control")).toBeInTheDocument();
   });
 
+  it("names a cadence by its interval, not by its unit alone", async () => {
+    // ULK: a fortnightly agreement (1 visit, every 2 weeks) was rendered
+    // "1x / week" — the interval was dropped — so every fortnightly contract
+    // read as weekly on the screen a manager answers "how often do we serve
+    // this customer" from. A coordinator concluded the scheduler was dropping
+    // visits; it was not.
+    vi.mocked(fetchServiceAgreements).mockResolvedValue({
+      items: [
+        buildServiceAgreement({
+          id: "agreement-fortnightly",
+          customerName: "Synthetic Client 60",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "WEEK",
+          frequencyLabel: "Fortnightly",
+        }),
+        buildServiceAgreement({
+          id: "agreement-two-monthly",
+          customerName: "Synthetic Client 79",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "MONTH",
+          frequencyLabel: "Two-monthly",
+        }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<ServiceAgreementsPage />);
+
+    expect(await screen.findByText("Fortnightly")).toBeInTheDocument();
+    expect(screen.getByText("Two-monthly")).toBeInTheDocument();
+    expect(screen.queryByText("1x / week")).not.toBeInTheDocument();
+    expect(screen.queryByText("1x / month")).not.toBeInTheDocument();
+  });
+
+  it("lets a manager set the interval, so a fortnightly agreement can be created at all", async () => {
+    const user = await openForm();
+
+    const interval = screen.getByLabelText("Every");
+    await user.clear(interval);
+    await user.type(interval, "2");
+
+    // The cadence is named back before it is saved: a manager should not have
+    // to save an agreement to find out they built a weekly one.
+    expect(await screen.findByText("fortnightly")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), "2026-09-17");
+
+    vi.mocked(createServiceAgreement).mockResolvedValue(
+      buildServiceAgreement({ frequencyInterval: 2, frequencyLabel: "Fortnightly" }),
+    );
+    vi.mocked(fetchSchedulePreview).mockResolvedValue(buildSchedulePreview());
+
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    await vi.waitFor(() =>
+      expect(createServiceAgreement).toHaveBeenCalledWith(
+        expect.objectContaining({ frequencyCount: 1, frequencyInterval: 2, frequencyUnit: "WEEK" }),
+      ),
+    );
+  });
+
   it("is reachable by keyboard and exposes accessible labels for every field", async () => {
     await openForm();
 

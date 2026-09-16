@@ -8,7 +8,7 @@ import {
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
-import { describeFrequency } from '../../catalog/catalog.mapper';
+import { describeFrequency } from '../visit-generation/cadence';
 import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';

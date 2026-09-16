@@ -1,5 +1,6 @@
-import { DayRuleKind, FrequencyUnit, Prisma, Weekday } from '@prisma/client';
+import { DayRuleKind, Prisma, Weekday } from '@prisma/client';
 
+import { describeFrequency } from '../scheduling/visit-generation/cadence';
 import {
   CustomerDto,
   JobTypeDto,
@@ -186,33 +187,4 @@ export function toAgreementDto(
     createdAt: agreement.createdAt.toISOString(),
     updatedAt: agreement.updatedAt.toISOString(),
   };
-}
-
-/**
- * Says a frequency the way a manager would.
- *
- * "1 per WEEK interval 2" is how the database holds it and how the scheduler
- * reasons about it, but nobody at UltraKIL calls it that — they say
- * fortnightly. The screens should use their words.
- */
-export function describeFrequency(
-  count: number,
-  unit: FrequencyUnit,
-  interval: number,
-): string {
-  const unitWord = unit === FrequencyUnit.WEEK ? 'week' : 'month';
-
-  if (count === 1 && interval === 1) {
-    return unit === FrequencyUnit.WEEK ? 'Weekly' : 'Monthly';
-  }
-  if (count === 1 && interval === 2) {
-    return unit === FrequencyUnit.WEEK ? 'Fortnightly' : 'Once in two months';
-  }
-  if (count === 1 && interval === 3 && unit === FrequencyUnit.MONTH) {
-    return 'Quarterly';
-  }
-  if (count === 1) return `Once every ${interval} ${unitWord}s`;
-  if (interval === 1) return `${count} times a ${unitWord}`;
-
-  return `${count} times every ${interval} ${unitWord}s`;
 }

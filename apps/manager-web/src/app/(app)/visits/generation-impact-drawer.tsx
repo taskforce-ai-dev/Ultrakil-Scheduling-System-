@@ -22,6 +22,12 @@ import {
   previewVisitGeneration,
   type GenerationImpact,
 } from "@/lib/api-client";
+import {
+  cadenceName,
+  cadenceNoun,
+  cadenceSpans,
+  type CadenceUnit,
+} from "@/lib/cadence";
 import { formatLongDate, type CalendarView } from "@/lib/calendar";
 import { notify } from "@/lib/notify";
 
@@ -105,44 +111,6 @@ const BOOKING_WARNING_TITLE: Record<string, string> = {
 };
 
 /**
- * The cadence an agreement is sold on, and the span a run has to hold whole
- * before it can plan one.
- *
- * A manager does not think in units and intervals. "Quarterly agreements need a
- * range covering a whole quarter" is the sentence that says what to do next.
- */
-function cadence(
-  unit: string,
-  interval: number
-): { name: string; span: string; spans: string } {
-  // `span` names one cycle, `spans` names several. Appending an "s" at the
-  // call site worked for "fortnight" and produced "2 three weekss" for
-  // everything whose span is already a plural phrase.
-  const known: Record<string, { name: string; span: string; spans: string }> = {
-    "WEEK|1": { name: "Weekly", span: "week", spans: "weeks" },
-    "WEEK|2": { name: "Fortnightly", span: "fortnight", spans: "fortnights" },
-    "MONTH|1": { name: "Monthly", span: "month", spans: "months" },
-    "MONTH|2": { name: "Two-monthly", span: "two months", spans: "two months" },
-    "MONTH|3": { name: "Quarterly", span: "quarter", spans: "quarters" },
-    "MONTH|6": { name: "Six-monthly", span: "six months", spans: "six months" },
-    "MONTH|12": { name: "Yearly", span: "year", spans: "years" },
-  };
-  const plural = unit === "WEEK" ? "weeks" : "months";
-  // Spelled the way it is spoken. "a whole 2 months" mixes a word and a digit
-  // in one phrase and reads like a field name.
-  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-  const counted = words[interval] ?? String(interval);
-  return (
-    known[`${unit}|${interval}`] ?? {
-      name: `Every ${counted} ${plural}`,
-      // Already a plural phrase — "three weeks" counts one cycle and many.
-      span: `${counted} ${plural}`,
-      spans: `${counted} ${plural}`,
-    }
-  );
-}
-
-/**
  * One line per cadence and reason, not one per agreement: the sentence is the
  * same, and the two reasons ask for different things.
  *
@@ -168,8 +136,12 @@ function skippedByCadence(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, count]) => {
       const [reason, unit, interval] = key.split("|");
-      const { name, span, spans } = cadence(unit, Number(interval));
-      const counted = `${count} ${count === 1 ? span : spans}`;
+      const cadenceUnit = unit as CadenceUnit;
+      const name = cadenceName(cadenceUnit, Number(interval));
+      const span = cadenceNoun(cadenceUnit, Number(interval));
+      const counted = `${count} ${
+        count === 1 ? span : cadenceSpans(cadenceUnit, Number(interval))
+      }`;
       return {
         key,
         text:

@@ -654,6 +654,8 @@ export interface CreateServiceAgreementRequest {
   serviceSiteId: string;
   jobTypeId: string;
   frequencyCount: number;
+  /** Units to one cycle. 1 per WEEK with an interval of 2 is fortnightly. */
+  frequencyInterval?: number;
   frequencyUnit: "WEEK" | "MONTH";
   crewSize?: number;
   durationMinutes?: number;

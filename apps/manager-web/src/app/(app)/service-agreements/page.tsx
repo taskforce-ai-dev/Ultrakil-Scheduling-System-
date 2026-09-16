@@ -48,6 +48,7 @@ import {
   type SchedulePreview,
   type SkillListItem,
 } from "@/lib/api-client";
+import { describeFrequency } from "@/lib/cadence";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -56,6 +57,7 @@ interface ServiceAgreementFormValues {
   serviceSiteId: string;
   jobTypeId: string;
   frequencyCount: number;
+  frequencyInterval: number;
   frequencyUnit: "WEEK" | "MONTH";
   crewSize: number;
   durationMinutes: number;
@@ -141,6 +143,7 @@ const defaultValues: ServiceAgreementFormValues = {
   serviceSiteId: "",
   jobTypeId: "",
   frequencyCount: 1,
+  frequencyInterval: 1,
   frequencyUnit: "WEEK",
   crewSize: 2,
   durationMinutes: 60,
@@ -212,6 +215,18 @@ export default function ServiceAgreementsPage() {
   const jobTypeId = useWatch({ control, name: "jobTypeId" });
   const allowedWeekdays = useWatch({ control, name: "allowedWeekdays" }) ?? [];
   const overrideWindow = useWatch({ control, name: "overrideWindow" });
+  const frequencyCount = useWatch({ control, name: "frequencyCount" });
+  const frequencyInterval = useWatch({ control, name: "frequencyInterval" });
+  const frequencyUnit = useWatch({ control, name: "frequencyUnit" });
+  // A half-typed number field reads back NaN; say nothing rather than
+  // "NaN times a week".
+  const cadencePreview =
+    Number.isFinite(frequencyCount) &&
+    Number.isFinite(frequencyInterval) &&
+    frequencyCount >= 1 &&
+    frequencyInterval >= 1
+      ? describeFrequency(frequencyCount, frequencyUnit, frequencyInterval).toLowerCase()
+      : "not set yet";
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
   // ULK-O09: an inactive site must never be offered when creating an
@@ -335,6 +350,7 @@ export default function ServiceAgreementsPage() {
         serviceSiteId: values.serviceSiteId,
         jobTypeId: values.jobTypeId,
         frequencyCount: Number(values.frequencyCount),
+        frequencyInterval: Number(values.frequencyInterval),
         frequencyUnit: values.frequencyUnit,
         crewSize: Number(values.crewSize),
         durationMinutes: Number(values.durationMinutes),
@@ -480,9 +496,11 @@ export default function ServiceAgreementsPage() {
                 <TableCell className="font-medium">{agreement.customerName}</TableCell>
                 <TableCell>{agreement.siteName}</TableCell>
                 <TableCell>{agreement.jobTypeName}</TableCell>
-                <TableCell>
-                  {agreement.frequencyCount}x / {agreement.frequencyUnit.toLowerCase()}
-                </TableCell>
+                {/* The API's own words for this cadence, interval and all.
+                    Composing them here from frequencyCount and frequencyUnit
+                    dropped frequencyInterval, and every fortnightly agreement
+                    read as weekly. */}
+                <TableCell>{agreement.frequencyLabel}</TableCell>
                 <TableCell>
                   {agreement.crewSize} {agreement.crewSize === 1 ? "person" : "people"}
                 </TableCell>
@@ -566,7 +584,7 @@ export default function ServiceAgreementsPage() {
               <p className="font-medium">{createdAgreement.customerName}</p>
               <p className="text-muted-foreground">
                 {createdAgreement.siteName} · {createdAgreement.jobTypeName} ·{" "}
-                {createdAgreement.frequencyCount}x / {createdAgreement.frequencyUnit.toLowerCase()}
+                {createdAgreement.frequencyLabel}
               </p>
             </div>
 
@@ -717,7 +735,12 @@ export default function ServiceAgreementsPage() {
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Three controls, not two. A cadence is visits-per-cycle *and*
+                how long the cycle is: without the interval there was no way
+                to write down a fortnightly or a quarterly agreement at all,
+                and every one of them had to be created as weekly or monthly
+                and corrected in the database. */}
+            <div className="grid grid-cols-3 gap-4">
               <FormField id="frequencyCount" label="Visits" error={errors.frequencyCount?.message}>
                 <Input
                   id="frequencyCount"
@@ -730,7 +753,26 @@ export default function ServiceAgreementsPage() {
                   })}
                 />
               </FormField>
-              <FormField id="frequencyUnit" label="Per">
+              <FormField
+                id="frequencyInterval"
+                label="Every"
+                error={errors.frequencyInterval?.message}
+              >
+                <Input
+                  id="frequencyInterval"
+                  type="number"
+                  min={1}
+                  max={12}
+                  {...register("frequencyInterval", {
+                    required: "Required",
+                    valueAsNumber: true,
+                    min: { value: 1, message: "Must be at least 1" },
+                    // The API rejects anything past 12 (CreateServiceAgreementDto).
+                    max: { value: 12, message: "12 is the longest cycle" },
+                  })}
+                />
+              </FormField>
+              <FormField id="frequencyUnit" label="Week or month">
                 <Controller
                   control={control}
                   name="frequencyUnit"
@@ -748,6 +790,12 @@ export default function ServiceAgreementsPage() {
                 />
               </FormField>
             </div>
+            {/* Named back before it is saved. Three numeric controls do not
+                add up to a cadence in anyone's head, and "1 / 2 / Week" is
+                exactly the shape a manager needs told back as "Fortnightly". */}
+            <p className="text-xs text-muted-foreground">
+              This agreement is <span className="font-medium">{cadencePreview}</span>.
+            </p>
 
             <div className="grid grid-cols-2 gap-4">
               <FormField id="crewSize" label="Crew size" error={errors.crewSize?.message}>
