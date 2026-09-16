@@ -393,6 +393,35 @@ export class VisitsService {
           );
         }
       }
+      // A stored unassigned reason is an answer about one particular day.
+      //
+      // Every conflict a run records names the date, the hours and the people
+      // that clashed where the visit was standing when it was judged — "…from
+      // 09:00 to 11:00 on 2026-09-18". Move the visit, or change the window it
+      // has to fit, and none of that is about this visit any more. The rows
+      // used to stay, so the Unassigned queue went on naming a Friday's
+      // clashes for a visit now on the Monday while the Edit crew drawer,
+      // which checks live, correctly named the Monday.
+      //
+      // Dropped rather than re-evaluated: this edit knows the reasons are
+      // stale, not what the true ones are, and the queue already reads an
+      // empty conflict list as "not yet checked", which is what the visit now
+      // is. Only an edit that actually moved something the engine judges
+      // clears them — a note against an unchanged visit is not news about its
+      // day.
+      const engineInputsMoved =
+        visitDate.getTime() !== before.visitDate.getTime() ||
+        windowStart !== before.windowStartMinute ||
+        windowEnd !== before.windowEndMinute ||
+        duration !== before.durationMinutes ||
+        (dto.requiredCrewSize !== undefined &&
+          dto.requiredCrewSize !== before.requiredCrewSize);
+      if (engineInputsMoved) {
+        await tx.visitUnassignedReason.deleteMany({
+          where: { generatedVisitId: id },
+        });
+      }
+
       const visit = await tx.generatedVisit.update({
         where: { id },
         data: {

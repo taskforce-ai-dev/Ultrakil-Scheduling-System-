@@ -73,6 +73,7 @@ function fixture(row = visitRow()) {
     // The row locks the real transaction takes; nothing to fence in a unit test.
     $queryRaw: jest.fn(async () => [{ id: VISIT_ID }]),
     assignment: { findMany: jest.fn(async () => []) },
+    visitUnassignedReason: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     generatedVisit: {
       findUnique: jest.fn(async () => row),
       update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -177,6 +178,58 @@ describe('VisitsService window provenance', () => {
     const data = dataOf(tx.generatedVisit.update as jest.Mock);
     expect(data).toMatchObject({ requiredCrewSize: 3, isManuallyAdjusted: true });
     expect(data).not.toHaveProperty('windowProvenance');
+  });
+});
+
+/**
+ * Stored reasons are an answer about a particular day.
+ *
+ * Every conflict a run records names the date, the times and the people that
+ * clashed on the day the visit was standing on when it was judged: "A Perera
+ * is already on another job from 09:00 to 11:00 on 2026-09-18." Move the visit
+ * by hand and none of that is about this visit any more — but the rows stayed,
+ * so the Unassigned queue went on citing clashes on a Friday for a visit now
+ * on the Monday, while the Edit crew drawer, which checks live, correctly
+ * named the Monday. Two screens, the same visit, different days.
+ *
+ * A visit whose reasons are dropped reads in the queue as not yet checked,
+ * which is exactly what it is: nobody has evaluated it where it now stands.
+ */
+describe('VisitsService stale unassigned reasons', () => {
+  it('drops stored reasons when a hand edit moves the visit to another day', async () => {
+    const { service, tx } = fixture();
+
+    await service.adjust(VISIT_ID, { visitDate: '2026-09-21' }, actor);
+
+    expect(tx.visitUnassignedReason.deleteMany).toHaveBeenCalledWith({
+      where: { generatedVisitId: VISIT_ID },
+    });
+  });
+
+  it('drops them when the window or the duration moves under them too', async () => {
+    // "from 09:00 to 11:00" is as much a part of a recorded clash as the date.
+    const first = fixture();
+    await first.service.adjust(VISIT_ID, { windowStartMinute: 600 }, actor);
+    expect(first.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+
+    const second = fixture();
+    await second.service.adjust(VISIT_ID, { durationMinutes: 120 }, actor);
+    expect(second.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+
+    const third = fixture();
+    await third.service.adjust(VISIT_ID, { requiredCrewSize: 3 }, actor);
+    expect(third.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+  });
+
+  it('keeps them when the edit changed nothing the engine judged', async () => {
+    // A note against an unchanged visit is not new information about its day,
+    // and throwing the reasons away would tell the queue the visit had never
+    // been looked at.
+    const { service, tx } = fixture();
+
+    await service.adjust(VISIT_ID, { reason: 'Noted for the file' }, actor);
+
+    expect(tx.visitUnassignedReason.deleteMany).not.toHaveBeenCalled();
   });
 });
 

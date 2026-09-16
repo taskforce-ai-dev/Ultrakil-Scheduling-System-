@@ -239,6 +239,20 @@ visit so a manager can see it.
    reads both why the crew does not fit and why the visit is on this day at
    all.
 
+   Those engine conflicts are judged against the day the visit **kept**, never
+   the day the solver offered: a refused move clears `proposedVisit` before the
+   eligibility call, so the date, the window and the busy windows all come from
+   the visit as it stands. This matters because the Edit crew drawer checks the
+   same visit live, and a queue naming clashes on a day the visit is not on
+   would contradict it on the same screen. Pinned by "judges a refused move
+   against the day the visit kept, never the day it was offered" in
+   `schedule-run.service.spec.ts`.
+
+   Stored reasons are an answer about one particular day, so a hand edit that
+   moves a visit — or changes the window, duration or crew size the engine
+   judged it by — deletes them (`VisitsService.adjust`). The visit then reads
+   in the queue as not yet checked, which is what it is.
+
    One limitation is worth naming rather than leaving to be discovered.
    Proposals are judged in the order the solver returned them — by visit id —
    and each is answered against the day as it stands at that moment. So if two

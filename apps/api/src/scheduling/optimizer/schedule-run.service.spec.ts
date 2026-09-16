@@ -1674,6 +1674,49 @@ describe('the daily-cap backstop on a solver move', () => {
     });
   });
 
+  /**
+   * A refused move must not leave the engine reasoning about the day the
+   * visit did not go to.
+   *
+   * The visit keeps its generated date, so every conflict recorded beside the
+   * cap refusal has to have been judged against that date: the crews and
+   * vehicles busy then, the site's hours then. Were the engine still handed
+   * the day the solver proposed, the queue would name clashes on a day the
+   * visit is not on — and the Edit crew drawer, which checks live against the
+   * real date, would contradict it on the same screen.
+   */
+  it('judges a refused move against the day the visit kept, never the day it was offered', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'EMPLOYEE_DOUBLE_BOOKED',
+          message: 'Employee is already booked.',
+          remediation: 'Choose somebody else.',
+          resources: { employeeIds: ['employee'] },
+        },
+      ],
+    } as never);
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // proposedVisit undefined: the engine reads the visit's own stored date,
+    // window and duration, and loads that day's busy windows.
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.any(Object),
+      expect.objectContaining({ proposedVisit: undefined }),
+      f.tx,
+    );
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+  });
+
   it('reads no day load at all when the solver moves nothing', async () => {
     const f = fixture();
 
