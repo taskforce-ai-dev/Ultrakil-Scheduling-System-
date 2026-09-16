@@ -48,16 +48,10 @@ import {
   type ScheduleRun,
 } from "@/lib/api-client";
 import { addDays, todayIso } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
@@ -440,7 +434,7 @@ export default function ScheduleHistoryPage() {
           <div className="space-y-1.5">
             <Label htmlFor="run-branch">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value as BranchFilter) ?? "ALL")}
             >
@@ -448,7 +442,7 @@ export default function ScheduleHistoryPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>

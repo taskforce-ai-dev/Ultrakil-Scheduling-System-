@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { BRANCH_FILTER_LABELS } from "@/lib/branches";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
@@ -169,12 +170,16 @@ export default function WorkforcePage() {
 
         <div className="space-y-1.5">
           <Label htmlFor="workforce-branch">Branch</Label>
-          <Select value={branch} onValueChange={(value) => setBranch(value as BranchCode | "ALL")}>
+          <Select
+            items={BRANCH_FILTER_LABELS}
+            value={branch}
+            onValueChange={(value) => setBranch(value as BranchCode | "ALL")}
+          >
             <SelectTrigger id="workforce-branch" className="w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">All branches</SelectItem>
+              <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
               <SelectItem value="COLOMBO">Colombo</SelectItem>
               <SelectItem value="KANDY">Kandy</SelectItem>
             </SelectContent>

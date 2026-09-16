@@ -39,16 +39,10 @@ import {
   WEEKDAY_INITIALS,
   type CalendarView,
 } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StageFilter = "ALL" | "UNASSIGNED" | "DRAFT" | "PUBLISHED" | "DONE";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 const STAGE_LABELS: Record<StageFilter, string> = {
   ALL: "Every stage",
@@ -438,7 +432,7 @@ export function CalendarBoard() {
           <div className="space-y-1.5">
             <Label htmlFor="branch-filter">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value ?? "ALL") as BranchFilter)}
             >
@@ -446,7 +440,7 @@ export function CalendarBoard() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>

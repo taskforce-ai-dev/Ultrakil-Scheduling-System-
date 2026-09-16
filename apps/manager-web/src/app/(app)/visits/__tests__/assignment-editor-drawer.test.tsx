@@ -410,6 +410,45 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.getByLabelText("Reason for this change")).toHaveFocus();
   });
 
+  /**
+   * The drawer opened on "Arrives 08:00 / Leaves by 17:00" — the site's whole
+   * working day — for a 60-minute job. Save it unchanged and the crew is
+   * blocked out for nine hours, and nothing on screen said the numbers were a
+   * fallback rather than the plan.
+   */
+  it("defaults to the visit's own planned window, not the site's whole day", async () => {
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        windowStartMinute: 8 * 60,
+        windowEndMinute: 17 * 60,
+        durationMinutes: 60,
+      })
+    );
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(null);
+    await openDrawer();
+
+    expect(screen.getByLabelText("Arrives")).toHaveValue("08:00");
+    expect(screen.getByLabelText("Leaves by")).toHaveValue("09:00");
+  });
+
+  it("never defaults past the window the visit has to stay inside", async () => {
+    // A window shorter than the job is already flagged elsewhere; the default
+    // must not quietly propose a crew leaving after the site shuts.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        windowStartMinute: 9 * 60,
+        windowEndMinute: 10 * 60,
+        durationMinutes: 180,
+      })
+    );
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(null);
+    await openDrawer();
+
+    expect(screen.getByLabelText("Leaves by")).toHaveValue("10:00");
+  });
+
   it("marks the reason box required where it is asked for", async () => {
     const { user } = await openDrawer();
     await addCrewMember(user, "A Perera");

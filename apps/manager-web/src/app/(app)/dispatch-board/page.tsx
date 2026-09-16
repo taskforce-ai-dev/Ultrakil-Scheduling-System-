@@ -45,19 +45,13 @@ import {
   type OperationsDayResponse,
   type Visit,
 } from "@/lib/api-client";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
 import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 import { OperationsDayPanel } from "@/components/shared/operations";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 /**
  * Who is on each visit today, with a direct path to change it: "Edit crew"
@@ -223,7 +217,7 @@ export default function DispatchBoardPage() {
           <div className="space-y-1.5">
             <Label htmlFor="dispatch-branch">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value as BranchFilter) ?? "ALL")}
             >
@@ -231,7 +225,7 @@ export default function DispatchBoardPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>

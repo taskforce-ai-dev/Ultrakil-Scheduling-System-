@@ -69,6 +69,18 @@ beforeEach(() => {
 
 describe("WorkforcePage", () => {
 
+  it("labels the branch filter the way every other screen does", async () => {
+    // Five screens said "Both branches"; this one had no value-to-label map
+    // at all, so its trigger showed the raw "ALL" above an option reading
+    // "All branches". One filter, one word.
+    render(<WorkforcePage />);
+    await screen.findByRole("heading", { name: "Workforce" });
+
+    const trigger = screen.getByLabelText("Branch");
+    expect(trigger).toHaveTextContent("All branches");
+    expect(trigger).not.toHaveTextContent("ALL");
+  });
+
   it("says plainly what a PMS grade is for", async () => {
     // The eligibility engine tells a manager to add a PMS-grade supervisor;
     // nothing on the screen that lists grades said a PMS-grade person is the

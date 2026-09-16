@@ -260,8 +260,16 @@ export function AssignmentEditorDrawer({
         }))
       );
     } else {
+      // The visit's own planned window, not the site's whole day. The service
+      // window is the span the work has to fall *inside* — 08:00-17:00 for an
+      // all-day site — and offering its far end as the default "Leaves by"
+      // booked a crew out for nine hours on a 60-minute job for anyone who
+      // pressed Save without editing it. Clamped to the window, so the
+      // default never proposes a crew still on site after it closes.
       setStartMinute(visit.windowStartMinute);
-      setEndMinute(visit.windowEndMinute);
+      setEndMinute(
+        Math.min(visit.windowEndMinute, visit.windowStartMinute + visit.durationMinutes)
+      );
       setCrewRows([]);
       setVehicleRows([]);
     }

@@ -58,6 +58,7 @@ import {
   WEEKDAY_INITIALS,
   type CalendarView,
 } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { VisitDetailDrawer } from "./visit-detail-drawer";
@@ -69,7 +70,6 @@ interface MoveRequest {
   targetDate: string;
 }
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StateFilter = "ALL" | VisitStatus | "LOCKED" | "MANUALLY_ADJUSTED" | "GENERATED";
 
 /**
@@ -100,12 +100,6 @@ const STATE_OPTIONS: { value: StateFilter; label: string }[] = [
   ...STAGE_OPTIONS,
   ...PROVENANCE_OPTIONS,
 ];
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 const STATE_LABELS = Object.fromEntries(
   STATE_OPTIONS.map((option) => [option.value, option.label])
@@ -499,7 +493,7 @@ export default function VisitsPage() {
         <div className="space-y-1.5">
           <Label htmlFor="branch-filter">Branch</Label>
           <Select
-            items={BRANCH_LABELS}
+            items={BRANCH_FILTER_LABELS}
             value={branch}
             onValueChange={(value) => setBranch((value ?? "ALL") as BranchFilter)}
           >
@@ -507,7 +501,7 @@ export default function VisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">Both branches</SelectItem>
+              <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
               <SelectItem value="COLOMBO">Colombo</SelectItem>
               <SelectItem value="KANDY">Kandy</SelectItem>
             </SelectContent>

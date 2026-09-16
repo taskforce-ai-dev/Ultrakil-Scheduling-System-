@@ -26,6 +26,7 @@ import {
   type UnassignedVisit,
   type UnassignedVisitsQuery,
 } from "@/lib/api-client";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { formatLongDate } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
@@ -35,7 +36,6 @@ import {
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 /**
  * "All", one of the engine's conflict groups, or the backlog nobody has
  * looked at yet.
@@ -56,12 +56,6 @@ type StateFilter = "ALL" | UnassignedOperationState;
 
 const KANDY_PMS_CODES = new Set(["NO_PMS_SUPERVISOR_AVAILABLE", "BRANCH_HAS_NO_PMS_SUPERVISOR"]);
 const PAGE_SIZE = 25;
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 // Base UI's <SelectValue> renders the raw value unless the root is given a
 // value -> label map, which showed the raw "UNASSIGNED" on this trigger.
@@ -271,7 +265,7 @@ export default function UnassignedVisitsPage() {
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-branch">Branch</Label>
           <Select
-            items={BRANCH_LABELS}
+            items={BRANCH_FILTER_LABELS}
             value={branch}
             onValueChange={(value) => {
               setBranch((value as BranchFilter) ?? "ALL");
@@ -282,7 +276,7 @@ export default function UnassignedVisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">Both branches</SelectItem>
+              <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
               <SelectItem value="COLOMBO">Colombo</SelectItem>
               <SelectItem value="KANDY">Kandy</SelectItem>
             </SelectContent>
