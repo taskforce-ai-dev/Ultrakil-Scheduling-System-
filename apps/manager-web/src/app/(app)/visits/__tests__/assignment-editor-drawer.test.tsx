@@ -380,14 +380,86 @@ describe("AssignmentEditorDrawer", () => {
     );
   });
 
-  it("will not save without a reason", async () => {
+  /**
+   * The coordinator's report: the validation panel said the crew was fine,
+   * Save was greyed out, nothing was marked required and nothing explained
+   * why — "I would have concluded the system was broken and phoned someone."
+   * The reason box was what Save was waiting for.
+   */
+  it("will not save without a reason, and says that is what it is waiting for", async () => {
     vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
     const { user } = await openDrawer();
 
     await addCrewMember(user, "A Perera");
     await screen.findByText("This crew is eligible to take the visit.");
 
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    const saveButton = screen.getByRole("button", { name: "Save assignment" });
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText("Add a reason for this change before saving.")
+    ).toBeInTheDocument();
+    // Named by the button itself, so the reason is announced with it rather
+    // than only sitting somewhere on the page.
+    expect(saveButton).toHaveAccessibleDescription(
+      "Add a reason for this change before saving."
+    );
+
+    await user.click(saveButton);
+    expect(assignCrew).not.toHaveBeenCalled();
+    // And it puts the manager in the box it is waiting for.
+    expect(screen.getByLabelText("Reason for this change")).toHaveFocus();
+  });
+
+  it("marks the reason box required where it is asked for", async () => {
+    const { user } = await openDrawer();
+    await addCrewMember(user, "A Perera");
+
+    const box = screen.getByLabelText("Reason for this change");
+    expect(box).toBeRequired();
+    expect(screen.getByText("Required")).toBeInTheDocument();
+  });
+
+  it("says which step is missing when there is no crew yet", async () => {
+    await openDrawer();
+
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(
+      "Add at least one crew member before saving."
+    );
+  });
+
+  it("names the failed validation as the blocker, not silence", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(
+      buildEligibilityResult({
+        isEligible: false,
+        conflicts: [buildConflict({ code: "BRANCH_MISMATCH", message: "Wrong branch." })],
+      })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("Wrong branch.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Because");
+
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(
+      "This crew cannot take the visit yet — see Validation below."
+    );
+  });
+
+  it("never leaves Save dead and silent", async () => {
+    // Whatever is missing, the button that cannot be pressed says why.
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    const { user } = await openDrawer();
+
+    const saveButton = screen.getByRole("button", { name: "Save assignment" });
+    expect(saveButton).toHaveAccessibleDescription(/\S/);
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    expect(saveButton).toHaveAccessibleDescription(/\S/);
+
+    await user.type(screen.getByLabelText("Reason for this change"), "Customer requested this crew");
+    // Nothing missing: no aria-disabled, and nothing left to explain.
+    expect(saveButton).not.toHaveAttribute("aria-disabled");
   });
 
   it("shows every rejection reason for an invalid move, and blocks Save", async () => {
@@ -429,7 +501,10 @@ describe("AssignmentEditorDrawer", () => {
     expect(
       screen.getByText("This employee is permanently stationed elsewhere.")
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("offers only crew members who are also authorized for the vehicle as driver choices (ULK-O09)", async () => {
@@ -583,7 +658,10 @@ describe("AssignmentEditorDrawer", () => {
       expect(screen.getByRole("button", { name: "Add vehicle" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Remove vehicle" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Remove crew" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
       for (const { label } of [
         { label: "Date & time" },
         { label: "Supervisor" },
@@ -653,7 +731,10 @@ describe("AssignmentEditorDrawer", () => {
     });
     await user.type(screen.getByLabelText("Reason for this change"), "Trying another crew");
     expect(await screen.findByText("The replacement crew is invalid.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await act(async () => {
       resolveOlder?.(buildEligibilityResult({ isEligible: true }));
@@ -661,7 +742,10 @@ describe("AssignmentEditorDrawer", () => {
 
     expect(screen.getByText("The replacement crew is invalid.")).toBeInTheDocument();
     expect(screen.queryByText("This crew is eligible to take the visit.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("keeps the reason when a save is refused, so nobody retypes it", async () => {
