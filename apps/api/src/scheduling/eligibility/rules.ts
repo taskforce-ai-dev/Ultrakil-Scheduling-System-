@@ -175,10 +175,23 @@ export function evaluateAssignment(
   const { plannedStartMinute: start, plannedEndMinute: end } = proposal;
 
   if (end - start < visit.durationMinutes) {
+    // A booking that ends at or before it starts is not a short booking, it is
+    // a backwards one, and "booked for -60 minutes but the job takes 60" asks a
+    // dispatcher to reason about a negative duration. Say what is actually
+    // wrong instead; the code stays the same, so nothing downstream moves.
+    const message =
+      end < start
+        ? `This crew is booked to finish at ${formatMinute(end)}, before it starts at ${formatMinute(start)}.`
+        : end === start
+          ? `This crew is booked to start and finish at the same moment, ${formatMinute(start)}.`
+          : `The crew is booked for ${end - start} minutes but the job takes ${visit.durationMinutes}.`;
     conflicts.push({
       code: 'WINDOW_TOO_SHORT',
-      message: `The crew is booked for ${end - start} minutes but the job takes ${visit.durationMinutes}.`,
-      remediation: `Book at least ${visit.durationMinutes} minutes, or shorten the job on the agreement.`,
+      message,
+      remediation:
+        end <= start
+          ? `Give the crew a finish time after ${formatMinute(start)}, leaving at least ${visit.durationMinutes} minutes for the job.`
+          : `Book at least ${visit.durationMinutes} minutes, or shorten the job on the agreement.`,
       resources: { visitId: visit.id },
     });
   }

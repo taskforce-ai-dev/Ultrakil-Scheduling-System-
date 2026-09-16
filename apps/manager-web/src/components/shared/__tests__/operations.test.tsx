@@ -56,6 +56,19 @@ describe("OperationsDayPanel", () => {
     expect(within(exception).queryByText("Crew assigned")).not.toBeInTheDocument();
   });
 
+  /**
+   * "EMPLOYEE_DOUBLE_BOOKED: This employee is already assigned…" printed the
+   * engine's own name above a sentence that already said it in English, and
+   * made a handled refusal read as a crash. The sentence is the product.
+   */
+  it("explains a violation in words, without shouting the engine's code", () => {
+    render(<OperationsDayPanel data={day} />);
+
+    const exception = screen.getByText("Exception customer").closest("li")!;
+    expect(within(exception).getByText(/Branch needs confirmation/)).toBeInTheDocument();
+    expect(within(exception).queryByText(/UNKNOWN_BRANCH/)).not.toBeInTheDocument();
+  });
+
   it("shows the server summary and a concrete next action", () => {
     render(<OperationsDayPanel data={day} />);
 

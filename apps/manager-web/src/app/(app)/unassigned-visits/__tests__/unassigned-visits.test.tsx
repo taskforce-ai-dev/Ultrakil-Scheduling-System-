@@ -439,11 +439,15 @@ describe("unassigned visits queue", () => {
   it("does not use color as the only signal for a conflict group", async () => {
     await renderPage();
 
-    // Each conflict card carries the group's text label and stable code
-    // alongside its icon, not just a colored badge.
+    // Each conflict card carries the group's text label and the written
+    // sentence alongside its icon, not just a colored badge. The engine's own
+    // code is not shouted at the manager.
     const row = screen.getByText("Grandview Hotel").closest("li")!;
     expect(within(row).getByText("Missing PMS supervisor")).toBeInTheDocument();
-    expect(within(row).getByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).toBeInTheDocument();
+    expect(
+      within(row).getByText("No PMS-grade supervisor is available in Kandy for this visit.")
+    ).toBeInTheDocument();
+    expect(within(row).queryByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).not.toBeInTheDocument();
   });
 
   it("never shows a not-yet-checked visit as if it had no problems", async () => {

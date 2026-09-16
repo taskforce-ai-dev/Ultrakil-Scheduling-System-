@@ -247,9 +247,16 @@ function ViolationList({ violations }: { violations: OperationsDayItem["violatio
         Why this needs attention
       </p>
       <ul className="mt-1 space-y-1 text-muted-foreground">
+        {/*
+          * The written reason, not the engine's code. "EMPLOYEE_DOUBLE_BOOKED:
+          * This employee is already assigned to another visit at this time"
+          * shouted an internal name above a sentence that already said it, and
+          * made a handled refusal look like a crash. `violation.code` stays on
+          * the wire for support.
+          */}
         {violations.map((violation) => (
-          <li key={`${violation.code}-${violation.message}`}>
-            <span className="font-mono text-xs text-foreground">{violation.code}</span>: {violation.message}
+          <li key={`${violation.code}-${violation.message}`} className="text-foreground">
+            {violation.message}
           </li>
         ))}
       </ul>

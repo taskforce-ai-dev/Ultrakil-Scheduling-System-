@@ -97,6 +97,12 @@ function proposal(overrides: Partial<AssignmentProposal> = {}): AssignmentPropos
 const codesOf = (result: { conflicts: { code: string }[] }) =>
   result.conflicts.map((conflict) => conflict.code);
 
+/** The sentence a manager actually reads for one refusal. */
+const messageOf = (
+  result: { conflicts: { code: string; message: string }[] },
+  code: string,
+) => result.conflicts.find((conflict) => conflict.code === code)?.message;
+
 describe('eligibility engine', () => {
   it('accepts a crew that satisfies every rule', () => {
     const result = evaluateAssignment(proposal(), context());
@@ -597,6 +603,47 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('WINDOW_TOO_SHORT');
+    });
+
+    it('refuses a booking shorter than the job takes, and says by how much', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 9 * 60, plannedEndMinute: 10 * 60 }),
+        context({ visit: visit({ durationMinutes: 120 }) }),
+      );
+
+      expect(messageOf(result, 'WINDOW_TOO_SHORT')).toBe(
+        'The crew is booked for 60 minutes but the job takes 120.',
+      );
+    });
+
+    /**
+     * A booking whose end is at or before its start is not a short booking; it
+     * is a backwards one. Reporting it as "booked for -60 minutes but the job
+     * takes 60" asked a dispatcher to reason about a negative duration, which
+     * means nothing to anyone.
+     */
+    it('says a backwards booking ends before it starts, rather than reporting negative minutes', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 10 * 60, plannedEndMinute: 9 * 60 }),
+        context({ visit: visit({ durationMinutes: 60 }) }),
+      );
+
+      const message = messageOf(result, 'WINDOW_TOO_SHORT');
+      expect(message).toBe(
+        'This crew is booked to finish at 09:00, before it starts at 10:00.',
+      );
+      expect(message).not.toContain('-');
+    });
+
+    it('treats a zero-length booking as backwards rather than as nothing at all', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 9 * 60, plannedEndMinute: 9 * 60 }),
+        context({ visit: visit({ durationMinutes: 60 }) }),
+      );
+
+      expect(messageOf(result, 'WINDOW_TOO_SHORT')).toBe(
+        'This crew is booked to start and finish at the same moment, 09:00.',
+      );
     });
   });
 
