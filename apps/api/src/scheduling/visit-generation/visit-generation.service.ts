@@ -154,7 +154,7 @@ export class VisitGenerationService {
       dto.from,
       dto.to,
       cancelledSlotsBy(around),
-      periodsHoldingAVisit(around, shapes),
+      await this.periodsHoldingAVisit(agreements, shapes, window),
     );
 
     const lives = lifetimes(agreements);
@@ -560,6 +560,69 @@ export class VisitGenerationService {
       }));
   }
 
+  /**
+   * The periods each multi-week agreement already has a visit in, by index.
+   *
+   * This is the evidence a clipped period is reported on: one handed over as
+   * designed holds a visit, and one nobody planned is empty. Asking the
+   * calendar rather than reasoning about which runs have been pressed is what
+   * makes the rule assumption-free.
+   *
+   * Read over its own window, wider than the enclosing months `around` covers,
+   * because a clipped period reaches past the range by up to a whole period
+   * and the visit standing in it can be anywhere inside. June's grid encloses
+   * June and July; the fortnight it clips at the start began on 25 May, and
+   * the visit May's run put there is on that very day.
+   *
+   * Only the cadences a clipped period is ever reported for, so on a book of
+   * weekly and monthly work this costs no query at all. A cancelled visit does
+   * not count: it satisfies no period anywhere else in generation, and
+   * counting it here would say a customer is served when nobody is going.
+   */
+  private async periodsHoldingAVisit(
+    agreements: AgreementForGeneration[],
+    shapes: Map<string, AgreementPeriodShape>,
+    window: { from: Date; to: Date },
+  ): Promise<Map<string, Set<number>>> {
+    const watched = agreements.filter((agreement) =>
+      clippingOneMayLoseIt(agreement.frequencyUnit, agreement.frequencyInterval),
+    );
+    if (watched.length === 0) return new Map();
+
+    const reach =
+      Math.max(...watched.map((agreement) => agreement.frequencyInterval * 7)) * DAY_MS;
+
+    const visits = await this.prisma.generatedVisit.findMany({
+      where: {
+        serviceAgreementId: { in: watched.map((agreement) => agreement.id) },
+        visitDate: {
+          gte: new Date(window.from.getTime() - reach),
+          lte: new Date(window.to.getTime() + reach),
+        },
+        status: { not: VisitStatus.CANCELLED },
+      },
+      select: { serviceAgreementId: true, visitDate: true },
+    });
+
+    const held = new Map<string, Set<number>>();
+    for (const visit of visits) {
+      const shape = shapes.get(visit.serviceAgreementId);
+      if (!shape) continue;
+
+      const period = periodIndexOf(
+        visit.visitDate,
+        parseDateOnly(shape.anchor),
+        shape.frequencyUnit,
+        shape.frequencyInterval,
+      );
+      const periods = held.get(visit.serviceAgreementId) ?? new Set<number>();
+      periods.add(period);
+      held.set(visit.serviceAgreementId, periods);
+    }
+
+    return held;
+  }
+
   private async loadExistingVisits(
     agreements: AgreementForGeneration[],
     from: Date,
@@ -924,44 +987,6 @@ function cancelledSlotsBy(
   }
 
   return slots;
-}
-
-/**
- * The periods each agreement already has a visit in, by index.
- *
- * Read from the visits over the whole calendar months the range touches, so a
- * period clipped at either edge of the range can still be looked up. This is
- * what lets a clipped period be reported on evidence rather than on an
- * assumption about which runs someone has pressed: a period holding a visit
- * was handed over as designed, and an empty one was not.
- *
- * A cancelled visit does not count. It satisfies no period anywhere else in
- * generation, and counting it here would say a customer is served when nobody
- * is going.
- */
-function periodsHoldingAVisit(
-  visits: ExistingVisit[],
-  shapes: Map<string, AgreementPeriodShape>,
-): Map<string, Set<number>> {
-  const held = new Map<string, Set<number>>();
-
-  for (const visit of visits) {
-    if (visit.status === VisitStatus.CANCELLED) continue;
-    const shape = shapes.get(visit.serviceAgreementId);
-    if (!shape) continue;
-
-    const period = periodIndexOf(
-      parseDateOnly(visit.visitDate),
-      parseDateOnly(shape.anchor),
-      shape.frequencyUnit,
-      shape.frequencyInterval,
-    );
-    const set = held.get(visit.serviceAgreementId) ?? new Set<number>();
-    set.add(period);
-    held.set(visit.serviceAgreementId, set);
-  }
-
-  return held;
 }
 
 function bookingWarningFrom(

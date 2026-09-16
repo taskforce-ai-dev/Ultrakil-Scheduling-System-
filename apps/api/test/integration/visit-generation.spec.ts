@@ -1440,33 +1440,49 @@ describe('the week view and the month view plan the same periods', () => {
       startDate: '2026-01-12',
     });
 
-    // May's range: the grid ends on Sunday 31 May, and because June begins the
-    // next day it reaches a whole week further, to 7 June.
-    const may = await preview({
-      from: '2026-04-27',
-      to: '2026-06-07',
-      serviceAgreementIds: [agreement.id],
-    });
+    try {
+      // The months are generated in order, as a manager works through them.
+      // April's grid holds the fortnight that reaches back over 27 April.
+      const april = await confirm({
+        from: '2026-03-30',
+        to: '2026-05-03',
+        serviceAgreementIds: [agreement.id],
+      });
+      expect(april.status).toBe(200);
 
-    expect(may.status).toBe(200);
-    expect(may.body.additions.length).toBeGreaterThan(0);
-    // The fortnight 1-14 June is cut by the last day, and June's grid plans
-    // it: nothing is at risk and nothing is said.
-    expect(may.body.skippedPeriods).toEqual([]);
+      // May's range: the grid ends on Sunday 31 May, and because June begins
+      // the next day it reaches a whole week further, to 7 June.
+      const may = await preview({
+        from: '2026-04-27',
+        to: '2026-06-07',
+        serviceAgreementIds: [agreement.id],
+      });
 
-    const june = await preview({
-      from: '2026-06-01',
-      to: '2026-07-05',
-      serviceAgreementIds: [agreement.id],
-    });
+      expect(may.status).toBe(200);
+      expect(may.body.additions.length).toBeGreaterThan(0);
+      // The fortnight 1-14 June is cut by the last day, and June's grid plans
+      // it; the one reaching back over 27 April is April's, and April planned
+      // it. Nothing is at risk and nothing is said.
+      expect(may.body.skippedPeriods).toEqual([]);
 
-    expect(june.status).toBe(200);
-    expect(
-      june.body.additions.some(
-        (visit: { visitDate: string }) =>
-          visit.visitDate >= '2026-06-01' && visit.visitDate <= '2026-06-14',
-      ),
-    ).toBe(true);
+      const june = await preview({
+        from: '2026-06-01',
+        to: '2026-07-05',
+        serviceAgreementIds: [agreement.id],
+      });
+
+      expect(june.status).toBe(200);
+      expect(
+        june.body.additions.some(
+          (visit: { visitDate: string }) =>
+            visit.visitDate >= '2026-06-01' && visit.visitDate <= '2026-06-14',
+        ),
+      ).toBe(true);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: agreement.id },
+      });
+    }
   });
 
   it('names a cycle of three weeks that really does fall between two grids', async () => {

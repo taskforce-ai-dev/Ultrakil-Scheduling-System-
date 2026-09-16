@@ -275,8 +275,13 @@ customer loses a visit with nothing said. Two things close it:
   about which runs someone has pressed, the rule asks the calendar: a clipped
   period **a visit of that agreement already stands in** was handed over as
   designed and is not reported, and an empty one is. That test applies at both
-  edges and assumes nothing. (`around`, the existing visits over the enclosing
-  months, is already loaded; `periodIndexOf` places each of them.)
+  edges and assumes nothing. It reads over its own window rather than reusing
+  `around`: a clipped period reaches past the range by up to a whole period,
+  and `around` covers only the enclosing calendar months. June's grid encloses
+  June and July, while the fortnight it clips at the start began on 25 May —
+  which is the very day May's run put the visit on. Only multi-week cadences
+  are asked about, so a book of weekly and monthly work costs no query at
+  all.
 
   A clipped *month* is never reported at all — the next grid holds the
   calendar month whole by construction. The impact drawer gives the clipped
