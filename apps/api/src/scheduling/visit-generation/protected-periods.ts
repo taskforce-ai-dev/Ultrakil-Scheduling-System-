@@ -1,4 +1,4 @@
-import { FrequencyUnit, Weekday } from '@prisma/client';
+import { FrequencyUnit, VisitPlacement, Weekday } from '@prisma/client';
 
 import { parseDateOnly, periodIndexOf, weekdayOf } from '../../catalog/schedule-preview';
 import { ExistingVisit, RequiredVisit, protectionReasonFor } from './plan';
@@ -213,8 +213,21 @@ export function honourProtectedDates(
         // have moved it to Monday" on that, for ever, teaches managers to
         // ignore the section. A visit stranded on a Saturday the agreement has
         // since dropped is the case the report exists for.
+        //
+        // None of which reaches a **booked** date. A booking is a commitment
+        // to a date, not to a weekday: the customer agreed the 2nd, and a
+        // protected visit on the 20th does not serve it however ordinary a
+        // Tuesday is. Exempting it silenced the whole report at once — the
+        // date was pinned away, `placement` was copied from the keeper so even
+        // that diff did not fire, and the plan counted the visit as already
+        // correct. The drawer then read "1 visit is already correct and needs
+        // nothing" while the agreed date got nothing at all, which is worse
+        // than the BOOKED_BELOW_FREQUENCY shortfall that exists precisely so a
+        // booking gap is not noticed a quarter later.
         ...(keeper.visitDate === pinned[index].visitDate ||
-        (shape !== undefined && allowsTheKeepersDay(shape, keeper.visitDate))
+        (pinned[index].placement !== VisitPlacement.BOOKED &&
+          shape !== undefined &&
+          allowsTheKeepersDay(shape, keeper.visitDate))
           ? {}
           : { pinnedFrom: pinned[index].visitDate }),
       };

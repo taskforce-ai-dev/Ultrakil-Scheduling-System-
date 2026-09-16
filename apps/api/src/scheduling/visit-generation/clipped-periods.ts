@@ -68,6 +68,13 @@ export function clippedPeriodsAtRisk(
   scope: ClippedPeriodScope,
 ): PreviewSkippedPeriod[] {
   const lastWeekStart = toDateOnly(startOfIsoWeek(parseDateOnly(scope.to)));
+  // The overlap argument holds for the ranges the portal sends, and only for
+  // those. `GenerateVisitsDto` validates two dates and nothing more, so a
+  // contract client may ask for May's raw grid — 27 April to 31 May — where
+  // the next month's grid begins on 1 June, *after* the fortnight from 25 May
+  // started, and suppressing the report would lose it in silence. Nothing is
+  // suppressed on an assumption the caller has not actually met.
+  const overlapsTheNextGrid = looksLikeAMonthGrid(scope.from, scope.to);
 
   return skipped.filter((period) => {
     // Something of this agreement is already there. Whoever planned it, the
@@ -76,10 +83,58 @@ export function clippedPeriodsAtRisk(
     if (scope.periodsHoldingAVisit.has(period.periodIndex)) return false;
 
     // Cut by the end: lost only if it began before the week the next grid
-    // starts on.
-    if (period.end > scope.to) return period.start < lastWeekStart;
+    // starts on — and only a range shaped like a month grid has a next grid
+    // that reaches back that far.
+    if (period.end > scope.to) {
+      return !overlapsTheNextGrid || period.start < lastWeekStart;
+    }
 
     // Cut by the start, and empty: no run is coming back for it.
     return period.start < scope.from;
   });
+}
+
+/**
+ * Whether this range is one of the month grids the overlap argument is about.
+ *
+ * A grid runs from the Monday on or before the 1st to the Sunday on or after
+ * the last day (reaching one ISO week further where that Sunday is the day
+ * before a month begins), so it always starts on a Monday, ends on a Sunday,
+ * and contains a whole calendar month. Those three together are what make the
+ * next grid begin on the Monday of this one's final week; a range that fails
+ * any of them has no such guarantee, and its clipped periods are reported.
+ *
+ * The week view is deliberately not a grid: it holds no whole month, so it
+ * falls through here — which costs it nothing, because a weekly cadence never
+ * reaches this code and a longer one it cannot see whole is reported as
+ * RANGE_HOLDS_NO_WHOLE_PERIOD instead.
+ */
+function looksLikeAMonthGrid(from: string, to: string): boolean {
+  const start = parseDateOnly(from);
+  const end = parseDateOnly(to);
+  // getUTCDay: 1 is Monday, 0 is Sunday.
+  if (start.getUTCDay() !== 1 || end.getUTCDay() !== 0) return false;
+
+  // A grid whose last day is the day before a month begins is one the portal
+  // would have reached a whole ISO week past — that is the single seam
+  // `rangeForGeneration` sews shut. Arriving here unextended, it is not a
+  // range the portal sent, and the next grid starts after this one's final
+  // week rather than on its Monday. May's raw grid, 27 April to 31 May, is
+  // exactly that: June's begins on 1 June, after the fortnight from 25 May
+  // started, and nobody holds it whole.
+  const dayAfter = new Date(end.getTime() + 24 * 60 * 60 * 1000);
+  if (dayAfter.getUTCDate() === 1) return false;
+
+  // The first of the month that starts on or after `from`, and its last day.
+  const firstOfMonth = new Date(
+    Date.UTC(
+      start.getUTCFullYear(),
+      start.getUTCMonth() + (start.getUTCDate() === 1 ? 0 : 1),
+      1,
+    ),
+  );
+  const lastOfMonth = new Date(
+    Date.UTC(firstOfMonth.getUTCFullYear(), firstOfMonth.getUTCMonth() + 1, 0),
+  );
+  return firstOfMonth >= start && lastOfMonth <= end;
 }

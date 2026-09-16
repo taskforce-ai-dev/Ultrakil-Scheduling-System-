@@ -464,6 +464,79 @@ describe('honourProtectedDates', () => {
     });
   });
 
+  /**
+   * A booking is a commitment to a DATE, not to a weekday.
+   *
+   * The would-have-moved report is suppressed when the keeper's own weekday is
+   * one the agreement still allows: a manager who moved a visit from Monday to
+   * Wednesday made a choice the agreement is content with, and saying so for
+   * ever teaches managers to skip the section. That reasoning does not reach a
+   * booked date. The customer agreed 2 October, not "some Friday"; a protected
+   * visit on the 20th does not serve it, and every part of the report went
+   * quiet at once — the date was pinned away, the placement was copied from
+   * the keeper so even that diff did not fire, and the plan counted the visit
+   * as already correct. "1 visit is already correct and needs nothing", while
+   * the agreed date gets nothing and nobody is told.
+   */
+  describe('a booked date a protected visit displaces', () => {
+    const booked = required({
+      visitDate: '2026-10-02',
+      placement: VisitPlacement.BOOKED,
+      periodIndex: 1,
+      alternatives: [],
+    });
+    // A Tuesday — a day this agreement allows, which is exactly what used to
+    // buy the silence.
+    const keeperOnAnAllowedWeekday = existing({
+      visitDate: '2026-10-20',
+      status: 'SCHEDULED',
+    });
+
+    it('says which date the booking was, so the report can name it', () => {
+      const pinned = honourProtectedDates([booked], [keeperOnAnAllowedWeekday], monthly());
+
+      expect(pinned[0].visitDate).toBe('2026-10-20');
+      expect(pinned[0].pinnedFrom).toBe('2026-10-02');
+    });
+
+    it('reaches the plan as a protected visit, never as one already correct', () => {
+      const plan = planGeneration(
+        honourProtectedDates([booked], [keeperOnAnAllowedWeekday], monthly()),
+        [keeperOnAnAllowedWeekday],
+      );
+
+      expect(plan.unchangedCount).toBe(0);
+      expect(plan.protectedVisits).toEqual([
+        expect.objectContaining({
+          visitId: 'visit-1',
+          visitDate: '2026-10-20',
+          wouldHave: 'UPDATE',
+          changes: expect.arrayContaining([
+            { field: 'visitDate', from: '2026-10-20', to: '2026-10-02' },
+          ]),
+        }),
+      ]);
+    });
+
+    it('still keeps quiet for an unbooked visit the manager simply moved', () => {
+      // The case the exemption exists for, unchanged.
+      const planned = required({
+        visitDate: '2026-10-05',
+        placement: VisitPlacement.ANCHORED,
+        periodIndex: 1,
+        alternatives: [],
+      });
+      const pinned = honourProtectedDates(
+        [planned],
+        [keeperOnAnAllowedWeekday],
+        monthly(),
+      );
+
+      expect(pinned[0].visitDate).toBe('2026-10-20');
+      expect(pinned[0].pinnedFrom).toBeUndefined();
+    });
+  });
+
   it('does not touch the list it was handed', () => {
     const input = [required()];
     honourProtectedDates(input, [existing({ isLocked: true })], monthly());

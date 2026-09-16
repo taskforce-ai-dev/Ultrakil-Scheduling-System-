@@ -71,6 +71,37 @@ describe('clippedPeriodsAtRisk', () => {
     ).toEqual([period(0, '2026-05-25', '2026-06-07')]);
   });
 
+  it('reports an end-clipped period when the range is not a month grid at all', () => {
+    // The overlap argument is a fact about the ranges the portal sends, not
+    // about every range the API will accept: `from` a Monday, `to` a Sunday,
+    // and a whole calendar month in between. A contract client may ask for
+    // 27 April to 31 May — May's raw grid, which the portal itself stopped
+    // sending once it reached a week further — and there the fortnight from 25
+    // May to 7 June really is nobody's: June's grid begins on 1 June, after it
+    // started. Nothing may be suppressed on an assumption the caller has not
+    // met.
+    expect(
+      clippedPeriodsAtRisk([period(10, '2026-05-25', '2026-06-07')], {
+        from: '2026-04-27',
+        to: '2026-05-31',
+        periodsHoldingAVisit: new Set(),
+      }),
+    ).toEqual([period(10, '2026-05-25', '2026-06-07')]);
+  });
+
+  it('still suppresses it for the grid the portal actually sends', () => {
+    // 27 April to 7 June: Monday to Sunday, May entire. The next grid begins
+    // on 1 June, the Monday of the final week, so a fortnight cut by the end
+    // is always held whole by it.
+    expect(
+      clippedPeriodsAtRisk([period(10, '2026-06-01', '2026-06-14')], {
+        from: '2026-04-27',
+        to: '2026-06-07',
+        periodsHoldingAVisit: new Set(),
+      }),
+    ).toEqual([]);
+  });
+
   it('leaves a clipped period alone when a visit of that agreement already stands in it', () => {
     // The ordinary hand-off: May's run planned this fortnight, so June meeting
     // it clipped at the start is not a loss, it is the overlap working.
