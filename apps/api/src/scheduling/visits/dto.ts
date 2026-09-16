@@ -253,12 +253,53 @@ export class VisitDto {
   @ApiProperty({ type: String, format: 'date-time' }) updatedAt!: string;
 }
 
+export const VISIT_CREW_CHANGE_ACTIONS = [
+  'CREW_SET',
+  'CREW_REPLACED',
+  'CREW_REMOVED',
+] as const;
+
+export type VisitCrewChangeAction = (typeof VISIT_CREW_CHANGE_ACTIONS)[number];
+
+export class VisitCrewChangeDto {
+  @ApiProperty({ type: String, format: 'date-time' }) changedAt!: string;
+  @ApiProperty({
+    type: String,
+    enum: VISIT_CREW_CHANGE_ACTIONS,
+    description:
+      'CREW_SET: a crew was put on a visit that had none. CREW_REPLACED: a crew already on the visit was changed. CREW_REMOVED: the crew was taken off.',
+  })
+  action!: VisitCrewChangeAction;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Who made the change, as recorded at the time.',
+  })
+  actorLabel!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'The reason the manager gave. Null where none was asked for, as when a crew is taken off.',
+  })
+  reason!: string | null;
+  @ApiProperty({ type: Number, description: 'How many people the change left on the visit.' })
+  crewSize!: number;
+}
+
 export class VisitDetailDto extends VisitDto {
   @ApiProperty({
     type: VisitOriginDto,
     description: 'Why this visit exists — the agreement and version behind it.',
   })
   origin!: VisitOriginDto;
+
+  @ApiProperty({
+    type: [VisitCrewChangeDto],
+    description:
+      "Every time a manager set, changed or removed this visit's crew by hand, newest first, with the reason they gave. Empty for a visit only the scheduler has touched. Capped at the most recent 20.",
+  })
+  crewChanges!: VisitCrewChangeDto[];
 }
 
 export class PaginatedVisitsDto {

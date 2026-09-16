@@ -116,6 +116,8 @@ describe('VisitsService origin', () => {
     const prisma = {
       generatedVisit: { findUnique: jest.fn(async () => row) },
       scheduleRun: { findUnique: jest.fn(async () => run) },
+      // The visit's own hand-edit history, which `get` reads alongside origin.
+      auditEvent: { findMany: jest.fn(async () => []) },
     };
     const service = new VisitsService(
       prisma as unknown as PrismaService,

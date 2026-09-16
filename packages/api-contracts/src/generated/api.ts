@@ -2003,6 +2003,21 @@ export interface components {
              */
             generatedByRunRangeEnd: string | null;
         };
+        VisitCrewChangeDto: {
+            /** Format: date-time */
+            changedAt: string;
+            /**
+             * @description CREW_SET: a crew was put on a visit that had none. CREW_REPLACED: a crew already on the visit was changed. CREW_REMOVED: the crew was taken off.
+             * @enum {string}
+             */
+            action: "CREW_SET" | "CREW_REPLACED" | "CREW_REMOVED";
+            /** @description Who made the change, as recorded at the time. */
+            actorLabel: string | null;
+            /** @description The reason the manager gave. Null where none was asked for, as when a crew is taken off. */
+            reason: string | null;
+            /** @description How many people the change left on the visit. */
+            crewSize: number;
+        };
         VisitDetailDto: {
             /** Format: uuid */
             id: string;
@@ -2047,6 +2062,8 @@ export interface components {
             updatedAt: string;
             /** @description Why this visit exists — the agreement and version behind it. */
             origin: components["schemas"]["VisitOriginDto"];
+            /** @description Every time a manager set, changed or removed this visit's crew by hand, newest first, with the reason they gave. Empty for a visit only the scheduler has touched. Capped at the most recent 20. */
+            crewChanges: components["schemas"]["VisitCrewChangeDto"][];
         };
         ConflictResourcesDto: {
             /** Format: uuid */

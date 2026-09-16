@@ -22,10 +22,16 @@ import { protectionReasonFor } from '../visit-generation/plan';
 import {
   AdjustVisitDto,
   LockVisitDto,
+  VISIT_CREW_CHANGE_ACTIONS,
+  VisitCrewChangeAction,
+  VisitCrewChangeDto,
   VisitDetailDto,
   VisitDto,
   VisitQueryDto,
 } from './dto';
+
+/** A history panel is read backwards from now; twenty edits is already a lot. */
+const MAX_VISIT_CREW_CHANGES = 20;
 
 /** The assignment a crew would turn up for, in the order `get` prefers. */
 const LIVE_CREW_STATUSES: AssignmentStatus[] = [
@@ -209,7 +215,50 @@ export class VisitsService {
         generatedByRunRangeStart: run ? toDateOnly(run.rangeStart) : null,
         generatedByRunRangeEnd: run ? toDateOnly(run.rangeEnd) : null,
       },
+      crewChanges: await this.crewChanges(id),
     };
+  }
+
+  /**
+   * Every hand edit to this visit's crew, newest first, with the reason given.
+   *
+   * The drawer requires a reason for a manual override and then showed no sign
+   * of it anywhere: the box reset to its placeholder on save and the visit's
+   * History listed only "Generated" and "Last updated". A required reason that
+   * cannot be read back is a form field, not a record.
+   *
+   * Read from the visit's own audit entries rather than its assignments':
+   * replacing a crew hard-deletes the draft it replaces, so an assignment-keyed
+   * history loses everything but the latest edit.
+   */
+  private async crewChanges(visitId: string): Promise<VisitCrewChangeDto[]> {
+    const events = await this.prisma.auditEvent.findMany({
+      where: {
+        entityType: 'GeneratedVisit',
+        entityId: visitId,
+        action: 'visit.crew_changed',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: MAX_VISIT_CREW_CHANGES,
+      select: { createdAt: true, actorLabel: true, after: true },
+    });
+
+    return events.map((event) => {
+      const change = (event.after ?? {}) as {
+        action?: VisitCrewChangeAction;
+        reason?: string | null;
+        crewSize?: number;
+      };
+      return {
+        changedAt: event.createdAt.toISOString(),
+        action: VISIT_CREW_CHANGE_ACTIONS.includes(change.action as VisitCrewChangeAction)
+          ? (change.action as VisitCrewChangeAction)
+          : 'CREW_REPLACED',
+        actorLabel: event.actorLabel,
+        reason: change.reason ?? null,
+        crewSize: change.crewSize ?? 0,
+      };
+    });
   }
 
   /**

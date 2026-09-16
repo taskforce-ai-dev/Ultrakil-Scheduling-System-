@@ -5423,6 +5423,45 @@
           "generatedByRunRangeEnd"
         ]
       },
+      "VisitCrewChangeDto": {
+        "type": "object",
+        "properties": {
+          "changedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "CREW_SET",
+              "CREW_REPLACED",
+              "CREW_REMOVED"
+            ],
+            "description": "CREW_SET: a crew was put on a visit that had none. CREW_REPLACED: a crew already on the visit was changed. CREW_REMOVED: the crew was taken off."
+          },
+          "actorLabel": {
+            "type": "string",
+            "nullable": true,
+            "description": "Who made the change, as recorded at the time."
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "The reason the manager gave. Null where none was asked for, as when a crew is taken off."
+          },
+          "crewSize": {
+            "type": "number",
+            "description": "How many people the change left on the visit."
+          }
+        },
+        "required": [
+          "changedAt",
+          "action",
+          "actorLabel",
+          "reason",
+          "crewSize"
+        ]
+      },
       "VisitDetailDto": {
         "type": "object",
         "properties": {
@@ -5537,6 +5576,13 @@
                 "$ref": "#/components/schemas/VisitOriginDto"
               }
             ]
+          },
+          "crewChanges": {
+            "description": "Every time a manager set, changed or removed this visit's crew by hand, newest first, with the reason they gave. Empty for a visit only the scheduler has touched. Capped at the most recent 20.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitCrewChangeDto"
+            }
           }
         },
         "required": [
@@ -5564,7 +5610,8 @@
           "assignedCrewCount",
           "createdAt",
           "updatedAt",
-          "origin"
+          "origin",
+          "crewChanges"
         ]
       },
       "ConflictResourcesDto": {

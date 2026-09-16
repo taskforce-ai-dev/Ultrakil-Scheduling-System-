@@ -222,10 +222,16 @@ export function AssignmentEditorDrawer({
   // refresh within the same visit, which would erase the one honest record
   // this drawer has of which scopes it locked/unlocked this session (see the
   // note above `sessionLocks`) the moment it saves its own change.
+  /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSessionLocks({});
+    // The reason belongs to the change a manager is composing, not to whatever
+    // the last fetch returned. Resetting it with the form prefill below meant
+    // any refresh of the same visit erased what they were typing; a successful
+    // save clears it explicitly instead, once the reason has been recorded.
+    setReason("");
   }, [visitId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Pre-fill the form from the current assignment (or the visit's own window,
   // for a visit that has none yet) whenever a fresh visit/assignment loads.
@@ -257,7 +263,6 @@ export function AssignmentEditorDrawer({
       setCrewRows([]);
       setVehicleRows([]);
     }
-    setReason("");
     setSaveConflicts(null);
   }, [visit, assignment]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -459,7 +464,11 @@ export function AssignmentEditorDrawer({
     setSaveConflicts(null);
     try {
       await assignCrew(visitId, { ...proposal, reason: reason.trim() });
-      notify.success("Assignment saved.");
+      notify.success("Assignment saved. The reason is on this visit's history.");
+      // The reason has been recorded; the next change needs its own. Cleared
+      // here rather than as a side effect of the reload, so a refusal — which
+      // does not reload — leaves the words a manager already typed in place.
+      setReason("");
       load();
       onChanged();
     } catch (caught) {

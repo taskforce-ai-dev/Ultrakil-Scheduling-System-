@@ -60,6 +60,13 @@ const WEEKDAY_SHORT: Record<string, string> = {
  * correctly after the agreement itself has been edited — which is exactly when
  * a manager asks the question.
  */
+/** What each recorded crew change is called on screen. */
+const CREW_CHANGE_LABEL: Record<VisitDetail["crewChanges"][number]["action"], string> = {
+  CREW_SET: "Crew set by hand",
+  CREW_REPLACED: "Crew changed by hand",
+  CREW_REMOVED: "Crew taken off by hand",
+};
+
 export function VisitDetailDrawer({
   visitId,
   onOpenChange,
@@ -266,6 +273,39 @@ export function VisitDetailDrawer({
                 {new Date(visit.updatedAt).toLocaleString()}
               </Row>
             </dl>
+
+            {/*
+              * Hand edits to the crew, newest first, with the reason the
+              * manager was made to give. The drawer that demands the reason
+              * used to clear it on save and leave no trace of it anywhere, so
+              * "Generated" and "Last updated" were the whole story of a visit
+              * somebody had re-crewed twice.
+              */}
+            {visit.crewChanges.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {visit.crewChanges.map((change) => (
+                  <li
+                    key={`${change.changedAt}-${change.action}`}
+                    className="rounded-lg border bg-muted/30 p-2 text-sm"
+                  >
+                    <p className="font-medium">
+                      {CREW_CHANGE_LABEL[change.action]}
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {new Date(change.changedAt).toLocaleString()}
+                      </span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {change.actorLabel ?? "Actor not recorded"}
+                      {change.action !== "CREW_REMOVED" &&
+                        ` · ${change.crewSize} ${change.crewSize === 1 ? "person" : "people"} on the visit`}
+                    </p>
+                    <p className={change.reason ? "mt-1" : "mt-1 text-muted-foreground"}>
+                      {change.reason ?? "No reason given"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         </div>
       ) : null}

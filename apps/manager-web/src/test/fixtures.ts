@@ -259,6 +259,7 @@ export function buildVisitDetail(overrides: Partial<VisitDetail> = {}): VisitDet
       generatedByRunRangeStart: "2026-08-31",
       generatedByRunRangeEnd: "2026-09-06",
     },
+    crewChanges: [],
     ...overrides,
   };
 }

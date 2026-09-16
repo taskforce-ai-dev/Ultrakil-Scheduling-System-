@@ -222,6 +222,13 @@ export class AssignmentsService {
         },
         tx,
       );
+      await this.recordCrewChange(tx, visitId, actor, {
+        action: existing ? 'CREW_REPLACED' : 'CREW_SET',
+        assignmentId: assignment.id,
+        replacedAssignmentId: existing?.id ?? null,
+        crewSize: assignment.crewMembers.length,
+        reason: dto.reason?.trim() || null,
+      });
 
       return { kind: 'assigned' as const, assignment };
     }, { timeout: 30_000 });
@@ -290,6 +297,13 @@ export class AssignmentsService {
         },
         tx,
       );
+      await this.recordCrewChange(tx, visitId, actor, {
+        action: 'CREW_REMOVED',
+        assignmentId: null,
+        replacedAssignmentId: existing.id,
+        crewSize: 0,
+        reason: null,
+      });
     });
   }
 
@@ -674,6 +688,41 @@ export class AssignmentsService {
       where: { id: visitId },
       data: { status: VisitStatus.UNASSIGNED },
     });
+  }
+
+  /**
+   * The visit's own record of a crew being set, replaced or taken off by hand.
+   *
+   * There is already an audit entry against the assignment, carrying the full
+   * before/after. It cannot be the visit's history, though: replacing a crew
+   * hard-deletes the draft it replaces, so after a second edit the first
+   * edit's entry names a row that no longer exists and the reason a manager
+   * was required to give goes with it. This entry is about the visit, which
+   * stays, and holds only what a history line needs to say.
+   */
+  private async recordCrewChange(
+    tx: Prisma.TransactionClient,
+    visitId: string,
+    actor: AuthenticatedUser,
+    change: {
+      action: 'CREW_SET' | 'CREW_REPLACED' | 'CREW_REMOVED';
+      assignmentId: string | null;
+      replacedAssignmentId: string | null;
+      crewSize: number;
+      reason: string | null;
+    },
+  ) {
+    await this.audit.record(
+      {
+        entityType: 'GeneratedVisit',
+        entityId: visitId,
+        action: 'visit.crew_changed',
+        actor,
+        before: null,
+        after: change,
+      },
+      tx,
+    );
   }
 
   private async deleteDraft(

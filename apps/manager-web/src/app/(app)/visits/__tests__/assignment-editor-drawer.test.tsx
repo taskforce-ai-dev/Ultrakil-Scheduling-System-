@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -358,6 +358,28 @@ describe("AssignmentEditorDrawer", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
+  /**
+   * The reason box reset to its placeholder on save and the edit never
+   * appeared in the visit's History, so a manager had no way to tell whether
+   * what they were made to write had been kept. It is kept — the drawer
+   * clears the box deliberately, because the next change needs its own reason,
+   * and the one just given is on the visit's History.
+   */
+  it("clears the reason after it has been saved, so the next change needs its own", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    vi.mocked(assignCrew).mockResolvedValue(buildAssignment({}));
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Customer requested this crew");
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reason for this change")).toHaveValue("")
+    );
+  });
+
   it("will not save without a reason", async () => {
     vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
     const { user } = await openDrawer();
@@ -640,6 +662,21 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.getByText("The replacement crew is invalid.")).toBeInTheDocument();
     expect(screen.queryByText("This crew is eligible to take the visit.")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+  });
+
+  it("keeps the reason when a save is refused, so nobody retypes it", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    vi.mocked(assignCrew).mockRejectedValue(
+      new ApiError({ code: "RESOURCE_CONFLICT", message: "Somebody else changed this." })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Emergency cover");
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+
+    expect(screen.getByLabelText("Reason for this change")).toHaveValue("Emergency cover");
   });
 
   it("surfaces a backend refusal without losing the drawer", async () => {
