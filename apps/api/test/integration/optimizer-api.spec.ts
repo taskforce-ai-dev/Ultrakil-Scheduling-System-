@@ -14,6 +14,7 @@
  * ends up seeing RUNNING.
  */
 import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { AssignmentStatus, AvailabilityKind, BranchCode, CrewRole, DataProvenance, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import { Job } from 'bullmq';
@@ -552,7 +553,7 @@ describe('assignment lock concurrency', () => {
     const started = deferred<void>();
     const answer = deferred<SolveResponse>();
     const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
-    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService));
+    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService), app.get(ConfigService));
     const publishing = new PublishingService(
       locker.client,
       app.get(AuditService),
@@ -775,7 +776,7 @@ describe('standard writer publication protocol', () => {
           })),
           unassigned: [],
         }),
-      } as unknown as SchedulerClient, eligibility, app.get(AuditService));
+      } as unknown as SchedulerClient, eligibility, app.get(AuditService), app.get(ConfigService));
       return service.execute(run.id);
     };
     return { visits, run, solve };
@@ -922,6 +923,7 @@ describe('standard writer publication protocol', () => {
       } as unknown as SchedulerClient,
       app.get(EligibilityService),
       app.get(AuditService),
+      app.get(ConfigService),
     );
 
     await expect(service.execute(run.id)).rejects.toMatchObject({
@@ -981,6 +983,7 @@ describe('standard writer publication protocol', () => {
           : { isEligible: true, conflicts: [] };
       } } as unknown as EligibilityService,
       app.get(AuditService),
+      app.get(ConfigService),
     );
     const pending = new ScheduleRunProcessor(service, {
       isCurrentDispatch: async () => true,
@@ -1115,6 +1118,7 @@ describe('standard writer publication protocol', () => {
           },
         } as EligibilityService,
         app.get(AuditService),
+        app.get(ConfigService),
       );
       const pending = service.execute(staleRun.id).then(
         () => undefined,
@@ -1938,6 +1942,7 @@ describe('publishing', () => {
         scheduler,
         app.get(EligibilityService),
         app.get(AuditService),
+        app.get(ConfigService),
       );
       const publishing = new PublishingService(
         publisher.client,

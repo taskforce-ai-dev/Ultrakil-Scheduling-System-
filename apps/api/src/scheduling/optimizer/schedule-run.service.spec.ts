@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import {
   AssignmentStatus,
   BranchCode,
@@ -36,6 +37,12 @@ function deferred<T>() {
 function fixture(
   scheduledDate = '2027-03-03',
   initialStatus: AssignmentStatus = AssignmentStatus.DRAFT,
+  /**
+   * How many visits each branch-day already carries, for the backstop that
+   * refuses a move on to a full one. Days left out are empty, which is what a
+   * week nobody has planned yet looks like.
+   */
+  dayLoad: Record<string, number> = {},
 ) {
   const started = deferred<void>();
   const answer = deferred<SolveResponse>();
@@ -176,6 +183,20 @@ function fixture(
     findUniqueOrThrow: jest.fn(async () => ({ ...visit })),
     update: jest.fn(async ({ data }: { data: Partial<typeof visit> }) =>
       Object.assign(visit, data),
+    ),
+    // The day-load read: how full each branch-day the run would move work
+    // between already is. Only the dates asked for come back, exactly as
+    // Postgres would answer.
+    groupBy: jest.fn(
+      async ({ where }: { where: { visitDate: { in: Date[] } } }) =>
+        where.visitDate.in
+          .map((date) => date.toISOString().slice(0, 10))
+          .filter((date) => (dayLoad[date] ?? 0) > 0)
+          .map((date) => ({
+            branchCode: BranchCode.COLOMBO,
+            visitDate: new Date(`${date}T00:00:00.000Z`),
+            _count: { _all: dayLoad[date] },
+          })),
     ),
   };
   const scheduleRun = {
@@ -397,6 +418,9 @@ function fixture(
     scheduler as unknown as SchedulerClient,
     eligibility as unknown as EligibilityService,
     {} as AuditService,
+    // Nothing configured: the service falls back to the default daily cap,
+    // which is what an environment without the override runs with too.
+    { get: () => undefined } as unknown as ConfigService,
   );
   const processor = new ScheduleRunProcessor(service, {
     isCurrentDispatch: jest.fn(async () => true),
@@ -1527,5 +1551,140 @@ describe('at-least-once schedule-run delivery leases', () => {
 
     expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
     expect(f.dispatchOutbox.terminalFailureAt).toBeInstanceOf(Date);
+  });
+});
+
+/**
+ * The daily cap, held where the move is actually committed.
+ *
+ * Generation spreads a calendar so no branch-day carries more than
+ * `VISIT_GENERATION_DAILY_CAP`. The solver is never told that number, so it
+ * moved work on to days that were already full and handed the manager back the
+ * twenty-job day the cap exists to prevent. These cover the decision itself:
+ * what is refused, what is not, and what a manager is told when it is.
+ */
+describe('the daily-cap backstop on a solver move', () => {
+  it('refuses a move on to a day already at the cap and leaves the visit where it was', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // The visit keeps its generated date, and the assignment is written for
+    // that date rather than the one the solver chose.
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.generatedVisit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: VisitStatus.SCHEDULED },
+      }),
+    );
+    // The engine was asked about the day the visit is standing on, not the
+    // day the solver wanted: refusing a move is not refusing an assignment.
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      f.visit.id,
+      expect.anything(),
+      expect.objectContaining({ proposedVisit: undefined }),
+      expect.anything(),
+    );
+  });
+
+  it('lets a move on to a day with room through', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // Eleven is not full, so the twelfth is the solver's to place. A backstop
+    // that refused this would have satisfied the cap by destroying the
+    // optimizer.
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-04T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+  });
+
+  it('still assigns a crew to a visit standing on a day that is already over the cap', async () => {
+    // Twenty on the visit's own day, and the solver is not moving it. A day
+    // over the cap from protected work still needs its crews; only making it
+    // worse is refused.
+    const f = fixture('2027-03-03', AssignmentStatus.DRAFT, {
+      '2027-03-03': 20,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.reasons.createMany).not.toHaveBeenCalled();
+    expect(f.assignments.map((entry) => entry.id)).toContain('replacement');
+  });
+
+  it('tells the manager the day was full when the kept day cannot be crewed', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+    // The solver's crew works on the 4th and not on the 3rd. With the move
+    // refused the visit has nowhere to be staffed, and must say so rather
+    // than disappear.
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'EMPLOYEE_DOUBLE_BOOKED',
+          message: 'Employee is already booked.',
+          remediation: 'Choose somebody else.',
+          resources: { employeeIds: ['employee'] },
+        },
+      ],
+    } as never);
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+
+    const written = f.reasons.createMany.mock.calls[0][0] as {
+      data: { code: string; message: string; details: unknown }[];
+    };
+    // The cap refusal comes first: it is why the visit is on this day at all,
+    // and a queue that only said "employee double booked" would be telling
+    // the manager to fix the wrong thing.
+    expect(written.data.map((row) => row.code)).toEqual([
+      'DAILY_VISIT_CAP_REACHED',
+      'EMPLOYEE_DOUBLE_BOOKED',
+    ]);
+    expect(written.data[0].message).toContain('2027-03-04');
+    expect(written.data[0].message).toContain('12');
+    expect(written.data[0].message).toContain('2027-03-03');
+    expect(written.data[0].details).toMatchObject({
+      remediation: expect.stringContaining('2027-03-04'),
+    });
+  });
+
+  it('reads no day load at all when the solver moves nothing', async () => {
+    const f = fixture();
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // A run that proposes no move asks the database nothing extra. The cap is
+    // a rule about moving work, so a solve that only staffs what is already
+    // dated pays nothing for it.
+    expect(f.generatedVisit.groupBy).not.toHaveBeenCalled();
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
   });
 });

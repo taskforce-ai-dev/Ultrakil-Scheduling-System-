@@ -2536,7 +2536,8 @@
                 "ASSIGNMENT_LOCKED",
                 "CREW_CANNOT_TRAVEL",
                 "TOO_MANY_VEHICLES",
-                "NO_FEASIBLE_CREW"
+                "NO_FEASIBLE_CREW",
+                "DAILY_VISIT_CAP_REACHED"
               ],
               "type": "string"
             }
@@ -5627,7 +5628,8 @@
               "ASSIGNMENT_LOCKED",
               "CREW_CANNOT_TRAVEL",
               "TOO_MANY_VEHICLES",
-              "NO_FEASIBLE_CREW"
+              "NO_FEASIBLE_CREW",
+              "DAILY_VISIT_CAP_REACHED"
             ]
           },
           "message": {

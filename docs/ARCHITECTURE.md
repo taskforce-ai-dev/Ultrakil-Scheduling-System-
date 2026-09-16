@@ -90,7 +90,7 @@ Every hard rule is enforced in `apps/api`, in one place, with tests.
 | Authorized driver only      | `VehicleAuthorization` must exist for `AssignmentVehicle.driverEmployeeId`       |
 | Allowed vs preferred days   | `ServiceAgreementDayRule.kind` — `ALLOWED` filters, `PREFERRED` only ranks       |
 | Booked dates are facts      | `ServiceAgreementBooking` — a booked period's visits are exactly those dates     |
-| One day, one day's work     | `VISIT_GENERATION_DAILY_CAP` — the cross-agreement load guard in generation     |
+| One day, one day's work     | `VISIT_GENERATION_DAILY_CAP` — the cross-agreement load guard in generation, and `DailyLoadLedger` refusing a solver's move on to a full day |
 | Service hours               | `SiteOperatingHours` per weekday, plus the agreement's optional window           |
 | No double booking           | Overlap check across `Assignment.plannedStart`/`plannedEnd`                      |
 
@@ -213,6 +213,37 @@ visit so a manager can see it.
    that view cannot touch. The warnings are filtered to the range as well,
    because pinning a requirement onto a protected visit outside it can put one
    there by another road.
+
+   **The cap is not generation's alone.** It was, and that was the hole: the
+   optimizer may move a visit to any legal day in its run's range, and nothing
+   in the solve knew the number. Measured end to end — generate the portal's
+   September grid on an empty calendar, 88 visits, busiest day 12, nothing over
+   the cap; then one solve over a single week of it — eight visits came off the
+   21st on to the 17th and the manager was handed a twenty-job day, which is
+   the complaint the cap was introduced to answer. So the same rule is enforced
+   a second time where a solver's move is actually committed: in the guarded
+   persistence transaction of `ScheduleRunService`, by `DailyLoadLedger`. A
+   proposed move on to a branch-day already carrying the cap is refused, and
+   the visit keeps the date generation gave it.
+
+   Three things make that a backstop rather than a second opinion. It counts a
+   day on **the same basis the warning above uses** — the day as it will stand
+   after the run, every non-cancelled visit on it whatever agreement it belongs
+   to — so the two halves of the system cannot disagree about what a full day
+   is. It refuses a **move**, never an assignment: a day already over the cap
+   from protected work still gets its crews, because punishing the visits
+   standing there for the day's history helps nobody. And a refused move never
+   loses the visit — it stays where generation put it, and if the solver's crew
+   cannot serve it there it surfaces in the Unassigned queue carrying
+   `DAILY_VISIT_CAP_REACHED` beside the engine's own conflicts, so the manager
+   reads both why the crew does not fit and why the visit is on this day at
+   all.
+
+   The solver itself is still not told the cap. It could be — the day-by-day
+   decomposition in `services/scheduler/app/solver/model.py` would take a
+   per-day limit on `staffed` as one linear constraint — but an invariant that
+   depends on a remote service behaving is not an invariant, so the API-side
+   refusal is required either way and is where the rule lives.
 
 ### What a period is
 

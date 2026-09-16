@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
   AssignmentStatus,
@@ -14,9 +15,16 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
+import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
+import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
+import {
+  branchDayKey,
+  dailyCapRefusal,
+  DailyLoadLedger,
+} from './daily-load-ledger';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
   lockScheduleAgreements,
@@ -158,6 +166,9 @@ interface ProposedAssignment extends SolveSnapshot {
     windowStartMinute: number;
     windowEndMinute: number;
   };
+  /** The branch-day the visit stands on now, which a move would empty. */
+  branchCode: BranchCode;
+  visitDate: Date;
 }
 
 /**
@@ -223,6 +234,7 @@ export class ScheduleRunService {
     private readonly scheduler: SchedulerClient,
     private readonly eligibility: EligibilityService,
     private readonly audit: AuditService,
+    private readonly config: ConfigService,
   ) {}
 
   /** Records the run. The work itself happens in the queue worker. */
@@ -599,6 +611,8 @@ export class ScheduleRunService {
         dto,
         replaceAssignmentId: existing?.id,
         proposedVisit,
+        branchCode: visit.branchCode,
+        visitDate: visit.visitDate,
       });
     }
 
@@ -899,9 +913,24 @@ export class ScheduleRunService {
             visit.updatedAt,
           );
         }
+        // What every branch-day this run would move work between carries
+        // right now, read inside the transaction that commits the moves.
+        const ledger = await this.readDailyLoad(tx, proposals);
         let scheduled = 0;
         let rejected = 0;
         for (const entry of proposals) {
+          // A move on to a day already at the cap is refused before it is
+          // judged, and the visit keeps its generated date. This is the one
+          // place a solver's move is committed, so it is the one place the
+          // cap can be made to hold whatever the solver decided.
+          //
+          // Refusing a move is not refusing an assignment: `refused` only
+          // clears `proposedVisit`, and the engine is then asked the same
+          // question about the day the visit is already standing on. A day
+          // that was over the cap before this run still gets its crews.
+          const refused = this.refuseOvercapMove(ledger, entry);
+          const move = refused ? undefined : entry.proposedVisit;
+
           // Evaluate and apply in order inside this transaction. Later checks
           // must see the slots freed or occupied by earlier accepted results.
           // The engine still wins whenever it disagrees with the solver.
@@ -910,7 +939,7 @@ export class ScheduleRunService {
             entry.dto,
             {
               excludeAssignmentId: entry.replaceAssignmentId,
-              proposedVisit: entry.proposedVisit,
+              proposedVisit: move,
             },
             tx,
           );
@@ -925,18 +954,30 @@ export class ScheduleRunService {
                 ...entry,
                 // Keep one explanation/remedy per conflict. The queue and visit
                 // detail read the same structured reasons as manual checks.
-                reasons: verdict.conflicts.map((conflict) => ({
-                  code: conflict.code,
-                  message: conflict.message,
-                  remediation: conflict.remediation,
-                  resources: conflict.resources,
-                })),
+                // A refused move is listed among them: without it the queue
+                // says the crew clashes and never says the visit is only on
+                // this day because the day the scheduler wanted was full.
+                reasons: [...(refused ? [refused] : []), ...verdict.conflicts].map(
+                  (conflict) => ({
+                    code: conflict.code,
+                    message: conflict.message,
+                    remediation: conflict.remediation,
+                    resources: conflict.resources,
+                  }),
+                ),
               },
             ]);
             rejected += 1;
             continue;
           }
-          await this.persist(tx, runId, entry, pmsById);
+          await this.persist(tx, runId, { ...entry, proposedVisit: move }, pmsById);
+          if (move) {
+            ledger.recordMove(
+              entry.branchCode,
+              dateOnly(entry.visitDate),
+              dateOnly(move.visitDate),
+            );
+          }
           scheduled += 1;
         }
         await this.recordUnassigned(tx, runId, unassigned);
@@ -959,6 +1000,101 @@ export class ScheduleRunService {
         );
       }
       throw error;
+    });
+  }
+
+  /** Most visits one branch-day may carry. The number generation spreads to. */
+  private get dailyCap(): number {
+    return (
+      this.config.get<number>('visitGeneration.dailyCap') ??
+      DEFAULT_DAILY_VISIT_CAP
+    );
+  }
+
+  /**
+   * How full every branch-day this run might move work between already is.
+   *
+   * The basis is generation's own: every visit standing on the branch-day that
+   * is not cancelled, whatever agreement it belongs to and whoever planned it.
+   * `docs/ARCHITECTURE.md` states that basis for the generation guard, and the
+   * two have to agree — a backstop that counted only this run's visits would
+   * read a day holding twelve as empty and wave the thirteenth straight on to
+   * it, which is exactly the hole this closes.
+   *
+   * Only the days a move could touch are read: its origin, which a committed
+   * move empties by one, and its destination. A run that proposes no move
+   * reads nothing at all.
+   */
+  private async readDailyLoad(
+    tx: Prisma.TransactionClient,
+    proposals: ProposedAssignment[],
+  ): Promise<DailyLoadLedger> {
+    const moves = proposals.filter((entry) => entry.proposedVisit !== undefined);
+    if (moves.length === 0) return new DailyLoadLedger(new Map(), this.dailyCap);
+
+    const branchCodes = [...new Set(moves.map((entry) => entry.branchCode))];
+    const dates = [
+      ...new Map(
+        moves
+          .flatMap((entry) => [entry.visitDate, entry.proposedVisit!.visitDate])
+          .map((date) => [date.getTime(), date]),
+      ).values(),
+    ];
+
+    const rows = await tx.generatedVisit.groupBy({
+      by: ['branchCode', 'visitDate'],
+      where: {
+        branchCode: { in: branchCodes },
+        visitDate: { in: dates },
+        // Cancelled work occupies no part of the day. Everything else does —
+        // pending, scheduled, unassigned, published, a manager's own visit.
+        status: { not: VisitStatus.CANCELLED },
+      },
+      _count: { _all: true },
+    });
+
+    return new DailyLoadLedger(
+      new Map(
+        rows.map((row) => [
+          branchDayKey(row.branchCode, dateOnly(row.visitDate)),
+          row._count._all,
+        ]),
+      ),
+      this.dailyCap,
+    );
+  }
+
+  /**
+   * The refusal, or nothing when the move may stand.
+   *
+   * Returns the conflict rather than a boolean so the caller can put it in
+   * front of a manager unchanged if the visit ends up unassigned. A proposal
+   * that moves nowhere is never refused: that is an assignment for the day the
+   * visit already sits on, and a full day still needs its crews.
+   */
+  private refuseOvercapMove(
+    ledger: DailyLoadLedger,
+    entry: ProposedAssignment,
+  ): Conflict | undefined {
+    if (!entry.proposedVisit) return undefined;
+
+    const target = dateOnly(entry.proposedVisit.visitDate);
+    if (ledger.admitsMoveOnto(entry.branchCode, target)) return undefined;
+
+    const kept = dateOnly(entry.visitDate);
+    this.logger.warn(
+      `Solver proposed moving visit ${entry.visitId} to ${target}, which already carries ${ledger.countOn(
+        entry.branchCode,
+        target,
+      )} visits in ${entry.branchCode}; the visit stays on ${kept}.`,
+    );
+    return dailyCapRefusal({
+      visitId: entry.visitId,
+      branchCode: entry.branchCode,
+      proposedDate: target,
+      keptDate: kept,
+      carrying: ledger.countOn(entry.branchCode, target),
+      cap: this.dailyCap,
     });
   }
 

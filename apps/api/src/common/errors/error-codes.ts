@@ -105,6 +105,11 @@ export const ErrorCode = {
   TOO_MANY_VEHICLES: 'TOO_MANY_VEHICLES',
   /** No legal crew/vehicle combination exists for the visit as currently defined. */
   NO_FEASIBLE_CREW: 'NO_FEASIBLE_CREW',
+  /// The optimizer wanted to move the visit on to a branch-day already
+  /// carrying VISIT_GENERATION_DAILY_CAP visits. Generation spreads a calendar
+  /// so no day goes over that number; a solve that moved work on to a full day
+  /// would hand the manager back the twenty-job day the cap exists to prevent.
+  DAILY_VISIT_CAP_REACHED: 'DAILY_VISIT_CAP_REACHED',
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
