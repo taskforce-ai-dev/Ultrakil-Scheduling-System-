@@ -346,9 +346,65 @@ describe("unassigned visits queue", () => {
 
     const query = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
     expect(query).toMatchObject({ branchCode: "KANDY", page: 1, pageSize: 25 });
-    expect(query).toHaveProperty("from");
-    expect(query).toHaveProperty("to");
     expect(query).not.toHaveProperty("visitId");
+  });
+
+  /**
+   * The backlog is the page's whole purpose, and the date was hiding it.
+   *
+   * The filter opened on today and could not be cleared, so a queue holding a
+   * hundred-odd uncrewed visits across three months — four of them inside a
+   * week already published — showed "Nothing unassigned / Every visit
+   * currently has a valid crew and vehicle assignment", directly under a
+   * heading promising "including work nobody has tried to staff yet".
+   */
+  it("asks for the whole backlog, with no date, until a manager picks one", async () => {
+    await renderPage();
+
+    const query = vi.mocked(fetchUnassignedVisits).mock.calls.at(0)?.[0];
+    expect(query).not.toHaveProperty("from");
+    expect(query).not.toHaveProperty("to");
+  });
+
+  it("narrows to one date when a manager picks one, and lets them clear it again", async () => {
+    const user = await renderPage();
+
+    await user.type(screen.getByLabelText("Date"), "2026-09-18");
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      from: "2026-09-18",
+      to: "2026-09-18",
+      page: 1,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Clear date/ }));
+    const cleared = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(cleared).not.toHaveProperty("from");
+    expect(cleared).not.toHaveProperty("to");
+  });
+
+  it("names the date it found nothing on rather than clearing the whole system", async () => {
+    const user = await renderPage();
+    mockUnassigned([]);
+
+    await user.type(screen.getByLabelText("Date"), "2026-09-18");
+
+    expect(await screen.findByText("Nothing unassigned on Friday 18 September 2026")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every visit currently has a valid crew/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("says a filter is hiding the queue instead of vouching for every visit", async () => {
+    const user = await renderPage();
+    mockUnassigned([]);
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+
+    expect(await screen.findByText("Nothing matches these filters")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every visit currently has a valid crew/)
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the Kandy PMS shortage notice on a focused visit", async () => {
@@ -361,10 +417,14 @@ describe("unassigned visits queue", () => {
   });
 
   it("shows an empty state when nothing is unassigned", async () => {
+    // No filter is set, so the queue has looked at everything and may say so.
     mockUnassigned([]);
     render(<UnassignedVisitsPage />);
 
     expect(await screen.findByText("Nothing unassigned")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Every visit in the system has a crew/)
+    ).toBeInTheDocument();
   });
 
   it("says so when the page holds fewer visits than the API reports", async () => {

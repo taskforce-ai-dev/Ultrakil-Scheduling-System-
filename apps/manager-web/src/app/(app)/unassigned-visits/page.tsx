@@ -26,7 +26,7 @@ import {
   type UnassignedVisit,
   type UnassignedVisitsQuery,
 } from "@/lib/api-client";
-import { formatLongDate, todayIso } from "@/lib/calendar";
+import { formatLongDate } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
   CONFLICT_GROUP_LABEL,
@@ -82,7 +82,17 @@ export default function UnassignedVisitsPage() {
 
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [group, setGroup] = React.useState<GroupFilter>("ALL");
-  const [date, setDate] = React.useState(todayIso());
+  /**
+   * Empty means "every date", and that is the queue's default.
+   *
+   * This opened on today, and the date input's change handler dropped an empty
+   * value, so the filter could not be cleared once set. A queue holding 115
+   * uncrewed visits across three months — four of them inside a week that had
+   * already been published — therefore reported "Nothing unassigned", under a
+   * heading promising work nobody has tried to staff yet. The backlog is the
+   * page; a date is something a manager asks for.
+   */
+  const [date, setDate] = React.useState("");
   const [status, setStatus] = React.useState<StateFilter>("ALL");
   const [page, setPage] = React.useState(1);
   const [items, setItems] = React.useState<UnassignedVisit[]>([]);
@@ -113,8 +123,7 @@ export default function UnassignedVisitsPage() {
       : {
           page,
           pageSize: PAGE_SIZE,
-          from: date,
-          to: date,
+          ...(date ? { from: date, to: date } : {}),
           ...(branch === "ALL" ? {} : { branchCode: branch }),
           ...(status === "ALL" ? {} : { operationState: status }),
           ...(group === "ALL" ? {} : { conflictGroup: group }),
@@ -167,6 +176,39 @@ export default function UnassignedVisitsPage() {
       ? error.code === "VALIDATION_FAILED"
       : items.length === 0 ||
         items.some((visit) => visit.visitId !== focusVisitId));
+
+  /**
+   * What an empty queue is allowed to say.
+   *
+   * "Every visit currently has a valid crew and vehicle assignment" is a claim
+   * about the whole system, and the page can only make it when it asked about
+   * the whole system. With a filter in force it knows one thing — that nothing
+   * matched — so that is all it says, and it names the filter so the manager
+   * can see what is being kept out.
+   */
+  const emptyQueue = React.useMemo(() => {
+    const narrowedByAnythingElse =
+      branch !== "ALL" || status !== "ALL" || group !== "ALL";
+    if (date && !narrowedByAnythingElse) {
+      return {
+        title: `Nothing unassigned on ${formatLongDate(date)}`,
+        description:
+          "Every visit on this date has a crew. Clear the date to see the rest of the backlog.",
+      };
+    }
+    if (date || narrowedByAnythingElse) {
+      return {
+        title: "Nothing matches these filters",
+        description:
+          "No unassigned visit matches the filters above. Widen or clear them to see the rest of the backlog.",
+      };
+    }
+    return {
+      title: "Nothing unassigned",
+      description:
+        "Every visit in the system has a crew and vehicle assignment — nothing is waiting to be staffed on any date.",
+    };
+  }, [branch, date, group, status]);
 
   const kandyPmsShortage = React.useMemo(
     () =>
@@ -227,13 +269,27 @@ export default function UnassignedVisitsPage() {
 
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-date">Date</Label>
-          <input
-            id="unassigned-date"
-            type="date"
-            value={date}
-            onChange={(event) => { if (event.target.value) { setDate(event.target.value); setPage(1); } }}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              id="unassigned-date"
+              type="date"
+              value={date}
+              // An empty value is a real choice — "any date" — and dropping it
+              // was what made the filter one-way.
+              onChange={(event) => { setDate(event.target.value); setPage(1); }}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+            {date && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => { setDate(""); setPage(1); }}
+              >
+                Clear date
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-1.5">
@@ -304,10 +360,7 @@ export default function UnassignedVisitsPage() {
           onRetry={load}
         />
       ) : items.length === 0 ? (
-        <EmptyState
-          title="Nothing unassigned"
-          description="Every visit currently has a valid crew and vehicle assignment."
-        />
+        <EmptyState {...emptyQueue} />
       ) : (
         <>
           {focusVisitId ? (
