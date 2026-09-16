@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronLeft, ChevronRight, Car, Users, Crown } from "lucide-react";
+import { ChevronLeft, ChevronRight, Car, Users, UserX, Crown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -116,9 +116,22 @@ function startMinute(entry: CalendarEntry): number {
   return entry.assignment?.plannedStartMinute ?? entry.windowStartMinute;
 }
 
+/**
+ * When the crew is actually there, or an honest statement that nobody has
+ * decided yet.
+ *
+ * An unassigned visit has no planned times — only the service window it must
+ * fall inside, which for a site open all day is 08:00–17:00. Printing that as
+ * a time range turned a 60-minute job into a nine-hour one, on precisely the
+ * tiles that need attention. Without an assignment the tile says how long the
+ * work takes and that its hour is undecided; it does not invent one.
+ */
 function timeRange(entry: CalendarEntry): string {
-  const end = entry.assignment?.plannedEndMinute ?? entry.windowEndMinute;
-  return `${formatMinuteOfDay(startMinute(entry))}–${formatMinuteOfDay(end)}`;
+  const assignment = entry.assignment;
+  if (!assignment) return `${entry.durationMinutes} min · time not set`;
+  return `${formatMinuteOfDay(assignment.plannedStartMinute)}–${formatMinuteOfDay(
+    assignment.plannedEndMinute,
+  )}`;
 }
 
 function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void }) {
@@ -130,7 +143,14 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`}
+      // Spoken as a sentence in both cases: "at 60 min · time not set on
+      // 2026-09-21" is not one, and the unstaffed tile is the one a screen
+      // reader user most needs to understand.
+      aria-label={
+        entry.assignment
+          ? `${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`
+          : `${entry.customerName} on ${entry.visitDate}, ${entry.durationMinutes} minutes, time not set, no crew, ${style.label.toLowerCase()}`
+      }
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
@@ -144,10 +164,17 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
         className={cn("h-1.5 w-1.5 shrink-0 rounded-full", BRANCH_DOT[entry.branchCode])}
       />
       <span className="min-w-0 flex-1 truncate font-medium">{entry.customerName}</span>
-      {crewCount > 0 && (
+      {/* Said, never left blank. Silence on a calendar reads as "fine", and an
+          unstaffed tile is the one thing on this screen that is not. */}
+      {crewCount > 0 ? (
         <span className="flex shrink-0 items-center gap-0.5 opacity-80">
           <Users className="h-3 w-3" aria-hidden="true" />
           {crewCount}
+        </span>
+      ) : (
+        <span className="flex shrink-0 items-center gap-0.5 font-medium">
+          <UserX className="h-3 w-3" aria-hidden="true" />
+          No crew
         </span>
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (
@@ -541,6 +568,10 @@ export function CalendarBoard() {
                         onOpen={() => setOpenEntry(entry)}
                       />
                     ))}
+                    {/* Says what it does. It used to read "+ 9 more" and
+                        silently swap the whole month view for Week, after
+                        which the next arrow stepped by week and a manager had
+                        no idea why. */}
                     {hiddenCount > 0 && (
                       <button
                         type="button"
@@ -550,7 +581,7 @@ export function CalendarBoard() {
                         }}
                         className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        + {hiddenCount} more
+                        + {hiddenCount} more in Week view
                       </button>
                     )}
                   </div>

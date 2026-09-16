@@ -446,7 +446,10 @@ describe("a busy day", () => {
 
     // Three chips and an overflow link, not seven chips.
     expect(within(grid()).getAllByRole("button", { name: /Cinnamon Grand Colombo at/ })).toHaveLength(3);
-    const more = within(grid()).getByRole("button", { name: "+ 4 more" });
+    // The label says what pressing it does. It used to read "+ 4 more" and
+    // silently swap the month view for Week, after which the next arrow
+    // stepped by week with nothing to explain it.
+    const more = within(grid()).getByRole("button", { name: "+ 4 more in Week view" });
 
     await user.click(more);
 
@@ -475,6 +478,19 @@ describe("paging honesty", () => {
     await renderCalendar();
 
     expect(screen.queryByText(/only the first/)).not.toBeInTheDocument();
+  });
+});
+
+describe("what this screen says it is", () => {
+  it("does not claim nobody is assigned on a screen that shows crews", async () => {
+    // "Nobody is assigned here" sat above tiles carrying crew badges, beside
+    // a "Crew assigned" filter that returns 66 visits.
+    await renderCalendar();
+
+    expect(screen.queryByText(/Nobody is assigned here/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Crew is shown where there is one; assign one from Unassigned Visits/)
+    ).toBeInTheDocument();
   });
 });
 

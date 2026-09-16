@@ -445,8 +445,13 @@ export default function VisitsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Visit Calendar</h1>
+          {/* "Nobody is assigned here" was meant as "crew is not set on this
+              screen" and read as "none of this work has a crew" — above tiles
+              carrying crew badges and beside a filter that returns 66 staffed
+              visits. Say which of the two it is. */}
           <p className="text-muted-foreground">
-            Recurring work generated from service agreements. Nobody is assigned here.
+            Recurring work generated from service agreements. Crew is shown where there is one;
+            assign one from Unassigned Visits or the Dispatch Board.
           </p>
         </div>
         <Button onClick={() => setGenerateOpen(true)}>
@@ -731,6 +736,9 @@ export default function VisitsPage() {
                             }}
                           />
                         ))}
+                        {/* Says what it does: it used to read "+ 9 more" and
+                            silently swap the month view for Week, after which
+                            the next arrow stepped by week. */}
                         {hiddenCount > 0 && (
                           <button
                             type="button"
@@ -740,7 +748,7 @@ export default function VisitsPage() {
                             }}
                             className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
-                            + {hiddenCount} more
+                            + {hiddenCount} more in Week view
                           </button>
                         )}
                       </div>
