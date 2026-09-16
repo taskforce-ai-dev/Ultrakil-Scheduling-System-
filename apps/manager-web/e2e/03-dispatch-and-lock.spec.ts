@@ -104,7 +104,10 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
       && new URL(response.url()).pathname.endsWith('/assignment'));
     await saveButton.click();
     expect((await saved).ok()).toBe(true);
-    await expect(page.getByText('Assignment saved.', { exact: true })).toBeVisible({ timeout: 10_000 });
+    // Pinned to the sentence that reports the save, not to the whole toast:
+    // the confirmation also says where the reason went, and that clause is
+    // free to improve without this acceptance run failing over wording.
+    await expect(page.getByText(/^Assignment saved\./)).toBeVisible({ timeout: 10_000 });
     await page.reload();
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('Ajith Alwis', { timeout: 10_000 });
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('T M Supun Tharaka Wijeweera');
