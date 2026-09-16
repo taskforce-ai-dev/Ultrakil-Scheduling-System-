@@ -1071,6 +1071,17 @@ export class ScheduleRunService {
    * front of a manager unchanged if the visit ends up unassigned. A proposal
    * that moves nowhere is never refused: that is an assignment for the day the
    * visit already sits on, and a full day still needs its crews.
+   *
+   * One limitation, stated rather than hidden: the ledger refuses **in
+   * proposal order**, which is the order the solver returned — by visit id —
+   * and each proposal is answered against the day as it stands at that
+   * moment. A mutual swap between two days that are both exactly at the cap is
+   * therefore refused rather than resolved: moving visit V from day A to day B
+   * and visit W from B to A would be legal applied in either order, but
+   * whichever is judged first sees a full destination and is refused, and
+   * nothing has moved by the time the other is judged. Nothing here reorders
+   * or retries. The outcome is deterministic and errs on the safe side — no
+   * day ever ends over the cap — and both visits keep their generated dates.
    */
   private refuseOvercapMove(
     ledger: DailyLoadLedger,

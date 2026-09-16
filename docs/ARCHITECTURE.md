@@ -90,7 +90,7 @@ Every hard rule is enforced in `apps/api`, in one place, with tests.
 | Authorized driver only      | `VehicleAuthorization` must exist for `AssignmentVehicle.driverEmployeeId`       |
 | Allowed vs preferred days   | `ServiceAgreementDayRule.kind` — `ALLOWED` filters, `PREFERRED` only ranks       |
 | Booked dates are facts      | `ServiceAgreementBooking` — a booked period's visits are exactly those dates     |
-| One day, one day's work     | `VISIT_GENERATION_DAILY_CAP` — the cross-agreement load guard in generation, and `DailyLoadLedger` refusing a solver's move on to a full day |
+| One day, one day's work     | `VISIT_GENERATION_DAILY_CAP` — the cross-agreement load guard in generation, and `DailyLoadLedger` refusing a solver's move on to a full day. A manager may still put a visit on any date by hand through `PATCH /visits/:id`; the rule constrains what the system does on its own |
 | Service hours               | `SiteOperatingHours` per weekday, plus the agreement's optional window           |
 | No double booking           | Overlap check across `Assignment.plannedStart`/`plannedEnd`                      |
 
@@ -238,6 +238,17 @@ visit so a manager can see it.
    `DAILY_VISIT_CAP_REACHED` beside the engine's own conflicts, so the manager
    reads both why the crew does not fit and why the visit is on this day at
    all.
+
+   One limitation is worth naming rather than leaving to be discovered.
+   Proposals are judged in the order the solver returned them — by visit id —
+   and each is answered against the day as it stands at that moment. So if two
+   branch-days are both exactly at the cap and the solve proposes a swap
+   between them, both legs are refused rather than resolved: either one
+   applied first would have been legal, but whichever is judged first sees a
+   full destination, and by the time the other is judged nothing has moved.
+   The ledger refuses in proposal order; it does not reorder or retry. The
+   outcome is deterministic and always on the safe side — no day ever ends
+   over the cap — and both visits simply keep the dates generation gave them.
 
    The solver itself is still not told the cap. It could be — the day-by-day
    decomposition in `services/scheduler/app/solver/model.py` would take a

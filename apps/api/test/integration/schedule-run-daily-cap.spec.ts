@@ -78,6 +78,7 @@ let adminToken: string;
 let runs: ScheduleRunService;
 let customerId: string;
 let jobTypeId: string;
+let branchId: string;
 const agreementIds: string[] = [];
 const employeeIds: string[] = [];
 
@@ -128,6 +129,34 @@ async function datesByVisit(): Promise<Map<string, string>> {
   );
 }
 
+/**
+ * What the ledger counted, from outside the service that builds it.
+ *
+ * `readDailyLoad` is private, and rightly so: nothing but the persistence
+ * transaction has any business building a ledger. But the "not cancelled" half
+ * of its counting basis is invisible from out here — the solve below never
+ * cancels anything, so a build with that filter deleted passes every other
+ * assertion in this file. This shape is the narrowest reach that can tell the
+ * difference, and it is typed rather than `any` so a change to the method's
+ * signature still breaks the suite.
+ */
+type DailyLoadReader = {
+  readDailyLoad(
+    tx: PrismaClient,
+    proposals: {
+      branchCode: BranchCode;
+      visitDate: Date;
+      proposedVisit?: { visitDate: Date };
+    }[],
+  ): Promise<{
+    countOn(branchCode: BranchCode, date: string): number;
+    admitsMoveOnto(branchCode: BranchCode, date: string): boolean;
+  }>;
+};
+
+const capReader = (service: ScheduleRunService): DailyLoadReader =>
+  service as unknown as DailyLoadReader;
+
 const shape = (byDay: Map<string, number>): string =>
   DAYS.map((date) => `${date.slice(5)}=${byDay.get(date) ?? 0}`).join(' ');
 
@@ -161,6 +190,7 @@ beforeAll(async () => {
     create: { code: BranchCode.COLOMBO, name: 'COLOMBO Branch' },
     update: {},
   });
+  branchId = branch.id;
 
   await prisma.user.upsert({
     where: { email: ADMIN.email },
@@ -416,5 +446,69 @@ describe('a generated week, then one solve over it', () => {
         visit.status,
       );
     }
+  });
+});
+
+/**
+ * The counting basis, pinned.
+ *
+ * The suite above proves the cap holds; it cannot prove *what* the cap counts.
+ * Every day it measures is built out of live visits, so `readDailyLoad` could
+ * drop `status: { not: CANCELLED }` and nothing above would notice. This day
+ * is built to notice: it carries exactly the cap in rows, one of them
+ * cancelled, so the documented basis reads it as one short of full and lets a
+ * move on to it through, while a basis that counted cancelled work would call
+ * it full and refuse. Cancelled work occupies no part of a day — that is the
+ * rule, and this is where it is held.
+ */
+describe('a branch-day at the cap, one of its visits cancelled', () => {
+  /**
+   * The Monday after the run's range, so the calendar the tests above measured
+   * is untouched and generation never put anything here itself.
+   */
+  const DAY = '2028-05-15';
+  const dayAt = new Date(`${DAY}T00:00:00.000Z`);
+
+  beforeAll(async () => {
+    // One visit per agreement, because the basis is cross-agreement: the day
+    // is full on the number of visits standing on it, not on whose they are.
+    for (let index = 0; index < DEFAULT_DAILY_VISIT_CAP; index += 1) {
+      await prisma.generatedVisit.create({
+        data: {
+          serviceAgreementId: agreementIds[index],
+          branchId,
+          branchCode: BranchCode.COLOMBO,
+          visitDate: dayAt,
+          windowStartMinute: 8 * 60,
+          windowEndMinute: 17 * 60,
+          durationMinutes: 90,
+          requiredCrewSize: 2,
+          // Exactly one of them called off. The day is at the cap in rows and
+          // one short of it in work.
+          status: index === 0 ? VisitStatus.CANCELLED : VisitStatus.PENDING,
+        },
+      });
+    }
+  }, 120_000);
+
+  it('admits a move on to it, because the cancelled visit occupies no part of the day', async () => {
+    const rows = await prisma.generatedVisit.count({
+      where: { branchCode: BranchCode.COLOMBO, visitDate: dayAt },
+    });
+    // If this is not the cap, the fixture is not the day the test describes.
+    expect(rows).toBe(DEFAULT_DAILY_VISIT_CAP);
+
+    const ledger = await capReader(runs).readDailyLoad(prisma, [
+      {
+        branchCode: BranchCode.COLOMBO,
+        visitDate: new Date(`${RANGE.to}T00:00:00.000Z`),
+        proposedVisit: { visitDate: dayAt },
+      },
+    ]);
+
+    expect(ledger.countOn(BranchCode.COLOMBO, DAY)).toBe(
+      DEFAULT_DAILY_VISIT_CAP - 1,
+    );
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, DAY)).toBe(true);
   });
 });
