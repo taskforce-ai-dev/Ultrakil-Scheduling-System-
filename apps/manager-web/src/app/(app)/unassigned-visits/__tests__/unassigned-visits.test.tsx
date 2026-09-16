@@ -198,7 +198,7 @@ describe("unassigned visits queue", () => {
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Status"));
-    await user.click(await screen.findByRole("option", { name: "Exceptions" }));
+    await user.click(await screen.findByRole("option", { name: "Checked and refused" }));
 
     const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
     expect(lastCall).toMatchObject({ operationState: "EXCEPTION", page: 1 });
@@ -209,7 +209,12 @@ describe("unassigned visits queue", () => {
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Status"));
-    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    // Not "Unassigned": on the Visit Calendar that word means the scheduler
+    // tried and failed, and here it means precisely the opposite — nobody has
+    // tried. The same word for opposite facts is how a coordinator came to
+    // read three different numbers as one.
+    expect(screen.queryByRole("option", { name: "Unassigned" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Not checked yet" }));
 
     expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
       operationState: "UNASSIGNED",

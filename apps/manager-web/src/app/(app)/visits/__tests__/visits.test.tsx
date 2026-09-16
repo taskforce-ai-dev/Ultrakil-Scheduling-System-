@@ -254,6 +254,53 @@ describe("filters", () => {
     expect(screen.getByText("2 visits")).toBeInTheDocument();
   });
 
+  /**
+   * "If I filter by the obvious word I lose 32 unstaffed visits and go home
+   * thinking I'm covered."
+   *
+   * UNASSIGNED is a *status* — the scheduler tried to staff the visit and
+   * could not — while "no crew assigned yet" is the broader fact, and includes
+   * every PENDING visit nobody has tried to staff. One word for both read as
+   * one number, and it was three.
+   */
+  it("does not offer one word for two different populations", async () => {
+    const user = await renderCalendar();
+
+    await user.click(screen.getByLabelText("Visit state"));
+    // Nothing in the list may be read as "everything with no crew".
+    expect(screen.queryByRole("option", { name: "Unassigned" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("option", { name: "Staffing failed" })
+    ).toBeInTheDocument();
+    // And the visits nobody has tried to staff are reachable at all, which is
+    // where the missing 32 were.
+    expect(screen.getByRole("option", { name: "Awaiting staffing" })).toBeInTheDocument();
+  });
+
+  it("separates how a visit got here from where it has got to", async () => {
+    const user = await renderCalendar();
+    await user.click(screen.getByLabelText("Visit state"));
+
+    // 6 + 66 = 72 against 104 visits, because the list mixed provenance with
+    // status and a manager read them as one set of parts.
+    expect(await screen.findByRole("group", { name: "Stage" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "How it got here" })).toBeInTheDocument();
+  });
+
+  it("says which population the unstaffed count counts", async () => {
+    mockVisits([
+      buildVisit({ id: "v-pending", visitDate: "2026-09-09", status: "PENDING", assignmentCount: 0 }),
+      buildVisit({ id: "v-failed", visitDate: "2026-09-10", status: "UNASSIGNED", assignmentCount: 0 }),
+      staffed,
+    ]);
+    await renderCalendar();
+
+    // Not "with no crew assigned yet", which reads as the filter's word.
+    expect(
+      screen.getByText("2 with no crew yet — awaiting staffing or staffing failed")
+    ).toBeInTheDocument();
+  });
+
   it("names the run that generated a visit by its weeks, never by its id", async () => {
     // "Schedule run 6a1d0f2e-9c4b-…" tells a manager nothing they can act on.
     // Everywhere else in the portal a run is recognised by the weeks it
@@ -436,13 +483,15 @@ describe("state badges", () => {
     vi.mocked(fetchVisit).mockResolvedValue(buildVisitDetail({ id: "visit-generated" }));
     const user = await renderCalendar();
 
-    expect(screen.getByText("2 with no crew assigned yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("2 with no crew yet — awaiting staffing or staffing failed")
+    ).toBeInTheDocument();
 
     await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("No crew yet")).toBeInTheDocument();
-    expect(within(drawer).getByText("Unassigned")).toBeInTheDocument();
+    expect(within(drawer).getByText("Staffing failed")).toBeInTheDocument();
     expect(within(drawer).queryByText("Crew assigned")).not.toBeInTheDocument();
   });
 

@@ -18,7 +18,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -26,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
+import { VISIT_STATUS_LABEL } from "@/components/shared/visit-badges";
 import { Badge } from "@/components/ui/badge";
 import {
   adjustVisit,
@@ -69,15 +72,33 @@ interface MoveRequest {
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StateFilter = "ALL" | VisitStatus | "LOCKED" | "MANUALLY_ADJUSTED" | "GENERATED";
 
-const STATE_OPTIONS: { value: StateFilter; label: string }[] = [
-  { value: "ALL", label: "All states" },
+/**
+ * Two different questions, asked in two labelled groups.
+ *
+ * Where a visit has got to (its status) and how it got there (generated,
+ * hand-modified, locked) are independent facts, and one flat list of both
+ * invited a manager to add them up: 6 "Unassigned" and 66 "Crew assigned"
+ * against 104 visits, with the rest — the PENDING ones nobody had tried to
+ * staff — not offered at all.
+ */
+const STAGE_OPTIONS: { value: StateFilter; label: string }[] = [
+  { value: "PENDING", label: VISIT_STATUS_LABEL.PENDING },
+  { value: "UNASSIGNED", label: VISIT_STATUS_LABEL.UNASSIGNED },
+  { value: "SCHEDULED", label: VISIT_STATUS_LABEL.SCHEDULED },
+  { value: "COMPLETED", label: VISIT_STATUS_LABEL.COMPLETED },
+  { value: "CANCELLED", label: VISIT_STATUS_LABEL.CANCELLED },
+];
+
+const PROVENANCE_OPTIONS: { value: StateFilter; label: string }[] = [
   { value: "GENERATED", label: "Generated (untouched)" },
   { value: "MANUALLY_ADJUSTED", label: "Manually modified" },
   { value: "LOCKED", label: "Locked" },
-  { value: "UNASSIGNED", label: "Unassigned" },
-  { value: "SCHEDULED", label: "Crew assigned" },
-  { value: "COMPLETED", label: "Completed" },
-  { value: "CANCELLED", label: "Cancelled" },
+];
+
+const STATE_OPTIONS: { value: StateFilter; label: string }[] = [
+  { value: "ALL", label: "All states" },
+  ...STAGE_OPTIONS,
+  ...PROVENANCE_OPTIONS,
 ];
 
 const BRANCH_LABELS: Record<BranchFilter, string> = {
@@ -541,11 +562,23 @@ export default function VisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {STATE_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
+              <SelectItem value="ALL">All states</SelectItem>
+              <SelectGroup>
+                <SelectLabel>Stage</SelectLabel>
+                {STAGE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+              <SelectGroup>
+                <SelectLabel>How it got here</SelectLabel>
+                {PROVENANCE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </div>
@@ -576,9 +609,13 @@ export default function VisitsPage() {
             {adjustedCount > 0 && (
               <Badge variant="secondary">{adjustedCount} manually modified</Badge>
             )}
+            {/* Which population, in the line itself. "38 with no crew
+                assigned yet" beside a filter reading "Unassigned" read as the
+                same number, and the filter returned 6 of the 38. */}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
-                {unstaffedCount} with no crew assigned yet
+                {unstaffedCount} with no crew yet — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
+                {VISIT_STATUS_LABEL.UNASSIGNED.toLowerCase()}
               </span>
             )}
           </div>

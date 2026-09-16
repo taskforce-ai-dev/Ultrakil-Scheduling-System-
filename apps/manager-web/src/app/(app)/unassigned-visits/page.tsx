@@ -55,6 +55,14 @@ const BRANCH_LABELS: Record<BranchFilter, string> = {
 };
 
 // Base UI's <SelectValue> renders the raw value unless the root is given a
+// value -> label map, which showed the raw "UNASSIGNED" on this trigger.
+const STATE_LABELS: Record<StateFilter, string> = {
+  ALL: "All unresolved",
+  UNASSIGNED: "Not checked yet",
+  EXCEPTION: "Checked and refused",
+};
+
+// Base UI's <SelectValue> renders the raw value unless the root is given a
 // value -> label map, which would show the raw group code on the trigger.
 const GROUP_LABELS: Record<GroupFilter, string> = {
   ALL: "All conflict types",
@@ -294,14 +302,19 @@ export default function UnassignedVisitsPage() {
 
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-status">Status</Label>
-          <Select value={status} onValueChange={(value) => { setStatus((value as typeof status) ?? "ALL"); setPage(1); }}>
+          <Select items={STATE_LABELS} value={status} onValueChange={(value) => { setStatus((value as typeof status) ?? "ALL"); setPage(1); }}>
             <SelectTrigger id="unassigned-status" className="w-44">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All unresolved</SelectItem>
-              <SelectItem value="UNASSIGNED">Unassigned</SelectItem>
-              <SelectItem value="EXCEPTION">Exceptions</SelectItem>
+              {/* Named by what the server means, not by the word both ends of
+                  the portal were using for opposite things: here UNASSIGNED
+                  is work nobody has proposed a crew for, while on the Visit
+                  Calendar the same word meant the scheduler tried and
+                  failed. */}
+              <SelectItem value="UNASSIGNED">Not checked yet</SelectItem>
+              <SelectItem value="EXCEPTION">Checked and refused</SelectItem>
             </SelectContent>
           </Select>
         </div>

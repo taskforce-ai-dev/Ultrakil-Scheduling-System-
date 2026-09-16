@@ -20,9 +20,19 @@ import type { Visit, VisitStatus } from "@/lib/api-client";
  * silence on a calendar reads as "fine".
  */
 
-const STATUS_LABEL: Record<VisitStatus, string> = {
-  PENDING: "Pending",
-  UNASSIGNED: "Unassigned",
+/**
+ * One word per status, used by every screen that names one.
+ *
+ * "Unassigned" is not among them any more, and deliberately. It was the API's
+ * word for "the scheduler tried to staff this visit and could not", while the
+ * calendar also said "no crew assigned yet" for the broader fact — every visit
+ * without a crew, PENDING ones nobody has tried to staff included. A manager
+ * filtering by the obvious word lost the untried visits and went home
+ * believing the month was covered. The two facts now have two names.
+ */
+export const VISIT_STATUS_LABEL: Record<VisitStatus, string> = {
+  PENDING: "Awaiting staffing",
+  UNASSIGNED: "Staffing failed",
   SCHEDULED: "Crew assigned",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
@@ -39,7 +49,7 @@ const STATUS_VARIANT: Record<VisitStatus, BadgeVariant> = {
 };
 
 export function VisitStatusBadge({ status }: { status: VisitStatus }) {
-  return <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>;
+  return <Badge variant={STATUS_VARIANT[status]}>{VISIT_STATUS_LABEL[status]}</Badge>;
 }
 
 /**
