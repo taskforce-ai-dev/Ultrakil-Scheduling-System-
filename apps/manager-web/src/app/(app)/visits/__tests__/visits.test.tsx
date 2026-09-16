@@ -254,6 +254,53 @@ describe("filters", () => {
     expect(screen.getByText("2 visits")).toBeInTheDocument();
   });
 
+  it("names the run that generated a visit by its weeks, never by its id", async () => {
+    // "Schedule run 6a1d0f2e-9c4b-…" tells a manager nothing they can act on.
+    // Everywhere else in the portal a run is recognised by the weeks it
+    // covered, and the detail panel is no exception.
+    mockVisits([generated]);
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        origin: {
+          ...buildVisitDetail().origin,
+          generatedByRunId: "6a1d0f2e-9c4b-4f2a-8c1d-0f2e9c4b4f2a",
+          generatedByRunRangeStart: "2026-09-15",
+          generatedByRunRangeEnd: "2026-09-21",
+        },
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).getByText("15–21 Sep")).toBeInTheDocument();
+    expect(drawer.textContent ?? "").not.toContain("6a1d0f2e");
+    expect(drawer.textContent ?? "").not.toMatch(/\b[0-9a-f]{8}\b/);
+  });
+
+  it("says so plainly when no run is on record for a visit", async () => {
+    mockVisits([generated]);
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        origin: {
+          ...buildVisitDetail().origin,
+          generatedByRunId: null,
+          generatedByRunRangeStart: null,
+          generatedByRunRangeEnd: null,
+        },
+      })
+    );
+    const user = await renderCalendar();
+
+    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    const drawer = await screen.findByRole("dialog");
+
+    expect(within(drawer).getAllByText("Not recorded").length).toBeGreaterThan(0);
+  });
+
   it("keeps the filters and the date when a visit is opened and closed", async () => {
     mockVisits([
       generated,
@@ -876,12 +923,16 @@ describe("regeneration impact review", () => {
     const drawer = await screen.findByRole("dialog");
 
     expect(
-      within(drawer).getByText(/began inside this range and ends after it/),
+      within(drawer).getByText(/runs past an edge of this range with no visit in it/),
     ).toBeInTheDocument();
     expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
+    // The advice has to be one a manager can follow from the month view they
+    // are standing in — they pick a month, not a range.
+    // Said on the cadence line and again in the advice beneath it.
     expect(
-      within(drawer).getByText(/every later run\s+begins after it did/),
-    ).toBeInTheDocument();
+      within(drawer).getAllByText(/Generate from the month it starts in, or use a wider range/),
+    ).not.toHaveLength(0);
+    expect(within(drawer).queryByText(/reaches its last day/)).not.toBeInTheDocument();
   });
 
   it("generates exactly the week the week view shows", async () => {

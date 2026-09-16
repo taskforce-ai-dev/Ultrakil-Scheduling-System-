@@ -140,16 +140,30 @@ export interface OperationViolation {
   remediation?: string;
 }
 
-export interface OperationsScheduleVersion {
-  id: string | null;
-  version?: number | null;
-  status: AssignmentStatus | "";
-  predecessorId?: string | null;
-  publishedAt: string | null;
-  /** The run's own horizon, which is how a screen names it. YYYY-MM-DD. */
-  rangeStart: string | null;
-  rangeEnd: string | null;
-}
+/**
+ * The schedule run the current assignment came from, straight off the
+ * contract like the lineage types below.
+ *
+ * It used to be written out by hand, and had drifted: a `version` and a
+ * `predecessorId` the server has never sent, which compiled happily and would
+ * have let a screen tell a correction story the API never told. The one
+ * departure is `status`, which widens to "" for a response carrying a status
+ * this client does not recognise — a defensive default, never a claim.
+ */
+type OperationsScheduleVersionContract = NonNullable<
+  OperationsDayContractItem["scheduleVersion"]
+>;
+export type OperationsScheduleVersion = Omit<
+  OperationsScheduleVersionContract,
+  "status"
+> & { status: OperationsScheduleVersionContract["status"] | "" };
+
+/**
+ * The run statuses the contract actually names. `AssignmentDto.status` is a
+ * bare string in the document, so this is the narrower of the two and the one
+ * a parsed value has to land in.
+ */
+type ScheduleVersionStatus = OperationsScheduleVersionContract["status"];
 
 /**
  * Per-visit published-assignment lineage. Types come from the generated
@@ -390,6 +404,20 @@ function parsePublishedAssignmentLineage(value: unknown): OperationsPublishedAss
   };
 }
 
+function parseScheduleVersion(version: Record<string, unknown>): OperationsScheduleVersion {
+  const status = asString(version.status);
+  return {
+    id: typeof version.id === "string" ? version.id : null,
+    // An unrecognised status is not a claim about dispatch truth.
+    status: ASSIGNMENT_STATUSES.has(status as AssignmentStatus)
+      ? (status as ScheduleVersionStatus)
+      : "",
+    publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
+    rangeStart: typeof version.rangeStart === "string" ? version.rangeStart : null,
+    rangeEnd: typeof version.rangeEnd === "string" ? version.rangeEnd : null,
+  };
+}
+
 function parseOperationsItem(value: unknown): OperationsDayItem | null {
   if (typeof value !== "object" || value === null) return null;
   const record = asRecord(value);
@@ -449,19 +477,7 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     proposedAssignment: parseAssignment(record.proposedAssignment),
     violations,
     nextAction: asString(record.nextAction, state === "READY" ? "No action needed" : "Review visit"),
-    scheduleVersion: hasVersion
-      ? {
-          id: typeof version.id === "string" ? version.id : null,
-          version: typeof version.version === "number" ? version.version : null,
-          status: ASSIGNMENT_STATUSES.has(asString(version.status) as AssignmentStatus)
-            ? (version.status as AssignmentStatus)
-            : "",
-          predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
-          publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
-          rangeStart: typeof version.rangeStart === "string" ? version.rangeStart : null,
-          rangeEnd: typeof version.rangeEnd === "string" ? version.rangeEnd : null,
-        }
-      : null,
+    scheduleVersion: hasVersion ? parseScheduleVersion(version) : null,
     publishedAssignmentLineage,
     warnings: warnings.filter(
       (warning, index) => warnings.findIndex(

@@ -113,10 +113,14 @@ function cadence(unit: string, interval: number): { name: string; span: string }
     "MONTH|12": { name: "Yearly", span: "year" },
   };
   const plural = unit === "WEEK" ? "weeks" : "months";
+  // Spelled the way it is spoken. "a whole 2 months" mixes a word and a digit
+  // in one phrase and reads like a field name.
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+  const counted = words[interval] ?? String(interval);
   return (
     known[`${unit}|${interval}`] ?? {
-      name: `Every ${interval} ${plural}`,
-      span: `${interval} ${plural}`,
+      name: `Every ${counted} ${plural}`,
+      span: `${counted} ${plural}`,
     }
   );
 }
@@ -127,8 +131,12 @@ function cadence(unit: string, interval: number): { name: string; span: string }
  *
  * RANGE_HOLDS_NO_WHOLE_PERIOD is the ordinary hand-off — a quarterly agreement
  * asked about from a week view, which the month view will plan. A range that
- * *clips* a period is not a hand-off at all: nothing shorter picks it up, so
- * telling a manager to switch views would be advice that does not work.
+ * *clips* a period is not a hand-off at all: nothing beginning later picks it
+ * up and nothing already stands in it, so telling a manager to switch views
+ * would be advice that does not work. Neither is "generate over a range that
+ * reaches its last day": in the month view a manager picks a month, not a
+ * range, so the advice has to be given in the months they can actually
+ * choose.
  */
 function skippedByCadence(
   skipped: GenerationImpact["skippedPeriods"]
@@ -148,7 +156,7 @@ function skippedByCadence(
         key,
         text:
           reason === "RANGE_CLIPS_A_PERIOD"
-            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} began inside this range and ${count === 1 ? "ends" : "end"} after it, and no run beginning later will hold ${count === 1 ? "it" : "them"} whole. Generate over a range that reaches the last day of the ${span}.`
+            ? `${name} agreements: ${count} ${span}${count === 1 ? "" : "s"} ${count === 1 ? "runs" : "run"} past an edge of this range with no visit in ${count === 1 ? "it" : "them"}, and no neighbouring month's grid holds ${count === 1 ? "it" : "them"} whole either. Generate from the month ${count === 1 ? "it starts" : "they start"} in, or use a wider range, to plan ${count === 1 ? "it" : "them"}.`
             : `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
       };
     });
@@ -457,10 +465,11 @@ export function GenerationImpactDrawer({
             )}
             {anyClipped(impact.skippedPeriods) && (
               <li className="text-muted-foreground">
-                Nothing is wrong with these agreements either — but a cycle that starts
-                inside this range and finishes after it is nobody&apos;s: every later run
-                begins after it did. Generate over a range that reaches its last day, or
-                it will not be planned at all.
+                Nothing is wrong with these agreements either — but a cycle that runs past
+                an edge of this range, with nothing standing in it, is nobody&apos;s: the
+                month before and the month after both cut it short too. Generate from the
+                month it starts in, or use a wider range, or it will not be planned at
+                all.
               </li>
             )}
           </Section>

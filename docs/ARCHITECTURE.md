@@ -168,9 +168,16 @@ visit so a manager can see it.
      grid, then the same ISO week again offered two additions and two removals
      for work nobody had touched.
 
-   Standing is read over the run's own range only. Those are the days the
-   guard may place anything on, and a day the run was never asked about is not
-   its to warn about.
+   Standing is read over the run's own range only — the whole range and
+   nothing wider. Those are the days the guard may place anything on, and a
+   day the run was never asked about is not its to warn about. The read used
+   to widen to the enclosing calendar months for protected and out-of-scope
+   work, which bought the guard nothing it could act on and cost a manager
+   real confusion: previewing 28 September to 1 November on the walkthrough
+   database returned four over-cap warnings, all of them for September days
+   that view cannot touch. The warnings are filtered to the range as well,
+   because pinning a requirement onto a protected visit outside it can put one
+   there by another road.
 
 ### What a period is
 
@@ -242,18 +249,46 @@ customer loses a visit with nothing said. Two things close it:
   the stub it is. The week view is untouched: it asks about its own seven days
   and no more, because a manager who generates a week must not find visits in
   the next one.
-- a range that leaves a period of a **multi-week cadence** unfinished now says
-  so even when it planned that agreement's other periods, as
-  `RANGE_CLIPS_A_PERIOD`. Which edge clipped it says whose it is: a period cut
-  by the range's *start* belongs to the run before this one, whose range
-  reaches at least this one's first day, and is not reported; a period cut by
-  the range's *end* is the one at risk, because every later range begins after
-  it did. A clipped *month* is never reported either — the next grid holds the
-  calendar month whole by construction. The impact drawer gives it its own
-  advice, because the line for `RANGE_HOLDS_NO_WHOLE_PERIOD` ("switch to the
-  month view") is wrong here: nothing beginning later will pick the period up. Generation still reads the existing and standing visits over the
-whole calendar months the range touches; what it may *change* is still exactly
-the range it was given.
+- a range that leaves a period of a **multi-week cadence** unfinished says so
+  even when it planned that agreement's other periods, as
+  `RANGE_CLIPS_A_PERIOD` — but only when the period is genuinely at risk, on
+  two counts.
+
+  The first is arithmetic. Because the grids overlap by exactly one ISO week,
+  the next grid always begins on the **Monday of this range's final week**. A
+  period cut by this range's *end* is therefore picked up by the next grid
+  whenever it began on or after that Monday. A fortnight is fourteen days and
+  the overlap is seven, so an end-clipped fortnight **always** begins inside
+  the overlap: **with one week of overlap, fortnights are always covered**,
+  and this warning exists for cadences of **three weeks or more**, whose
+  periods are long enough to begin before the next grid does. Reporting every
+  end-clipped fortnight was not an occasional false alarm but a total one —
+  the October grid on the walkthrough database named eleven, and November's
+  grid planned a visit in all eleven.
+
+  The second is evidence. A period cut by this range's *start* ordinarily
+  belongs to the run before this one, whose range reaches at least this one's
+  first day — but that run may never have happened. An agreement created on 28
+  May starting the 27th has a first fortnight of 25 May to 7 June; May was
+  generated on the 1st, before the agreement existed, and June's run met that
+  period clipped at the start and skipped it in silence. So rather than reason
+  about which runs someone has pressed, the rule asks the calendar: a clipped
+  period **a visit of that agreement already stands in** was handed over as
+  designed and is not reported, and an empty one is. That test applies at both
+  edges and assumes nothing. (`around`, the existing visits over the enclosing
+  months, is already loaded; `periodIndexOf` places each of them.)
+
+  A clipped *month* is never reported at all — the next grid holds the
+  calendar month whole by construction. The impact drawer gives the clipped
+  case its own advice, because the line for `RANGE_HOLDS_NO_WHOLE_PERIOD`
+  ("switch to the month view") is wrong here: nothing beginning later picks
+  the period up, and nothing stands in it. Nor can the advice be "generate
+  over a range that reaches its last day" — in the month view a manager picks
+  a month, not a range — so it names the month to generate from instead.
+
+Generation still reads the existing and standing visits over the whole
+calendar months the range touches; what it may *change* is still exactly the
+range it was given, and now so is what it may warn about.
 
 Neither view holds a whole quarter. An agreement whose cadence the range cannot
 hold is not planned and is named in `skippedPeriods` — agreement, unit,
@@ -296,7 +331,21 @@ from every other. The operations day read model therefore carries the run's own
 `rangeStart`/`rangeEnd` — one batched lookup per day, not one per visit — and
 the line reads "Published schedule 15-21 Sep, published 15 Sep 20:05", linking
 to Schedule History where the rest of the run's story is. The id stays in the
-payload for that link and is never rendered.
+payload for that link and is never rendered — and the link **carries** it, as
+`?run=<id>`, so Schedule History marks that run and scrolls to it rather than
+leaving a manager to find a date range by eye down fifty rows.
+
+The same rule reaches the two other places a raw id was printed. The visit
+detail drawer's "Schedule run" row showed `generatedByRunId` as a uuid; the
+visit origin now carries the generating run's own `rangeStart`/`rangeEnd`
+(looked up per visit, not joined into the list query) and the row reads "15-21
+Sep". And the per-visit published-assignment lineage printed eight-character id
+prefixes for each version, its repair and what it superseded — three hashes on
+one line, none of them searchable. It reads by **ordinal and by what produced
+it** instead: "Version 12 of 13 · superseded · from the audited repair of 10
+Sep · replaces version 11", numbered from the whole chain so truncation cannot
+make it lie, and "replaces an earlier version" when the predecessor is not in
+the window shown.
 
 A cancelled visit's shortfall names the cancellation only when the period had
 days enough without it. Blaming it whenever *any* of the period's days was

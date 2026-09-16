@@ -150,9 +150,10 @@ describe("OperationsDayPanel", () => {
       within(item).getByText(/^Published schedule 15–21 Sep, published \d{1,2} Sep \d{2}:\d{2}$/),
     ).toBeInTheDocument();
     // Schedule History is where the rest of the run's story is.
+    // The link carries the run, so Schedule History can pick it out of fifty.
     expect(within(item).getByRole("link", { name: /Published schedule 15–21 Sep/ })).toHaveAttribute(
       "href",
-      "/schedule-history",
+      "/schedule-history?run=6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
     );
   });
 
@@ -272,9 +273,14 @@ describe("OperationsDayPanel published assignment lineage", () => {
 
     const history = screen.getByRole("region", { name: "Published assignment history" });
     expect(within(history).getByText(/current published version/)).toBeInTheDocument();
-    expect(within(history).getByText(/supersedes v2/)).toBeInTheDocument();
-    expect(within(history).getByText(/audited repair repair77/)).toBeInTheDocument();
+    // Ordinal and human labels, never an id fragment: "supersedes 8f2c1a0b…"
+    // is a string a manager can neither search for nor say out loud.
+    expect(within(history).getByText(/Version 3 of 3/)).toBeInTheDocument();
+    expect(within(history).getByText(/replaces version 2/)).toBeInTheDocument();
+    expect(within(history).getByText(/the audited repair of \d{1,2} Sep/)).toBeInTheDocument();
     expect(within(history).getByText(/mixes scheduled and repaired/)).toBeInTheDocument();
+    expect(history.textContent ?? "").not.toContain("repair77");
+    expect(history.textContent ?? "").not.toMatch(/\b[0-9a-f]{8}\b/);
 
     // Schedule-run history is a different thing and must survive.
     const item = screen.getByText("Corrected customer").closest("li")!;
@@ -318,6 +324,13 @@ describe("OperationsDayPanel published assignment lineage", () => {
     const history = screen.getByRole("region", { name: "Published assignment history" });
     expect(within(history).getByText(/Showing the 2 most recent of 13 published versions/)).toBeInTheDocument();
     expect(within(history).getByText(/11 older versions are not shown/)).toBeInTheDocument();
+    // The numbering counts from the whole chain, not from what fitted.
+    expect(within(history).getByText(/Version 13 of 13/)).toBeInTheDocument();
+    expect(within(history).getByText(/Version 12 of 13/)).toBeInTheDocument();
+    // v12's own predecessor is not in the shown window, so it is described
+    // rather than named by an id nobody can look up here.
+    expect(within(history).getByText(/replaces an earlier version/)).toBeInTheDocument();
+    expect(history.textContent ?? "").not.toContain("v11");
   });
 
   it("says a visit has no published history rather than staying silent", () => {

@@ -5,11 +5,12 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock3, Info, Users, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { formatDayRange, formatStamp } from "@/lib/calendar";
+import { formatDayRange, formatStamp, formatStampDay } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 import {
   isDispatchableOperation,
   type OperationState,
+  type OperationsPublishedAssignmentLineageEntry,
   type OperationsDayItem,
   type OperationsDayResponse,
   type OperationsPublishedAssignmentProvenance,
@@ -128,7 +129,10 @@ function ScheduleLineage({ item }: { item: OperationsDayItem }) {
   return (
     <p className="mt-2 text-xs text-muted-foreground">
       {version.id ? (
-        <Link href="/schedule-history" className="underline underline-offset-2">
+        <Link
+          href={`/schedule-history?run=${encodeURIComponent(version.id)}`}
+          className="underline underline-offset-2"
+        >
           {label}
         </Link>
       ) : (
@@ -139,13 +143,24 @@ function ScheduleLineage({ item }: { item: OperationsDayItem }) {
 }
 
 const PROVENANCE_LABELS: Record<OperationsPublishedAssignmentProvenance, string> = {
-  SCHEDULE_RUN: "schedule run",
-  REPAIR: "audited repair",
-  MANUAL_PUBLISH: "manual publish",
+  SCHEDULE_RUN: "a schedule run",
+  REPAIR: "an audited repair",
+  MANUAL_PUBLISH: "a manual publish",
 };
 
-function shortId(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+/**
+ * How a published version is referred to on screen.
+ *
+ * By its place in the chain and by what produced it, never by eight
+ * characters of a uuid. "supersedes 8f2c1a0b…" is a string a manager can
+ * neither search for nor read out to a colleague, and three of them on one
+ * line turned a correction story into a hash.
+ */
+function provenancePhrase(entry: OperationsPublishedAssignmentLineageEntry): string {
+  if (entry.provenance !== "REPAIR") return PROVENANCE_LABELS[entry.provenance];
+  return entry.publishedAt
+    ? `the audited repair of ${formatStampDay(entry.publishedAt)}`
+    : "an audited repair";
 }
 
 /**
@@ -186,25 +201,38 @@ function PublishedAssignmentLineage({ item }: { item: OperationsDayItem }) {
         </p>
       )}
       <ol className="mt-1 space-y-1 text-muted-foreground">
-        {lineage.entries.map((entry, index) => (
-          <li key={entry.assignmentId} className={cn(entry.isCurrent && "text-foreground")}>
-            <span className="font-medium">
-              Version {lineage.totalCount - lineage.entries.length + index + 1}
-            </span>{" "}
-            <span className="font-mono">{shortId(entry.assignmentId)}</span> ·{" "}
-            {entry.isCurrent ? "current published version" : entry.status.toLowerCase().replaceAll("_", " ")} · from{" "}
-            {PROVENANCE_LABELS[entry.provenance]}
-            {entry.provenance === "REPAIR" && entry.publishedByRepairId
-              ? ` ${shortId(entry.publishedByRepairId)}`
-              : ""}
-            {entry.supersedesAssignmentId
-              ? ` · supersedes ${shortId(entry.supersedesAssignmentId)}`
-              : ""}
-            {!entry.supersededByAssignmentId && !entry.isCurrent && lineage.withdrawn
-              ? " · withdrawn, not replaced"
-              : ""}
-          </li>
-        ))}
+        {lineage.entries.map((entry, index) => {
+          // Counted from the whole chain, not from what fitted on screen, so
+          // "Version 12 of 13" stays true under truncation.
+          const numberOf = (position: number) =>
+            lineage.totalCount - lineage.entries.length + position + 1;
+          const predecessor = entry.supersedesAssignmentId
+            ? lineage.entries.findIndex(
+                (candidate) => candidate.assignmentId === entry.supersedesAssignmentId,
+              )
+            : -1;
+
+          return (
+            <li key={entry.assignmentId} className={cn(entry.isCurrent && "text-foreground")}>
+              <span className="font-medium">
+                Version {numberOf(index)} of {lineage.totalCount}
+              </span>{" "}
+              ·{" "}
+              {entry.isCurrent
+                ? "current published version"
+                : entry.status.toLowerCase().replaceAll("_", " ")}{" "}
+              · from {provenancePhrase(entry)}
+              {entry.supersedesAssignmentId
+                ? predecessor >= 0
+                  ? ` · replaces version ${numberOf(predecessor)}`
+                  : " · replaces an earlier version"
+                : ""}
+              {!entry.supersededByAssignmentId && !entry.isCurrent && lineage.withdrawn
+                ? " · withdrawn, not replaced"
+                : ""}
+            </li>
+          );
+        })}
       </ol>
     </section>
   );

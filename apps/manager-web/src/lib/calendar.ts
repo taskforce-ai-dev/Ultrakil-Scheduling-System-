@@ -210,12 +210,19 @@ export function formatDayRange(fromIso: string, toIso: string): string {
 }
 
 /**
- * An instant, in the reader's own clock: "15 Sep 20:05".
+ * The calendar day of an instant, in the reader's own clock: "15 Sep".
  *
  * Unlike a visit date, a publication is a moment rather than a calendar day,
- * so this one is deliberately *not* held in UTC — "published at 20:05" has to
- * mean 20:05 where the manager is standing.
+ * so these two are deliberately *not* held in UTC — "published at 20:05" has
+ * to mean 20:05 where the manager is standing.
  */
+export function formatStampDay(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return `${at.getDate()} ${SHORT_MONTH_NAMES[at.getMonth()]}`;
+}
+
+/** The same instant with the time on it: "15 Sep 20:05". */
 export function formatStamp(iso: string): string {
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) return "";

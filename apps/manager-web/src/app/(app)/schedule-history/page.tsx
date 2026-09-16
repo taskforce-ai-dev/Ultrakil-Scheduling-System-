@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
@@ -46,6 +47,7 @@ import {
   type ScheduleRun,
 } from "@/lib/api-client";
 import { addDays, todayIso } from "@/lib/calendar";
+import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 
 type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
@@ -212,6 +214,14 @@ function currentSchedule(runs: ScheduleRun[]): {
 }
 
 export default function ScheduleHistoryPage() {
+  // The run a link arrived pointing at. The operational visits list names a
+  // visit's run by its weeks and links here; landing on fifty rows with
+  // nothing picked out leaves a manager to find a date range by eye, which is
+  // the job the link was supposed to do.
+  const searchParams = useSearchParams();
+  const focusRunId = searchParams?.get("run") ?? null;
+  const focusRef = React.useRef<HTMLLIElement | null>(null);
+
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
   const { live, pending } = React.useMemo(() => currentSchedule(runs), [runs]);
   const [total, setTotal] = React.useState(0);
@@ -268,6 +278,18 @@ export default function ScheduleHistoryPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  const focusedRun = focusRunId
+    ? (runs.find((run) => run.id === focusRunId)?.id ?? null)
+    : null;
+
+  React.useEffect(() => {
+    // Scrolling the DOM is exactly what a ref and an effect are for. Only
+    // once the run is actually on the page — a link to a run older than the
+    // fifty loaded here highlights nothing and moves nothing.
+    if (!focusedRun) return;
+    focusRef.current?.scrollIntoView({ block: "center" });
+  }, [focusedRun]);
 
   const hasActiveRun = runs.some((run) => ACTIVE_STATUSES.has(run.status));
 
@@ -482,8 +504,19 @@ export default function ScheduleHistoryPage() {
               const canCancel = isActive && !run.cancelRequested;
               const canPublish = canPublishRun(run);
 
+              const isFocused = run.id === focusedRun;
+
               return (
-                <li key={run.id} className="rounded-xl border bg-card p-4 shadow-sm">
+                <li
+                  key={run.id}
+                  data-testid={`run-${run.id}`}
+                  ref={isFocused ? focusRef : undefined}
+                  aria-current={isFocused ? "true" : undefined}
+                  className={cn(
+                    "rounded-xl border bg-card p-4 shadow-sm",
+                    isFocused && "border-primary ring-2 ring-primary/40",
+                  )}
+                >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="font-medium">

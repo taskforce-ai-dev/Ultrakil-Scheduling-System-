@@ -255,6 +255,8 @@ export function buildVisitDetail(overrides: Partial<VisitDetail> = {}): VisitDet
       allowedDaysAtGeneration: ["WEDNESDAY"],
       generatedAt: "2026-08-31T00:00:00.000Z",
       generatedByRunId: "run-1",
+      generatedByRunRangeStart: "2026-08-31",
+      generatedByRunRangeEnd: "2026-09-06",
     },
     ...overrides,
   };

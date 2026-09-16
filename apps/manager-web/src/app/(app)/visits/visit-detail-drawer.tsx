@@ -22,7 +22,7 @@ import {
   unlockVisit,
   type VisitDetail,
 } from "@/lib/api-client";
-import { formatLongDate, formatMinuteOfDay } from "@/lib/calendar";
+import { formatDayRange, formatLongDate, formatMinuteOfDay } from "@/lib/calendar";
 import { notify } from "@/lib/notify";
 
 interface VisitDetailDrawerProps {
@@ -236,12 +236,19 @@ export function VisitDetailDrawer({
                   ? new Date(visit.origin.generatedAt).toLocaleString()
                   : "Not recorded"}
               </Row>
+              {/*
+                * The weeks the run covered, never its id. "Schedule run
+                * 6a1d0f2e-9c4b-…" is a string a manager can neither search
+                * for nor say out loud, and every run's line looked different
+                * from every other. The id stays in the payload for links.
+                */}
               <Row label="Schedule run">
-                {visit.origin.generatedByRunId ? (
-                  <code className="text-xs">{visit.origin.generatedByRunId}</code>
-                ) : (
-                  "Not recorded"
-                )}
+                {visit.origin.generatedByRunRangeStart && visit.origin.generatedByRunRangeEnd
+                  ? formatDayRange(
+                      visit.origin.generatedByRunRangeStart,
+                      visit.origin.generatedByRunRangeEnd
+                    )
+                  : "Not recorded"}
               </Row>
               {visit.isManuallyAdjusted && (
                 <Row label="Modified by hand">

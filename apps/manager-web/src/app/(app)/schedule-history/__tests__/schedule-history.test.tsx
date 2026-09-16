@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const { searchParamsRef } = vi.hoisted(() => ({
+  searchParamsRef: { current: null as URLSearchParams | null },
+}));
+
+vi.mock("next/navigation", async () => {
+  const actual = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+  return { ...actual, useSearchParams: () => searchParamsRef.current };
+});
+
 vi.mock("@/lib/api-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
   return {
@@ -35,6 +44,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.mocked(startScheduleRun).mockReset();
   vi.mocked(publishScheduleRun).mockReset();
+  searchParamsRef.current = null;
 });
 
 async function renderPage() {
@@ -457,5 +467,35 @@ describe("a visit-generation run in the history", () => {
     await screen.findByText("Visit generation");
 
     expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ScheduleHistoryPage, arrived at from a run link", () => {
+  it("marks the run the link named and brings it into view", async () => {
+    // The operational visits list links a visit to the run that produced it.
+    // Landing on a page of fifty runs with nothing picked out leaves a manager
+    // to find a date range by eye, which is the job the link was meant to do.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    mockRuns([
+      buildScheduleRun({ id: "older", rangeStart: "2026-09-01", rangeEnd: "2026-09-07" }),
+      buildScheduleRun({ id: "wanted", rangeStart: "2026-09-15", rangeEnd: "2026-09-21" }),
+    ]);
+    searchParamsRef.current = new URLSearchParams("run=wanted");
+    await renderPage();
+
+    const highlighted = await screen.findByTestId("run-wanted");
+    expect(highlighted).toHaveAttribute("aria-current", "true");
+    expect(screen.getByTestId("run-older")).not.toHaveAttribute("aria-current");
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("marks nothing when the link names a run this page does not hold", async () => {
+    mockRuns([buildScheduleRun({ id: "older" })]);
+    searchParamsRef.current = new URLSearchParams("run=elsewhere");
+    await renderPage();
+
+    expect(await screen.findByTestId("run-older")).not.toHaveAttribute("aria-current");
   });
 });

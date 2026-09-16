@@ -110,6 +110,11 @@ Sunday) or a whole calendar month, counted from the agreement's own start date
   that the fortnight across the join belongs to somebody. You will see visits
   created in that extra week; they are the ones no other run would plan.
 
+  With that week of overlap in place, **a fortnight is always covered by one
+  month or the next**, so you will not see a warning about one. Cycles of
+  three weeks or longer are the ones that can still fall between two months,
+  and those are what the warning below is for.
+
 Because the two views measure periods the same way, they agree. Generate a week
 from the week view and then the month it sits in, or the other way round, and
 the second run has nothing to add and nothing to remove. Neither view ever
@@ -123,13 +128,21 @@ view, or ask for a longer range, and the run that covers a whole cycle will
 plan them. A silent zero would read exactly like a calendar already in order,
 which is why it is never left silent.
 
-The same panel has a second, sharper line: *"Fortnightly agreements: 1
-fortnight began inside this range and ends after it, and no run beginning later
-will hold it whole."* That one is not a hand-off. Every later run starts after
-that cycle did, so none of them can plan it — switching views will not help.
-Generate over a range that reaches the cycle's last day, or it stays unplanned.
-(A cycle cut at the *start* of a range is not reported: the run before this one
-covers it.)
+The same panel has a second, sharper line: *"Every three weeks agreements: 1
+three weeks runs past an edge of this range with no visit in it, and no
+neighbouring month's grid holds it whole either."* That one is not a hand-off.
+Neither the month before nor the month after reaches the whole cycle, and
+nothing is standing in it — so switching views will not help. **Generate from
+the month the cycle starts in**, or ask for a wider range, or it stays
+unplanned.
+
+Two things about when you see it. A cycle cut at the *start* of a range is
+normally the previous month's, and is not mentioned — unless nothing is in it,
+which is what happens when an agreement is created after that month was
+already generated. Its first cycle belongs to a run that has been and gone, so
+the panel names it and you can plan it from the month it starts in. And a
+fortnight is never named here at all: the week of overlap above covers every
+one of them.
 
 ### Why a visit is on the date it is
 
@@ -149,6 +162,12 @@ date**:
   and nothing is on record about its usual days, so it takes the first
   allowed day. Adding the real dates to the workbook and re-importing is what
   turns this into one of the answers above.
+
+The same panel's **History** block names the run that created the visit by the
+weeks it covered — *"Schedule run 15-21 Sep"* — not by an id. If nothing
+generated the visit it says *"Not recorded"*. On the operations board, the line
+naming a visit's published schedule links straight to that run in Schedule
+History, where it is marked and scrolled to for you.
 
 A visit you have locked, edited by hand, or already staffed keeps its date
 even when the agreement would now put that period's visit somewhere else. It

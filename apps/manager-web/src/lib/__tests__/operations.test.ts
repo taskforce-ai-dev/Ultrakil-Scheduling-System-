@@ -100,13 +100,28 @@ describe("operations day contract parser", () => {
           { code: "HOURS_UNCONFIRMED", message: "Opening hours are assumed" },
         ],
         nextAction: "Confirm branch",
-        scheduleVersion: { id: "v1", status: "PUBLISHED", predecessorId: "v0" },
+        scheduleVersion: {
+          id: "v1",
+          status: "PUBLISHED",
+          publishedAt: "2026-09-10T08:00:00.000Z",
+          rangeStart: "2026-09-15",
+          rangeEnd: "2026-09-21",
+        },
       }],
     });
 
     expect(parsed.items[0].violations[0].code).toBe("UNKNOWN_BRANCH");
     expect(parsed.items[0].nextAction).toBe("Confirm branch");
-    expect(parsed.items[0].scheduleVersion?.predecessorId).toBe("v0");
+    // Exactly the fields the contract describes — nothing hand-written. A
+    // `predecessorId` the server never sends compiled happily for a year and
+    // would have rendered a story the API had not told.
+    expect(parsed.items[0].scheduleVersion).toEqual({
+      id: "v1",
+      status: "PUBLISHED",
+      publishedAt: "2026-09-10T08:00:00.000Z",
+      rangeStart: "2026-09-15",
+      rangeEnd: "2026-09-21",
+    });
     expect(parsed.items[0].warnings).toContainEqual({
       code: "HOURS_UNCONFIRMED",
       message: "Opening hours are assumed",
