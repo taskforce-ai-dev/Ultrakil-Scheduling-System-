@@ -2316,6 +2316,47 @@ describe('publishing', () => {
     ).toBe(2);
   });
 
+  it('locks a hand-edited visit once its run is published', async () => {
+    const [visitId, handEditedVisitId] = [await makeVisit(), await makeVisit()];
+    const runId = await draftRunOver([visitId, handEditedVisitId]);
+    await request(http)
+      .put(`/api/visits/${handEditedVisitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        plannedStartMinute: 11 * 60,
+        plannedEndMinute: 12 * 60 + 30,
+        reason: 'Site asked for the other supervisor.',
+        crew: [
+          { employeeId: supervisorIds[1], role: 'SUPERVISOR' },
+          { employeeId: technicianIds[1], role: 'TECHNICIAN' },
+        ],
+      })
+      .expect(200);
+    await request(http)
+      .post(`/api/schedule-runs/${runId}/publish`)
+      .set(auth(adminToken))
+      .send({ reason: 'Week of 1 March' })
+      .expect(200);
+
+    // The publish gate promised the run was frozen. It has to hold for the
+    // visit a manager touched as much as for the ones they did not.
+    const afterPublication = await request(http)
+      .put(`/api/visits/${handEditedVisitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        plannedStartMinute: 13 * 60,
+        plannedEndMinute: 14 * 60 + 30,
+        reason: 'Changing my mind after the crews were told.',
+        crew: [
+          { employeeId: supervisorIds[0], role: 'SUPERVISOR' },
+          { employeeId: technicianIds[0], role: 'TECHNICIAN' },
+        ],
+      });
+
+    expect(afterPublication.status).toBe(409);
+    expect(afterPublication.body.message).toContain('published');
+  });
+
   /**
    * The other direction: a visit the run staffed that a manager then took the
    * crew off. Nothing is published for it, so the run must not go on counting
