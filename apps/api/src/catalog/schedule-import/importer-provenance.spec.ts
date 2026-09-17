@@ -141,6 +141,8 @@ function fixture(state: Partial<ExistingState> = {}) {
     },
     // The agreement-row lock, which answers with the rows it was asked for.
     $queryRaw: jest.fn(async () => [{ id: AGREEMENT_ID }]),
+    // The per-customer advisory lock, held before the existence check.
+    $executeRaw: jest.fn(async () => 1),
   };
 
   const prisma = {

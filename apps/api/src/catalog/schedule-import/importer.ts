@@ -10,6 +10,7 @@ import {
 
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { decideBranch } from './branch-match';
+import { createOrRaceToExisting, lockCustomerImport } from './customer-lock';
 import { ParsedAgreement, ParsedSchedule } from './types';
 
 type TransactionClient = Prisma.TransactionClient;
@@ -144,6 +145,10 @@ export async function importSchedule(
     // import is re-runnable, so a partial import is recoverable. The explicit
     // timeout absorbs cross-region latency in supported operator imports.
     await prisma.$transaction(async (tx) => {
+      // Held for the rest of this customer's transaction, before the
+      // existence check it would otherwise race: see `customer-lock.ts`.
+      await lockCustomerImport(tx, customer.name);
+
       const existing = await tx.customer.findFirst({
         where: { name: customer.name },
         select: { id: true },
@@ -503,17 +508,24 @@ async function ensureJobTypes(
     const code = `IMPORTED_${key}`;
     const existing = await prisma.jobType.findUnique({ where: { code } });
 
-    const record =
-      existing ??
-      (await prisma.jobType.create({
-        data: {
-          code,
-          name: codes.join(' + '),
-          requiredSkillCode: null,
-        },
-      }));
+    if (existing) {
+      ids.set(key, existing.id);
+      continue;
+    }
 
-    if (!existing) summary.jobTypesCreated += 1;
+    // Two imports sharing a treatment combination can both read no existing
+    // row here; `code` is unique, so the loser's `create` used to reach the
+    // operator as a crashed import instead of the row the winner already
+    // made. See `customer-lock.ts`.
+    const { record, created } = await createOrRaceToExisting(
+      () =>
+        prisma.jobType.create({
+          data: { code, name: codes.join(' + '), requiredSkillCode: null },
+        }),
+      () => prisma.jobType.findUniqueOrThrow({ where: { code } }),
+    );
+
+    if (created) summary.jobTypesCreated += 1;
     ids.set(key, record.id);
   }
 

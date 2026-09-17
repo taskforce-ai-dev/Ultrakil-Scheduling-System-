@@ -82,6 +82,8 @@ function fakePrisma() {
     },
     serviceAgreementBooking: booking,
     $queryRaw: jest.fn().mockResolvedValue([]),
+    // The per-customer advisory lock, held before the existence check.
+    $executeRaw: jest.fn().mockResolvedValue(1),
   };
 
   const prisma = {
