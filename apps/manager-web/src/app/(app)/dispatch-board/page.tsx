@@ -170,7 +170,7 @@ export default function DispatchBoardPage() {
             : "No vehicle";
       return `${time} — ${visit.customerName} (${visit.siteName})\n  Supervisor: ${supervisor?.fullName ?? "None"} | Crew: ${crew} | Vehicle: ${vehicle}`;
     });
-    return `Dispatch Board — ${formatLongDate(date)}${branch !== "ALL" ? ` (${BRANCH_LABELS[branch]})` : ""}\n\n${lines.join("\n\n")}`;
+    return `Dispatch Board — ${formatLongDate(date)}${branch !== "ALL" ? ` (${BRANCH_FILTER_LABELS[branch]})` : ""}\n\n${lines.join("\n\n")}`;
   }
 
   async function shareBoard() {

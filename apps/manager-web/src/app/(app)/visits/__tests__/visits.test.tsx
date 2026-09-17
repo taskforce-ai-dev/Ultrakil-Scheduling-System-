@@ -759,7 +759,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -872,7 +872,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -901,7 +901,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -966,7 +966,7 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -979,7 +979,7 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -1022,7 +1022,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(
@@ -1057,7 +1057,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(
@@ -1096,7 +1096,7 @@ describe("regeneration impact review", () => {
     // The calendar opens in the month view, which is where the advice was wrong.
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
@@ -1127,7 +1127,7 @@ describe("regeneration impact review", () => {
     const user = await renderCalendar();
     await user.click(screen.getByRole("button", { name: "Week" }));
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getByText(/Switch to the month view/)).toBeInTheDocument();
@@ -1161,7 +1161,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getByText(/2 three weeks run past an edge/)).toBeInTheDocument();
@@ -1173,7 +1173,7 @@ describe("regeneration impact review", () => {
     const user = await renderCalendar();
 
     await user.click(screen.getByRole("button", { name: "Week" }));
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -1218,7 +1218,7 @@ describe("regeneration impact review", () => {
     const user = await renderCalendar();
 
     // First request: opening the drawer previews the current month.
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     let drawer = await screen.findByRole("dialog");
     expect(previewVisitGeneration).toHaveBeenCalledTimes(1);
 
@@ -1228,7 +1228,7 @@ describe("regeneration impact review", () => {
     // so this is the reachable way to trigger a second request, not
     // navigating the calendar behind it.
     await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     // The closed drawer unmounts, so re-find it rather than reuse the first
     // (by now detached) node.
     drawer = await screen.findByRole("dialog");
