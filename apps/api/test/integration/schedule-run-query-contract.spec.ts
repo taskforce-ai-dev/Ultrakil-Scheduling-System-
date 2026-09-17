@@ -120,4 +120,16 @@ it('accepts one id the same way it accepts several', async () => {
   expect(new Set(both.body.items.map((run: { id: string }) => run.id))).toEqual(
     new Set([first.id, second.id]),
   );
+
+  // The manager portal's own query builder does `String(value)` on whatever
+  // it is handed, and `String([a, b])` joins with commas rather than
+  // repeating the parameter — this is the shape a real request from it takes.
+  const commaJoined = await request(http)
+    .get('/api/schedule-runs')
+    .query(`ids=${first.id},${second.id}`)
+    .set(auth());
+  expect(commaJoined.status).toBe(200);
+  expect(new Set(commaJoined.body.items.map((run: { id: string }) => run.id))).toEqual(
+    new Set([first.id, second.id]),
+  );
 }, 60_000);

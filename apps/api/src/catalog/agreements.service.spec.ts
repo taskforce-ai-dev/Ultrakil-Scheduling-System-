@@ -103,6 +103,9 @@ function fixture(row = agreementRow()) {
         ...applied(row, data),
         currentVersion: row.currentVersion + 1,
       })),
+      // The fresh, locked read `update()`/`changeStatus()` take before
+      // falling back to any field the edit itself did not carry.
+      findUniqueOrThrow: jest.fn(async () => row),
     },
     serviceAgreementDayRule: { deleteMany: jest.fn() },
     serviceAgreementRequiredSkill: { deleteMany: jest.fn() },

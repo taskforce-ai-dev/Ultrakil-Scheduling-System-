@@ -41,6 +41,6 @@ export const ApiScheduleRunQuery = () =>
       isArray: true,
       format: 'uuid',
       description:
-        'Up to 50. Repeat the parameter for more than one id (?ids=a&ids=b) — the API also accepts a single bare id.',
+        'Up to 50. Accepts a repeated parameter (?ids=a&ids=b), one comma-separated value (?ids=a,b — what the manager portal itself sends), or a single bare id.',
     }),
   );
