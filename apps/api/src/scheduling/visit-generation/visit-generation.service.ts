@@ -24,14 +24,11 @@ import {
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
+import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
-import {
-  assertVisitRevision,
-  lockScheduleAgreements,
-  lockScheduleVisits,
-} from '../optimizer/schedule-visit-lock';
+import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
@@ -879,7 +876,7 @@ export class VisitGenerationService {
       // [… 1430998084 …]", and killed one of the two. Locking the agreement
       // here, before the day, means this run waits at the same place the
       // optimizer does instead of meeting it head on.
-      await lockScheduleAgreements(tx, [
+      await lockAgreementRows(tx, [
         ...plan.additions.map((addition) => addition.required.serviceAgreementId),
         ...plan.updates.map((update) => update.required.serviceAgreementId),
         ...plan.removals.map((removal) => removal.serviceAgreementId),
@@ -1036,7 +1033,18 @@ export class VisitGenerationService {
       );
 
       return finished.id;
-    });
+      },
+      // Prisma's default is five seconds, and this transaction now queues:
+      // holding the agreement rows in the one order everybody uses means a
+      // confirm can legitimately wait behind an import updating the same
+      // customer. Thirty seconds, the same budget the optimizer's persistence
+      // runs on, is long enough for that queue and short enough that a stuck
+      // writer is still reported rather than sat behind. The largest run in
+      // the integration suite — 65 agreements, 325 additions — commits in
+      // 1.3s. Exceeding it rolls the whole run back; nothing is half-applied,
+      // and the manager presses Generate again.
+      { timeout: 30_000 },
+    );
   }
 
   /** The version each affected agreement is currently on. */

@@ -15,6 +15,7 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
+import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict } from '../eligibility/conflict-codes';
@@ -28,7 +29,6 @@ import {
 } from './daily-load-ledger';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
-  lockScheduleAgreements,
   lockScheduleResources,
   assertScheduleSnapshot,
   assertVisitRevision,
@@ -893,7 +893,7 @@ export class ScheduleRunService {
         // One solver response is one atomic change. Lock the entire affected set
         // in the shared deterministic order, then validate every revision before
         // creating drafts, transferring locks, moving dates or changing reasons.
-        await lockScheduleAgreements(
+        await lockAgreementRows(
           tx,
           entries.map((entry) => entry.serviceAgreementId),
         );

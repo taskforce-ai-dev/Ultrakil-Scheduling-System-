@@ -41,33 +41,10 @@ export async function lockScheduleVisits(
   }
 }
 
-/**
- * Generated-visit uniqueness is scoped by agreement.  Lock these parents in
- * the same sorted order in every writer before changing a date/start key so
- * concurrent solver results cannot both create the same sibling slot.
- */
-export async function lockScheduleAgreements(
-  tx: Prisma.TransactionClient,
-  agreementIds: string[],
-) {
-  const ids = [...new Set(agreementIds)].sort();
-  if (ids.length === 0) return;
-
-  const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-    SELECT id FROM service_agreements
-    WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
-    ORDER BY id
-    FOR UPDATE
-  `);
-  if (locked.length !== ids.length) {
-    throw new AppException(
-      'RESOURCE_CONFLICT',
-      'One or more agreements changed while the schedule was being prepared. Refresh and try again.',
-      HttpStatus.CONFLICT,
-      { agreementIds: ids },
-    );
-  }
-}
+// Agreement rows come before visit rows, and are locked through
+// `lockAgreementRows` in `common/locks/agreement-lock.ts`. It lives there
+// rather than here because the workbook importer keeps the same order, and a
+// rule the whole system obeys should not sit inside the scheduler.
 
 /**
  * Serialize schedule eligibility and persistence across different visits.

@@ -73,11 +73,15 @@ function fakePrisma() {
       }),
     },
     serviceAgreement: {
+      // What the customer already has, which the import locks in id order
+      // before it updates any of it.
+      findMany: jest.fn().mockResolvedValue([]),
       findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
       update: jest.fn().mockResolvedValue({ id: 'agreement-1' }),
     },
     serviceAgreementBooking: booking,
+    $queryRaw: jest.fn().mockResolvedValue([]),
   };
 
   const prisma = {

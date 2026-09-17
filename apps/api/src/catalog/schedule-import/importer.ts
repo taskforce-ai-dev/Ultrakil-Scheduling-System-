@@ -8,6 +8,7 @@ import {
   Weekday,
 } from '@prisma/client';
 
+import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { decideBranch } from './branch-match';
 import { ParsedAgreement, ParsedSchedule } from './types';
 
@@ -228,6 +229,36 @@ export async function importSchedule(
         if (existingSite) summary.sitesUpdated += 1;
         else summary.sitesCreated += 1;
       }
+
+      // Every agreement this customer already has, held before a single one is
+      // updated, in the id order `lockAgreementRows` defines.
+      //
+      // The rows below are taken in **workbook order** — whatever order a
+      // spreadsheet kept by hand happens to list them in — while every
+      // schedule writer takes them sorted. That is two orders over the same
+      // rows, and it deadlocked exactly as you would expect: a generation
+      // confirm adding visits for two of this customer's agreements held the
+      // lower id and waited for the higher; this loop held the higher and then
+      // asked for the lower; Postgres killed one of them and a manager saw a
+      // 500 on Generate. Taking them all here, sorted, costs nothing this
+      // transaction was not already going to hold — it updates most of them
+      // anyway, and held them to commit once it had — and it puts the importer
+      // on the same order as everybody else.
+      const held = await tx.serviceAgreement.findMany({
+        where: {
+          OR: [
+            { customerId: record.id },
+            ...(siteIds.size > 0
+              ? [{ serviceSiteId: { in: [...siteIds.values()] } }]
+              : []),
+          ],
+        },
+        select: { id: true },
+      });
+      await lockAgreementRows(
+        tx,
+        held.map((agreement) => agreement.id),
+      );
 
       for (const agreement of customer.agreements) {
         if (!isImportable(agreement)) {

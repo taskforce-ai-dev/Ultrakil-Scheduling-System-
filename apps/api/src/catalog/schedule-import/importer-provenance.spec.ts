@@ -122,6 +122,9 @@ function fixture(state: Partial<ExistingState> = {}) {
       })),
     },
     serviceAgreement: {
+      // The customer's existing agreements, locked in id order before any of
+      // them is updated.
+      findMany: jest.fn(async () => [{ id: AGREEMENT_ID }]),
       findFirst: jest.fn(async () => ({
         id: AGREEMENT_ID,
         importedInactiveAt: existing.agreementImportedInactiveAt,
@@ -136,6 +139,8 @@ function fixture(state: Partial<ExistingState> = {}) {
       deleteMany: jest.fn(async () => ({ count: 0 })),
       createMany: jest.fn(async () => ({ count: 0 })),
     },
+    // The agreement-row lock, which answers with the rows it was asked for.
+    $queryRaw: jest.fn(async () => [{ id: AGREEMENT_ID }]),
   };
 
   const prisma = {

@@ -100,6 +100,48 @@ explanation. **A rule is never relaxed to make the board look full.**
 
 ---
 
+## Locks, and the order they are taken in
+
+Three transactions can be writing the same customer's work at once: a solve
+persisting the optimizer's result, a manager pressing Generate, and an admin
+re-importing the master schedule workbook. They contend over the same handful
+of tables, and the order they take rows in is not a detail — taken in two
+different orders, PostgreSQL resolves the difference by killing one of them,
+which reaches somebody as a 500 on a button they pressed for a good reason.
+
+**Every writer takes the same locks in the same order:**
+
+1. **agreement rows**, ascending by id, through `lockAgreementRows`
+   (`common/locks/agreement-lock.ts`) — all of them, before touching any;
+2. **visit rows**, ascending by id, through `lockScheduleVisits`;
+3. **employee then vehicle rows**, ascending by id, through
+   `lockScheduleResources`;
+4. **branch-days**, ascending by key, through `lockBranchDays`
+   (`scheduling/optimizer/branch-day-lock.ts`).
+
+A writer skipping a level is fine; a writer inverting two is not. The rule is
+written as code in those four helpers, and the only way to keep it is to reach
+for them rather than to lock by hand — which is how each of the three deadlocks
+this section exists because of got in: generation locking a branch-day while
+holding no agreement, and the importer updating a customer's agreements in the
+order the spreadsheet happens to list them.
+
+Two writers need no ordering discipline, and it is worth saying why rather than
+leaving the next person to wonder. `ServiceAgreementsService` — create, update,
+status change, reactivation — writes **exactly one agreement row per
+transaction**, and its other writes are new rows (a version, an audit entry) or
+children of the row it already holds, so it has nothing to invert with. The
+repair path, the assignments service and the eligibility engine never write or
+lock an agreement row at all; they read them through relation includes, which
+takes no lock.
+
+Advisory locks are cooperative, and the row locks only bind writers that take
+them, so none of this constrains a manager moving one visit by hand through
+`PATCH /visits/:id`. That is deliberate, and the same sentence as the daily cap
+below: the rules constrain what the system does on its own.
+
+---
+
 ## Where a visit lands
 
 Frequency says how many visits a period needs. It never said which days, and

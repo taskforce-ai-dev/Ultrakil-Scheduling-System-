@@ -44,7 +44,7 @@ import {
   branchDayLockKey,
   lockBranchDays,
 } from '../../src/scheduling/optimizer/branch-day-lock';
-import { lockScheduleAgreements } from '../../src/scheduling/optimizer/schedule-visit-lock';
+import { lockAgreementRows } from '../../src/common/locks/agreement-lock';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -658,7 +658,7 @@ describe('a writer that took the agreement first', () => {
     const holder = other
       .$transaction(
         async (tx) => {
-          await lockScheduleAgreements(tx, [agreementId]);
+          await lockAgreementRows(tx, [agreementId]);
           await mayRelease;
           await lockBranchDays(tx, [{ branchCode: BranchCode.COLOMBO, date: day }]);
           heldTheDay = true;
