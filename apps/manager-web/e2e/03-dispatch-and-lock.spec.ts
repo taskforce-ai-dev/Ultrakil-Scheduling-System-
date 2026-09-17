@@ -1,10 +1,11 @@
 import { test, expect } from "./fixtures";
 
 /**
- * Manual override (dispatch board → Edit crew) and locking a visit
- * (visits calendar). Strict CI uses its independently seeded assigned visit
- * and requires a persisted crew change. Non-strict operator runs adapt to
- * available visits and can also exercise a legitimate eligibility refusal.
+ * Manual override (dispatch board → Edit crew), the board's Share button,
+ * and locking a visit (visits calendar). Strict CI uses its independently
+ * seeded assigned visit and requires a persisted crew change. Non-strict
+ * operator runs adapt to available visits and can also exercise a
+ * legitimate eligibility refusal.
  */
 
 test("dispatch board: overrides a crew with a reason, and shows every ineligibility reason if the pick fails eligibility", async ({
@@ -133,6 +134,83 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
 
   await saveButton.click();
   await expect(page.getByText(/Assignment saved\.|assignment/i).first()).toBeVisible({ timeout: 10_000 });
+});
+
+test("dispatch board: Share copies the exact displayed day to the clipboard", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/dispatch-board");
+  await expect(page.getByRole("heading", { name: "Dispatch Board" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+
+  const shareButton = page.getByRole("button", { name: "Share" });
+  await expect(shareButton).toBeVisible();
+  if (await shareButton.isDisabled()) {
+    test.skip(true, "Nothing scheduled for today in this environment — nothing to share.");
+  }
+
+  // A real browser Clipboard API, not a jsdom mock — the PR's own unit test
+  // suite could not exercise this (navigator.clipboard mocking behaved
+  // unreliably under jsdom/Vitest: the mocked spy wasn't visible from inside
+  // the click handler despite working in isolation outside React).
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+
+  // The page's own rendering of the current filter state — asserting
+  // against this (not a hand-built expectation) is what proves the copied
+  // text tracks whatever day/branch is actually on screen, not a stale or
+  // hard-coded one.
+  const displayedDate = await page
+    .locator("div.rounded-xl.border.bg-card.p-4.shadow-sm + p")
+    .textContent();
+  const firstRowCustomer = await page
+    .locator("table tbody tr")
+    .first()
+    .locator("button")
+    .first()
+    .textContent();
+
+  await shareButton.click();
+  await expect(page.getByText("Dispatch board copied to clipboard.")).toBeVisible({
+    timeout: 10_000,
+  });
+
+  const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboardText).toContain("Dispatch Board");
+  expect(clipboardText).toContain(displayedDate?.trim());
+  expect(clipboardText).toContain(firstRowCustomer?.trim());
+});
+
+test("dispatch board: Share reports a clean, actionable error when the browser blocks clipboard access", async ({
+  page,
+}) => {
+  // Simulate a browser/OS refusing clipboard access (denied permission,
+  // insecure context, etc.) — the catch branch's whole reason to exist, and
+  // the other thing a jsdom mock can't meaningfully stand in for. Must be
+  // registered before the page's own scripts run, so it has to precede goto.
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: () => Promise.reject(new Error("denied")) },
+      configurable: true,
+    });
+  });
+
+  await page.goto("/dispatch-board");
+  await expect(page.getByRole("heading", { name: "Dispatch Board" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+
+  const shareButton = page.getByRole("button", { name: "Share" });
+  await expect(shareButton).toBeVisible();
+  if (await shareButton.isDisabled()) {
+    test.skip(true, "Nothing scheduled for today in this environment — nothing to share.");
+  }
+
+  await shareButton.click();
+  await expect(
+    page.getByText(
+      "Could not copy the dispatch board — your browser may be blocking clipboard access."
+    )
+  ).toBeVisible({ timeout: 10_000 });
 });
 
 test("visit calendar: locks and releases a visit", async ({ page }) => {

@@ -58,7 +58,7 @@ pnpm exec playwright show-report
 | --- | --- | --- |
 | `01-customer-and-agreement.spec.ts` | Create a customer, create a service agreement for it, see the schedule preview | Nothing — creates its own customer |
 | `02-generation.spec.ts` | Preview and confirm visit generation for the visible month | At least one active service agreement (created by the spec above, or from a real import) |
-| `03-dispatch-and-lock.spec.ts` | Dispatch board → Edit crew with a reason, persisted crew and reopen validation; lock/unlock a visit | Strict CI uses the seeded assigned Synthetic Active visit. Non-strict runs adapt to available visits. |
+| `03-dispatch-and-lock.spec.ts` | Dispatch board → Edit crew with a reason, persisted crew and reopen validation; Share button copies the displayed day to the clipboard, and fails cleanly when the browser blocks it; lock/unlock a visit | Strict CI uses the seeded assigned Synthetic Active visit. Non-strict runs adapt to available visits. |
 | `04-publish.spec.ts` | Start a schedule run, wait for it to finish, publish it | Nothing beyond agreements existing somewhere in the horizon used |
 | `05-accessibility.spec.ts` | Automated axe-core scan (serious/critical only) of every top-level page, plus the customer/agreement/generation forms and override/publish dialogs | CI seeds populated dispatch and a separate draft. Any required skip fails strict acceptance. |
 | `06-responsive.spec.ts` | No document-level horizontal scroll, and a working nav (fixed sidebar vs. hamburger/Sheet drawer), on every top-level page at a laptop width (1366×768) and a tablet width (768×1024) | Nothing — layout-only, doesn't touch data |
