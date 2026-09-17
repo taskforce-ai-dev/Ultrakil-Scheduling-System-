@@ -221,15 +221,24 @@ export default function DispatchBoardPage() {
               Calendar
             </Button>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={shareBoard}
-            disabled={sorted.length === 0}
-          >
-            <Share2 className="h-4 w-4" aria-hidden="true" />
-            Share
-          </Button>
+          {view === "list" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={shareBoard}
+              // The list and its crew/vehicle assignments load in two steps
+              // (see load() above) — Share must wait for both to finish for
+              // the current date/branch, and for stale data left over from
+              // the previous selection, or it can copy an old day's visits
+              // under the newly picked date, or say "No crew yet" for a
+              // visit whose assignment just hasn't arrived yet. It also has
+              // no calendar-view equivalent, so it never appears there.
+              disabled={isLoading || Boolean(error) || sorted.length === 0}
+            >
+              <Share2 className="h-4 w-4" aria-hidden="true" />
+              Share
+            </Button>
+          )}
         </div>
       </div>
 

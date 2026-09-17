@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -17,10 +17,12 @@ vi.mock("@/lib/api-client", async () => {
 
 import DispatchBoardPage from "../page";
 import {
+  ApiError,
   fetchOperationsDay,
   fetchVisit,
   fetchVisitAssignment,
   fetchVisits,
+  type Assignment,
   type OperationsDayResponse,
   type Visit,
 } from "@/lib/api-client";
@@ -292,5 +294,87 @@ describe("dispatch board", () => {
     await screen.findByText("Nothing scheduled for this date");
 
     expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
+  });
+
+  it("keeps Share disabled through a deferred branch reload until both the visits and their assignments arrive", async () => {
+    const user = await renderBoard();
+    expect(screen.getByRole("button", { name: "Share" })).toBeEnabled();
+
+    vi.mocked(fetchVisits).mockClear();
+    vi.mocked(fetchVisitAssignment).mockClear();
+
+    const reloadedVisit = buildVisit({
+      id: "visit-kandy-reloaded",
+      customerName: "Kandy Fresh Co",
+      assignmentCount: 1,
+    });
+
+    let resolveVisits: ((page: Awaited<ReturnType<typeof fetchVisits>>) => void) | undefined;
+    vi.mocked(fetchVisits).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveVisits = resolve;
+        })
+    );
+    let resolveAssignment: ((assignment: Assignment) => void) | undefined;
+    vi.mocked(fetchVisitAssignment).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAssignment = resolve;
+        })
+    );
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+
+    // Still showing the previous, fully-loaded board while the new one is in
+    // flight — Share must not offer to copy it under the newly picked branch.
+    expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
+
+    resolveVisits?.({ items: [reloadedVisit], total: 1, page: 1, pageSize: 200 });
+    // The new visit list has landed — proven by the assignment round trip it
+    // triggers — but the board stays on its loading skeleton and the
+    // assignment itself hasn't arrived. Share must keep waiting through this
+    // gap, or it could be clicked while "No crew yet" would be wrong for a
+    // visit that does have one.
+    await waitFor(() => expect(fetchVisitAssignment).toHaveBeenCalledWith("visit-kandy-reloaded"));
+    expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
+
+    resolveAssignment?.(
+      buildAssignment({
+        generatedVisitId: "visit-kandy-reloaded",
+        crew: [{ employeeId: "e-9", fullName: "R Silva", role: "TECHNICIAN", isPmsSupervisor: false }],
+        vehicles: [],
+      })
+    );
+    await screen.findByText("Kandy Fresh Co");
+    expect(screen.getByRole("button", { name: "Share" })).toBeEnabled();
+  });
+
+  it("disables Share once the board fails to load, instead of sharing the last successful day", async () => {
+    const user = await renderBoard();
+    expect(screen.getByRole("button", { name: "Share" })).toBeEnabled();
+
+    vi.mocked(fetchVisits).mockRejectedValueOnce(
+      new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
+    );
+
+    await user.click(screen.getByRole("button", { name: "Next day" }));
+
+    await screen.findByText("Couldn't load the dispatch board");
+    expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
+  });
+
+  it("hides the list's Share action in Calendar view instead of sharing the hidden list-day state", async () => {
+    const user = await renderBoard();
+    expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Calendar" }));
+
+    expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "List" }));
+
+    expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
   });
 });
