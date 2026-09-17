@@ -32,7 +32,7 @@ import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-v
 import { anchorDaysFrom } from './anchors';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
-import { GenerateVisitsDto, GenerationImpactDto } from './dto';
+import { ExtendHorizonsDto, GenerateVisitsDto, GenerationImpactDto } from './dto';
 import {
   DailyLoadWarning,
   StandingVisit,
@@ -59,6 +59,34 @@ interface RangeAsItStands {
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
 const MAX_HORIZON_DAYS = 366;
+/** How far ahead {@link VisitGenerationService.extendRollingHorizons} plans an open-ended agreement. */
+const ROLLING_HORIZON_DAYS = 365;
+
+function addDays(date: string, days: number): string {
+  return toDateOnly(new Date(parseDateOnly(date).getTime() + days * DAY_MS));
+}
+
+function laterDateOnly(a: string, b: string): string {
+  return a >= b ? a : b;
+}
+
+/** One open-ended agreement {@link VisitGenerationService.extendRollingHorizons} planned further into. */
+export interface HorizonExtension {
+  serviceAgreementId: string;
+  customerName: string;
+  siteName: string;
+  from: string;
+  to: string;
+  visitsAdded: number;
+}
+
+export interface HorizonExtensionSummary {
+  today: string;
+  targetHorizon: string;
+  /** Every active, open-ended agreement considered — extended or already caught up. */
+  agreementsConsidered: number;
+  agreementsExtended: HorizonExtension[];
+}
 
 const AGREEMENT_INCLUDE = {
   customer: { select: { name: true } },
@@ -140,6 +168,121 @@ export class VisitGenerationService {
 
   confirm(dto: GenerateVisitsDto, actor: AuthenticatedUser): Promise<GenerationImpactDto> {
     return this.build(dto, actor);
+  }
+
+  /**
+   * Keeps every open-ended agreement planned a rolling year ahead.
+   *
+   * An agreement with an end date stops there, the same as any other
+   * generation call — this only ever widens the horizon for one that never
+   * ends, and only for the stretch it does not have yet. "Has" means the
+   * latest date among its own non-cancelled visits; an agreement with none
+   * yet is planned from its own start date, and never from earlier than
+   * today either — an agreement that started years ago and somehow has no
+   * visits at all is not this operation's chance to backfill its whole
+   * history, only to make sure the year ahead of it is covered.
+   *
+   * Each agreement is generated through the ordinary, scoped {@link confirm}
+   * — the same call a manager's own Generate Visits makes for one agreement
+   * — so it inherits every protection that path already has: it can only
+   * ever add, update or remove *this* agreement's own visits, published and
+   * locked work stays put, and a second call over ground already covered
+   * reports nothing to do. Calling this twice in a row, or while a manager
+   * is generating something else entirely, is exactly as safe as calling
+   * `confirm` twice in a row already is.
+   *
+   * Nothing here runs this on a schedule. `docs/ARCHITECTURE.md` and the PR
+   * that added it say why: wiring a live cron changes what happens in every
+   * environment the moment it deploys, and this branch's own rule is no
+   * deploy, no staging changes. This is the operation a scheduled job (or an
+   * operator, by hand) calls; deciding when to call it is a deployment
+   * decision for later.
+   *
+   * `scope` narrows which open-ended agreements are considered — by branch,
+   * by id, or both — the same two filters {@link GenerateVisitsDto} already
+   * offers. Omitted, every open-ended agreement in the company is
+   * considered, which is the real operation: a company has one financial
+   * calendar, not one per branch. Narrowing it is for an operator fixing one
+   * branch or one customer's horizon without touching anyone else's.
+   */
+  async extendRollingHorizons(
+    actor: AuthenticatedUser,
+    scope: ExtendHorizonsDto = {},
+  ): Promise<HorizonExtensionSummary> {
+    const today = toDateOnly(new Date());
+    const targetHorizon = addDays(today, ROLLING_HORIZON_DAYS);
+
+    const agreements = await this.prisma.serviceAgreement.findMany({
+      where: {
+        status: AgreementStatus.ACTIVE,
+        endDate: null,
+        serviceSite: { isActive: true, customer: { isActive: true } },
+        ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+        ...(scope.serviceAgreementIds?.length
+          ? { id: { in: scope.serviceAgreementIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        startDate: true,
+        customer: { select: { name: true } },
+        serviceSite: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const plannedThroughRows = await this.prisma.generatedVisit.groupBy({
+      by: ['serviceAgreementId'],
+      where: {
+        serviceAgreementId: { in: agreements.map((agreement) => agreement.id) },
+        status: { not: VisitStatus.CANCELLED },
+      },
+      _max: { visitDate: true },
+    });
+    const plannedThroughById = new Map(
+      plannedThroughRows.map((row) => [row.serviceAgreementId, row._max.visitDate]),
+    );
+
+    const extended: HorizonExtension[] = [];
+    for (const agreement of agreements) {
+      const agreementStart = toDateOnly(agreement.startDate);
+      const lastPlanned = plannedThroughById.get(agreement.id);
+      const plannedThrough = lastPlanned
+        ? toDateOnly(lastPlanned)
+        : addDays(agreementStart, -1);
+
+      // Already planned to the target, or past it — nothing to extend. True,
+      // harmlessly, on every call after the first one for a given agreement
+      // once it has caught up, which is what keeps this idempotent.
+      if (plannedThrough >= targetHorizon) continue;
+
+      const from = laterDateOnly(laterDateOnly(addDays(plannedThrough, 1), agreementStart), today);
+      // The agreement's own start is still further out than a year from now
+      // — nothing is due yet.
+      if (from > targetHorizon) continue;
+
+      const impact = await this.confirm(
+        { from, to: targetHorizon, serviceAgreementIds: [agreement.id] },
+        actor,
+      );
+      if (impact.additions.length === 0 && impact.updates.length === 0) continue;
+
+      extended.push({
+        serviceAgreementId: agreement.id,
+        customerName: agreement.customer.name,
+        siteName: agreement.serviceSite.name,
+        from,
+        to: targetHorizon,
+        visitsAdded: impact.additions.length,
+      });
+    }
+
+    return {
+      today,
+      targetHorizon,
+      agreementsConsidered: agreements.length,
+      agreementsExtended: extended,
+    };
   }
 
   /** Shared by preview and confirm, so the two can never disagree. */

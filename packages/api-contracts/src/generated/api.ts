@@ -828,6 +828,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visit-generation/extend-horizons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep every open-ended agreement planned a rolling year ahead
+         * @description Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.
+         */
+        post: operations["VisitGenerationController_extendHorizons"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/visits": {
         parameters: {
             query?: never;
@@ -1925,6 +1945,39 @@ export interface components {
              * @description The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.
              */
             scheduleRunId: string | null;
+        };
+        ExtendHorizonsDto: {
+            /**
+             * @description Limit to one branch. Omit to consider every open-ended agreement in the company.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit to particular agreements. Omit for every open-ended agreement in scope. */
+            serviceAgreementIds?: string[];
+        };
+        HorizonExtensionDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            visitsAdded: number;
+        };
+        HorizonExtensionSummaryDto: {
+            /** Format: date */
+            today: string;
+            /**
+             * Format: date
+             * @description today plus a rolling year — every open-ended agreement is planned up to here.
+             */
+            targetHorizon: string;
+            /** @description Every active, open-ended agreement considered — extended or already caught up. */
+            agreementsConsidered: number;
+            /** @description Only the agreements this call actually planned further into. */
+            agreementsExtended: components["schemas"]["HorizonExtensionDto"][];
         };
         VisitDto: {
             /** Format: uuid */
@@ -4329,6 +4382,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GenerationImpactDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_extendHorizons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ExtendHorizonsDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HorizonExtensionSummaryDto"];
                 };
             };
             /** @description Missing or invalid token. */

@@ -11,7 +11,12 @@ import { UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
-import { GenerateVisitsDto, GenerationImpactDto } from './dto';
+import {
+  ExtendHorizonsDto,
+  GenerateVisitsDto,
+  GenerationImpactDto,
+  HorizonExtensionSummaryDto,
+} from './dto';
 import { VisitGenerationService } from './visit-generation.service';
 
 @ApiTags('visit-generation')
@@ -56,5 +61,22 @@ export class VisitGenerationController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<GenerationImpactDto> {
     return this.generation.confirm(dto, actor);
+  }
+
+  @Post('extend-horizons')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Keep every open-ended agreement planned a rolling year ahead',
+    description:
+      "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+  })
+  @ApiBody({ type: ExtendHorizonsDto, required: false })
+  @ApiResponse({ status: 200, type: HorizonExtensionSummaryDto })
+  extendHorizons(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() scope: ExtendHorizonsDto = {},
+  ): Promise<HorizonExtensionSummaryDto> {
+    return this.generation.extendRollingHorizons(actor, scope);
   }
 }

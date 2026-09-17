@@ -68,6 +68,27 @@ export class GenerateVisitsDto {
   serviceAgreementIds?: string[];
 }
 
+export class ExtendHorizonsDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every open-ended agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every open-ended agreement in scope.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
 class VisitChangeDto {
   @ApiProperty({ type: String }) field!: string;
   @ApiProperty({ type: String }) from!: string;
@@ -284,4 +305,41 @@ export class GenerationImpactDto {
       'The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.',
   })
   scheduleRunId!: string | null;
+}
+
+export class HorizonExtensionDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({ type: Number })
+  visitsAdded!: number;
+}
+
+export class HorizonExtensionSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: String,
+    format: 'date',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'today plus a rolling year — every open-ended agreement is planned up to here.',
+  })
+  targetHorizon!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active, open-ended agreement considered — extended or already caught up.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [HorizonExtensionDto],
+    description: 'Only the agreements this call actually planned further into.',
+  })
+  agreementsExtended!: HorizonExtensionDto[];
 }

@@ -2093,6 +2093,47 @@
         ]
       }
     },
+    "/api/visit-generation/extend-horizons": {
+      "post": {
+        "description": "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+        "operationId": "VisitGenerationController_extendHorizons",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendHorizonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HorizonExtensionSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Keep every open-ended agreement planned a rolling year ahead",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
     "/api/visits": {
       "get": {
         "description": "Visits in date order. Filter by branch, date range, status, customer or site. Each row says whether regeneration would leave it alone, and why.",
@@ -5254,6 +5295,96 @@
           "skippedPeriods",
           "isPreview",
           "scheduleRunId"
+        ]
+      },
+      "ExtendHorizonsDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every open-ended agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every open-ended agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "HorizonExtensionDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "visitsAdded": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "from",
+          "to",
+          "visitsAdded"
+        ]
+      },
+      "HorizonExtensionSummaryDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "targetHorizon": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "today plus a rolling year — every open-ended agreement is planned up to here."
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active, open-ended agreement considered — extended or already caught up."
+          },
+          "agreementsExtended": {
+            "description": "Only the agreements this call actually planned further into.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HorizonExtensionDto"
+            }
+          }
+        },
+        "required": [
+          "today",
+          "targetHorizon",
+          "agreementsConsidered",
+          "agreementsExtended"
         ]
       },
       "VisitDto": {
