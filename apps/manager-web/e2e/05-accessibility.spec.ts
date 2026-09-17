@@ -22,13 +22,13 @@ const PAGES = [
   { path: "/dashboard", heading: "Dashboard" },
   { path: "/customers", heading: "Customers" },
   { path: "/service-agreements", heading: "Service Agreements" },
-  { path: "/visits", heading: "Visit Calendar" },
+  { path: "/visits", heading: "Generate Schedule" },
   { path: "/calendar", heading: "Calendar" },
   { path: "/workforce", heading: "Workforce" },
   { path: "/vehicles", heading: "Vehicles" },
   { path: "/dispatch-board", heading: "Dispatch Board" },
   { path: "/unassigned-visits", heading: "Unassigned Visits" },
-  { path: "/schedule-history", heading: "Schedule History" },
+  { path: "/schedule-history", heading: "Assign Crew" },
 ];
 
 for (const { path, heading } of PAGES) {
@@ -67,10 +67,8 @@ test("visit generation dialog has no serious accessibility violations", async ({
   page,
 }) => {
   await page.goto("/visits");
-  await page.getByRole("button", { name: "Generate visits" }).click();
-  await expect(
-    page.getByRole("heading", { name: "Generate visits" }),
-  ).toBeVisible();
+  await page.getByRole("button", { name: "Generate Schedule" }).click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Generate Schedule" })).toBeVisible();
   await expect(
     page.getByText(
       /Nothing has been written yet\.|Could not work out what generation would change\./,
