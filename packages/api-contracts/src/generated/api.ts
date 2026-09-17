@@ -4741,7 +4741,15 @@ export interface operations {
     };
     ScheduleRunsController_list: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 1-based page number. */
+                page?: number;
+                /** @description Up to 100 per page. */
+                pageSize?: number;
+                status?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "SUPERSEDED";
+                /** @description Up to 50. Repeat the parameter for more than one id (?ids=a&ids=b) — the API also accepts a single bare id. */
+                ids?: string[];
+            };
             header?: never;
             path?: never;
             cookie?: never;

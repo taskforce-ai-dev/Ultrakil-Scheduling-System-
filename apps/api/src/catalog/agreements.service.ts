@@ -255,7 +255,6 @@ export class AgreementsService {
           : null;
     assertDateRange(startDate, endDate);
 
-    const crewSize = dto.crewSize ?? before.crewSize;
     const durationMinutes = dto.durationMinutes ?? before.durationMinutes;
 
     this.assertSatisfiable({
@@ -279,6 +278,57 @@ export class AgreementsService {
       // rules here first, before this row was locked, waited on the same
       // agreement from the opposite direction and deadlocked against it.
       await lockAgreementRows(tx, [id]);
+
+      // `before` was read before this transaction opened, and everything
+      // above it derived from it — including every field this edit did not
+      // itself carry. A concurrent import can archive this agreement, or
+      // refresh its crew size, duration, window or dates, in the gap between
+      // that read and this lock. Re-read now, under the lock, so a field this
+      // edit leaves alone falls back to what the row actually holds rather
+      // than silently reverting it to what `before` happened to say.
+      const current = await tx.serviceAgreement.findUniqueOrThrow({
+        where: { id },
+        include: { dayRules: true },
+      });
+      if (current.status === AgreementStatus.ARCHIVED) {
+        throw new AppException(
+          'AGREEMENT_ARCHIVED',
+          'This agreement was archived while this edit was being prepared. Past visits reference it as it stands. Create a new agreement instead.',
+          HttpStatus.CONFLICT,
+          { serviceAgreementId: id },
+        );
+      }
+      const currentAllowedDays = dto.allowedDays
+        ? sortWeekdays(dto.allowedDays)
+        : sortWeekdays(
+            current.dayRules
+              .filter((rule) => rule.kind === DayRuleKind.ALLOWED)
+              .map((rule) => rule.weekday),
+          );
+      const currentPreferredDays = dto.preferredDays
+        ? sortWeekdays(dto.preferredDays)
+        : sortWeekdays(
+            current.dayRules
+              .filter((rule) => rule.kind === DayRuleKind.PREFERRED)
+              .map((rule) => rule.weekday),
+          );
+      const currentStartMinute =
+        dto.serviceWindowStartMinute !== undefined
+          ? dto.serviceWindowStartMinute
+          : current.serviceWindowStartMinute;
+      const currentEndMinute =
+        dto.serviceWindowEndMinute !== undefined
+          ? dto.serviceWindowEndMinute
+          : current.serviceWindowEndMinute;
+      const currentStartDate = dto.startDate ?? toDateOnly(current.startDate);
+      const currentEndDate =
+        dto.endDate !== undefined
+          ? dto.endDate
+          : current.endDate
+            ? toDateOnly(current.endDate)
+            : null;
+      const currentCrewSize = dto.crewSize ?? current.crewSize;
+      const currentDurationMinutes = dto.durationMinutes ?? current.durationMinutes;
 
       if (dto.allowedDays || dto.preferredDays) {
         await tx.serviceAgreementDayRule.deleteMany({
@@ -310,8 +360,8 @@ export class AgreementsService {
           ...(dto.frequencyInterval !== undefined
             ? { frequencyInterval: dto.frequencyInterval }
             : {}),
-          crewSize,
-          durationMinutes,
+          crewSize: currentCrewSize,
+          durationMinutes: currentDurationMinutes,
           // Only what this edit actually carried becomes confirmed. Changing
           // the crew size says nothing about whether the imported duration was
           // right, and confirming it anyway would quietly promote an
@@ -325,14 +375,18 @@ export class AgreementsService {
           ...(dto.allowedDays || dto.preferredDays
             ? { dayRuleProvenance: DataProvenance.MANAGER_CONFIRMED }
             : {}),
-          serviceWindowStartMinute: startMinute,
-          serviceWindowEndMinute: endMinute,
-          startDate: parseDateOnly(startDate),
-          endDate: endDate ? parseDateOnly(endDate) : null,
+          serviceWindowStartMinute: currentStartMinute,
+          serviceWindowEndMinute: currentEndMinute,
+          startDate: parseDateOnly(currentStartDate),
+          endDate: currentEndDate ? parseDateOnly(currentEndDate) : null,
           ...(dto.notes !== undefined ? { notes: dto.notes?.trim() || null } : {}),
           currentVersion: { increment: 1 },
           ...(dto.allowedDays || dto.preferredDays
-            ? { dayRules: { create: toDayRuleRows(allowedDays, preferredDays) } }
+            ? {
+                dayRules: {
+                  create: toDayRuleRows(currentAllowedDays, currentPreferredDays),
+                },
+              }
             : {}),
           ...(dto.requiredSkillCodes
             ? {
@@ -394,16 +448,37 @@ export class AgreementsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // `before` was read before this transaction opened. A concurrent import
+      // can archive this agreement in the gap between that read and this
+      // write — a routine "set ACTIVE" request that was a no-op against
+      // `before` would then unconditionally write `status: ACTIVE` over an
+      // import's fresh ARCHIVED, leaving `importedInactiveAt` still set
+      // underneath a status that says otherwise. Lock and re-read first, and
+      // decide against what the row actually holds right now.
+      await lockAgreementRows(tx, [id]);
+      const current = await tx.serviceAgreement.findUniqueOrThrow({ where: { id } });
+      if (
+        current.status === AgreementStatus.ARCHIVED &&
+        dto.status !== AgreementStatus.ARCHIVED
+      ) {
+        throw new AppException(
+          'AGREEMENT_ARCHIVED',
+          'This agreement was archived while this change was being prepared. Archiving is final, because past visits are explained by it. Create a new agreement instead of reviving this one.',
+          HttpStatus.CONFLICT,
+          { serviceAgreementId: id, requestedStatus: dto.status },
+        );
+      }
+
       const agreement = await tx.serviceAgreement.update({
         where: { id },
         data: {
           status: dto.status,
-          ...(before.status === dto.status ? {} : { currentVersion: { increment: 1 } }),
+          ...(current.status === dto.status ? {} : { currentVersion: { increment: 1 } }),
         },
         include: AGREEMENT_INCLUDE,
       });
 
-      if (before.status !== dto.status) {
+      if (current.status !== dto.status) {
         await this.writeVersion(
           tx,
           agreement as AgreementWithRelations,
