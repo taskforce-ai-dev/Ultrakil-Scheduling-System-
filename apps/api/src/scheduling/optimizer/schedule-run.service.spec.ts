@@ -1717,6 +1717,113 @@ describe('the daily-cap backstop on a solver move', () => {
     expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
   });
 
+  /**
+   * The same rule for the other way a move can fail.
+   *
+   * The cap refuses a move before the engine ever sees it, and that path has
+   * been right since the last round. But a move the cap lets through can still
+   * be refused by the engine itself — the crew the solver chose is busy on the
+   * day it wanted — and that refusal used to be recorded as-is: conflicts
+   * judged against the proposed day, written against a visit that never left
+   * its generated one. A coordinator found unassigned visits dated Monday 21
+   * September whose reasons cited clashes on the previous Friday and Saturday,
+   * and there is no way to tell from the queue that those dates are not the
+   * visit's own. Sent to the wrong day, a manager checks the wrong crews.
+   */
+  it('re-judges a move the engine refuses against the day the visit keeps', async () => {
+    // Eleven on the 4th: the cap lets the move through, so the refusal here is
+    // the engine's own.
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+    f.eligibility.evaluate.mockImplementation(
+      (async (
+        _visitId: string,
+        _proposal: unknown,
+        options: { proposedVisit?: { visitDate: Date } },
+      ) => ({
+        isEligible: false,
+        conflicts: [
+          {
+            code: 'EMPLOYEE_DOUBLE_BOOKED',
+            message: `Employee is already on another job on ${
+              options.proposedVisit
+                ? options.proposedVisit.visitDate.toISOString().slice(0, 10)
+                : '2027-03-03'
+            }.`,
+            remediation: 'Choose somebody else.',
+            resources: { employeeIds: ['employee'] },
+          },
+        ],
+      })) as never,
+    );
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    // The last question asked was about the day the visit is actually on.
+    expect(f.eligibility.evaluate).toHaveBeenLastCalledWith(
+      'visit',
+      expect.any(Object),
+      expect.objectContaining({ proposedVisit: undefined }),
+      f.tx,
+    );
+
+    const written = f.reasons.createMany.mock.calls[0][0] as {
+      data: { code: string; message: string }[];
+    };
+    expect(written.data).toHaveLength(1);
+    expect(written.data[0].message).toContain('2027-03-03');
+    // The day the visit did not go to must not appear as though it were the
+    // visit's own.
+    expect(written.data[0].message).not.toContain('2027-03-04');
+  });
+
+  /**
+   * Refusing a move is not refusing an assignment — the principle the cap
+   * backstop already runs on, applied to the engine's own refusal. A crew that
+   * cannot serve the day the solver wanted may well be free on the day the
+   * visit was generated for, and leaving that visit unstaffed helps nobody.
+   */
+  it('staffs the day the visit keeps when only the move was impossible', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+    f.eligibility.evaluate.mockImplementation(
+      (async (
+        _visitId: string,
+        _proposal: unknown,
+        options: { proposedVisit?: unknown },
+      ) =>
+        options.proposedVisit
+          ? {
+              isEligible: false,
+              conflicts: [
+                {
+                  code: 'EMPLOYEE_DOUBLE_BOOKED',
+                  message: 'Employee is already on another job on 2027-03-04.',
+                  remediation: 'Choose somebody else.',
+                  resources: { employeeIds: ['employee'] },
+                },
+              ],
+            }
+          : { isEligible: true, conflicts: [] }) as never,
+    );
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.reasons.createMany).not.toHaveBeenCalled();
+  });
+
   it('reads no day load at all when the solver moves nothing', async () => {
     const f = fixture();
 

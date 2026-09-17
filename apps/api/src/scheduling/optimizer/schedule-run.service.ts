@@ -960,12 +960,12 @@ export class ScheduleRunService {
           // question about the day the visit is already standing on. A day
           // that was over the cap before this run still gets its crews.
           const refused = this.refuseOvercapMove(ledger, entry);
-          const move = refused ? undefined : entry.proposedVisit;
+          let move = refused ? undefined : entry.proposedVisit;
 
           // Evaluate and apply in order inside this transaction. Later checks
           // must see the slots freed or occupied by earlier accepted results.
           // The engine still wins whenever it disagrees with the solver.
-          const verdict = await this.eligibility.evaluate(
+          let verdict = await this.eligibility.evaluate(
             entry.visitId,
             entry.dto,
             {
@@ -974,6 +974,31 @@ export class ScheduleRunService {
             },
             tx,
           );
+          if (!verdict.isEligible && move) {
+            // The engine has refused the move, so the move is not happening —
+            // and everything it just said is about a day this visit will not
+            // be on. Recorded as-is, those reasons name other people's clashes
+            // on another date beside a visit dated where it was generated:
+            // "on 2026-09-18" against a visit on Monday the 21st, with nothing
+            // on the screen to say the date is not the visit's own. A manager
+            // reading that checks the wrong day's crews.
+            //
+            // So the question is asked again about the day the visit keeps,
+            // exactly as a cap refusal does above. Refusing a move is not
+            // refusing an assignment: a crew that cannot serve the day the
+            // solver wanted is often free on the day the visit was generated
+            // for, and either way what gets recorded describes that day.
+            move = undefined;
+            verdict = await this.eligibility.evaluate(
+              entry.visitId,
+              entry.dto,
+              {
+                excludeAssignmentId: entry.replaceAssignmentId,
+                proposedVisit: undefined,
+              },
+              tx,
+            );
+          }
           if (!verdict.isEligible) {
             this.logger.warn(
               `Solver proposed an assignment the engine refused for visit ${entry.visitId}: ${verdict.conflicts
