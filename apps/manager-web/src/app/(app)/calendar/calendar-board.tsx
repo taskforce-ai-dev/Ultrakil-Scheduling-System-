@@ -30,7 +30,6 @@ import {
   addMonths,
   daysInView,
   formatLongDate,
-  formatMinuteOfDay,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
@@ -40,6 +39,13 @@ import {
   type CalendarView,
 } from "@/lib/calendar";
 import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import {
+  compareVisitTiles,
+  visitTileAccessibleName,
+  visitTileTime,
+  NO_CREW_LABEL,
+  type VisitTileFacts,
+} from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
 
 type StageFilter = "ALL" | "UNASSIGNED" | "DRAFT" | "PUBLISHED" | "DONE";
@@ -106,45 +112,38 @@ const BRANCH_DOT: Record<"COLOMBO" | "KANDY", string> = {
   KANDY: "bg-violet-500",
 };
 
-function startMinute(entry: CalendarEntry): number {
-  return entry.assignment?.plannedStartMinute ?? entry.windowStartMinute;
+/**
+ * This screen's payload, reduced to the facts a tile may state. The Visit
+ * Calendar builds the same shape from its own payload, so the two screens
+ * cannot disagree about the same visit.
+ */
+function tileFacts(entry: CalendarEntry): VisitTileFacts {
+  return {
+    customerName: entry.customerName,
+    visitDate: entry.visitDate,
+    durationMinutes: entry.durationMinutes,
+    plannedStartMinute: entry.assignment?.plannedStartMinute ?? null,
+    plannedEndMinute: entry.assignment?.plannedEndMinute ?? null,
+    windowStartMinute: entry.windowStartMinute,
+    crewCount: entry.assignment?.crew.length ?? 0,
+  };
 }
 
-/**
- * When the crew is actually there, or an honest statement that nobody has
- * decided yet.
- *
- * An unassigned visit has no planned times — only the service window it must
- * fall inside, which for a site open all day is 08:00–17:00. Printing that as
- * a time range turned a 60-minute job into a nine-hour one, on precisely the
- * tiles that need attention. Without an assignment the tile says how long the
- * work takes and that its hour is undecided; it does not invent one.
- */
 function timeRange(entry: CalendarEntry): string {
-  const assignment = entry.assignment;
-  if (!assignment) return `${entry.durationMinutes} min · time not set`;
-  return `${formatMinuteOfDay(assignment.plannedStartMinute)}–${formatMinuteOfDay(
-    assignment.plannedEndMinute,
-  )}`;
+  return visitTileTime(tileFacts(entry));
 }
 
 function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void }) {
   const stage = stageOf(entry);
   const style = STAGE_STYLES[stage];
-  const crewCount = entry.assignment?.crew.length ?? 0;
+  const facts = tileFacts(entry);
+  const crewCount = facts.crewCount;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      // Spoken as a sentence in both cases: "at 60 min · time not set on
-      // 2026-09-21" is not one, and the unstaffed tile is the one a screen
-      // reader user most needs to understand.
-      aria-label={
-        entry.assignment
-          ? `${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`
-          : `${entry.customerName} on ${entry.visitDate}, ${entry.durationMinutes} minutes, time not set, no crew, ${style.label.toLowerCase()}`
-      }
+      aria-label={visitTileAccessibleName(facts, style.label.toLowerCase())}
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
@@ -168,7 +167,7 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
       ) : (
         <span className="flex shrink-0 items-center gap-0.5 font-medium">
           <UserX className="h-3 w-3" aria-hidden="true" />
-          No crew
+          {NO_CREW_LABEL}
         </span>
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (
@@ -362,7 +361,7 @@ export function CalendarBoard() {
       else grouped.set(entry.visitDate, [entry]);
     }
     for (const bucket of grouped.values()) {
-      bucket.sort((left, right) => startMinute(left) - startMinute(right));
+      bucket.sort((left, right) => compareVisitTiles(tileFacts(left), tileFacts(right)));
     }
     return grouped;
   }, [visible]);

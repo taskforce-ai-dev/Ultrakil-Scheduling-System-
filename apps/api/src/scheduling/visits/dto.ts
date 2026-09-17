@@ -249,6 +249,21 @@ export class VisitDto {
   })
   assignedCrewCount!: number;
 
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong.',
+  })
+  plannedStartMinute!: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description: 'When the crew is due to leave, on the same scale. Null when nobody is assigned.',
+  })
+  plannedEndMinute!: number | null;
+
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
   @ApiProperty({ type: String, format: 'date-time' }) updatedAt!: string;
 }

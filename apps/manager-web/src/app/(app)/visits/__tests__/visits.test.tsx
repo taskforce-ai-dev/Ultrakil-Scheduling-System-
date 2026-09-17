@@ -78,6 +78,12 @@ const staffed = buildVisit({
   jobTypeName: "Termite Control",
   status: "SCHEDULED",
   assignmentCount: 2,
+  // A staffed visit has a crew and an hour they are due. The window is still
+  // the defaulted 09:00-17:00 the builder gives every visit — the tile must
+  // show the assignment's 09:00-10:30, not that.
+  assignedCrewCount: 2,
+  plannedStartMinute: 540,
+  plannedEndMinute: 630,
   isProtected: true,
   protectionReason: "ALREADY_SCHEDULED",
 });
@@ -134,10 +140,21 @@ function grid() {
   return screen.getByRole("grid");
 }
 
-/** Chips are labelled with the date too, so two visits for one customer are distinct. */
-function chip(customerName: string, time: string, date: string) {
+/**
+ * Chips are labelled with the date too, so two visits for one customer are
+ * distinct.
+ *
+ * The hour is part of that label only when a crew is actually due. An
+ * unstaffed visit's tile says its time is not set rather than printing the
+ * service window, so this helper matches on the customer and the date and
+ * leaves the wording itself to be pinned where it is decided — in
+ * `@/lib/visit-tile` and in the test that holds both calendars to one answer.
+ */
+function chip(customerName: string, date: string) {
   return screen.getByRole("button", {
-    name: `${customerName} at ${time} on ${date}`,
+    name: new RegExp(
+      `^${customerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b.*\\bon ${date}\\b`,
+    ),
   });
 }
 
@@ -171,8 +188,8 @@ describe("calendar rendering", () => {
   it("keeps scheduled visit times readable on the green status tint", async () => {
     await renderCalendar();
 
-    const scheduledChip = chip("Cinnamon Grand Colombo", "09:00", "2026-09-23");
-    expect(within(scheduledChip).getByText("09:00")).toHaveClass("text-foreground");
+    const scheduledChip = chip("Cinnamon Grand Colombo", "2026-09-23");
+    expect(within(scheduledChip).getByText("09:00–10:30")).toHaveClass("text-foreground");
     expect(
       within(scheduledChip.parentElement!).getByRole("button", {
         name: "Move Cinnamon Grand Colombo's visit to a different date",
@@ -319,7 +336,7 @@ describe("filters", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getByText("15–21 Sep")).toBeInTheDocument();
@@ -342,7 +359,7 @@ describe("filters", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getAllByText("Not recorded").length).toBeGreaterThan(0);
@@ -367,7 +384,7 @@ describe("filters", () => {
     await chooseOption(user, "Customer", "Union Bank Kadawatha");
     expect(screen.getByTestId("calendar-range")).toHaveTextContent("October 2026");
 
-    await user.click(chip("Union Bank Kadawatha", "09:00", "2026-10-07"));
+    await user.click(chip("Union Bank Kadawatha", "2026-10-07"));
     await screen.findByText("Why this visit exists");
     await user.keyboard("{Escape}");
 
@@ -445,7 +462,7 @@ describe("a busy day", () => {
     const user = await renderCalendar();
 
     // Three chips and an overflow link, not seven chips.
-    expect(within(grid()).getAllByRole("button", { name: /Cinnamon Grand Colombo at/ })).toHaveLength(3);
+    expect(within(grid()).getAllByRole("button", { name: /^Cinnamon Grand Colombo\b/ })).toHaveLength(3);
     // The label says what pressing it does. It used to read "+ 4 more" and
     // silently swap the month view for Week, after which the next arrow
     // stepped by week with nothing to explain it.
@@ -455,7 +472,7 @@ describe("a busy day", () => {
 
     expect(screen.getByTestId("calendar-range")).toHaveTextContent("7 – 13 September 2026");
     // The week view shows the day in full.
-    expect(within(grid()).getAllByRole("button", { name: /Cinnamon Grand Colombo at/ })).toHaveLength(7);
+    expect(within(grid()).getAllByRole("button", { name: /^Cinnamon Grand Colombo\b/ })).toHaveLength(7);
   });
 });
 
@@ -503,7 +520,7 @@ describe("state badges", () => {
       screen.getByText("2 with no crew yet — awaiting staffing or staffing failed")
     ).toBeInTheDocument();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("No crew yet")).toBeInTheDocument();
@@ -536,7 +553,7 @@ describe("the visit detail drawer", () => {
     vi.mocked(fetchVisit).mockResolvedValue(buildVisitDetail({ id: "visit-generated" }));
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Fortnightly")).toBeInTheDocument();
@@ -561,7 +578,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Window shorter than the visit")).toBeInTheDocument();
@@ -571,7 +588,7 @@ describe("the visit detail drawer", () => {
     vi.mocked(fetchVisit).mockResolvedValue(buildVisitDetail({ id: "visit-generated" }));
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -585,7 +602,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Why this date")).toBeInTheDocument();
@@ -598,7 +615,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -619,7 +636,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Placed by the generator")).toBeInTheDocument();
@@ -639,7 +656,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Union Bank Kadawatha", "09:00", "2026-09-16"));
+    await user.click(chip("Union Bank Kadawatha", "2026-09-16"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("Locked by a manager")).toBeInTheDocument();
@@ -656,7 +673,7 @@ describe("the visit detail drawer", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(chip("Cinnamon Grand Colombo", "09:00", "2026-09-09"));
+    await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
     const drawer = await screen.findByRole("dialog");
     await user.click(within(drawer).getByRole("button", { name: "Lock this visit" }));
 

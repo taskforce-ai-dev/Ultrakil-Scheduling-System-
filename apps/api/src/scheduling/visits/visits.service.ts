@@ -66,7 +66,11 @@ const VISIT_INCLUDE = {
    */
   assignments: {
     where: { status: { in: LIVE_CREW_STATUSES } },
-    select: { _count: { select: { crewMembers: true } } },
+    select: {
+      _count: { select: { crewMembers: true } },
+      plannedStart: true,
+      plannedEnd: true,
+    },
     orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     take: 1,
   },
@@ -551,6 +555,9 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     hasAssignments: visit._count.assignments > 0,
   });
 
+  // The assignment in force, the one the Dispatch Board and the Calendar show.
+  const inForce = visit.assignments[0];
+
   return {
     id: visit.id,
     visitDate: toDateOnly(visit.visitDate),
@@ -574,9 +581,25 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     lockReason: visit.lockReason,
     assignmentCount: visit._count.assignments,
     assignedCrewCount: visit.assignments[0]?._count.crewMembers ?? 0,
+    // The hour a crew is actually due, which is not the service window. A
+    // calendar that prints the window as the time turns a defaulted
+    // 08:00-17:00 into "the crew arrives at 08:00" for every visit on the
+    // day. Null until somebody is assigned: nobody has decided yet, and
+    // saying so is the only honest answer.
+    plannedStartMinute: inForce ? minuteOfVisitDay(inForce.plannedStart, visit.visitDate) : null,
+    plannedEndMinute: inForce ? minuteOfVisitDay(inForce.plannedEnd, visit.visitDate) : null,
     createdAt: visit.createdAt.toISOString(),
     updatedAt: visit.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Minutes from the visit's own UTC midnight, exactly as the calendar read
+ * model computes them — the two screens must not disagree about the same
+ * assignment by a timezone.
+ */
+function minuteOfVisitDay(moment: Date, visitDate: Date): number {
+  return Math.round((moment.getTime() - visitDate.getTime()) / 60_000);
 }
 
 function formatMinute(minute: number): string {

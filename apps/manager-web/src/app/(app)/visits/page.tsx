@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { CalendarPlus, ChevronLeft, ChevronRight, Move } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Move, UserX, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -47,7 +47,6 @@ import {
   addDays,
   addMonths,
   daysInView,
-  formatMinuteOfDay,
   formatLongDate,
   formatMonthYear,
   formatWeekRange,
@@ -59,6 +58,13 @@ import {
   type CalendarView,
 } from "@/lib/calendar";
 import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import {
+  compareVisitTiles,
+  visitTileAccessibleName,
+  visitTileTime,
+  NO_CREW_LABEL,
+  type VisitTileFacts,
+} from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { VisitDetailDrawer } from "./visit-detail-drawer";
@@ -116,6 +122,26 @@ const STATE_LABELS = Object.fromEntries(
 const MAX_CHIPS_PER_MONTH_CELL = 3;
 
 /**
+ * This screen's payload, reduced to the facts a tile may state.
+ *
+ * `calendar-board` builds the identical shape from the calendar read model,
+ * and both render it through the same helpers — see `@/lib/visit-tile`. The
+ * two screens are pinned to the same answer by test, because they have
+ * already drifted once.
+ */
+function tileFacts(visit: Visit): VisitTileFacts {
+  return {
+    customerName: visit.customerName,
+    visitDate: visit.visitDate,
+    durationMinutes: visit.durationMinutes,
+    plannedStartMinute: visit.plannedStartMinute,
+    plannedEndMinute: visit.plannedEndMinute,
+    windowStartMinute: visit.windowStartMinute,
+    crewCount: visit.assignedCrewCount,
+  };
+}
+
+/**
  * One visit as it appears inside a day cell.
  *
  * Draggable to another day for a quick reschedule, but dragging is never the
@@ -148,6 +174,7 @@ function VisitChip({
   // uses the normal foreground for scheduled chips.
   const supportingTextTone =
     visit.status === "SCHEDULED" ? "text-foreground" : "text-muted-foreground";
+  const facts = tileFacts(visit);
 
   return (
     <div
@@ -165,22 +192,39 @@ function VisitChip({
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
-          ""
-        }`}
-        className="min-w-0 flex-1 truncate px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={visitTileAccessibleName(facts, VISIT_STATUS_LABEL[visit.status].toLowerCase())}
+        className="min-w-0 flex-1 px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="flex items-center gap-1">
+        <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+          {/* The hour a crew is actually due, or the plain statement that
+              nobody has decided one. This used to print windowStartMinute —
+              the service window, defaulted to 08:00 on a site with no
+              recorded hours — under the word "at", so nine tiles in twelve
+              announced a time nobody was attending. */}
+          <span className={cn("w-full tabular-nums", supportingTextTone)}>
+            {visitTileTime(facts)}
+          </span>
           {visit.isLocked && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
           )}
           {!visit.isLocked && visit.isManuallyAdjusted && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
           )}
-          <span className={cn("shrink-0 tabular-nums", supportingTextTone)}>
-            {formatMinuteOfDay(visit.windowStartMinute)}
-          </span>
-          <span className="truncate">{visit.customerName}</span>
+          <span className="min-w-0 flex-1 truncate">{visit.customerName}</span>
+          {/* Said, never left blank: staffed and unstaffed tiles read
+              identically without it, which is what this screen lost while the
+              other calendar kept it. */}
+          {facts.crewCount > 0 ? (
+            <span className={cn("flex shrink-0 items-center gap-0.5", supportingTextTone)}>
+              <Users className="h-3 w-3" aria-hidden="true" />
+              {facts.crewCount}
+            </span>
+          ) : (
+            <span className="flex shrink-0 items-center gap-0.5 font-medium">
+              <UserX className="h-3 w-3" aria-hidden="true" />
+              {NO_CREW_LABEL}
+            </span>
+          )}
         </span>
       </button>
       <button
@@ -334,7 +378,7 @@ export default function VisitsPage() {
       else grouped.set(visit.visitDate, [visit]);
     }
     for (const bucket of grouped.values()) {
-      bucket.sort((left, right) => left.windowStartMinute - right.windowStartMinute);
+      bucket.sort((left, right) => compareVisitTiles(tileFacts(left), tileFacts(right)));
     }
     return grouped;
   }, [visible]);

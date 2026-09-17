@@ -59,7 +59,15 @@ function fixture() {
       dayRuleProvenance: DataProvenance.SOURCE as DataProvenance,
     },
     _count: { assignments: 1 },
-    assignments: [{ _count: { crewMembers: 2 } }],
+    // The assignment in force, as the visits read model selects it: the crew
+    // size and the hours that crew is actually due.
+    assignments: [
+      {
+        _count: { crewMembers: 2 },
+        plannedStart: new Date('2027-03-03T09:00:00Z'),
+        plannedEnd: new Date('2027-03-03T10:30:00Z'),
+      },
+    ],
   };
   const original = {
     id: 'draft',
