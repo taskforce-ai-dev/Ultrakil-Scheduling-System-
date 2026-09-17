@@ -9,16 +9,43 @@ vi.mock("@/lib/api-client", async () => {
     fetchVisits: vi.fn(),
     fetchVisitAssignment: vi.fn(),
     fetchVisit: vi.fn(),
+    fetchOperationsDay: vi.fn(),
     lockVisit: vi.fn(),
     unlockVisit: vi.fn(),
   };
 });
 
 import DispatchBoardPage from "../page";
-import { fetchVisit, fetchVisitAssignment, fetchVisits, type Visit } from "@/lib/api-client";
+import {
+  fetchOperationsDay,
+  fetchVisit,
+  fetchVisitAssignment,
+  fetchVisits,
+  type OperationsDayResponse,
+  type Visit,
+} from "@/lib/api-client";
 import { buildAssignment, buildVisit, buildVisitDetail } from "@/test/fixtures";
 
+function buildOperationsDay(overrides: Partial<OperationsDayResponse> = {}): OperationsDayResponse {
+  return {
+    date: NOW_ISO,
+    branchCode: null,
+    summary: {
+      total: 0,
+      ready: 0,
+      proposed: 0,
+      awaitingStaffing: 0,
+      staffingFailed: 0,
+      exceptions: 0,
+      hoursUnconfirmed: 0,
+    },
+    items: [],
+    ...overrides,
+  };
+}
+
 const NOW = new Date("2026-09-09T09:00:00.000Z");
+const NOW_ISO = "2026-09-09";
 
 const staffed = buildVisit({
   id: "visit-staffed",
@@ -52,6 +79,8 @@ beforeEach(() => {
   mockVisits([staffed, unassigned]);
   vi.mocked(fetchVisit).mockReset();
   vi.mocked(fetchVisitAssignment).mockReset();
+  vi.mocked(fetchOperationsDay).mockReset();
+  vi.mocked(fetchOperationsDay).mockResolvedValue(buildOperationsDay());
   vi.mocked(fetchVisitAssignment).mockResolvedValue(
     buildAssignment({
       generatedVisitId: "visit-staffed",
@@ -191,5 +220,69 @@ describe("dispatch board", () => {
 
     const row = (await screen.findByText("Assumed-hours customer")).closest("tr")!;
     expect(within(row).getByText(/Assumed hours/)).toBeInTheDocument();
+  });
+
+  it("keeps the newer branch's visits and operations panel even when the older branch answers last", async () => {
+    const user = await renderBoard();
+
+    // Both fetches below race independently — set each up with its own
+    // resolver queue, in the order load() actually calls them. Cleared first
+    // so the mount-time call above doesn't count toward the two below.
+    vi.mocked(fetchVisits).mockClear();
+    vi.mocked(fetchOperationsDay).mockClear();
+    let resolveOlderVisits: ((page: Awaited<ReturnType<typeof fetchVisits>>) => void) | undefined;
+    let resolveNewerVisits: ((page: Awaited<ReturnType<typeof fetchVisits>>) => void) | undefined;
+    vi.mocked(fetchVisits).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (resolveOlderVisits) resolveNewerVisits = resolve;
+          else resolveOlderVisits = resolve;
+        })
+    );
+    let resolveOlderOperations: ((data: OperationsDayResponse) => void) | undefined;
+    let resolveNewerOperations: ((data: OperationsDayResponse) => void) | undefined;
+    vi.mocked(fetchOperationsDay).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (resolveOlderOperations) resolveNewerOperations = resolve;
+          else resolveOlderOperations = resolve;
+        })
+    );
+
+    // Two branch switches in a row — Colombo's requests are the older ones,
+    // Kandy's are the newer ones that reflect what is now on screen.
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Colombo" }));
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+    expect(fetchVisits).toHaveBeenCalledTimes(2);
+    expect(fetchOperationsDay).toHaveBeenCalledTimes(2);
+
+    const kandyVisit = buildVisit({
+      id: "visit-kandy-only",
+      customerName: "Kandy Fresh Co",
+      assignmentCount: 0,
+    });
+    const colomboVisit = buildVisit({
+      id: "visit-colombo-only",
+      customerName: "Colombo Stale Co",
+      assignmentCount: 0,
+    });
+
+    // The newer requests answer first — realistic under any real network,
+    // where request order and response order are not the same.
+    resolveNewerVisits?.({ items: [kandyVisit], total: 1, page: 1, pageSize: 200 });
+    resolveNewerOperations?.(buildOperationsDay({ summary: { ...buildOperationsDay().summary, total: 22 } }));
+    expect(await screen.findByText("Kandy Fresh Co")).toBeInTheDocument();
+    expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("22");
+
+    // The older, stale requests finally answer. Neither may overwrite what
+    // the newer requests already put on screen.
+    resolveOlderVisits?.({ items: [colomboVisit], total: 1, page: 1, pageSize: 200 });
+    resolveOlderOperations?.(buildOperationsDay({ summary: { ...buildOperationsDay().summary, total: 11 } }));
+    await Promise.resolve();
+    expect(screen.queryByText("Colombo Stale Co")).not.toBeInTheDocument();
+    expect(screen.getByText("Kandy Fresh Co")).toBeInTheDocument();
+    expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("22");
   });
 });

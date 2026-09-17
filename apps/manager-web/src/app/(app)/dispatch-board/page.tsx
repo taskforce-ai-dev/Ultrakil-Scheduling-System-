@@ -72,8 +72,16 @@ export default function DispatchBoardPage() {
   const [selectedVisitId, setSelectedVisitId] = React.useState<string | null>(null);
   const [editVisitId, setEditVisitId] = React.useState<string | null>(null);
   const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
+  // Stepping the date or switching branch fires a new load before an older
+  // one has answered — for both fetches below, independently, since they run
+  // in parallel rather than one after the other. Without a fence, whichever
+  // response lands last wins, which is not necessarily the one for what is
+  // now on screen. One counter fences both, since they always start together
+  // from the same load() call.
+  const requestGeneration = React.useRef(0);
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     fetchVisits({
@@ -83,6 +91,7 @@ export default function DispatchBoardPage() {
       ...(branch === "ALL" ? {} : { branchCode: branch }),
     })
       .then(async (page) => {
+        if (generation !== requestGeneration.current) return;
         setVisits(page.items);
         // Only visits the API already says have a live assignment are worth a
         // round trip — assignmentCount === 0 already tells us the answer.
@@ -90,23 +99,31 @@ export default function DispatchBoardPage() {
         const pairs = await Promise.all(
           toFetch.map(async (visit) => [visit.id, await fetchVisitAssignment(visit.id)] as const)
         );
+        if (generation !== requestGeneration.current) return;
         setAssignments(Object.fromEntries(pairs));
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
 
     fetchOperationsDay({
       date,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
     })
-      .then(setOperations)
-      .catch(() => setOperations(null));
+      .then((response) => {
+        if (generation === requestGeneration.current) setOperations(response);
+      })
+      .catch(() => {
+        if (generation === requestGeneration.current) setOperations(null);
+      });
   }, [date, branch]);
 
   React.useEffect(() => {
