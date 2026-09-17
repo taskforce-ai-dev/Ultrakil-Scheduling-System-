@@ -4747,7 +4747,7 @@ export interface operations {
                 /** @description Up to 100 per page. */
                 pageSize?: number;
                 status?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "SUPERSEDED";
-                /** @description Up to 50. Repeat the parameter for more than one id (?ids=a&ids=b) — the API also accepts a single bare id. */
+                /** @description Up to 50. Accepts a repeated parameter (?ids=a&ids=b), one comma-separated value (?ids=a,b — what the manager portal itself sends), or a single bare id. */
                 ids?: string[];
             };
             header?: never;
