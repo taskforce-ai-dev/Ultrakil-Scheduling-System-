@@ -21,7 +21,7 @@ test("publish confirmation dialog has no serious accessibility violations", asyn
   test.setTimeout(180_000);
 
   await page.goto("/schedule-history");
-  await expect(page.getByRole("heading", { name: "Schedule History" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Assign Crew" })).toBeVisible();
 
   const from = await page.locator("#run-from").inputValue();
   const to = await page.locator("#run-to").inputValue();
