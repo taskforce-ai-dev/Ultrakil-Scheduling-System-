@@ -1423,6 +1423,15 @@
         "operationId": "AgreementsController_list",
         "parameters": [
           {
+            "name": "withoutVisits",
+            "required": false,
+            "in": "query",
+            "description": "Only agreements that have generated no visits at all.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "search",
             "required": false,
             "in": "query",
@@ -4295,6 +4304,10 @@
             "type": "boolean",
             "description": "True only when status is ACTIVE."
           },
+          "generatedVisitCount": {
+            "type": "number",
+            "description": "How many visits this agreement has ever generated. Zero on an active agreement means it has produced no work at all, which is invisible on every other screen."
+          },
           "currentVersion": {
             "type": "number",
             "description": "Increments whenever a change would alter the visits produced."
@@ -4392,6 +4405,7 @@
           "endDate",
           "status",
           "isActive",
+          "generatedVisitCount",
           "currentVersion",
           "dayRules",
           "allowedDays",
@@ -5291,6 +5305,16 @@
             "type": "number",
             "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
           },
+          "plannedStartMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is due to leave, on the same scale. Null when nobody is assigned."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -5323,6 +5347,8 @@
           "lockReason",
           "assignmentCount",
           "assignedCrewCount",
+          "plannedStartMinute",
+          "plannedEndMinute",
           "createdAt",
           "updatedAt"
         ]
@@ -5561,6 +5587,16 @@
             "type": "number",
             "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
           },
+          "plannedStartMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is due to leave, on the same scale. Null when nobody is assigned."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -5608,6 +5644,8 @@
           "lockReason",
           "assignmentCount",
           "assignedCrewCount",
+          "plannedStartMinute",
+          "plannedEndMinute",
           "createdAt",
           "updatedAt",
           "origin",
@@ -6618,8 +6656,13 @@
           "proposed": {
             "type": "number"
           },
-          "unassigned": {
-            "type": "number"
+          "awaitingStaffing": {
+            "type": "number",
+            "description": "No crew and no proposal, and nobody has tried: visit status PENDING."
+          },
+          "staffingFailed": {
+            "type": "number",
+            "description": "No crew and no proposal because staffing was attempted and refused: visit status UNASSIGNED."
           },
           "exceptions": {
             "type": "number"
@@ -6632,7 +6675,8 @@
           "total",
           "ready",
           "proposed",
-          "unassigned",
+          "awaitingStaffing",
+          "staffingFailed",
           "exceptions",
           "hoursUnconfirmed"
         ]
@@ -6678,6 +6722,17 @@
           },
           "hoursUnconfirmed": {
             "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SCHEDULED",
+              "UNASSIGNED",
+              "COMPLETED",
+              "CANCELLED"
+            ],
+            "description": "The visit's own stage, which is how every screen names it. The day item's `state` answers a different question — whether there is anything to dispatch — and its UNASSIGNED covers both a visit nobody has tried to staff (PENDING) and one the scheduler tried and could not (UNASSIGNED). A client needs this to tell a manager which."
           }
         },
         "required": [
@@ -6691,7 +6746,8 @@
           "durationMinutes",
           "windowStartMinute",
           "windowEndMinute",
-          "hoursUnconfirmed"
+          "hoursUnconfirmed",
+          "status"
         ]
       },
       "OperationsCrewMemberDto": {

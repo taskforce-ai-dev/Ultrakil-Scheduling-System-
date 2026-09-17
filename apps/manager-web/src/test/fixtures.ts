@@ -169,6 +169,7 @@ export function buildServiceAgreement(overrides: Partial<ServiceAgreement> = {})
     endDate: null,
     status: "ACTIVE",
     isActive: true,
+    generatedVisitCount: 4,
     currentVersion: 1,
     dayRules: [
       { weekday: "MONDAY", kind: "ALLOWED" },
@@ -237,6 +238,8 @@ export function buildVisit(overrides: Partial<Visit> = {}): Visit {
     lockReason: null,
     assignmentCount: 0,
     assignedCrewCount: 0,
+    plannedStartMinute: null,
+    plannedEndMinute: null,
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,

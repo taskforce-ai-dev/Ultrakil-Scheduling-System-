@@ -37,6 +37,11 @@ const AGREEMENT_INCLUDE = {
   dayRules: true,
   requiredSkills: true,
   bookings: { orderBy: { bookedDate: 'asc' } },
+  // How many visits this agreement has ever produced. An active agreement
+  // that has produced none is invisible everywhere else in the portal — it
+  // appears on no calendar, in no queue and in no run — so the list that does
+  // show it has to be able to say so.
+  _count: { select: { generatedVisits: true } },
 } satisfies Prisma.ServiceAgreementInclude;
 
 @Injectable()
@@ -61,6 +66,9 @@ export class AgreementsService {
       ...(query.serviceSiteId ? { serviceSiteId: query.serviceSiteId } : {}),
       ...(query.jobTypeId ? { jobTypeId: query.jobTypeId } : {}),
       ...(query.frequencyUnit ? { frequencyUnit: query.frequencyUnit } : {}),
+      // Its own key, deliberately: `activeOn` and `search` already contend for
+      // the one top-level OR.
+      ...(query.withoutVisits ? { generatedVisits: { none: {} } } : {}),
       ...(query.activeOn
         ? {
             startDate: { lte: parseDateOnly(query.activeOn) },

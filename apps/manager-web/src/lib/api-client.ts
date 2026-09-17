@@ -107,6 +107,12 @@ export interface OperationsVisit {
   windowEndMinute: number | null;
   hoursUnconfirmed: boolean;
   branchCode: BranchCode | "";
+  /**
+   * The visit's own stage, which is the vocabulary every screen uses. Null
+   * when the server did not send one this client recognises — the row still
+   * renders, it just cannot claim which kind of unstaffed it is.
+   */
+  status: VisitStatus | null;
 }
 
 export interface OperationsCrewMember {
@@ -201,7 +207,10 @@ export interface OperationsSummary {
   total: number;
   ready: number;
   proposed: number;
-  unassigned: number;
+  /** Nobody has tried to staff these yet. */
+  awaitingStaffing: number;
+  /** Staffing was attempted on these and refused. */
+  staffingFailed: number;
   exceptions: number;
   hoursUnconfirmed: number;
 }
@@ -243,6 +252,18 @@ export type ApplyPublishedAssignmentRepairRequest =
 export type PublishedAssignmentRepairResult = Json<
   paths["/api/operations/published-assignment-repairs/apply"]["post"]["responses"]["200"]
 >;
+
+/**
+ * The visit statuses this client knows. A row carrying anything else is still
+ * shown; it just does not get named with a word that might be wrong.
+ */
+const VISIT_STATUSES = new Set<VisitStatus>([
+  "PENDING",
+  "SCHEDULED",
+  "UNASSIGNED",
+  "COMPLETED",
+  "CANCELLED",
+]);
 
 const OPERATION_STATES = new Set<OperationState>([
   "READY",
@@ -466,6 +487,9 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
       branchCode: ["COLOMBO", "KANDY"].includes(asString(visitRecord.branchCode))
         ? (visitRecord.branchCode as BranchCode)
         : "",
+      status: VISIT_STATUSES.has(asString(visitRecord.status) as VisitStatus)
+        ? (visitRecord.status as VisitStatus)
+        : null,
     },
     state,
     // An unknown state cannot safely be treated as dispatch truth, even when
@@ -502,7 +526,8 @@ export function parseOperationsDay(payload: unknown): OperationsDayResponse {
       total: asNumber(summary.total),
       ready: asNumber(summary.ready),
       proposed: asNumber(summary.proposed),
-      unassigned: asNumber(summary.unassigned),
+      awaitingStaffing: asNumber(summary.awaitingStaffing),
+      staffingFailed: asNumber(summary.staffingFailed),
       exceptions: asNumber(summary.exceptions),
       hoursUnconfirmed: asNumber(summary.hoursUnconfirmed),
     },

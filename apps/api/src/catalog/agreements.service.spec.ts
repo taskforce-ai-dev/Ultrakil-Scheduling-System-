@@ -70,6 +70,7 @@ function agreementRow(overrides: Record<string, unknown> = {}) {
     dayRules: [{ id: 'day-1', weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
     requiredSkills: [],
     bookings: [],
+    _count: { generatedVisits: 0 },
     ...overrides,
   };
 }
@@ -292,5 +293,61 @@ describe('AgreementsService explicit reactivation', () => {
       service.changeStatus(AGREEMENT_ID, { status: AgreementStatus.ACTIVE }, actor),
     ).rejects.toMatchObject({ code: 'AGREEMENT_ARCHIVED' });
     expect(tx.serviceAgreement.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An active agreement that has produced nothing has to be findable.
+ *
+ * Two testers raised the same customer independently: an active two-monthly
+ * agreement with no generated visits in September, October, November or
+ * December. It appears on no calendar, in no queue and in no run — the only
+ * screen that can show it at all is the list of agreements, so the list has
+ * to carry the fact and be able to narrow to it.
+ */
+describe('AgreementsService listing agreements that have generated nothing', () => {
+  function listFixture(rows: ReturnType<typeof agreementRow>[]) {
+    type Args = { where: Record<string, unknown> };
+    const findMany = jest.fn(async (_args: Args) => rows);
+    const count = jest.fn(async (_args: Args) => rows.length);
+    const prisma = { serviceAgreement: { findMany, count } };
+    const service = new AgreementsService(
+      prisma as unknown as PrismaService,
+      { record: jest.fn() } as unknown as AuditService,
+    );
+    return { service, findMany, count };
+  }
+
+  it('reports how many visits each agreement has ever generated', async () => {
+    const { service } = listFixture([
+      agreementRow({ _count: { generatedVisits: 0 } }),
+    ]);
+
+    const page = await service.list({});
+
+    expect(page.items[0]).toMatchObject({
+      status: AgreementStatus.ACTIVE,
+      isActive: true,
+      generatedVisitCount: 0,
+    });
+  });
+
+  it('narrows to the agreements that have generated nothing when asked', async () => {
+    const { service, findMany, count } = listFixture([]);
+
+    await service.list({ withoutVisits: true });
+
+    const where = findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ generatedVisits: { none: {} } });
+    // The total has to be the filtered total, or the pager lies about it.
+    expect(count.mock.calls[0][0].where).toEqual(where);
+  });
+
+  it('asks for no such narrowing by default', async () => {
+    const { service, findMany } = listFixture([]);
+
+    await service.list({});
+
+    expect(findMany.mock.calls[0][0].where).not.toHaveProperty('generatedVisits');
   });
 });

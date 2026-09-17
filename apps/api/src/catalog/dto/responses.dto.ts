@@ -229,6 +229,13 @@ export class ServiceAgreementDto {
 
   @ApiProperty({
     type: Number,
+    description:
+      'How many visits this agreement has ever generated. Zero on an active agreement means it has produced no work at all, which is invisible on every other screen.',
+  })
+  generatedVisitCount!: number;
+
+  @ApiProperty({
+    type: Number,
     description: 'Increments whenever a change would alter the visits produced.',
   })
   currentVersion!: number;

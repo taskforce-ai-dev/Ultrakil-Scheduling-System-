@@ -1635,6 +1635,8 @@ export interface components {
             status: "ACTIVE" | "PAUSED" | "ARCHIVED";
             /** @description True only when status is ACTIVE. */
             isActive: boolean;
+            /** @description How many visits this agreement has ever generated. Zero on an active agreement means it has produced no work at all, which is invisible on every other screen. */
+            generatedVisitCount: number;
             /** @description Increments whenever a change would alter the visits produced. */
             currentVersion: number;
             dayRules: components["schemas"]["ServiceAgreementDayRuleDto"][];
@@ -1962,6 +1964,10 @@ export interface components {
             assignmentCount: number;
             /** @description How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize. */
             assignedCrewCount: number;
+            /** @description When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong. */
+            plannedStartMinute: number | null;
+            /** @description When the crew is due to leave, on the same scale. Null when nobody is assigned. */
+            plannedEndMinute: number | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -2056,6 +2062,10 @@ export interface components {
             assignmentCount: number;
             /** @description How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize. */
             assignedCrewCount: number;
+            /** @description When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong. */
+            plannedStartMinute: number | null;
+            /** @description When the crew is due to leave, on the same scale. Null when nobody is assigned. */
+            plannedEndMinute: number | null;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -2350,7 +2360,10 @@ export interface components {
             total: number;
             ready: number;
             proposed: number;
-            unassigned: number;
+            /** @description No crew and no proposal, and nobody has tried: visit status PENDING. */
+            awaitingStaffing: number;
+            /** @description No crew and no proposal because staffing was attempted and refused: visit status UNASSIGNED. */
+            staffingFailed: number;
             exceptions: number;
             hoursUnconfirmed: number;
         };
@@ -2369,6 +2382,11 @@ export interface components {
             windowStartMinute: number;
             windowEndMinute: number;
             hoursUnconfirmed: boolean;
+            /**
+             * @description The visit's own stage, which is how every screen names it. The day item's `state` answers a different question — whether there is anything to dispatch — and its UNASSIGNED covers both a visit nobody has tried to staff (PENDING) and one the scheduler tried and could not (UNASSIGNED). A client needs this to tell a manager which.
+             * @enum {string}
+             */
+            status: "PENDING" | "SCHEDULED" | "UNASSIGNED" | "COMPLETED" | "CANCELLED";
         };
         OperationsCrewMemberDto: {
             /** Format: uuid */
@@ -3809,6 +3827,8 @@ export interface operations {
     AgreementsController_list: {
         parameters: {
             query?: {
+                /** @description Only agreements that have generated no visits at all. */
+                withoutVisits?: boolean;
                 search?: string;
                 /** @description Only agreements in force on this date. */
                 activeOn?: string;

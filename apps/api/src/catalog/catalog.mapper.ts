@@ -34,6 +34,7 @@ export type AgreementWithRelations = Prisma.ServiceAgreementGetPayload<{
     dayRules: true;
     requiredSkills: true;
     bookings: true;
+    _count: { select: { generatedVisits: true } };
   };
 }>;
 
@@ -167,6 +168,7 @@ export function toAgreementDto(
     endDate: agreement.endDate ? toDateOnly(agreement.endDate) : null,
     status: agreement.status,
     isActive: agreement.status === 'ACTIVE',
+    generatedVisitCount: agreement._count.generatedVisits,
     currentVersion: agreement.currentVersion,
     dayRules: agreement.dayRules.map((rule) => ({
       weekday: rule.weekday,

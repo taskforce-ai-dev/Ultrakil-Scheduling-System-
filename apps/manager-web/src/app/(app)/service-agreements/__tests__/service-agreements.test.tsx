@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -382,6 +382,61 @@ describe("ServiceAgreementsPage", () => {
     expect(await screen.findByText("Harbour Logistics")).toBeInTheDocument();
     expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Archived");
+  });
+
+  /**
+   * An active agreement that has generated nothing must not be invisible.
+   *
+   * Synthetic Client 79 has an active two-monthly agreement and zero visits
+   * in September, October, November and December. It appears on no calendar,
+   * in no queue and in no schedule run — there is nothing of it to appear —
+   * and two testers raised it independently before anything on screen said a
+   * word about it. This list is the only place that can.
+   */
+  it("marks an agreement that has generated no visits, and gathers them behind a filter", async () => {
+    const barren = buildServiceAgreement({
+      id: "agreement-barren",
+      customerName: "Synthetic Client 79",
+      siteName: "Rear Store",
+      status: "ACTIVE",
+      isActive: true,
+      generatedVisitCount: 0,
+    });
+    vi.mocked(fetchServiceAgreements).mockImplementation((query) =>
+      Promise.resolve(
+        query?.withoutVisits
+          ? { items: [barren], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingAgreement, barren], total: 2, page: 1, pageSize: 200 }
+      )
+    );
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Synthetic Client 79");
+
+    // Said on the row, in words, without being asked for.
+    const barrenRow = screen.getByRole("row", { name: /Synthetic Client 79/ });
+    expect(within(barrenRow).getByText("No visits generated")).toBeInTheDocument();
+    // And not said about an agreement that has produced work.
+    const healthyRow = screen.getByRole("row", { name: /Cinnamon Grand Colombo/ });
+    expect(within(healthyRow).queryByText("No visits generated")).toBeNull();
+
+    // The default look asks the server for everything, not only these.
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.not.objectContaining({ withoutVisits: expect.anything() })
+    );
+
+    expect(screen.getByLabelText("Visits generated")).toHaveTextContent("Any");
+    await user.click(screen.getByLabelText("Visits generated"));
+    await user.click(await screen.findByRole("option", { name: "None generated" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Cinnamon Grand Colombo")).toBeNull();
+    });
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.objectContaining({ withoutVisits: true })
+    );
+    expect(screen.getByText("Synthetic Client 79")).toBeInTheDocument();
   });
 
   it("reaches archived agreements through the Status filter and labels them in text (ULK-O08)", async () => {

@@ -114,6 +114,22 @@ const AGREEMENT_STATUS_FILTER_LABEL: Record<AgreementStatusFilter, string> = {
 };
 
 /**
+ * An agreement that has generated nothing is invisible everywhere else.
+ *
+ * Two testers found the same customer independently: an active two-monthly
+ * agreement with no visits in September, October, November or December. It
+ * appears on no calendar, in no queue and in no schedule run — there is
+ * nothing of it to appear — so the only screen that can raise it is this one.
+ * The row says so, and this filter gathers them.
+ */
+type VisitsFilter = "ANY" | "NONE";
+const VISITS_FILTER_LABEL: Record<VisitsFilter, string> = {
+  ANY: "Any",
+  NONE: "None generated",
+};
+const NO_VISITS_LABEL = "No visits generated";
+
+/**
  * An agreement's *own* service window, or a plain statement that it has none.
  *
  * Never substitute the site's hours (or a default like 08:00–17:00) as if they
@@ -180,6 +196,7 @@ export default function ServiceAgreementsPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<AgreementStatusFilter>("CURRENT");
+  const [visitsFilter, setVisitsFilter] = React.useState<VisitsFilter>("ANY");
   // Switching the filter fires a second list request while the first may still
   // be in flight; without this an older response can land last and repopulate
   // the table with the rows the manager just filtered away.
@@ -251,6 +268,7 @@ export default function ServiceAgreementsPage() {
       fetchServiceAgreements({
         pageSize: 200,
         ...(statusFilter === "ARCHIVED" ? { status: "ARCHIVED" as const } : {}),
+        ...(visitsFilter === "NONE" ? { withoutVisits: true } : {}),
       }),
       fetchCustomers({ pageSize: 200 }),
       fetchJobTypes(),
@@ -274,7 +292,7 @@ export default function ServiceAgreementsPage() {
       .finally(() => {
         if (generation === requestGeneration.current) setIsLoading(false);
       });
-  }, [statusFilter]);
+  }, [statusFilter, visitsFilter]);
 
   // A handler that awaited a request resumes holding the `load` of the render
   // it started in. If the Status filter changed meanwhile, that stale `load`
@@ -446,6 +464,23 @@ export default function ServiceAgreementsPage() {
             </SelectContent>
           </Select>
         </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="agreements-visits">Visits generated</Label>
+          <Select
+            items={VISITS_FILTER_LABEL}
+            value={visitsFilter}
+            onValueChange={(value) => setVisitsFilter((value ?? "ANY") as VisitsFilter)}
+          >
+            <SelectTrigger id="agreements-visits" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ANY">{VISITS_FILTER_LABEL.ANY}</SelectItem>
+              <SelectItem value="NONE">{VISITS_FILTER_LABEL.NONE}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {isLoading ? (
@@ -521,9 +556,20 @@ export default function ServiceAgreementsPage() {
                   {agreement.preferredDays.map((day) => WEEKDAY_SHORT[day]).join(", ") || "—"}
                 </TableCell>
                 <TableCell>
-                  <Badge variant={agreement.status === "ACTIVE" ? "success" : "outline"}>
-                    {STATUS_LABEL[agreement.status]}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant={agreement.status === "ACTIVE" ? "success" : "outline"}>
+                      {STATUS_LABEL[agreement.status]}
+                    </Badge>
+                    {/* In words, never colour alone — and inside the Status
+                        cell rather than an eleventh column, which this table
+                        has no room for at tablet width. */}
+                    {agreement.status !== "ARCHIVED" && agreement.generatedVisitCount === 0 && (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                        {NO_VISITS_LABEL}
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   {agreement.status !== "ARCHIVED" && (
