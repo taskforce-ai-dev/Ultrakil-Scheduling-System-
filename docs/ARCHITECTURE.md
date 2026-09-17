@@ -289,11 +289,24 @@ visit so a manager can see it.
    the plan was made **and** would now end over the cap. Both conditions
    matter: a day the guard already warned about is still generated onto,
    because the guard warns rather than blocks when a visit has nowhere else to
-   go, and a run nobody raced behaves exactly as it always did. The days are
-   locked in one fixed ascending order, after the visit and agreement row
-   locks, so two runs touching the same pair of days queue instead of
+   go, and a run nobody raced behaves exactly as it always did. "Since the plan
+   was made" is the count taken from the very rows the guard planned against,
+   not a second aggregate read a moment apart from them: with the two split, a
+   visit removed in between left the baseline reading twelve and the guard
+   reading eleven, and a thirteenth visit committed with nothing to show for
+   it.
+
+   The days are locked in one fixed ascending order, after the agreement and
+   visit row locks, so two runs touching the same pair of days queue instead of
    deadlocking; a run that proposes no move and a generation that adds nothing
-   take no lock at all. The cost is one lock per day written for the length of
+   take no lock at all. Generation locks the agreements of everything it
+   **adds**, not only of what it changes, and that is not tidiness: a run that
+   only adds locks no visit row at all, and the insert still needs the
+   agreement — Postgres takes a `FOR KEY SHARE` on the referenced row for the
+   foreign key — so it reached the day first and then met an optimizer holding
+   that agreement and waiting for the same day. Postgres called it
+   ("deadlock detected … waits for ExclusiveLock on advisory lock") and killed
+   one of them, which reached the manager as a 500 on Generate. The cost is one lock per day written for the length of
    one transaction — a month's generation holds thirty-odd of them for a
    second, and only against another planner writing the same days. And it
    binds the system's own planners only: a manager moving one visit by hand is

@@ -27,7 +27,11 @@ import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
-import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
+import {
+  assertVisitRevision,
+  lockScheduleAgreements,
+  lockScheduleVisits,
+} from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
@@ -46,6 +50,14 @@ import {
 } from './plan';
 import { AgreementPeriodShape, honourProtectedDates } from './protected-periods';
 import { AgreementLifetime, leftStandingBy, thisRunsToJudge } from './run-scope';
+
+/** What one read of the run's horizon tells it: see {@link VisitGenerationService.readTheRange}. */
+interface RangeAsItStands {
+  /** Everything in the range this run will leave exactly where it is. */
+  standing: StandingVisit[];
+  /** How full each branch-day of the range is, by `branchDayKey`. */
+  loadByDay: Map<string, number>;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
@@ -171,27 +183,16 @@ export class VisitGenerationService {
     // created too, and the customer gets both.
     const honoured = honourProtectedDates(planned.required, around, shapes);
 
-    // How full every day in the horizon is before the guard reads a thing.
-    // Kept so `apply` can tell, under the branch-day lock, whether a day it is
-    // about to add to has grown since — the one thing that can turn a plan the
-    // guard certified into a day over the cap. Read *first* on purpose: taken
-    // after the standing read, a visit that landed in between would be in both
-    // pictures and invisible to the comparison, and the day would quietly go
-    // over. Taken before it, the worst that can happen is that the run notices
-    // something it could in fact have lived with.
-    const loadWhenPlanned = actor
-      ? await this.readBranchDayLoad(this.prisma, dto, from, to)
-      : new Map<string, number>();
     // One cross-agreement pass, after every agreement has had its say. Nothing
     // in per-agreement planning can see that forty of them chose the same day,
     // and nothing in this run's own list can see the work already standing in
     // the calendar — so the guard is given both.
-    const standing = await this.loadStandingVisits(dto, agreements, from, to, {
+    const range = await this.readTheRange(dto, agreements, from, to, {
       shapes,
       plannedPeriods: planned.periods,
       lives,
     });
-    const guarded = applyDailyLoadGuard(honoured, this.dailyCap, standing);
+    const guarded = applyDailyLoadGuard(honoured, this.dailyCap, range.standing);
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
     // requirement onto a protected visit outside it — which is dropped from
@@ -218,7 +219,7 @@ export class VisitGenerationService {
 
     let scheduleRunId: string | null = null;
     if (actor) {
-      scheduleRunId = await this.apply(plan, dto, from, to, actor, loadWhenPlanned);
+      scheduleRunId = await this.apply(plan, dto, from, to, actor, range.loadByDay);
     }
 
     return this.toImpact(
@@ -489,7 +490,22 @@ export class VisitGenerationService {
   }
 
   /**
-   * Everything already in the horizon that this run will leave standing.
+   * The horizon as it stands, read once: what this run will leave standing,
+   * and how full each of its days is.
+   *
+   * Two answers from one read, and that is the point of the method rather than
+   * an economy. `apply` decides whether a day it is adding to has grown since
+   * the plan was made, and it can only ask that question against the very
+   * calendar the guard planned against. A second count taken a moment later is
+   * a *different* calendar: with the count read first and the standing set
+   * second, a visit removed in between leaves the baseline reading twelve and
+   * the guard reading eleven, the guard plans its addition, another planner
+   * takes the freed slot, and the commit-time comparison sees twelve against a
+   * baseline of twelve and calls that no growth at all. Measured: a thirteenth
+   * visit committed on a day capped at twelve, with no warning. One statement
+   * is one snapshot, and the question stays answerable.
+   *
+   * ## What is standing
    *
    * Deliberately not limited to the agreements in scope. A run asked about one
    * agreement still has to see the other eleven visits on the Monday it is
@@ -519,7 +535,7 @@ export class VisitGenerationService {
    * will do, and pushed the next agreement onto a day it had no reason to be
    * on.
    */
-  private async loadStandingVisits(
+  private async readTheRange(
     dto: GenerateVisitsDto,
     agreements: AgreementForGeneration[],
     from: Date,
@@ -529,18 +545,11 @@ export class VisitGenerationService {
       plannedPeriods: Map<string, Set<number>>;
       lives: Map<string, AgreementLifetime>;
     },
-  ): Promise<StandingVisit[]> {
+  ): Promise<RangeAsItStands> {
     const inScope = new Set(agreements.map((agreement) => agreement.id));
 
     const visits = await this.prisma.generatedVisit.findMany({
-      where: {
-        visitDate: { gte: from, lte: to },
-        // Cancelled work occupies no part of the day. Everything else does.
-        status: { not: VisitStatus.CANCELLED },
-        // Branch isolation: a Kandy day says nothing about a Colombo one, and
-        // a run scoped to a branch has no business reading the other's book.
-        ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),
-      },
+      where: this.theRangeCounted(dto, from, to),
       select: {
         serviceAgreementId: true,
         branchCode: true,
@@ -552,7 +561,16 @@ export class VisitGenerationService {
       },
     });
 
-    return visits
+    // Every row, whoever it belongs to and whether or not this run judges it:
+    // a day is as full as the work on it. Counted before anything is filtered
+    // out, because the filter below is about *authorship*, and the cap is not.
+    const loadByDay = new Map<string, number>();
+    for (const visit of visits) {
+      const key = branchDayKey(visit.branchCode, toDateOnly(visit.visitDate));
+      loadByDay.set(key, (loadByDay.get(key) ?? 0) + 1);
+    }
+
+    const standing = visits
       .map((visit) => ({
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
@@ -574,6 +592,28 @@ export class VisitGenerationService {
         branchCode: visit.branchCode,
         visitDate: visit.visitDate,
       }));
+
+    return { standing, loadByDay };
+  }
+
+  /**
+   * The rows a branch-day's load is counted from — here and in the
+   * transaction, from one definition so the two cannot drift apart.
+   *
+   * Cancelled work occupies no part of the day; everything else does. Branch
+   * isolation: a Kandy day says nothing about a Colombo one, and a run scoped
+   * to a branch has no business reading the other's book.
+   */
+  private theRangeCounted(
+    dto: GenerateVisitsDto,
+    from: Date,
+    to: Date,
+  ): Prisma.GeneratedVisitWhereInput {
+    return {
+      visitDate: { gte: from, lte: to },
+      status: { not: VisitStatus.CANCELLED },
+      ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),
+    };
   }
 
   /**
@@ -689,7 +729,11 @@ export class VisitGenerationService {
    * - **the day grew.** If it carries exactly what it carried when the plan
    *   was made, no one has raced this run and the plan is as good as it was.
    *   This is what keeps the ordinary case — every generation that is not
-   *   racing anything — behaving exactly as before.
+   *   racing anything — behaving exactly as before. "When the plan was made"
+   *   is `readTheRange`'s own count, taken from the rows the load guard was
+   *   handed; an aggregate read a moment apart from those rows is a different
+   *   calendar, and a removal landing between the two hid a later addition
+   *   well enough to commit a thirteenth visit on a day capped at twelve.
    * - **and it would now end over the cap.** A day the guard already reported
    *   as over the cap, and could do nothing about, is still allowed to be
    *   generated onto: `applyDailyLoadGuard` warns rather than blocks there,
@@ -709,6 +753,7 @@ export class VisitGenerationService {
     to: Date,
     plan: GenerationPlan,
     changing: Map<string, { branchCode: BranchCode }>,
+    /** Each day's load in the same read the guard planned against. */
     loadWhenPlanned: Map<string, number>,
   ): Promise<void> {
     // A run that adds nothing cannot make a day fuller, so it queues behind
@@ -736,10 +781,11 @@ export class VisitGenerationService {
       delta.set(key, (delta.get(key) ?? 0) - 1);
     }
 
-    // After `lockScheduleVisits` above, and in the same sorted order the
-    // optimizer takes them in: the two writers must agree on the sequence or
-    // they deadlock instead of queueing. Only the days this run adds to are
-    // locked — a day it only removes from can only get emptier.
+    // Last of the three, after the agreement and visit rows `apply` has
+    // already locked, and in the sorted order `lockBranchDays` imposes: the
+    // two writers must agree on the whole sequence or they deadlock instead of
+    // queueing. Only the days this run adds to are locked — a day it only
+    // removes from can only get emptier.
     await lockBranchDays(tx, [...days.values()]);
     const loadNow = await this.readBranchDayLoad(tx, dto, from, to);
 
@@ -761,18 +807,18 @@ export class VisitGenerationService {
   }
 
   /**
-   * How many visits each branch-day of the horizon carries, by `branchDayKey`.
+   * How many visits each branch-day of the horizon carries, read inside the
+   * transaction that is about to add to it.
    *
-   * One method, two readers: the plan reads it through the ordinary client to
-   * learn what it is planning into, and `apply` reads it again inside its
-   * transaction, under the branch-day locks, to learn whether that has
-   * changed. Both must count a day the same way or the comparison means
-   * nothing, which is why they share these lines rather than resembling each
-   * other.
+   * The plan-time half of the comparison is not another call to this: it is
+   * counted from the rows {@link readTheRange} already fetched, so that the
+   * baseline and the guard's own picture are one snapshot rather than two
+   * moments. What both halves share is `theRangeCounted` — the same rows, the
+   * same basis, and no way for the two to drift into counting different days.
    *
-   * The basis is the load guard's own, and the optimizer's: every visit
+   * That basis is the load guard's own, and the optimizer's: every visit
    * standing on the day that is not cancelled, whatever agreement it belongs
-   * to and whoever put it there. Cancelled work occupies no part of a day.
+   * to and whoever put it there.
    */
   private async readBranchDayLoad(
     client: Prisma.TransactionClient,
@@ -782,11 +828,7 @@ export class VisitGenerationService {
   ): Promise<Map<string, number>> {
     const rows = await client.generatedVisit.groupBy({
       by: ['branchCode', 'visitDate'],
-      where: {
-        visitDate: { gte: from, lte: to },
-        status: { not: VisitStatus.CANCELLED },
-        ...(dto.branchCode ? { branchCode: dto.branchCode } : {}),
-      },
+      where: this.theRangeCounted(dto, from, to),
       _count: { _all: true },
     });
     return new Map(
@@ -821,6 +863,27 @@ export class VisitGenerationService {
 
     return this.prisma.$transaction(async (tx) => {
       const changes = [...plan.updates, ...plan.removals];
+      // Agreements first, then visits, then — inside the cap check — the
+      // branch-days. That is the order `ScheduleRunService.persistResult`
+      // takes, and both writers have to take it or they deadlock instead of
+      // queueing.
+      //
+      // **Additions are the reason this is here at all.** A run that only adds
+      // changes no visit, so it locks no visit row, and used to reach the
+      // branch-day lock holding nothing. The insert that follows still needs
+      // the agreement — Postgres takes a `FOR KEY SHARE` on the referenced row
+      // for the foreign key — and the optimizer holds that row `FOR UPDATE`
+      // from the start of its own transaction while it waits for the same day.
+      // Postgres named the cycle exactly: "Process A waits for ShareLock on
+      // transaction …; Process B waits for ExclusiveLock on advisory lock
+      // [… 1430998084 …]", and killed one of the two. Locking the agreement
+      // here, before the day, means this run waits at the same place the
+      // optimizer does instead of meeting it head on.
+      await lockScheduleAgreements(tx, [
+        ...plan.additions.map((addition) => addition.required.serviceAgreementId),
+        ...plan.updates.map((update) => update.required.serviceAgreementId),
+        ...plan.removals.map((removal) => removal.serviceAgreementId),
+      ]);
       await lockScheduleVisits(
         tx,
         changes.map((change) => change.visitId),

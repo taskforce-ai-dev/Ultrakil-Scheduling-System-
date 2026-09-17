@@ -44,6 +44,7 @@ import {
   branchDayLockKey,
   lockBranchDays,
 } from '../../src/scheduling/optimizer/branch-day-lock';
+import { lockScheduleAgreements } from '../../src/scheduling/optimizer/schedule-visit-lock';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -64,6 +65,7 @@ const ADMIN = {
  */
 const RACE_WEEK = { from: '2029-03-05', to: '2029-03-11' };
 const WAIT_WEEK = { from: '2029-03-12', to: '2029-03-18' };
+const DEADLOCK_WEEK = { from: '2029-03-19', to: '2029-03-25' };
 const RACE_DAY = RACE_WEEK.from;
 const WAIT_DAY = WAIT_WEEK.from;
 const at = (date: string) => new Date(`${date}T00:00:00.000Z`);
@@ -88,6 +90,8 @@ let runs: ScheduleRunService;
 let branchId: string;
 let customerId: string;
 let jobTypeId: string;
+/** Work on the days that belongs to no run these tests make. */
+let fillerAgreementId: string;
 const agreementIds: string[] = [];
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
@@ -203,6 +207,26 @@ async function waitUntilBlockedOn(date: string): Promise<void> {
     await sleep(100);
   }
   throw new Error(`Nothing ever waited for the ${date} branch-day lock.`);
+}
+
+/** Someone is parked on a lock over one of the two tables the writers share. */
+async function somethingIsBlocked(): Promise<boolean> {
+  const rows = await prisma.$queryRaw<{ blocked: bigint }[]>`
+    SELECT count(*) AS blocked
+    FROM pg_stat_activity
+    WHERE wait_event_type = 'Lock'
+      AND (query ILIKE '%service_agreements%' OR query ILIKE '%generated_visits%')
+  `;
+  return Number(rows[0]?.blocked ?? 0) > 0;
+}
+
+/** Give a writer up to ten seconds to reach a lock it cannot have yet. */
+async function waitUntilSomethingBlocks(): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await somethingIsBlocked()) return;
+    await sleep(100);
+  }
+  throw new Error('Nothing ever blocked on an agreement or a visit.');
 }
 
 /**
@@ -322,9 +346,9 @@ beforeAll(async () => {
   });
   customerId = customer.id;
 
-  const filler = await makeAgreement('filler', RACE_WEEK.from);
-  await fillDay(filler, RACE_DAY, FILLERS);
-  await fillDay(filler, WAIT_DAY, FILLERS);
+  fillerAgreementId = await makeAgreement('filler', RACE_WEEK.from);
+  await fillDay(fillerAgreementId, RACE_DAY, FILLERS);
+  await fillDay(fillerAgreementId, WAIT_DAY, FILLERS);
 }, 300_000);
 
 afterAll(async () => {
@@ -375,6 +399,7 @@ afterAll(async () => {
       OR: [
         { rangeStart: at(RACE_WEEK.from), rangeEnd: at(RACE_WEEK.to) },
         { rangeStart: at(WAIT_WEEK.from), rangeEnd: at(WAIT_WEEK.to) },
+        { rangeStart: at(DEADLOCK_WEEK.from), rangeEnd: at(DEADLOCK_WEEK.to) },
       ],
     },
   });
@@ -476,10 +501,17 @@ describe('a writer already holding the branch-day', () => {
     await waitUntilBlockedOn(WAIT_DAY);
 
     // The last slot, taken by the other writer while the run waits.
+    //
+    // On the filler's agreement, not this run's, and the distinction is a rule
+    // rather than a detail: a writer that takes a branch-day and *then* wants
+    // an agreement is holding the two in the opposite order to everything
+    // else here, and Postgres would rightly deadlock it against a generation
+    // that locked the agreement first. The holder stands for another planner
+    // filling the day, and another planner has its own agreements.
     await holder.releaseAfter(async (tx) => {
       await tx.generatedVisit.create({
         data: {
-          serviceAgreementId: agreementId,
+          serviceAgreementId: fillerAgreementId,
           branchId,
           branchCode: BranchCode.COLOMBO,
           visitDate: at(WAIT_DAY),
@@ -589,4 +621,84 @@ describe('a writer already holding the branch-day', () => {
 
     await holder.releaseAfter(async () => undefined);
   }, 120_000);
+});
+
+/**
+ * The two writers take the same locks in the same order, or they meet head on.
+ *
+ * `persistResult` locks the agreement `FOR UPDATE` first and waits for the
+ * branch-day last. Generation locked neither when all it had to do was *add* a
+ * visit: with nothing changing, there was no visit row to lock and no
+ * agreement row either — and the insert that followed still needed the
+ * agreement, because Postgres takes a `FOR KEY SHARE` on the referenced row
+ * for the foreign key. So generation held the day and wanted the agreement
+ * while the optimizer held the agreement and wanted the day. Postgres named it
+ * exactly and killed one of them:
+ *
+ *   deadlock detected — Process A waits for ShareLock on transaction …;
+ *   Process B waits for ExclusiveLock on advisory lock [… 1430998084 …]
+ *
+ * which reached the manager as a 500 on Generate.
+ */
+describe('a writer that took the agreement first', () => {
+  it('is queued behind, not deadlocked with, a generation that only adds', async () => {
+    const agreementId = await makeAgreement('deadlock', DEADLOCK_WEEK.from);
+    const day = DEADLOCK_WEEK.from;
+
+    let release: () => void = () => undefined;
+    const mayRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let heldTheDay = false;
+    let holderError: unknown;
+
+    // The optimizer's own order, using the optimizer's own helpers: the
+    // agreement first, then — after this run has had every chance to get
+    // ahead of it — the branch-day.
+    const holder = other
+      .$transaction(
+        async (tx) => {
+          await lockScheduleAgreements(tx, [agreementId]);
+          await mayRelease;
+          await lockBranchDays(tx, [{ branchCode: BranchCode.COLOMBO, date: day }]);
+          heldTheDay = true;
+        },
+        { timeout: 60_000, maxWait: 30_000 },
+      )
+      .catch((error: unknown) => {
+        holderError = error;
+      });
+    await sleep(500);
+
+    // A brand-new agreement over a week nothing has been generated for: the
+    // plan is one addition and nothing else, which is the case that used to
+    // reach the branch-day holding no agreement at all.
+    const confirm = request(http)
+      .post('/api/visit-generation/confirm')
+      .set(auth())
+      .send({
+        ...DEADLOCK_WEEK,
+        branchCode: BranchCode.COLOMBO,
+        serviceAgreementIds: [agreementId],
+      })
+      .then((response) => response);
+
+    // Generation gets as far as it can while the agreement row is held, and
+    // then waits — for the agreement, not holding the day.
+    await waitUntilSomethingBlocks();
+    release();
+
+    const [response] = await Promise.all([confirm, holder]);
+
+    expect(holderError).toBeUndefined();
+    expect(heldTheDay).toBe(true);
+    expect(response.status).toBe(200);
+
+    // And the run really did the thing that needs the agreement.
+    const visits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: agreementId },
+      select: { visitDate: true },
+    });
+    expect(visits).toHaveLength(1);
+  }, 180_000);
 });
