@@ -39,6 +39,7 @@ import {
   StartScheduleRunDto,
 } from './dto';
 import { PublishingService } from './publishing.service';
+import { ApiScheduleRunQuery } from './query.swagger';
 import { ScheduleRunDispatchService } from './schedule-run-dispatch.service';
 import {
   SCHEDULE_RUN_DISPATCHER,
@@ -208,6 +209,7 @@ export class ScheduleRunsController {
 
   @Get('schedule-runs')
   @ApiOperation({ summary: 'Past and current schedule runs' })
+  @ApiScheduleRunQuery()
   @ApiResponse({ status: 200, type: PaginatedScheduleRunsDto })
   async list(
     @Query() query: ScheduleRunQueryDto,

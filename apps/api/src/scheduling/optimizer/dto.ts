@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchCode, LockScope, ScheduleRunStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -139,8 +139,16 @@ export class ScheduleRunQueryDto {
   @IsEnum(ScheduleRunStatus)
   status?: ScheduleRunStatus;
 
-  @ApiPropertyOptional({ type: [String], format: 'uuid' })
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description:
+      'Repeat the parameter for more than one id (?ids=a&ids=b). Express parses a single occurrence as a bare string rather than a one-element array, so that case is coerced here too.',
+  })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === undefined || Array.isArray(value) ? value : [value],
+  )
   @IsArray()
   @ArrayMaxSize(50)
   @IsUUID('4', { each: true })
