@@ -63,7 +63,8 @@ describe("operations day contract parser", () => {
       total: 0,
       ready: 0,
       proposed: 0,
-      unassigned: 0,
+      awaitingStaffing: 0,
+      staffingFailed: 0,
       exceptions: 0,
       hoursUnconfirmed: 0,
     });
@@ -71,6 +72,10 @@ describe("operations day contract parser", () => {
     expect(parsed.items[0].state).toBe("UNASSIGNED");
     expect(parsed.items[0].dispatchAssignment).toBeNull();
     expect(parsed.items[0].visit.windowStartMinute).toBeNull();
+    // A row with no recognised visit status is not given one. The badge falls
+    // back to a word that is true of any unstaffed visit rather than guessing
+    // between "nobody tried" and "the attempt failed".
+    expect(parsed.items[0].visit.status).toBeNull();
   });
 
   it("does not treat a proposal snapshot as published dispatch truth", () => {

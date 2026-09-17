@@ -101,7 +101,11 @@ export class OperationsService {
         total: items.length,
         ready: countState(items, 'READY'),
         proposed: countState(items, 'PROPOSED'),
-        unassigned: countState(items, 'UNASSIGNED'),
+        // One number per fact. See OperationsSummaryDto: both of these were
+        // "unassigned", and a manager reading that number as the backlog was
+        // reading past the work nobody had attempted.
+        awaitingStaffing: countUnstaffed(items, VisitStatus.PENDING),
+        staffingFailed: countUnstaffed(items, VisitStatus.UNASSIGNED),
         exceptions: countState(items, 'EXCEPTION'),
         hoursUnconfirmed: items.filter((item) => item.visit.hoursUnconfirmed).length,
       },
@@ -189,6 +193,7 @@ export class OperationsService {
         windowStartMinute: visit.windowStartMinute,
         windowEndMinute: visit.windowEndMinute,
         hoursUnconfirmed: operationWarnings.some((warning) => warning.code === 'HOURS_UNCONFIRMED'),
+        status: visit.status,
       },
       state,
       dispatchAssignment: dispatch ? snapshot(dispatch, visit) : null,
@@ -385,6 +390,16 @@ function warnings(
 
 function countState(items: OperationsDayItemDto[], state: OperationsDayItemDto['state']): number {
   return items.filter((item) => item.state === state).length;
+}
+/**
+ * The UNASSIGNED bucket, split by the visit's own stage.
+ *
+ * `state` says there is nothing to dispatch; `visit.status` says whether that
+ * is because nobody has tried yet or because the attempt failed. Counted off
+ * both so a row can never be added to a total the badge beside it contradicts.
+ */
+function countUnstaffed(items: OperationsDayItemDto[], status: VisitStatus): number {
+  return items.filter((item) => item.state === 'UNASSIGNED' && item.visit.status === status).length;
 }
 function resources(raw: object | undefined = {}): ConflictDto['resources'] {
   const value = raw as Record<string, unknown>;

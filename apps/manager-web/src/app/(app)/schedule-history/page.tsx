@@ -611,7 +611,11 @@ export default function ScheduleHistoryPage() {
                         </dd>
                       </div>
                       <div>
-                        <dt className="inline">Unassigned: </dt>
+                        {/* The run's own word for these was "Unassigned",
+                            which on every other screen now names two
+                            different things. What this number counts is the
+                            work this run tried to staff and could not. */}
+                        <dt className="inline">Staffing failed: </dt>
                         <dd className="inline font-medium text-foreground">
                           {run.visitsUnassigned}
                         </dd>

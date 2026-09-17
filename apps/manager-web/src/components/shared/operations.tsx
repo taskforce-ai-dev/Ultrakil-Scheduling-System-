@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock3, Info, Users, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { VISIT_STATUS_LABEL } from "@/components/shared/visit-badges";
 import { formatDayRange, formatStamp, formatStampDay } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 import {
@@ -15,16 +16,47 @@ import {
   type OperationsDayResponse,
   type OperationsPublishedAssignmentProvenance,
   type OperationsScheduleVersion,
+  type OperationsVisit,
 } from "@/lib/api-client";
 
-const STATE_LABELS: Record<OperationState, string> = {
+/**
+ * What to call each operational state.
+ *
+ * UNASSIGNED is missing on purpose. This enum answers "is there anything to
+ * dispatch", and its UNASSIGNED covers two facts the rest of the portal names
+ * separately: a visit nobody has tried to staff, and one the scheduler tried
+ * and could not. Calling both "Unassigned" here was the last place the old
+ * vocabulary survived, and it sat on the same Dispatch Board screen as a table
+ * saying "Awaiting staffing" and "Staffing failed" about the very same rows.
+ * {@link unstaffedLabel} reads the visit's own status instead, from the one
+ * map that names a visit status anywhere in this portal.
+ */
+const STATE_LABELS: Record<Exclude<OperationState, "UNASSIGNED">, string> = {
   READY: "Ready",
   PROPOSED: "Proposed",
-  UNASSIGNED: "Unassigned",
   EXCEPTION: "Exception",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
+
+/**
+ * Which kind of unstaffed, in the portal's own words.
+ *
+ * A visit with no assignment whose status is neither of the two unstaffed
+ * ones is a contradiction the read model should never produce — and if it
+ * ever does, "No crew yet" is the one thing that is certainly true of it.
+ * VISIT_STATUS_LABEL.SCHEDULED would read "Crew assigned" beside a row that
+ * plainly has none.
+ */
+function unstaffedLabel(status: OperationsVisit["status"]): string {
+  if (status === "PENDING") return VISIT_STATUS_LABEL.PENDING;
+  if (status === "UNASSIGNED") return VISIT_STATUS_LABEL.UNASSIGNED;
+  return "No crew yet";
+}
+
+function stateLabel(state: OperationState, status: OperationsVisit["status"]): string {
+  return state === "UNASSIGNED" ? unstaffedLabel(status) : STATE_LABELS[state];
+}
 
 const STATE_VARIANTS: Record<OperationState, "success" | "outline" | "destructive" | "secondary"> = {
   READY: "success",
@@ -40,11 +72,17 @@ function StateIcon({ state }: { state: OperationState }) {
   return <Icon className="h-3 w-3" aria-hidden="true" />;
 }
 
-export function OperationStateBadge({ state }: { state: OperationState }) {
+export function OperationStateBadge({
+  state,
+  visitStatus = null,
+}: {
+  state: OperationState;
+  visitStatus?: OperationsVisit["status"];
+}) {
   return (
     <Badge variant={STATE_VARIANTS[state]}>
       <StateIcon state={state} />
-      {STATE_LABELS[state]}
+      {stateLabel(state, visitStatus)}
     </Badge>
   );
 }
@@ -280,7 +318,7 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
             {item.visit.siteName} · {item.visit.jobTypeName}
           </p>
         </div>
-        <OperationStateBadge state={item.state} />
+        <OperationStateBadge state={item.state} visitStatus={item.visit.status} />
       </div>
       <AssignmentSummary item={item} />
       <p className="mt-2 text-sm">
@@ -295,16 +333,20 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
 }
 
 export function OperationsSummaryCards({ summary }: { summary: OperationsDayResponse["summary"] }) {
+  // Seven numbers, each one fact. The old six put "Unassigned" where two of
+  // these are now, and a manager reading that one number as the backlog read
+  // straight past the work nobody had attempted.
   const cards = [
     ["Total", summary.total],
     ["Ready", summary.ready],
     ["Proposed", summary.proposed],
-    ["Unassigned", summary.unassigned],
+    [VISIT_STATUS_LABEL.PENDING, summary.awaitingStaffing],
+    [VISIT_STATUS_LABEL.UNASSIGNED, summary.staffingFailed],
     ["Exceptions", summary.exceptions],
     ["Hours unconfirmed", summary.hoursUnconfirmed],
   ] as const;
   return (
-    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {cards.map(([label, value]) => (
         <div key={label} className="rounded-lg border bg-card p-3">
           <dt className="text-xs text-muted-foreground">{label}</dt>

@@ -106,7 +106,8 @@ describe('OperationsService', () => {
         total: 1,
         ready: 1,
         proposed: 0,
-        unassigned: 0,
+        awaitingStaffing: 0,
+        staffingFailed: 0,
         exceptions: 0,
         hoursUnconfirmed: 0,
       },
@@ -175,6 +176,46 @@ describe('OperationsService', () => {
       'SITE_BRANCH_UNCONFIRMED',
     ]);
     expect(result.summary.hoursUnconfirmed).toBe(1);
+  });
+
+  /**
+   * Two facts, two numbers.
+   *
+   * The day's UNASSIGNED state means only "there is nothing to dispatch". It
+   * covers a visit nobody has tried to staff and a visit the scheduler tried
+   * and could not, and the queue strip reported their sum under one word
+   * while every other screen named them apart. Counted separately here, at
+   * the one place that owns the totals, so no client has to re-derive them
+   * from whichever rows it is holding.
+   */
+  it('counts work nobody has attempted apart from work that failed to be staffed', async () => {
+    const untried = visit({ id: 'untried', status: VisitStatus.PENDING });
+    const failed = visit({
+      id: 'failed',
+      status: VisitStatus.UNASSIGNED,
+      unassignedReasons: [{ code: 'CREW_TOO_SMALL', message: 'Crew is short', details: null }],
+    });
+    const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
+      assignment: { findMany: jest.fn().mockResolvedValue([]) },
+      generatedVisit: { findMany: jest.fn().mockResolvedValue([untried, failed]) },
+    };
+    const service = new OperationsService(prisma as never, { evaluate: jest.fn() } as never);
+
+    const result = await service.day({ date: '2026-09-10' });
+
+    expect(result.summary).toMatchObject({
+      total: 2,
+      awaitingStaffing: 1,
+      staffingFailed: 1,
+    });
+    // Both are the same operational state — nothing to dispatch — and the
+    // visit's own status is what tells them apart, so it travels with the row.
+    expect(result.items.map((item) => item.state)).toEqual(['UNASSIGNED', 'UNASSIGNED']);
+    expect(result.items.map((item) => item.visit.status)).toEqual([
+      VisitStatus.PENDING,
+      VisitStatus.UNASSIGNED,
+    ]);
   });
 
   it('makes competing live proposals a deterministic exception without confusing one for dispatch truth', async () => {

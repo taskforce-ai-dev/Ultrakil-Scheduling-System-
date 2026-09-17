@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AssignmentStatus, BranchCode } from '@prisma/client';
+import { AssignmentStatus, BranchCode, VisitStatus } from '@prisma/client';
 import { IsEnum, IsOptional } from 'class-validator';
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
@@ -172,6 +172,12 @@ export class OperationsVisitDto {
   @ApiProperty({ type: Number }) windowStartMinute!: number;
   @ApiProperty({ type: Number }) windowEndMinute!: number;
   @ApiProperty({ type: Boolean }) hoursUnconfirmed!: boolean;
+  @ApiProperty({
+    enum: VisitStatus,
+    description:
+      "The visit's own stage, which is how every screen names it. The day item's `state` answers a different question — whether there is anything to dispatch — and its UNASSIGNED covers both a visit nobody has tried to staff (PENDING) and one the scheduler tried and could not (UNASSIGNED). A client needs this to tell a manager which.",
+  })
+  status!: VisitStatus;
 }
 
 export class OperationsDayItemDto {
@@ -191,11 +197,32 @@ export class OperationsDayItemDto {
   publishedAssignmentLineage!: OperationsPublishedAssignmentLineageDto;
 }
 
+/**
+ * The day's counts.
+ *
+ * "Unassigned" used to be one number here, and it was two facts: visits
+ * nobody has tried to staff yet and visits the scheduler tried and could not.
+ * Every other screen names those separately, because a manager who reads the
+ * second number as the whole backlog goes home believing the untried work is
+ * covered. The strip that shows these counts now names them the same way, so
+ * the one number is split at its source rather than being re-derived by
+ * whichever client happens to be looking.
+ */
 export class OperationsSummaryDto {
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) ready!: number;
   @ApiProperty({ type: Number }) proposed!: number;
-  @ApiProperty({ type: Number }) unassigned!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'No crew and no proposal, and nobody has tried: visit status PENDING.',
+  })
+  awaitingStaffing!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'No crew and no proposal because staffing was attempted and refused: visit status UNASSIGNED.',
+  })
+  staffingFailed!: number;
   @ApiProperty({ type: Number }) exceptions!: number;
   @ApiProperty({ type: Number }) hoursUnconfirmed!: number;
 }

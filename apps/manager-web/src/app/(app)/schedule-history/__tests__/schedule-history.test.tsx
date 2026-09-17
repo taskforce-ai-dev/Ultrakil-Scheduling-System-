@@ -605,7 +605,7 @@ describe("a visit-generation run in the history", () => {
     expect(await screen.findByText(/105 visits considered/)).toBeInTheDocument();
     expect(screen.queryByText(/105 visits generated/)).not.toBeInTheDocument();
     expect(screen.queryByText("Scheduled: ")).not.toBeInTheDocument();
-    expect(screen.queryByText("Unassigned: ")).not.toBeInTheDocument();
+    expect(screen.queryByText("Staffing failed: ")).not.toBeInTheDocument();
   });
 
   it("does not claim a second run over the same range generated them all again", async () => {

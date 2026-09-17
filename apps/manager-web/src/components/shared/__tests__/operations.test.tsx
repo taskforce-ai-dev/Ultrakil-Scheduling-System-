@@ -6,7 +6,7 @@ import { parseOperationsDay } from "@/lib/api-client";
 
 const day = parseOperationsDay({
   date: "2026-09-10",
-  summary: { total: 3, ready: 1, proposed: 1, unassigned: 0, exceptions: 1, hoursUnconfirmed: 1 },
+  summary: { total: 3, ready: 1, proposed: 1, awaitingStaffing: 0, staffingFailed: 0, exceptions: 1, hoursUnconfirmed: 1 },
   items: [
     {
       visit: { id: "ready", customerName: "Ready customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false },
@@ -39,6 +39,85 @@ const day = parseOperationsDay({
       scheduleVersion: { status: "PUBLISHED" },
     },
   ],
+});
+
+/**
+ * The queue strip was the last place in the portal that still said
+ * "Unassigned" — on the same Dispatch Board screen as a table saying
+ * "Awaiting staffing" and "Staffing failed" about the very same rows. The
+ * word covered two different facts, and a coordinator reading it as the
+ * backlog read straight past the work nobody had attempted.
+ */
+const unstaffedDay = parseOperationsDay({
+  date: "2026-09-21",
+  summary: { total: 2, ready: 0, proposed: 0, awaitingStaffing: 1, staffingFailed: 1, exceptions: 0, hoursUnconfirmed: 0 },
+  items: [
+    {
+      visit: { id: "untried", customerName: "Untried customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false, status: "PENDING" },
+      state: "UNASSIGNED",
+      dispatchAssignment: null,
+      proposedAssignment: null,
+      violations: [],
+      warnings: [],
+      nextAction: "Assign an eligible crew.",
+      scheduleVersion: null,
+    },
+    {
+      visit: { id: "refused", customerName: "Refused customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false, status: "UNASSIGNED" },
+      state: "UNASSIGNED",
+      dispatchAssignment: null,
+      proposedAssignment: null,
+      violations: [{ code: "CREW_TOO_SMALL", message: "Only one of the two required crew members was proposed." }],
+      warnings: [],
+      nextAction: "Resolve crew too small before assigning a crew.",
+      scheduleVersion: null,
+    },
+  ],
+});
+
+describe("the queue strip's vocabulary", () => {
+  it("names the two kinds of unstaffed work instead of calling both Unassigned", () => {
+    render(<OperationsDayPanel data={unstaffedDay} />);
+
+    const untried = screen.getByText("Untried customer").closest("li")!;
+    expect(within(untried).getByText("Awaiting staffing")).toBeInTheDocument();
+
+    const refused = screen.getByText("Refused customer").closest("li")!;
+    expect(within(refused).getByText("Staffing failed")).toBeInTheDocument();
+
+    expect(screen.queryByText("Unassigned")).not.toBeInTheDocument();
+  });
+
+  it("counts them apart on the summary strip, in the same words as the rows", () => {
+    render(<OperationsDayPanel data={unstaffedDay} />);
+
+    const strip = screen.getByText("Total").closest("dl")!;
+    expect(within(strip).getByText("Awaiting staffing").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).getByText("Staffing failed").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).queryByText("Unassigned")).not.toBeInTheDocument();
+  });
+
+  it("does not guess which kind it is when the server named no visit status", () => {
+    const unknown = parseOperationsDay({
+      date: "2026-09-21",
+      summary: { total: 1, ready: 0, proposed: 0, awaitingStaffing: 0, staffingFailed: 0, exceptions: 0, hoursUnconfirmed: 0 },
+      items: [
+        {
+          visit: { id: "mystery", customerName: "Mystery customer", siteName: "Site", jobTypeName: "Job" },
+          state: "UNASSIGNED",
+          dispatchAssignment: null,
+          proposedAssignment: null,
+          violations: [],
+          warnings: [],
+          nextAction: "Assign an eligible crew.",
+        },
+      ],
+    });
+    render(<OperationsDayPanel data={unknown} />);
+
+    const row = screen.getByText("Mystery customer").closest("li")!;
+    expect(within(row).getByText("No crew yet")).toBeInTheDocument();
+  });
 });
 
 describe("OperationsDayPanel", () => {
