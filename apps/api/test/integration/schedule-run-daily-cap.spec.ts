@@ -132,8 +132,8 @@ async function datesByVisit(): Promise<Map<string, string>> {
 /**
  * What the ledger counted, from outside the service that builds it.
  *
- * `readDailyLoad` is private, and rightly so: nothing but the persistence
- * transaction has any business building a ledger. But the "not cancelled" half
+ * `lockAndReadDailyLoad` is private, and rightly so: nothing but the
+ * persistence transaction has any business building a ledger. But the "not cancelled" half
  * of its counting basis is invisible from out here — the solve below never
  * cancels anything, so a build with that filter deleted passes every other
  * assertion in this file. This shape is the narrowest reach that can tell the
@@ -141,7 +141,7 @@ async function datesByVisit(): Promise<Map<string, string>> {
  * signature still breaks the suite.
  */
 type DailyLoadReader = {
-  readDailyLoad(
+  lockAndReadDailyLoad(
     tx: PrismaClient,
     proposals: {
       branchCode: BranchCode;
@@ -498,7 +498,7 @@ describe('a branch-day at the cap, one of its visits cancelled', () => {
     // If this is not the cap, the fixture is not the day the test describes.
     expect(rows).toBe(DEFAULT_DAILY_VISIT_CAP);
 
-    const ledger = await capReader(runs).readDailyLoad(prisma, [
+    const ledger = await capReader(runs).lockAndReadDailyLoad(prisma, [
       {
         branchCode: BranchCode.COLOMBO,
         visitDate: new Date(`${RANGE.to}T00:00:00.000Z`),

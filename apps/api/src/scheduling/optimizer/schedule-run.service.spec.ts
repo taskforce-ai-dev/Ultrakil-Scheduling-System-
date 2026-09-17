@@ -15,6 +15,10 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import {
+  BRANCH_DAY_LOCK_CLASS,
+  branchDayLockKey,
+} from './branch-day-lock';
+import {
   ScheduleRunJobData,
   ScheduleRunProcessor,
 } from './schedule-run.processor';
@@ -371,6 +375,9 @@ function fixture(
     assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
+    // The branch-day advisory lock. It returns a row count rather than rows,
+    // which is why it is `$executeRaw` and not the `$queryRaw` the row locks use.
+    $executeRaw: jest.fn(async () => 1),
     $queryRaw: jest.fn(async (query: Prisma.Sql) =>
       query.sql.includes('generated_visits')
         ? [{ id: visit.id }]
@@ -1834,9 +1841,35 @@ describe('the daily-cap backstop on a solver move', () => {
 
     // A run that proposes no move asks the database nothing extra. The cap is
     // a rule about moving work, so a solve that only staffs what is already
-    // dated pays nothing for it.
+    // dated pays nothing for it — and takes no branch-day lock, so it never
+    // queues behind a run that is actually moving something.
     expect(f.generatedVisit.groupBy).not.toHaveBeenCalled();
+    expect(f.tx.$executeRaw).not.toHaveBeenCalled();
     expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+  });
+
+  it('holds the day it is moving on to before it counts what stands there', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // The count is an aggregate and locks nothing, so reading it before the
+    // day is held would let two runs over disjoint work both see room for one
+    // and both take it. The lock names the destination day, in this codebase's
+    // own advisory scheme, and it is asked for first.
+    const [lock] = f.tx.$executeRaw.mock.calls;
+    expect(lock.slice(1)).toEqual([
+      BRANCH_DAY_LOCK_CLASS,
+      branchDayLockKey(BranchCode.COLOMBO, '2027-03-04'),
+    ]);
+    expect(f.tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      f.generatedVisit.groupBy.mock.invocationCallOrder[0],
+    );
   });
 });
 

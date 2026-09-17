@@ -270,6 +270,35 @@ visit so a manager can see it.
    depends on a remote service behaving is not an invariant, so the API-side
    refusal is required either way and is where the rule lives.
 
+   **Two writers, one day.** Both halves of the rule count a day and then
+   write, and a count locks nothing: at READ COMMITTED two transactions over
+   disjoint visits, agreements and crews can both read a day as carrying
+   eleven and both commit their twelfth. The row locks each already takes are
+   on what it is *changing*, and an addition creates a row nobody could have
+   locked in advance. Measured before it was closed: two
+   `POST /visit-generation/confirm` calls fired together at a COLOMBO day
+   carrying eleven, each for an agreement the other knew nothing about, both
+   answered 200 and left thirteen visits on the day — with no warning, since
+   neither run ever saw the other's. So both writers now take a
+   transaction-scoped advisory lock on the branch-day itself
+   (`lockBranchDays`, keyed by branch and date so no two days contend) before
+   reading the day's load and until they commit: the optimizer on every day a
+   move could land on, generation on every day it adds to. Generation reads
+   the load again under that lock and refuses the whole run — *preview again
+   before confirming* — when the day it was about to add to has grown since
+   the plan was made **and** would now end over the cap. Both conditions
+   matter: a day the guard already warned about is still generated onto,
+   because the guard warns rather than blocks when a visit has nowhere else to
+   go, and a run nobody raced behaves exactly as it always did. The days are
+   locked in one fixed ascending order, after the visit and agreement row
+   locks, so two runs touching the same pair of days queue instead of
+   deadlocking; a run that proposes no move and a generation that adds nothing
+   take no lock at all. The cost is one lock per day written for the length of
+   one transaction — a month's generation holds thirty-odd of them for a
+   second, and only against another planner writing the same days. And it
+   binds the system's own planners only: a manager moving one visit by hand is
+   still free to, which is the rule stated at the top of this document.
+
 ### What a period is
 
 A period is a **whole ISO week (Monday to Sunday) or a whole calendar month**,

@@ -19,6 +19,7 @@ import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { lockBranchDays } from './branch-day-lock';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import {
   branchDayKey,
@@ -945,8 +946,9 @@ export class ScheduleRunService {
           );
         }
         // What every branch-day this run would move work between carries
-        // right now, read inside the transaction that commits the moves.
-        const ledger = await this.readDailyLoad(tx, proposals);
+        // right now, read inside the transaction that commits the moves, and
+        // under a lock on every day a move could land on.
+        const ledger = await this.lockAndReadDailyLoad(tx, proposals);
         let scheduled = 0;
         let rejected = 0;
         for (const entry of proposals) {
@@ -1079,14 +1081,51 @@ export class ScheduleRunService {
    *
    * Only the days a move could touch are read: its origin, which a committed
    * move empties by one, and its destination. A run that proposes no move
-   * reads nothing at all.
+   * reads nothing at all — and takes no lock, because a run that moves nothing
+   * changes no day's load and has no business queueing behind one that does.
+   *
+   * ## Why the count is locked before it is read
+   *
+   * The count is an aggregate, and an aggregate locks nothing. At READ
+   * COMMITTED two runs over disjoint visits, agreements and crews could both
+   * read a day as carrying eleven and both commit their twelfth, leaving
+   * thirteen on a day whose cap is twelve; none of the row locks above
+   * serialise that, because neither run touches anything the other holds.
+   * {@link lockBranchDays} gives the day itself a name to contend for, and it
+   * is held until this transaction commits, so a count read after it is a
+   * count that cannot change underneath the moves it authorises.
+   *
+   * Only the *destinations* are locked, not the origins. A day's count is
+   * consulted for one purpose — deciding whether a move may land on it — and
+   * every day a move can land on is a destination. An origin that is not also
+   * a destination is never asked how full it is; an origin that is also a
+   * destination is locked on that account. Reading an unlocked origin can
+   * therefore only ever leave the ledger with a stale idea of a day nobody
+   * asks about.
+   *
+   * The lock binds the two writers that plan days — this one and generation's
+   * `apply`. It cannot bind a manager moving one visit by hand, and is not
+   * meant to: `docs/ARCHITECTURE.md` has always said the cap constrains what
+   * the system does on its own.
    */
-  private async readDailyLoad(
+  private async lockAndReadDailyLoad(
     tx: Prisma.TransactionClient,
     proposals: ProposedAssignment[],
   ): Promise<DailyLoadLedger> {
     const moves = proposals.filter((entry) => entry.proposedVisit !== undefined);
     if (moves.length === 0) return new DailyLoadLedger(new Map(), this.dailyCap);
+
+    // Taken after the visit, agreement and resource locks, and in the sorted
+    // order `lockBranchDays` imposes: every schedule writer takes these locks
+    // in the same sequence, which is what keeps two runs over the same days
+    // queueing rather than deadlocking.
+    await lockBranchDays(
+      tx,
+      moves.map((entry) => ({
+        branchCode: entry.branchCode,
+        date: dateOnly(entry.proposedVisit!.visitDate),
+      })),
+    );
 
     const branchCodes = [...new Set(moves.map((entry) => entry.branchCode))];
     const dates = [
