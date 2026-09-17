@@ -34,6 +34,7 @@ import {
   buildServiceAgreement,
   buildServiceSite,
 } from "@/test/fixtures";
+import { formatDurationMinutes } from "@/lib/calendar";
 
 // The site is open Mon 06:00-22:00 and Wed 08:00-18:00 — deliberately
 // different hours, so the read-only summary can prove it shows each
@@ -544,5 +545,72 @@ describe("ServiceAgreementsPage", () => {
     // And no invented window: not the other agreement's, and not a default
     // like 08:00-17:00 dressed up as this agreement's fact.
     expect(within(noWindowRow).queryByText(/AM|PM/)).toBeNull();
+  });
+
+  describe("job duration slider", () => {
+    it("initializes duration from the selected job type's default, in the field, the slider and the readable text", async () => {
+      const user = await openForm();
+
+      await user.click(screen.getByLabelText("Job type"));
+      await user.click(await screen.findByRole("option", { name: "Termite Control" }));
+
+      expect(screen.getByLabelText("Duration (minutes)")).toHaveValue(90);
+      expect(screen.getByText("1 hour 30 minutes")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Job duration" })).toHaveValue("90");
+    });
+
+    it("moves the numeric field in 15-minute steps when the slider is used", async () => {
+      const user = await openForm();
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+
+      // The form's own default (60) before any job type is picked.
+      expect(durationInput).toHaveValue(60);
+
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+      const afterOneStep = Number(durationInput.value);
+      // On the slider's own 15-minute grid (from its min of 1) — not an
+      // arbitrary jump — and moved, not left where it started.
+      expect((afterOneStep - 1) % 15).toBe(0);
+      expect(afterOneStep).toBeGreaterThan(60);
+
+      await user.keyboard("{ArrowRight}");
+      const afterTwoSteps = Number(durationInput.value);
+      expect(afterTwoSteps - afterOneStep).toBe(15);
+      expect(screen.getByText(formatDurationMinutes(afterTwoSteps))).toBeInTheDocument();
+    });
+
+    it("keeps a manager-typed duration exact, without snapping it to the nearest slider step", async () => {
+      const user = await openForm();
+      const durationInput = screen.getByLabelText("Duration (minutes)");
+
+      await user.clear(durationInput);
+      await user.type(durationInput, "47");
+
+      expect(durationInput).toHaveValue(47);
+      expect(screen.getByText("47 minutes")).toBeInTheDocument();
+      // The slider reflects the exact value too — never rounded to a step.
+      expect(screen.getByRole("slider", { name: "Job duration" })).toHaveValue("47");
+    });
+
+    it("rejects a duration past 1440 minutes with the API's own bound, instead of silently clamping it", async () => {
+      const user = await openForm();
+      await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+      await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+
+      const durationInput = screen.getByLabelText("Duration (minutes)");
+      await user.clear(durationInput);
+      await user.type(durationInput, "1500");
+
+      await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+      expect(
+        await screen.findByText("1440 minutes (24 hours) is the longest a single visit can run"),
+      ).toBeInTheDocument();
+      // The manager's own number is still there — not reset or clamped to 1440.
+      expect(durationInput).toHaveValue(1500);
+      expect(createServiceAgreement).not.toHaveBeenCalled();
+    });
   });
 });
