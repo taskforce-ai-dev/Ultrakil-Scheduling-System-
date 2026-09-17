@@ -34,7 +34,6 @@ import {
   buildServiceAgreement,
   buildServiceSite,
 } from "@/test/fixtures";
-import { formatDurationMinutes } from "@/lib/calendar";
 
 // The site is open Mon 06:00-22:00 and Wed 08:00-18:00 — deliberately
 // different hours, so the read-only summary can prove it shows each
@@ -559,26 +558,56 @@ describe("ServiceAgreementsPage", () => {
       expect(screen.getByRole("slider", { name: "Job duration" })).toHaveValue("90");
     });
 
-    it("moves the numeric field in 15-minute steps when the slider is used", async () => {
+    it("moves the numeric field in exact 15-minute steps when the slider is used (60 → 75 → 90)", async () => {
       const user = await openForm();
       const slider = screen.getByRole("slider", { name: "Job duration" });
       const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
 
-      // The form's own default (60) before any job type is picked.
+      // The form's own default (60) — already on the slider's own grid
+      // (min 15, step 15), so a single step lands on a real quarter-hour.
       expect(durationInput).toHaveValue(60);
 
       slider.focus();
       await user.keyboard("{ArrowRight}");
-      const afterOneStep = Number(durationInput.value);
-      // On the slider's own 15-minute grid (from its min of 1) — not an
-      // arbitrary jump — and moved, not left where it started.
-      expect((afterOneStep - 1) % 15).toBe(0);
-      expect(afterOneStep).toBeGreaterThan(60);
+      expect(durationInput).toHaveValue(75);
+      expect(screen.getByText("1 hour 15 minutes")).toBeInTheDocument();
 
       await user.keyboard("{ArrowRight}");
-      const afterTwoSteps = Number(durationInput.value);
-      expect(afterTwoSteps - afterOneStep).toBe(15);
-      expect(screen.getByText(formatDurationMinutes(afterTwoSteps))).toBeInTheDocument();
+      expect(durationInput).toHaveValue(90);
+      expect(screen.getByText("1 hour 30 minutes")).toBeInTheDocument();
+    });
+
+    it("moves a job type's own default in the same exact steps (90 → 105)", async () => {
+      const user = await openForm();
+      await user.click(screen.getByLabelText("Job type"));
+      await user.click(await screen.findByRole("option", { name: "Termite Control" }));
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+      expect(durationInput).toHaveValue(90);
+
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+
+      expect(durationInput).toHaveValue(105);
+      expect(screen.getByText("1 hour 45 minutes")).toBeInTheDocument();
+    });
+
+    it("moves an off-grid manager-typed duration onto the slider's real grid once the slider is operated", async () => {
+      const user = await openForm();
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+
+      await user.clear(durationInput);
+      await user.type(durationInput, "47");
+      expect(durationInput).toHaveValue(47);
+
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+
+      // Base UI rounds the off-grid 47 to its nearest grid point (45) before
+      // applying the step, landing on 60 rather than 47 + 15 = 62.
+      expect(durationInput).toHaveValue(60);
+      expect(screen.getByText("1 hour")).toBeInTheDocument();
     });
 
     it("keeps a manager-typed duration exact, without snapping it to the nearest slider step", async () => {

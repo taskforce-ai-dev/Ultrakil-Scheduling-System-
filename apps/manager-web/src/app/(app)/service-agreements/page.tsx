@@ -241,9 +241,11 @@ export default function ServiceAgreementsPage() {
   // The slider's own displayed position only — never what's actually saved.
   // A manager who types 47 keeps exactly 47 in the field and on submission;
   // this just gives the thumb a valid, in-range spot to sit at meanwhile.
+  // Floored at 15, not 1: the slider's own min is 15 (see below) so its grid
+  // lands on real quarter-hours — 15, 30, 45… — instead of 1, 16, 31…
   const sliderDurationMinutes = Number.isFinite(durationMinutes)
-    ? Math.min(Math.max(durationMinutes, 1), 1440)
-    : 1;
+    ? Math.min(Math.max(durationMinutes, 15), 1440)
+    : 15;
   // A half-typed number field reads back NaN; say nothing rather than
   // "NaN times a week".
   const cadencePreview =
@@ -894,7 +896,14 @@ export default function ServiceAgreementsPage() {
                   />
                   <Slider
                     aria-label="Job duration"
-                    min={1}
+                    // A quarter-hour grid has to start on a quarter-hour: with
+                    // min={1} the grid was 1, 16, 31… — a step off true 15s,
+                    // so Arrow Right from the 60-minute default landed on 76,
+                    // not 75. min=15 makes every step a real 15/30/45/60…
+                    // The field itself still keeps the API's real 1-1440
+                    // bound — this only changes where the slider's own steps
+                    // fall.
+                    min={15}
                     max={1440}
                     step={15}
                     value={sliderDurationMinutes}
