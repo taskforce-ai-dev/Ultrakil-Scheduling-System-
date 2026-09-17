@@ -11,6 +11,7 @@ import {
 import { AuditService, PrismaLike } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
+import { lockAgreementRows } from '../common/locks/agreement-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { anchorDaysFrom } from '../scheduling/visit-generation/anchors';
 import {
@@ -272,6 +273,13 @@ export class AgreementsService {
     });
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Same order every other writer touching `service_agreements` keeps —
+      // the agreement itself before anything hanging off it. The importer now
+      // locks the agreement before touching its day rules; deleting the day
+      // rules here first, before this row was locked, waited on the same
+      // agreement from the opposite direction and deadlocked against it.
+      await lockAgreementRows(tx, [id]);
+
       if (dto.allowedDays || dto.preferredDays) {
         await tx.serviceAgreementDayRule.deleteMany({
           where: { serviceAgreementId: id },
