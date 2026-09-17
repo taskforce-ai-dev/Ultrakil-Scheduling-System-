@@ -126,14 +126,22 @@ this section exists because of got in: generation locking a branch-day while
 holding no agreement, and the importer updating a customer's agreements in the
 order the spreadsheet happens to list them.
 
-Two writers need no ordering discipline, and it is worth saying why rather than
-leaving the next person to wonder. `ServiceAgreementsService` — create, update,
-status change, reactivation — writes **exactly one agreement row per
-transaction**, and its other writes are new rows (a version, an audit entry) or
-children of the row it already holds, so it has nothing to invert with. The
-repair path, the assignments service and the eligibility engine never write or
-lock an agreement row at all; they read them through relation includes, which
-takes no lock.
+One writer needs no ordering discipline, and it is worth saying why rather than
+leaving the next person to wonder. The repair path, the assignments service and
+the eligibility engine never write or lock an agreement row at all; they read
+them through relation includes, which takes no lock.
+
+`ServiceAgreementsService` writes **exactly one agreement row per
+transaction** — create, update, status change, reactivation — so it has
+nothing to invert *between agreements*. It still has to take that single row's
+lock before touching that row's own children, the same as everyone else:
+`update` deletes an agreement's day-rule and required-skill rows before it
+updates the agreement itself, and the importer holds the agreement first, then
+replaces the same day-rule rows as a nested write. Deleting the children before
+the parent is locked queues behind the importer from the opposite direction —
+found running a manager's edit against a concurrent re-import — so `update`
+now calls `lockAgreementRows(tx, [id])` before either `deleteMany`, a
+single-row use of the same helper rather than a rule of its own.
 
 Advisory locks are cooperative, and the row locks only bind writers that take
 them, so none of this constrains a manager moving one visit by hand through

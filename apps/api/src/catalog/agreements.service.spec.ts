@@ -107,6 +107,8 @@ function fixture(row = agreementRow()) {
     serviceAgreementDayRule: { deleteMany: jest.fn() },
     serviceAgreementRequiredSkill: { deleteMany: jest.fn() },
     serviceAgreementVersion: { create: jest.fn() },
+    // The agreement-row lock `update()` takes before touching its children.
+    $queryRaw: jest.fn(async () => [{ id: row.id }]),
   };
 
   const audit = { record: jest.fn() };
