@@ -1117,6 +1117,98 @@ describe('a scoped run and a full run reach the same calendar', () => {
   });
 });
 
+describe('a new agreement, generated on its own, never moves another agreement\'s visit', () => {
+  /** Small enough that one existing visit already fills the day. */
+  const cappedAtOne = () =>
+    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
+      get: (key: string) => (key === 'visitGeneration.dailyCap' ? 1 : undefined),
+    } as unknown as ConfigService);
+
+  it("plans the new agreement's visits without touching the existing agreement's", async () => {
+    const week = { from: '2027-05-03', to: '2027-05-09' }; // Monday-Sunday
+    await prisma.generatedVisit.deleteMany({
+      where: {
+        branchCode: BranchCode.KANDY,
+        visitDate: {
+          gte: new Date(`${week.from}T00:00:00.000Z`),
+          lte: new Date(`${week.to}T00:00:00.000Z`),
+        },
+      },
+    });
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 New Agreement ${suffix}`, branchCode: BranchCode.KANDY });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({
+        name: `C04 New Agreement Site ${suffix}`,
+        branchCode: BranchCode.KANDY,
+        // Both agreements below allow the same two weekdays, so the new one
+        // has somewhere else to go once the guard finds the first already
+        // full — an agreement allowed only one day has no alternative to
+        // spread to at all, which would prove nothing about not touching a
+        // neighbour.
+        operatingHours: [Weekday.WEDNESDAY, Weekday.THURSDAY].map((weekday) => ({
+          weekday,
+          opensAtMinute: 540,
+          closesAtMinute: 1020,
+        })),
+      });
+
+    const existing = await createAgreement({
+      serviceSiteId: site.body.id,
+      allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+      preferredDays: [Weekday.WEDNESDAY],
+    });
+    const generation = cappedAtOne();
+    const actor = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN.email } });
+
+    // The existing agreement, generated and settled first — one visit, on
+    // the branch-day's one and only slot at this cap.
+    await generation.confirm({ ...week, serviceAgreementIds: [existing.id] }, actor);
+    const before = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: existing.id },
+    });
+    expect(before).toHaveLength(1);
+
+    // A brand-new agreement, over the same site and the same preferred day,
+    // generated scoped to itself alone — the shape of "a manager just added
+    // a customer".
+    const created = await createAgreement({
+      serviceSiteId: site.body.id,
+      allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+      preferredDays: [Weekday.WEDNESDAY],
+    });
+    await generation.confirm({ ...week, serviceAgreementIds: [created.id] }, actor);
+
+    // The existing agreement's visit is exactly what it was — same id, same
+    // date, same revision. A scoped run for someone else never moved it,
+    // even though the new agreement wanted the identical day and the day
+    // could hold only one.
+    const after = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: existing.id },
+    });
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      id: before[0].id,
+      visitDate: before[0].visitDate,
+    });
+    expect(after[0].updatedAt.getTime()).toBe(before[0].updatedAt.getTime());
+
+    // The new agreement was still served — the guard found it somewhere
+    // else, or it is honestly reported unassigned. Either is fine; the only
+    // wrong outcome is a moved neighbour.
+    const newVisits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: created.id },
+    });
+    for (const visit of newVisits) {
+      expect(visit.visitDate.getTime()).not.toBe(before[0].visitDate.getTime());
+    }
+  });
+});
+
 describe('a range that cuts a month in half', () => {
   /**
    * The portal's month view used to hand generation the calendar *grid* —
