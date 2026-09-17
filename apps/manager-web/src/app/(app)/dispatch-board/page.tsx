@@ -86,6 +86,12 @@ export default function DispatchBoardPage() {
     const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
+    // The visits/assignments side already hides behind the loading skeleton
+    // while isLoading is true, but this panel has no such gate — it renders
+    // whenever `operations` is non-null. Left alone, the previous date or
+    // branch's totals would stay on screen, now mislabeled under whatever is
+    // newly selected, until the new response lands.
+    setOperations(null);
     fetchVisits({
       from: date,
       to: date,
