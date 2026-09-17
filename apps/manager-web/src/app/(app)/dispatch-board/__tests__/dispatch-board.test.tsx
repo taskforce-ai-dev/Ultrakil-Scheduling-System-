@@ -288,6 +288,30 @@ describe("dispatch board", () => {
     expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("22");
   });
 
+  it("clears the operations panel immediately on a reload, instead of leaving the old day/branch totals under the new selection", async () => {
+    const user = await renderBoard();
+    expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("0");
+
+    let resolveOperations: ((data: OperationsDayResponse) => void) | undefined;
+    vi.mocked(fetchOperationsDay).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOperations = resolve;
+        })
+    );
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+
+    // Gone the moment the reload starts — not still showing Colombo's totals
+    // relabeled as Kandy's until the new response happens to land.
+    expect(screen.queryByText("Total")).not.toBeInTheDocument();
+
+    resolveOperations?.(buildOperationsDay({ summary: { ...buildOperationsDay().summary, total: 7 } }));
+    expect(await screen.findByText("Total")).toBeInTheDocument();
+    expect(screen.getByText("Total").nextElementSibling).toHaveTextContent("7");
+  });
+
   it("disables Share when there is nothing on the board to share", async () => {
     mockVisits([]);
     render(<DispatchBoardPage />);
