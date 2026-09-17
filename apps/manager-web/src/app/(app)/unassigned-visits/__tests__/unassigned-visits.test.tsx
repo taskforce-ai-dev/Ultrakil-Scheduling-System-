@@ -210,6 +210,51 @@ describe("unassigned visits queue", () => {
     expect(screen.queryByText(/Narrow the branch filter/)).not.toBeInTheDocument();
   });
 
+  /**
+   * The pager, walked end to end on a backlog that actually needs one.
+   *
+   * The pilot dataset has 23 unassigned visits, so the queue never went past
+   * one page in the trial and the pager the banner points at was never
+   * exercised by anyone. 70 visits at 25 a page is three pages: the banner
+   * and the pager have to agree about which one of them a manager is on, and
+   * the ends have to stop — a Previous that steps off page 1, or a Next that
+   * asks the server for page 4 of 3, both answer with an empty list and no
+   * way to tell that from "nothing left to staff".
+   */
+  it("walks a backlog too large for one page, and stops at both ends", async () => {
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall], 70);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+    const user = userEvent.setup();
+
+    // Re-queried each time: every page change puts the list back through its
+    // loading state, so the pager is a new node afterwards.
+    const pager = () => screen.getByRole("navigation", { name: "Unassigned visit pages" });
+    const lastQuery = () => vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+
+    // Banner and pager, one page number between them.
+    expect(screen.getByText(/page 1 of 3\./)).toBeInTheDocument();
+    expect(within(pager()).getByText(/Page 1 of 3/)).toBeInTheDocument();
+    expect(within(pager()).getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(within(pager()).getByRole("button", { name: "Next" })).toBeEnabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/page 2 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 2 });
+    expect(within(pager()).getByText(/Page 2 of 3/)).toBeInTheDocument();
+    expect(within(pager()).getByRole("button", { name: "Previous" })).toBeEnabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/page 3 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 3 });
+    // The last page is the last page: Next must not ask for a fourth.
+    expect(within(pager()).getByRole("button", { name: "Next" })).toBeDisabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Previous" }));
+    expect(await screen.findByText(/page 2 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 2 });
+  });
+
   it("always reports how many there are, even when they all fit on one page", async () => {
     // A filtered queue that fits showed no total at all, so a coordinator
     // could not tell 2 from 2-of-70 without scrolling to look for a pager.
