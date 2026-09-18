@@ -68,19 +68,26 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   await expect(page.getByRole("heading", { name: "Service agreement created" })).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByText("Schedule preview")).toBeVisible();
+  // Stated unconditionally, before the scoped preview even answers.
+  await expect(
+    page.getByText("every other customer's existing schedule is untouched")
+  ).toBeVisible();
+  // A generated visit's own row leads with formatLongDate (e.g. "Tuesday
+  // 7 September 2026"), not a raw ISO date.
+  const visitDatePattern = /^[A-Za-z]+ \d{1,2} [A-Za-z]+ \d{4}/;
   if (process.env.E2E_STRICT === '1') {
-    await expect(page.locator('li', { hasText: /^\d{4}-\d{2}-\d{2}/ }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator("li", { hasText: visitDatePattern }).first()).toBeVisible({
+      timeout: 10_000,
+    });
   }
-  // A populated preview lists each visit as a plain date/time row (no
-  // summary sentence), so this checks for that structure directly rather
-  // than guessing wording. Either that, the "nothing in range" message, or
-  // a real load error — never a blank panel.
+  // A populated schedule lists each visit as a date/window/crew row. Either
+  // that, the "nothing could be placed" message, or a real load error —
+  // never a blank panel.
   await expect(
     page
-      .locator("li", { hasText: /^\d{4}-\d{2}-\d{2}/ })
+      .locator("li", { hasText: visitDatePattern })
       .first()
-      .or(page.getByText("No visits fall in the preview window."))
-      .or(page.getByText("Could not load the schedule preview."))
+      .or(page.getByText("No visits could be placed in the next month", { exact: false }))
+      .or(page.getByText("Could not calculate the schedule."))
   ).toBeVisible({ timeout: 10_000 });
 });
