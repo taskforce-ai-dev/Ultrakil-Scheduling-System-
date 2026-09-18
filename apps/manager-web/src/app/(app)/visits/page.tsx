@@ -296,7 +296,14 @@ export default function VisitsPage() {
   // `rangeForGeneration`.
   const generationRange = rangeForGeneration(anchor, view);
 
+  // Stepping months or switching branch fires a new load before an older one
+  // has answered. Without a fence, whichever response lands last wins — which
+  // is not necessarily the one for what is now on screen. Every setter below
+  // is guarded by the same check the calendar board already uses.
+  const requestGeneration = React.useRef(0);
+
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     Promise.all([
@@ -311,6 +318,7 @@ export default function VisitsPage() {
       fetchBranches(),
     ])
       .then(([visitPage, customerPage, jobTypeList, branchList]) => {
+        if (generation !== requestGeneration.current) return;
         setVisits(visitPage.items);
         setTotalInRange(visitPage.total);
         setCustomers(customerPage.items);
@@ -318,13 +326,16 @@ export default function VisitsPage() {
         setBranches(branchList);
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [from, to, branch]);
 
   React.useEffect(() => {
@@ -482,7 +493,7 @@ export default function VisitsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Visit Calendar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Generate Schedule</h1>
           {/* "Nobody is assigned here" was meant as "crew is not set on this
               screen" and read as "none of this work has a crew" — above tiles
               carrying crew badges and beside a filter that returns 66 staffed
@@ -494,7 +505,7 @@ export default function VisitsPage() {
         </div>
         <Button onClick={() => setGenerateOpen(true)}>
           <CalendarPlus className="h-4 w-4" />
-          Generate visits
+          Generate Schedule
         </Button>
       </div>
 

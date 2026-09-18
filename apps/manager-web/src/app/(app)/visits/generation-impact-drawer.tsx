@@ -187,22 +187,34 @@ export function GenerationImpactDrawer({
   // double-click) both close over the same pre-update `isConfirming`, so the
   // state check alone can't stop the second one.
   const isConfirmingRef = React.useRef(false);
+  // Confirm always applies the current from/to/branchCode props, never the
+  // displayed impact itself — so the impact shown has to be fenced to match
+  // those same props, or a manager could see one range's preview and confirm
+  // a different one without either of them being wrong on its own. Same
+  // pattern as CalendarBoard's request fence.
+  const requestGeneration = React.useRef(0);
 
   const loadPreview = React.useCallback(() => {
     if (!open) return;
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     setImpact(null);
     previewVisitGeneration({ from, to, branchCode })
-      .then(setImpact)
+      .then((result) => {
+        if (generation === requestGeneration.current) setImpact(result);
+      })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught.message
             : "Could not work out what generation would change."
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [open, from, to, branchCode]);
 
   // Re-preview whenever the drawer opens or the visible range moves. The
@@ -245,7 +257,7 @@ export function GenerationImpactDrawer({
     <AppDrawer
       open={open}
       onOpenChange={onOpenChange}
-      title="Generate visits"
+      title="Generate Schedule"
       description={`${formatLongDate(from)} to ${formatLongDate(to)}`}
       // This body is a read-only impact summary — no form fields, nothing
       // for the Sheet's open-time autofocus to prefer instead.
