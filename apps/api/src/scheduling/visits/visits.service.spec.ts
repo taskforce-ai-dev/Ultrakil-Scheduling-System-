@@ -62,6 +62,8 @@ function visitRow(overrides: Record<string, unknown> = {}) {
       jobType: { name: 'Job' },
     },
     _count: { assignments: 0 },
+    // The live assignment's crew, as VISIT_INCLUDE reads it.
+    assignments: [],
     ...overrides,
   };
 }
@@ -71,6 +73,7 @@ function fixture(row = visitRow()) {
     // The row locks the real transaction takes; nothing to fence in a unit test.
     $queryRaw: jest.fn(async () => [{ id: VISIT_ID }]),
     assignment: { findMany: jest.fn(async () => []) },
+    visitUnassignedReason: { deleteMany: jest.fn(async () => ({ count: 0 })) },
     generatedVisit: {
       findUnique: jest.fn(async () => row),
       update: jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -100,6 +103,58 @@ function dataOf(mock: jest.Mock): Record<string, unknown> {
   return (mock.mock.calls[0][0] as { data: Record<string, unknown> }).data;
 }
 
+/**
+ * The run that generated a visit, named the way a screen can print it.
+ *
+ * The detail panel used to render `generatedByRunId` as a raw uuid under
+ * "Schedule run". A uuid tells a manager nothing they can act on, and the run
+ * is recognised — everywhere else in the portal — by the weeks it covered. So
+ * the origin carries the run's own horizon, and the id stays in the payload
+ * for links and is never printed.
+ */
+describe('VisitsService origin', () => {
+  function detailFixture(row: Record<string, unknown>, run: unknown) {
+    const prisma = {
+      generatedVisit: { findUnique: jest.fn(async () => row) },
+      scheduleRun: { findUnique: jest.fn(async () => run) },
+      // The visit's own hand-edit history, which `get` reads alongside origin.
+      auditEvent: { findMany: jest.fn(async () => []) },
+    };
+    const service = new VisitsService(
+      prisma as unknown as PrismaService,
+      { record: jest.fn() } as unknown as AuditService,
+      { evaluate: jest.fn() } as unknown as EligibilityService,
+    );
+    return { service, prisma };
+  }
+
+  it("carries the generating run's own horizon, so a screen never prints its id", async () => {
+    const { service } = detailFixture(
+      visitRow({ generatedByRunId: '66666666-6666-4666-8666-666666666666' }),
+      {
+        rangeStart: new Date('2026-09-15T00:00:00.000Z'),
+        rangeEnd: new Date('2026-09-21T00:00:00.000Z'),
+      },
+    );
+
+    const detail = await service.get(VISIT_ID);
+
+    expect(detail.origin.generatedByRunRangeStart).toBe('2026-09-15');
+    expect(detail.origin.generatedByRunRangeEnd).toBe('2026-09-21');
+  });
+
+  it('leaves the horizon null for a visit no run generated', async () => {
+    const { service, prisma } = detailFixture(visitRow(), null);
+
+    const detail = await service.get(VISIT_ID);
+
+    expect(detail.origin.generatedByRunRangeStart).toBeNull();
+    expect(detail.origin.generatedByRunRangeEnd).toBeNull();
+    // Nothing to look up, so nothing is asked for.
+    expect(prisma.scheduleRun.findUnique).not.toHaveBeenCalled();
+  });
+});
+
 describe('VisitsService window provenance', () => {
   it('records a hand-corrected window as manager confirmed', async () => {
     const { service, tx } = fixture();
@@ -123,5 +178,100 @@ describe('VisitsService window provenance', () => {
     const data = dataOf(tx.generatedVisit.update as jest.Mock);
     expect(data).toMatchObject({ requiredCrewSize: 3, isManuallyAdjusted: true });
     expect(data).not.toHaveProperty('windowProvenance');
+  });
+});
+
+/**
+ * Stored reasons are an answer about a particular day.
+ *
+ * Every conflict a run records names the date, the times and the people that
+ * clashed on the day the visit was standing on when it was judged: "A Perera
+ * is already on another job from 09:00 to 11:00 on 2026-09-18." Move the visit
+ * by hand and none of that is about this visit any more — but the rows stayed,
+ * so the Unassigned queue went on citing clashes on a Friday for a visit now
+ * on the Monday, while the Edit crew drawer, which checks live, correctly
+ * named the Monday. Two screens, the same visit, different days.
+ *
+ * A visit whose reasons are dropped reads in the queue as not yet checked,
+ * which is exactly what it is: nobody has evaluated it where it now stands.
+ */
+describe('VisitsService stale unassigned reasons', () => {
+  it('drops stored reasons when a hand edit moves the visit to another day', async () => {
+    const { service, tx } = fixture();
+
+    await service.adjust(VISIT_ID, { visitDate: '2026-09-21' }, actor);
+
+    expect(tx.visitUnassignedReason.deleteMany).toHaveBeenCalledWith({
+      where: { generatedVisitId: VISIT_ID },
+    });
+  });
+
+  it('drops them when the window or the duration moves under them too', async () => {
+    // "from 09:00 to 11:00" is as much a part of a recorded clash as the date.
+    const first = fixture();
+    await first.service.adjust(VISIT_ID, { windowStartMinute: 600 }, actor);
+    expect(first.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+
+    const second = fixture();
+    await second.service.adjust(VISIT_ID, { durationMinutes: 120 }, actor);
+    expect(second.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+
+    const third = fixture();
+    await third.service.adjust(VISIT_ID, { requiredCrewSize: 3 }, actor);
+    expect(third.tx.visitUnassignedReason.deleteMany).toHaveBeenCalled();
+  });
+
+  it('keeps them when the edit changed nothing the engine judged', async () => {
+    // A note against an unchanged visit is not new information about its day,
+    // and throwing the reasons away would tell the queue the visit had never
+    // been looked at.
+    const { service, tx } = fixture();
+
+    await service.adjust(VISIT_ID, { reason: 'Noted for the file' }, actor);
+
+    expect(tx.visitUnassignedReason.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('VisitsService window invariants', () => {
+  /** A booked day whose recorded hours are shorter than the visit needs. */
+  const tooShort = () =>
+    visitRow({ windowStartMinute: 540, windowEndMinute: 600, durationMinutes: 90 });
+
+  it('lets a manager change the crew of a visit whose window is already short', async () => {
+    // The window came from a booking on hours the site itself records as an
+    // hour. It is reported as a booking warning, and it is not this edit's
+    // business — refusing the crew change left the visit uneditable for ever.
+    const { service, tx } = fixture(tooShort());
+
+    await service.adjust(VISIT_ID, { requiredCrewSize: 3 }, actor);
+
+    expect(dataOf(tx.generatedVisit.update as jest.Mock)).toMatchObject({
+      requiredCrewSize: 3,
+    });
+  });
+
+  it('still refuses an edit that makes the window too short for the visit', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { durationMinutes: 900 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
+  });
+
+  it('still refuses a narrowed window that no longer holds the visit', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { windowEndMinute: 500 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
+  });
+
+  it('still refuses a window that ends before it starts', async () => {
+    const { service } = fixture();
+
+    await expect(
+      service.adjust(VISIT_ID, { windowStartMinute: 1020, windowEndMinute: 480 }, actor),
+    ).rejects.toMatchObject({ code: 'SERVICE_WINDOW_INVALID' });
   });
 });

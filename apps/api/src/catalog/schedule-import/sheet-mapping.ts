@@ -10,29 +10,42 @@ import { BranchCode } from '@prisma/client';
  * the branch name will eventually pick the wrong one and nobody will notice.
  */
 
+interface AgreementSheetColumns {
+  customer: number;
+  location: number;
+  treatment: number;
+  frequency: number;
+  day?: number;
+  effort?: number;
+  endDate?: number;
+}
+
+/**
+ * Where a sheet's booked dates are, when it has any.
+ *
+ * The columns and the year they belong to are one fact, not two. A day number
+ * with no year is not a date, so a mapping that declared month columns and
+ * forgot the year read every booked date in the sheet as nothing — no
+ * bookings, no derived weekdays, and no complaint. Declaring them together
+ * makes that mapping fail to compile rather than fail in silence.
+ */
+export type BookedDateColumns =
+  | { monthColumns: number[]; year: number }
+  | { monthColumns?: undefined; year?: undefined };
+
 /** A sheet listing many customers, one agreement per row. */
-export interface AgreementSheetMapping {
+export type AgreementSheetMapping = {
   kind: 'agreements';
   sheet: string;
   headerRow: number;
-  columns: {
-    customer: number;
-    location: number;
-    treatment: number;
-    frequency: number;
-    day?: number;
-    effort?: number;
-    endDate?: number;
-  };
+  columns: AgreementSheetColumns;
   /**
    * Columns holding the visit dates already planned, in month order from
-   * January. Used to work out the weekdays a site is actually serviced on when
-   * the Day column is empty, which is most of them.
+   * January, and the calendar year they belong to. Used to work out the
+   * weekdays a site is actually serviced on when the Day column is empty,
+   * which is most of them.
    */
-  monthColumns?: number[];
-  /** Calendar year those dates belong to. */
-  year?: number;
-}
+} & BookedDateColumns;
 
 /** A sheet for one customer, one site per row. */
 export interface BranchSheetMapping {

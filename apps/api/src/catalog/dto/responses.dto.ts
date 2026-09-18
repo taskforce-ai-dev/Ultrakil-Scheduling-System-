@@ -4,8 +4,11 @@ import {
   BranchCode,
   DayRuleKind,
   FrequencyUnit,
+  VisitPlacement,
   Weekday,
 } from '@prisma/client';
+
+import { SHORTFALL_REASONS, ShortfallReason } from '../schedule-preview';
 
 /**
  * Response shapes for the customer, site and agreement endpoints.
@@ -226,6 +229,13 @@ export class ServiceAgreementDto {
 
   @ApiProperty({
     type: Number,
+    description:
+      'How many visits this agreement has ever generated. Zero on an active agreement means it has produced no work at all, which is invisible on every other screen.',
+  })
+  generatedVisitCount!: number;
+
+  @ApiProperty({
+    type: Number,
     description: 'Increments whenever a change would alter the visits produced.',
   })
   currentVersion!: number;
@@ -249,6 +259,15 @@ export class ServiceAgreementDto {
 
   @ApiProperty({ type: [String], example: ['MBR_FUMIGATION'] })
   requiredSkillCodes!: string[];
+
+  @ApiProperty({
+    type: [String],
+    format: 'date',
+    example: ['2026-01-05', '2026-01-20'],
+    description:
+      'Dates already agreed with the customer, read from the master schedule workbook. Read-only: generation places a visit on each of them rather than re-planning the period.',
+  })
+  bookedDates!: string[];
 
   @ApiProperty({ type: String, nullable: true })
   notes!: string | null;
@@ -302,6 +321,14 @@ export class PreviewVisitDto {
     description: 'Fell on a preferred weekday, not merely an allowed one.',
   })
   isPreferredDay!: boolean;
+
+  @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
 }
 
 export class PreviewShortfallDto {
@@ -319,13 +346,12 @@ export class PreviewShortfallDto {
 
   @ApiProperty({
     type: String,
-    enum: [
-      'NOT_ENOUGH_ALLOWED_DAYS',
-      'SITE_CLOSED_ON_ALLOWED_DAYS',
-      'WINDOW_TOO_SHORT_FOR_VISIT',
-    ],
+    // The shared list, never a copy: a reason the preview can return and the
+    // contract does not admit is a client that cannot parse its own API, and
+    // PERIOD_HELD_BY_A_CANCELLED_VISIT was exactly that for a release.
+    enum: SHORTFALL_REASONS,
   })
-  reason!: string;
+  reason!: ShortfallReason;
 
   @ApiProperty({ type: String, description: 'Actionable explanation for a manager.' })
   message!: string;

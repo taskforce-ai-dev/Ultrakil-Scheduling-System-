@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
+  CalendarPlus,
   CheckCircle2,
   CircleDashed,
   Loader2,
@@ -16,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -45,22 +48,34 @@ import {
   type ScheduleRun,
 } from "@/lib/api-client";
 import { addDays, todayIso } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
 /** How often the run list is re-fetched while anything is queued or running. */
 const POLL_INTERVAL_MS = 3000;
 
+/** True for the record a confirmed "Generate visits" leaves behind. */
+function isGeneration(run: ScheduleRun): boolean {
+  return run.kind === "VISIT_GENERATION";
+}
+
 function StatusBadge({ run }: { run: ScheduleRun }) {
+  // Generation creates visits, never assignments. Judging it by the solver's
+  // yardstick badged every single one "Draft — no dispatchable assignments",
+  // which reads as a schedule that failed — sitting directly above the real
+  // optimiser run, where it does the most damage.
+  if (isGeneration(run)) {
+    return (
+      <Badge variant="secondary">
+        <CalendarPlus className="h-3 w-3" aria-hidden="true" />
+        Visit generation
+      </Badge>
+    );
+  }
   if (run.status === "QUEUED") {
     return (
       <Badge variant="outline">
@@ -136,7 +151,12 @@ function StatusBadge({ run }: { run: ScheduleRun }) {
 }
 
 function canPublishRun(run: ScheduleRun): boolean {
-  return run.status === "SUCCEEDED" && !run.isPublished && run.visitsScheduled > 0;
+  return (
+    !isGeneration(run) &&
+    run.status === "SUCCEEDED" &&
+    !run.isPublished &&
+    run.visitsScheduled > 0
+  );
 }
 
 /**
@@ -166,7 +186,7 @@ function unconfirmedSourceWarnings(run: ScheduleRun | null) {
  * held in memory.
  */
 /**
- * Which run is actually in force, and whether something newer is waiting.
+ * Which run is actually in force today, and whether something newer is waiting.
  *
  * The page listed every run a range had ever had — published, draft and failed
  * together, newest first — which answers "what has happened" and not "what are
@@ -174,23 +194,56 @@ function unconfirmedSourceWarnings(run: ScheduleRun | null) {
  * of 17, with a later draft staffing 17 of 17 sitting above it and a failed
  * attempt above that, has no way to tell which one the crews were given.
  *
- * Live is the most recent published run. Anything successful and newer is a
- * proposal waiting on a decision; anything older is history.
+ * "In force" is a question about today, not about recency. Taking simply the
+ * most recently published run meant that publishing a November week made the
+ * September week the crews were working disappear from the panel on the day
+ * they were working it. So: the published run whose range covers today, and
+ * where several do, the one published last — a later publication over the same
+ * dates is what supersedes an earlier one. When none covers today the panel
+ * says so rather than naming a week nobody is working.
+ *
+ * `pending` is a draft a manager could actually act on, which is the same
+ * question the row's own Publish button asks. Without that it offered a
+ * visit-generation run — "0 of 0 staffed", because generation staffs nobody by
+ * definition — and hid the real staffed draft below it.
  */
-function currentSchedule(runs: ScheduleRun[]): {
+function currentSchedule(
+  runs: ScheduleRun[],
+  today: string,
+): {
   live: ScheduleRun | null;
   pending: ScheduleRun | null;
 } {
-  // The API returns newest first, which is the order these two want.
-  const live = runs.find((run) => run.isPublished) ?? null;
+  const covering = runs.filter(
+    (run) => run.isPublished && run.rangeStart <= today && today <= run.rangeEnd,
+  );
+  const live =
+    covering.reduce<ScheduleRun | null>(
+      (latest, run) =>
+        latest === null || (run.publishedAt ?? "") > (latest.publishedAt ?? "") ? run : latest,
+      null,
+    ) ?? null;
+  // The API returns newest first, so "newer than the one in force" is the
+  // slice above it. With nothing in force, every run is still to be decided.
   const newer = live ? runs.slice(0, runs.indexOf(live)) : runs;
-  const pending = newer.find((run) => run.status === "SUCCEEDED" && !run.isPublished) ?? null;
+  const pending = newer.find(canPublishRun) ?? null;
   return { live, pending };
 }
 
 export default function ScheduleHistoryPage() {
+  // The run a link arrived pointing at. The operational visits list names a
+  // visit's run by its weeks and links here; landing on fifty rows with
+  // nothing picked out leaves a manager to find a date range by eye, which is
+  // the job the link was supposed to do.
+  const searchParams = useSearchParams();
+  const focusRunId = searchParams?.get("run") ?? null;
+  const focusRef = React.useRef<HTMLLIElement | null>(null);
+
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
-  const { live, pending } = React.useMemo(() => currentSchedule(runs), [runs]);
+  // Which day it is decides which schedule is in force, so it is read once per
+  // render rather than captured when the page mounted — a portal left open
+  // overnight would otherwise go on naming yesterday's week.
+  const { live, pending } = React.useMemo(() => currentSchedule(runs, todayIso()), [runs]);
   const [total, setTotal] = React.useState(0);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
@@ -245,6 +298,18 @@ export default function ScheduleHistoryPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
+
+  const focusedRun = focusRunId
+    ? (runs.find((run) => run.id === focusRunId)?.id ?? null)
+    : null;
+
+  React.useEffect(() => {
+    // Scrolling the DOM is exactly what a ref and an effect are for. Only
+    // once the run is actually on the page — a link to a run older than the
+    // fifty loaded here highlights nothing and moves nothing.
+    if (!focusedRun) return;
+    focusRef.current?.scrollIntoView({ block: "center" });
+  }, [focusedRun]);
 
   const hasActiveRun = runs.some((run) => ACTIVE_STATUSES.has(run.status));
 
@@ -369,7 +434,7 @@ export default function ScheduleHistoryPage() {
           <div className="space-y-1.5">
             <Label htmlFor="run-branch">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value as BranchFilter) ?? "ALL")}
             >
@@ -377,7 +442,7 @@ export default function ScheduleHistoryPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>
@@ -431,6 +496,12 @@ export default function ScheduleHistoryPage() {
                 {live.visitsScheduled + live.visitsUnassigned} visits have a crew. This is what
                 the crews were given.
               </p>
+            ) : runs.some((run) => run.isPublished) ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                No published schedule covers today, so no schedule is in force. Published runs
+                for other weeks are listed below; publish a run covering today and it becomes
+                the one the crews work to.
+              </p>
             ) : (
               <p className="mt-1 text-sm text-muted-foreground">
                 Nothing is published yet, so no schedule is in force. Publish a run below and it
@@ -459,8 +530,19 @@ export default function ScheduleHistoryPage() {
               const canCancel = isActive && !run.cancelRequested;
               const canPublish = canPublishRun(run);
 
+              const isFocused = run.id === focusedRun;
+
               return (
-                <li key={run.id} className="rounded-xl border bg-card p-4 shadow-sm">
+                <li
+                  key={run.id}
+                  data-testid={`run-${run.id}`}
+                  ref={isFocused ? focusRef : undefined}
+                  aria-current={isFocused ? "true" : undefined}
+                  className={cn(
+                    "rounded-xl border bg-card p-4 shadow-sm",
+                    isFocused && "border-primary ring-2 ring-primary/40",
+                  )}
+                >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="font-medium">
@@ -496,26 +578,50 @@ export default function ScheduleHistoryPage() {
                     </div>
                   )}
 
-                  <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
-                    <div>
-                      <dt className="inline">Considered: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsConsidered}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Scheduled: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsScheduled}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="inline">Unassigned: </dt>
-                      <dd className="inline font-medium text-foreground">
-                        {run.visitsUnassigned}
-                      </dd>
-                    </div>
-                  </dl>
+                  {isGeneration(run) ? (
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {/*
+                        * `visitsConsidered` is every visit the run accounted
+                        * for — created, changed, removed, protected and
+                        * already correct alike — so "visits generated" was
+                        * simply untrue of it. A second run over the same range
+                        * creates nothing and still carries the same number,
+                        * and the page then accounted for twice the work that
+                        * exists.
+                        */}
+                      <span className="font-medium text-foreground">
+                        {run.visitsConsidered} visits considered
+                      </span>{" "}
+                      — every visit in the range, whether this run created it or
+                      found it already correct. Nobody is assigned by generation:
+                      solve this range to staff them.
+                    </p>
+                  ) : (
+                    <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-muted-foreground">
+                      <div>
+                        <dt className="inline">Considered: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsConsidered}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="inline">Scheduled: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsScheduled}
+                        </dd>
+                      </div>
+                      <div>
+                        {/* The run's own word for these was "Unassigned",
+                            which on every other screen now names two
+                            different things. What this number counts is the
+                            work this run tried to staff and could not. */}
+                        <dt className="inline">Staffing failed: </dt>
+                        <dd className="inline font-medium text-foreground">
+                          {run.visitsUnassigned}
+                        </dd>
+                      </div>
+                    </dl>
+                  )}
 
                   {run.status === "FAILED" && (
                     <p className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm text-destructive">
@@ -570,76 +676,78 @@ export default function ScheduleHistoryPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {publishTarget && publishTarget.visitsUnassigned > 0 && (
-            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                {publishTarget.visitsUnassigned}{" "}
-                {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
-                be staffed and will remain in the Unassigned queue after publishing.
-              </p>
-              <label htmlFor="partial-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
-                <Checkbox
-                  id="partial-publish-ack"
-                  checked={partialAcknowledged}
-                  onCheckedChange={(checked) => setPartialAcknowledged(checked === true)}
-                />
-                <span>I understand that unassigned visits will not be dispatched.</span>
-              </label>
-            </div>
-          )}
+          <DialogBody>
+            {publishTarget && publishTarget.visitsUnassigned > 0 && (
+              <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <p className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  {publishTarget.visitsUnassigned}{" "}
+                  {publishTarget.visitsUnassigned === 1 ? "visit" : "visits"} in this range could not
+                  be staffed and will remain in the Unassigned queue after publishing.
+                </p>
+                <label htmlFor="partial-publish-ack" className="flex items-start gap-2 font-medium text-foreground">
+                  <Checkbox
+                    id="partial-publish-ack"
+                    checked={partialAcknowledged}
+                    onCheckedChange={(checked) => setPartialAcknowledged(checked === true)}
+                  />
+                  <span>I understand that unassigned visits will not be dispatched.</span>
+                </label>
+              </div>
+            )}
 
-          {unconfirmedSourceWarnings(publishTarget).length > 0 && (
-            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-              <p className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                Some of this schedule rests on source data nobody has confirmed. Publishing it
-                tells the crews to act on an assumption.
-              </p>
-              <ul className="ml-6 list-disc space-y-1">
-                {unconfirmedSourceWarnings(publishTarget).map((warning) => (
-                  <li key={warning.code}>
-                    {warning.message}{" "}
-                    <span className="font-medium">
-                      {warning.affectedVisitCount}{" "}
-                      {warning.affectedVisitCount === 1 ? "visit" : "visits"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              <label
-                htmlFor="provenance-publish-ack"
-                className="flex items-start gap-2 font-medium text-foreground"
-              >
-                <Checkbox
-                  id="provenance-publish-ack"
-                  checked={provenanceAcknowledged}
-                  onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
-                />
-                <span>
-                  I understand this schedule uses source data that is not confirmed, and I am
-                  publishing it anyway.
-                </span>
-              </label>
-            </div>
-          )}
+            {unconfirmedSourceWarnings(publishTarget).length > 0 && (
+              <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <p className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  Some of this schedule rests on source data nobody has confirmed. Publishing it
+                  tells the crews to act on an assumption.
+                </p>
+                <ul className="ml-6 list-disc space-y-1">
+                  {unconfirmedSourceWarnings(publishTarget).map((warning) => (
+                    <li key={warning.code}>
+                      {warning.message}{" "}
+                      <span className="font-medium">
+                        {warning.affectedVisitCount}{" "}
+                        {warning.affectedVisitCount === 1 ? "visit" : "visits"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <label
+                  htmlFor="provenance-publish-ack"
+                  className="flex items-start gap-2 font-medium text-foreground"
+                >
+                  <Checkbox
+                    id="provenance-publish-ack"
+                    checked={provenanceAcknowledged}
+                    onCheckedChange={(checked) => setProvenanceAcknowledged(checked === true)}
+                  />
+                  <span>
+                    I understand this schedule uses source data that is not confirmed, and I am
+                    publishing it anyway.
+                  </span>
+                </label>
+              </div>
+            )}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="publish-reason">
-              {publishTarget && publishTarget.visitsUnassigned > 0
-                ? "Reason (required for partial schedules)"
-                : publishNeedsReason
-                  ? "Reason (required for unconfirmed source data)"
-                  : "Reason (optional)"}
-            </Label>
-            <Textarea
-              id="publish-reason"
-              value={publishReason}
-              onChange={(event) => setPublishReason(event.target.value)}
-              placeholder="Why is this being published now?"
-              aria-required={publishNeedsReason}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="publish-reason">
+                {publishTarget && publishTarget.visitsUnassigned > 0
+                  ? "Reason (required for partial schedules)"
+                  : publishNeedsReason
+                    ? "Reason (required for unconfirmed source data)"
+                    : "Reason (optional)"}
+              </Label>
+              <Textarea
+                id="publish-reason"
+                value={publishReason}
+                onChange={(event) => setPublishReason(event.target.value)}
+                placeholder="Why is this being published now?"
+                aria-required={publishNeedsReason}
+              />
+            </div>
+          </DialogBody>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setPublishTarget(null)}>

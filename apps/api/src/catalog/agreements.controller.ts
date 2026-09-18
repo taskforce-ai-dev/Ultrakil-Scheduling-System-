@@ -77,6 +77,12 @@ export class AgreementsController {
     description: 'Only agreements in force on this date.',
   })
   @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({
+    name: 'withoutVisits',
+    required: false,
+    type: Boolean,
+    description: 'Only agreements that have generated no visits at all.',
+  })
   @ApiResponse({ status: 200, type: PaginatedServiceAgreementsDto })
   list(
     @Query() query: ServiceAgreementQueryDto,

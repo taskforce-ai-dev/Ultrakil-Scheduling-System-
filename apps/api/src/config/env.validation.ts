@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import {
+  DEFAULT_DAILY_CAPACITY_MINUTES,
+  DEFAULT_DAILY_VISIT_CAP,
+  DEFAULT_EMPLOYEE_WORKDAY_MINUTES,
+} from './constants';
+import {
   QSTASH_MAX_EXECUTION_SECONDS,
   QSTASH_MINIMUM_EXECUTION_SECONDS,
 } from '../scheduling/optimizer/schedule-run-execution-budget';
@@ -112,6 +117,42 @@ export const envSchema = z.object({
   SEED_ADMIN_NAME: z.string().default('UltraKIL Administrator'),
 
   TECHNICIAN_MATRIX_PATH: z.string().default('./data/technician-matrix.xlsx'),
+
+  /**
+   * The reference visit count `GET /branches` shows a manager for context.
+   * No longer what generation, the load guard or the optimizer plan against —
+   * see `VISIT_GENERATION_DAILY_CAPACITY_MINUTES` for that.
+   */
+  VISIT_GENERATION_DAILY_CAP: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_DAILY_VISIT_CAP),
+
+  /**
+   * Most crew-minutes one branch plans for in a single day when this
+   * database has no workforce imported for that branch at all. See
+   * `VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES` for what is actually
+   * enforced everywhere else.
+   */
+  VISIT_GENERATION_DAILY_CAPACITY_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_DAILY_CAPACITY_MINUTES),
+
+  /**
+   * Minutes in one employee's standard working day. A branch-day's real
+   * crew-minutes capacity is its available headcount times this figure —
+   * the resource-derived cap `load-guard.ts`, the commit-time recheck in
+   * `visit-generation.service.ts`, and the optimizer's `DailyLoadLedger`
+   * actually enforce.
+   */
+  VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_EMPLOYEE_WORKDAY_MINUTES),
 });
 
 export type Env = z.infer<typeof envSchema>;

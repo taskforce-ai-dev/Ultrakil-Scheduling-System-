@@ -83,6 +83,54 @@ export function rangeForView(
   return { from, to: addDays(lastCellStart, 6) };
 }
 
+/**
+ * The inclusive range a generation run should be asked for.
+ *
+ * A run plans only the periods its range holds **whole**, and periods are
+ * calendar-aligned: a week is a Monday-to-Sunday ISO week, a month a calendar
+ * month, both counted from the agreement's own start rather than from the
+ * range. So the range has to be chosen to hold whole ones.
+ *
+ * The month view sends the **grid** — the same days it draws. The grid begins
+ * on a Monday and ends on a Sunday, so it holds whole ISO weeks for every
+ * weekly and fortnightly agreement; and it contains the whole calendar month,
+ * so it holds a whole month for every monthly one. The calendar month on its
+ * own would do the second but not the first: 1-30 September holds no whole ISO
+ * week at either end, and a weekly agreement generated from the month view
+ * would plan a different set of weeks from the same agreement generated from
+ * the week view — a duplicate where the week view's visit was protected, churn
+ * where it was not.
+ *
+ * The week view sends its own seven days, which are one whole ISO week.
+ *
+ * Neither view holds a whole quarter, and only a month view holds a whole
+ * fortnight. An agreement whose cycle the range cannot hold is not planned and
+ * is reported in `skippedPeriods`, never silently.
+ *
+ * One seam has to be sewn shut by hand. A grid normally reaches into the next
+ * month — March's runs to 3 May, September's to 4 October — so consecutive
+ * month runs overlap and a period straddling the join is held whole by one of
+ * them. A month that *begins on a Monday* breaks that: May 2026's grid ends on
+ * Sunday 31 May and June's begins on Monday 1 June, with not a day in common.
+ * A fortnight straddling the seam — 25 May to 7 June — is clipped by the
+ * horizon in both, so neither run plans it, neither is "the run that can see it
+ * whole", and the customer loses a visit with nothing said. Where the grid ends
+ * the day before a month, the run therefore reaches one whole ISO week further.
+ * That week is a whole ISO week, so a weekly agreement plans it exactly as the
+ * week view would, and a monthly one still skips it as the stub it is.
+ */
+export function rangeForGeneration(
+  anchor: string,
+  view: CalendarView
+): { from: string; to: string } {
+  const range = rangeForView(anchor, view);
+  // The week view asks about its own seven days and no more: a manager who
+  // generates a week must not find visits in the next one.
+  if (view !== "month") return range;
+  const startsAMonth = addDays(range.to, 1).endsWith("-01");
+  return startsAMonth ? { ...range, to: addDays(range.to, 7) } : range;
+}
+
 /** Every day in the grid, in order. 7 for a week, 35 or 42 for a month. */
 export function daysInView(anchor: string, view: CalendarView): string[] {
   const { from, to } = rangeForView(anchor, view);
@@ -134,4 +182,50 @@ export function formatMinuteOfDay(minute: number): string {
   const hour = Math.floor(minute / 60);
   const rest = minute % 60;
   return `${String(hour).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+const SHORT_MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * The span a schedule run covered, short enough to sit inside a sentence.
+ *
+ * "15–21 Sep" when the two ends share a month, "28 Sep – 4 Oct" when they do
+ * not, and the year said out loud only when the range crosses one — a run over
+ * the turn of the year is the one case where "29 Dec – 3 Jan" is ambiguous.
+ */
+export function formatDayRange(fromIso: string, toIso: string): string {
+  const from = parseDate(fromIso);
+  const to = parseDate(toIso);
+  const sameYear = from.getUTCFullYear() === to.getUTCFullYear();
+  const year = (date: Date) => (sameYear ? "" : ` ${date.getUTCFullYear()}`);
+  const month = (date: Date) => SHORT_MONTH_NAMES[date.getUTCMonth()];
+
+  if (sameYear && from.getUTCMonth() === to.getUTCMonth()) {
+    return `${from.getUTCDate()}–${to.getUTCDate()} ${month(to)}`;
+  }
+  return `${from.getUTCDate()} ${month(from)}${year(from)} – ${to.getUTCDate()} ${month(to)}${year(to)}`;
+}
+
+/**
+ * The calendar day of an instant, in the reader's own clock: "15 Sep".
+ *
+ * Unlike a visit date, a publication is a moment rather than a calendar day,
+ * so these two are deliberately *not* held in UTC — "published at 20:05" has
+ * to mean 20:05 where the manager is standing.
+ */
+export function formatStampDay(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  return `${at.getDate()} ${SHORT_MONTH_NAMES[at.getMonth()]}`;
+}
+
+/** The same instant with the time on it: "15 Sep 20:05". */
+export function formatStamp(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const time = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${at.getDate()} ${SHORT_MONTH_NAMES[at.getMonth()]} ${time}`;
 }

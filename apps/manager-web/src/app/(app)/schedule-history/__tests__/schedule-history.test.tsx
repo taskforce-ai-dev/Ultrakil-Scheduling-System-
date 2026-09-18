@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const { searchParamsRef } = vi.hoisted(() => ({
+  searchParamsRef: { current: null as URLSearchParams | null },
+}));
+
+vi.mock("next/navigation", async () => {
+  const actual = await vi.importActual<typeof import("next/navigation")>("next/navigation");
+  return { ...actual, useSearchParams: () => searchParamsRef.current };
+});
+
 vi.mock("@/lib/api-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
   return {
@@ -35,6 +44,7 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.mocked(startScheduleRun).mockReset();
   vi.mocked(publishScheduleRun).mockReset();
+  searchParamsRef.current = null;
 });
 
 async function renderPage() {
@@ -89,6 +99,9 @@ describe("ScheduleHistoryPage", () => {
     // The exact pile a manager reported: a failed attempt, a draft that staffed
     // everything, and below them the published run the crews actually got. The
     // list is honest history and answers none of "what are my crews doing".
+    // The clock is pinned inside the published run's week, because "in force"
+    // is a question about today.
+    vi.setSystemTime(new Date("2026-09-09T08:00:00.000Z"));
     const published = buildScheduleRun({
       id: "run-live", status: "SUCCEEDED", isPublished: true,
       publishedAt: "2026-09-08T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
@@ -107,6 +120,80 @@ describe("ScheduleHistoryPage", () => {
     // And the better draft is offered, not silently preferred.
     expect(within(current).getByText(/A newer draft is waiting/)).toBeInTheDocument();
     expect(within(current).getByText(/Nobody has been told about it/)).toBeInTheDocument();
+  });
+
+  /**
+   * "Current schedule" means the schedule in force today, not the schedule
+   * published most recently. Publishing a November week made the September
+   * week the crews were actually working vanish from the panel on the very day
+   * it was being worked.
+   */
+  it("names the published run covering today, not the one published most recently", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const inForce = buildScheduleRun({
+      id: "run-september", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-09-14", rangeEnd: "2026-09-20",
+      publishedAt: "2026-09-11T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
+    });
+    const november = buildScheduleRun({
+      id: "run-november", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-11-23", rangeEnd: "2026-11-29",
+      publishedAt: "2026-09-15T16:06:51.000Z", visitsScheduled: 28, visitsUnassigned: 1,
+    });
+    mockRuns([november, inForce]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/2026-09-14 – 2026-09-20/)).toBeInTheDocument();
+    expect(within(current).getByText(/11 of 17 visits have a crew/)).toBeInTheDocument();
+    expect(within(current).queryByText(/2026-11-23/)).not.toBeInTheDocument();
+  });
+
+  it("does not claim a future published week is what the crews are working now", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const november = buildScheduleRun({
+      id: "run-november", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-11-23", rangeEnd: "2026-11-29",
+      publishedAt: "2026-09-15T16:06:51.000Z", visitsScheduled: 28, visitsUnassigned: 1,
+    });
+    mockRuns([november]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    expect(within(current).getByText(/no published schedule covers today/i)).toBeInTheDocument();
+    expect(within(current).queryByText(/This is what the crews were given/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A generation run staffs nobody by definition — "0 of 0 staffed" is not a
+   * draft waiting on a decision, and offering it as one hid the real staffed
+   * draft sitting below it.
+   */
+  it("offers the newest draft that can actually be published, not a generation run", async () => {
+    vi.setSystemTime(new Date("2026-09-16T08:00:00.000Z"));
+    const generationRun = buildScheduleRun({
+      id: "run-generation", kind: "VISIT_GENERATION", status: "SUCCEEDED", isPublished: false,
+      rangeStart: "2026-10-26", rangeEnd: "2026-12-06",
+      visitsConsidered: 105, visitsScheduled: 0, visitsUnassigned: 0, publishReadiness: null,
+    });
+    const staffedDraft = buildScheduleRun({
+      id: "run-draft", status: "SUCCEEDED", isPublished: false,
+      rangeStart: "2026-09-21", rangeEnd: "2026-09-27",
+      visitsScheduled: 17, visitsUnassigned: 0,
+    });
+    const live = buildScheduleRun({
+      id: "run-live", status: "SUCCEEDED", isPublished: true,
+      rangeStart: "2026-09-14", rangeEnd: "2026-09-20",
+      publishedAt: "2026-09-11T05:13:05.000Z", visitsScheduled: 11, visitsUnassigned: 6,
+    });
+    mockRuns([generationRun, staffedDraft, live]);
+    await renderPage();
+
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    const waiting = within(current).getByText(/A newer draft is waiting/);
+    expect(waiting).toHaveTextContent("17 of 17 staffed for 2026-09-21 – 2026-09-27");
+    expect(within(current).queryByText(/0 of 0 staffed/)).not.toBeInTheDocument();
+    expect(within(current).queryByText(/2026-10-26/)).not.toBeInTheDocument();
   });
 
   it("says plainly when nothing is published, rather than implying the latest run is live", async () => {
@@ -404,5 +491,172 @@ describe("ScheduleHistoryPage", () => {
     await renderPage();
 
     expect(await screen.findByText("No schedule runs yet")).toBeInTheDocument();
+  });
+
+  it("keeps Publish out of the scrolling part of the dialog, however long the gate list", async () => {
+    // Measured on the live portal at 1280x720: a run with four
+    // unconfirmed-source sections pushed this button to y=745.5 — visible and
+    // enabled to anything that asked, and unclickable, because the point was
+    // off the bottom of the screen. The gate list is exactly what makes the
+    // dialog tall, so the more a schedule needed checking, the less
+    // publishable it became. The gates scroll; the decision does not move.
+    const run = buildScheduleRun({
+      id: "run-tall",
+      status: "SUCCEEDED",
+      isPublished: false,
+      visitsUnassigned: 3,
+      publishReadiness: {
+        state: "ACKNOWLEDGEMENT_REQUIRED",
+        code: "PARTIAL_RESULTS",
+        message: "This run left visits unassigned and rests on unconfirmed source data.",
+        requiresPartialAcknowledgement: true,
+        requiresProvenanceAcknowledgement: true,
+        provenanceWarnings: [
+          {
+            code: "CREW_SIZE_UNCONFIRMED",
+            message: "Crew size was not stated by the source and has not been confirmed.",
+            affectedVisitCount: 4,
+          },
+          {
+            code: "DAY_RULE_UNCONFIRMED",
+            message: "Allowed service days were inferred and have not been confirmed.",
+            affectedVisitCount: 6,
+          },
+          {
+            code: "DURATION_UNCONFIRMED",
+            message: "Visit duration was not stated by the source and has not been confirmed.",
+            affectedVisitCount: 9,
+          },
+          {
+            code: "HOURS_UNCONFIRMED",
+            message: "Opening hours for this visit are not confirmed.",
+            affectedVisitCount: 13,
+          },
+        ],
+      },
+    });
+    mockRuns([run]);
+    const user = await renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publish" }));
+
+    const body = document.querySelector("[data-slot=dialog-body]");
+    expect(body).not.toBeNull();
+
+    // Everything variable-length is inside the region that scrolls.
+    expect(body).toContainElement(screen.getByText(/Allowed service days were inferred/));
+    expect(body).toContainElement(screen.getByText(/could not\s+be staffed/));
+    expect(body).toContainElement(
+      screen.getByLabelText("Reason (required for partial schedules)"),
+    );
+
+    // The decision is not.
+    const publishButton = screen.getByRole("button", { name: "Publish" });
+    expect(body).not.toContainElement(publishButton);
+    expect(body).not.toContainElement(screen.getByRole("button", { name: "Cancel" }));
+    expect(document.querySelector("[data-slot=dialog-footer]")).toContainElement(publishButton);
+  });
+});
+
+describe("a visit-generation run in the history", () => {
+  /**
+   * Confirming "Generate visits" writes a run to account for what it did.
+   * Listed beside the solver's runs it read as a failed schedule: "Draft — no
+   * dispatchable assignments · Considered: 105 · Scheduled: 0", directly above
+   * the real optimiser run.
+   */
+  const generation = () =>
+    buildScheduleRun({
+      id: "run-generation",
+      kind: "VISIT_GENERATION",
+      status: "SUCCEEDED",
+      visitsConsidered: 105,
+      visitsScheduled: 0,
+      visitsUnassigned: 0,
+      publishReadiness: null,
+      isPublished: false,
+    });
+
+  it("is named as visit generation", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+
+    expect(await screen.findByText("Visit generation")).toBeInTheDocument();
+  });
+
+  it("is never called a draft, and never blamed for having no assignments", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+    await screen.findByText("Visit generation");
+
+    expect(screen.queryByText(/Draft/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/dispatchable assignments/)).not.toBeInTheDocument();
+  });
+
+  it("says what the number it prints actually counts", async () => {
+    // `visitsConsidered` is every visit the run accounted for — created,
+    // changed, removed, protected and already correct alike. Printing it as
+    // "105 visits generated" made a second run over the same range, which
+    // creates nothing, claim another 105: the page accounted for 210 where
+    // 105 exist. The number is honest, the word for it was not.
+    mockRuns([generation()]);
+    await renderPage();
+
+    expect(await screen.findByText(/105 visits considered/)).toBeInTheDocument();
+    expect(screen.queryByText(/105 visits generated/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Scheduled: ")).not.toBeInTheDocument();
+    expect(screen.queryByText("Staffing failed: ")).not.toBeInTheDocument();
+  });
+
+  it("does not claim a second run over the same range generated them all again", async () => {
+    // The shape that made it wrong: one run that created the work, and a
+    // second over the same range that created nothing and found all of it
+    // already correct. Both carry the same `visitsConsidered`.
+    mockRuns([
+      { ...generation(), id: "run-second" },
+      { ...generation(), id: "run-first" },
+    ]);
+    await renderPage();
+
+    expect(await screen.findAllByText(/105 visits considered/)).toHaveLength(2);
+    expect(screen.queryByText(/visits generated/)).not.toBeInTheDocument();
+  });
+
+  it("offers nothing to publish", async () => {
+    mockRuns([generation()]);
+    await renderPage();
+    await screen.findByText("Visit generation");
+
+    expect(screen.queryByRole("button", { name: "Publish" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ScheduleHistoryPage, arrived at from a run link", () => {
+  it("marks the run the link named and brings it into view", async () => {
+    // The operational visits list links a visit to the run that produced it.
+    // Landing on a page of fifty runs with nothing picked out leaves a manager
+    // to find a date range by eye, which is the job the link was meant to do.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    mockRuns([
+      buildScheduleRun({ id: "older", rangeStart: "2026-09-01", rangeEnd: "2026-09-07" }),
+      buildScheduleRun({ id: "wanted", rangeStart: "2026-09-15", rangeEnd: "2026-09-21" }),
+    ]);
+    searchParamsRef.current = new URLSearchParams("run=wanted");
+    await renderPage();
+
+    const highlighted = await screen.findByTestId("run-wanted");
+    expect(highlighted).toHaveAttribute("aria-current", "true");
+    expect(screen.getByTestId("run-older")).not.toHaveAttribute("aria-current");
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("marks nothing when the link names a run this page does not hold", async () => {
+    mockRuns([buildScheduleRun({ id: "older" })]);
+    searchParamsRef.current = new URLSearchParams("run=elsewhere");
+    await renderPage();
+
+    expect(await screen.findByTestId("run-older")).not.toHaveAttribute("aria-current");
   });
 });

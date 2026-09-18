@@ -4,8 +4,8 @@ import { CONFLICT_GROUP_LABEL, CONFLICT_GROUPS, conflictGroup } from "@/lib/conf
 import type { ConflictCode } from "@/lib/api-client";
 
 /**
- * Locks in every one of the backend's 21 conflict codes against the 11
- * named groups ULK-O05 asks for (plus "Other" for the 4 that don't fit).
+ * Locks in every one of the backend's conflict codes against the 11 named
+ * groups ULK-O05 asks for (plus "Other" for the six that don't fit).
  * A code the backend adds later and this file doesn't know about should
  * fail typecheck (CODE_TO_GROUP is a Record<ConflictCode, ...>), but this
  * still pins the *current* mapping so a miscategorization is caught here
@@ -34,6 +34,7 @@ const EXPECTED: Record<ConflictCode, string> = {
   VISIT_NOT_SCHEDULABLE: "OTHER",
   ASSIGNMENT_LOCKED: "OTHER",
   NO_FEASIBLE_CREW: "OTHER",
+  DAILY_VISIT_CAP_REACHED: "OTHER",
 };
 
 describe("conflictGroup", () => {
@@ -42,7 +43,7 @@ describe("conflictGroup", () => {
   });
 
   it("covers every conflict code the backend defines", () => {
-    expect(Object.keys(EXPECTED)).toHaveLength(22);
+    expect(Object.keys(EXPECTED)).toHaveLength(23);
   });
 
   it("lists all eleven named groups plus Other, in a stable order", () => {

@@ -65,6 +65,7 @@ function servicedSchedule(): ParsedSchedule {
             },
             effort: { durationMinutes: 90, crewSize: 3 },
             endDate: null,
+            bookedDates: [],
             notes: null,
           },
         ],
@@ -121,6 +122,9 @@ function fixture(state: Partial<ExistingState> = {}) {
       })),
     },
     serviceAgreement: {
+      // The customer's existing agreements, locked in id order before any of
+      // them is updated.
+      findMany: jest.fn(async () => [{ id: AGREEMENT_ID }]),
       findFirst: jest.fn(async () => ({
         id: AGREEMENT_ID,
         importedInactiveAt: existing.agreementImportedInactiveAt,
@@ -131,6 +135,14 @@ function fixture(state: Partial<ExistingState> = {}) {
       update: jest.fn(async () => ({ id: AGREEMENT_ID })),
       create: jest.fn(),
     },
+    serviceAgreementBooking: {
+      deleteMany: jest.fn(async () => ({ count: 0 })),
+      createMany: jest.fn(async () => ({ count: 0 })),
+    },
+    // The agreement-row lock, which answers with the rows it was asked for.
+    $queryRaw: jest.fn(async () => [{ id: AGREEMENT_ID }]),
+    // The per-customer advisory lock, held before the existence check.
+    $executeRaw: jest.fn(async () => 1),
   };
 
   const prisma = {

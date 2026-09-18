@@ -58,6 +58,13 @@ async function visitForAssignment(): Promise<string> {
       crewSize: 2,
     });
   expect(agreement.status).toBe(201);
+  // Agreement creation now automatically plans a scoped onboarding horizon,
+  // which lands on the real clock's "today" — a different window than this
+  // fixture's own fixed `HORIZON`. Clear it so the explicit confirm below is
+  // the only thing that plants a visit, as `listed.body.items[0]` assumes.
+  await prisma.generatedVisit.deleteMany({
+    where: { serviceAgreementId: agreement.body.id },
+  });
 
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
@@ -353,6 +360,88 @@ describe('assigning a crew', () => {
       where: { entityId: res.body.id, action: 'assignment.created' },
     });
     expect(event).not.toBeNull();
+  });
+
+  /**
+   * ULK: if a reason is required, it is recorded and it can be read back.
+   *
+   * The drawer makes "Reason for this change" mandatory, then the box reset to
+   * its placeholder on save and the edit never appeared in the visit's
+   * History, which listed only "Generated" and "Last updated". The manager had
+   * no way to tell whether what they wrote had been kept at all.
+   */
+  it("keeps a hand edit, and its reason, in the visit's own history", async () => {
+    const visitId = await visitForAssignment();
+
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), reason: 'Client asked for the senior supervisor.' })
+      .expect(200);
+
+    const first = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+    expect(first.status).toBe(200);
+    expect(first.body.crewChanges).toEqual([
+      expect.objectContaining({
+        action: 'CREW_SET',
+        reason: 'Client asked for the senior supervisor.',
+        crewSize: 2,
+      }),
+    ]);
+    expect(first.body.crewChanges[0].actorLabel).toContain('@');
+    expect(typeof first.body.crewChanges[0].changedAt).toBe('string');
+
+    // A second edit replaces the assignment row, which the first edit's
+    // assignment-scoped audit entry named — so the visit has to hold the
+    // history, or the earlier reason disappears with the row.
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        ...goodCrew(),
+        plannedEndMinute: 12 * 60,
+        reason: 'Site pushed the finish time back.',
+      })
+      .expect(200);
+
+    const second = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+    // Newest first: a manager reads this backwards from what is true now.
+    expect(
+      second.body.crewChanges.map((change: { reason: string | null }) => change.reason),
+    ).toEqual([
+      'Site pushed the finish time back.',
+      'Client asked for the senior supervisor.',
+    ]);
+    expect(second.body.crewChanges[0].action).toBe('CREW_REPLACED');
+  });
+
+  it('records taking a crew off a visit in the same history', async () => {
+    const visitId = await visitForAssignment();
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), reason: 'Staffing it now.' })
+      .expect(200);
+
+    await request(http)
+      .delete(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .expect(204);
+
+    const visit = await request(http).get(`/api/visits/${visitId}`).set(auth(adminToken));
+    expect(visit.body.crewChanges[0]).toMatchObject({ action: 'CREW_REMOVED', crewSize: 0 });
+  });
+
+  it('leaves the history empty for a visit nobody has touched', async () => {
+    const visitId = await visitForAssignment();
+
+    const visit = await request(http).get(`/api/visits/${visitId}`).set(auth(adminToken));
+
+    expect(visit.body.crewChanges).toEqual([]);
   });
 
   it('accepts a vehicle with an authorized driver in the crew', async () => {

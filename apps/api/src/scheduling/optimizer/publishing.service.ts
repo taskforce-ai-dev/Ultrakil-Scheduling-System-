@@ -38,6 +38,30 @@ const PUBLISH_ASSIGNMENT_INCLUDE = {
 } satisfies Prisma.AssignmentInclude;
 
 /**
+ * What this publication is actually putting out, as the run's own counters.
+ *
+ * `visitsConsidered` is the run's horizon and does not move; a publication can
+ * only ever cover visits the run already looked at. Scheduled is the number of
+ * distinct visits being frozen right now, and everything else in the horizon is
+ * unassigned — which is what makes the partial-publication acknowledgement fire
+ * on the state being published rather than on the state the solver last saw.
+ */
+function publishedCounters(
+  run: { visitsConsidered: number },
+  publishable: readonly { generatedVisitId: string }[],
+) {
+  const visitsScheduled = new Set(
+    publishable.map((assignment) => assignment.generatedVisitId),
+  ).size;
+  const visitsConsidered = Math.max(run.visitsConsidered, visitsScheduled);
+  return {
+    visitsConsidered,
+    visitsScheduled,
+    visitsUnassigned: visitsConsidered - visitsScheduled,
+  };
+}
+
+/**
  * Publishing a schedule, and pinning parts of one.
  *
  * A published schedule is what the crews were told. It is never edited and
@@ -174,7 +198,16 @@ export class PublishingService {
       // publication can never proceed on a different warning set from the one
       // it was checked against.
       const warnings = provenanceWarnings(publishable);
-      const lockedReadiness = publishReadiness(run, warnings);
+      // The counters the run finished with are the solver's account of its own
+      // work, and a manager can change what is actually staffed afterwards — by
+      // taking a crew off a visit, or by putting one on a visit the solver left
+      // empty. "N of M visits have a crew. This is what the crews were given"
+      // is read straight off these numbers, so they are recomputed here, from
+      // the assignments actually being frozen, and the partial-publication gate
+      // is judged on them. A run may never report a visit as staffed when no
+      // assignment of its went out for it.
+      const counters = publishedCounters(run, publishable);
+      const lockedReadiness = publishReadiness(counters, warnings);
       const failure = missingPublishAcknowledgement(lockedReadiness, {
         acknowledgePartial,
         acknowledgeProvenance,
@@ -274,7 +307,7 @@ export class PublishingService {
           status: ScheduleRunStatus.SUCCEEDED,
           publishedAt: null,
         },
-        data: { publishedAt, publishedByUserId: actor.id },
+        data: { publishedAt, publishedByUserId: actor.id, ...counters },
       });
       if (claim.count !== 1) {
         throw new AppException(
@@ -368,6 +401,7 @@ export class PublishingService {
           after: {
             reason,
             assignmentCount: snapshot.length,
+            ...counters,
             supersededAssignments: previouslyPublished.length,
             // What the manager accepted, and exactly which unconfirmed source
             // values they accepted it over.

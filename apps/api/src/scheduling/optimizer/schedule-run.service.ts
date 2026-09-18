@@ -14,12 +14,21 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
+import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { crewMinutesOf } from '../capacity';
+import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { BranchDayCapacityService } from '../visit-generation/branch-day-capacity.service';
+import { lockBranchDays } from './branch-day-lock';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
+import {
+  branchDayKey,
+  dailyCapRefusal,
+  DailyLoadLedger,
+} from './daily-load-ledger';
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
-  lockScheduleAgreements,
   lockScheduleResources,
   assertScheduleSnapshot,
   assertVisitRevision,
@@ -158,6 +167,11 @@ interface ProposedAssignment extends SolveSnapshot {
     windowStartMinute: number;
     windowEndMinute: number;
   };
+  /** The branch-day the visit stands on now, which a move would empty. */
+  branchCode: BranchCode;
+  visitDate: Date;
+  /** This visit's own cost against the daily cap: duration times crew size. */
+  crewMinutes: number;
 }
 
 /**
@@ -214,6 +228,32 @@ function isPrismaUniqueConstraint(error: unknown): boolean {
  * under a long solve, and the cost of a crew sent somewhere they are not
  * allowed to be is far higher than the cost of checking twice.
  */
+/**
+ * Which member of a solved crew is the supervisor.
+ *
+ * The solver returns employee ids sorted by uuid and has no opinion about
+ * rank, so stamping SUPERVISOR on the first of them named whoever happened to
+ * sort first. On screen that put the Dispatch Board's Supervisor column — which
+ * reads the PMS grade — and the Edit crew drawer's role labels on the same
+ * visit in open disagreement: the column named the PMS-grade technician, the
+ * drawer called them a Technician and called somebody else Supervisor.
+ *
+ * The supervisor is the PMS-grade member, which is the grade the rule is
+ * actually about, and there is exactly one of them however many hold it. With
+ * no grade at all the first member keeps the role, so the output stays defined
+ * for a crew the eligibility engine would refuse anyway.
+ */
+export function solvedCrewRoles(
+  employeeIds: readonly string[],
+  isPmsGrade: (employeeId: string) => boolean,
+): { employeeId: string; role: CrewRole }[] {
+  const supervisorId = employeeIds.find(isPmsGrade) ?? employeeIds[0];
+  return employeeIds.map((employeeId) => ({
+    employeeId,
+    role: employeeId === supervisorId ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
+  }));
+}
+
 @Injectable()
 export class ScheduleRunService {
   private readonly logger = new Logger(ScheduleRunService.name);
@@ -223,6 +263,7 @@ export class ScheduleRunService {
     private readonly scheduler: SchedulerClient,
     private readonly eligibility: EligibilityService,
     private readonly audit: AuditService,
+    private readonly branchDayCapacity: BranchDayCapacityService,
   ) {}
 
   /** Records the run. The work itself happens in the queue worker. */
@@ -553,6 +594,11 @@ export class ScheduleRunService {
     if (await this.isCancelled(runId)) return this.markCancelled(runId, lease);
 
     const byId = new Map(visits.map((visit) => [visit.id, visit]));
+    // Who actually holds the grade the supervisor rule is about. The solver
+    // answers with employee ids in its own order and says nothing about rank.
+    const pmsGradeById = new Map(
+      employees.map((employee) => [employee.id, employee.isPmsGrade]),
+    );
     const proposals: ProposedAssignment[] = [];
 
     for (const proposal of solution.assignments) {
@@ -579,10 +625,10 @@ export class ScheduleRunService {
       const dto = {
         plannedStartMinute: proposal.start_minute,
         plannedEndMinute: proposal.start_minute + visit.durationMinutes,
-        crew: proposal.employee_ids.map((employeeId, index) => ({
-          employeeId,
-          role: index === 0 ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
-        })),
+        crew: solvedCrewRoles(
+          proposal.employee_ids,
+          (employeeId) => pmsGradeById.get(employeeId) === true,
+        ),
         vehicles: proposal.vehicles.map((entry) => ({
           vehicleId: entry.vehicle_id,
           driverEmployeeId: entry.driver_employee_id,
@@ -599,6 +645,9 @@ export class ScheduleRunService {
         dto,
         replaceAssignmentId: existing?.id,
         proposedVisit,
+        branchCode: visit.branchCode,
+        visitDate: visit.visitDate,
+        crewMinutes: crewMinutesOf(visit),
       });
     }
 
@@ -847,7 +896,7 @@ export class ScheduleRunService {
         // One solver response is one atomic change. Lock the entire affected set
         // in the shared deterministic order, then validate every revision before
         // creating drafts, transferring locks, moving dates or changing reasons.
-        await lockScheduleAgreements(
+        await lockAgreementRows(
           tx,
           entries.map((entry) => entry.serviceAgreementId),
         );
@@ -899,21 +948,62 @@ export class ScheduleRunService {
             visit.updatedAt,
           );
         }
+        // What every branch-day this run would move work between carries
+        // right now, read inside the transaction that commits the moves, and
+        // under a lock on every day a move could land on.
+        const ledger = await this.lockAndReadDailyLoad(tx, proposals);
         let scheduled = 0;
         let rejected = 0;
         for (const entry of proposals) {
+          // A move on to a day already at the cap is refused before it is
+          // judged, and the visit keeps its generated date. This is the one
+          // place a solver's move is committed, so it is the one place the
+          // cap can be made to hold whatever the solver decided.
+          //
+          // Refusing a move is not refusing an assignment: `refused` only
+          // clears `proposedVisit`, and the engine is then asked the same
+          // question about the day the visit is already standing on. A day
+          // that was over the cap before this run still gets its crews.
+          const refused = this.refuseOvercapMove(ledger, entry);
+          let move = refused ? undefined : entry.proposedVisit;
+
           // Evaluate and apply in order inside this transaction. Later checks
           // must see the slots freed or occupied by earlier accepted results.
           // The engine still wins whenever it disagrees with the solver.
-          const verdict = await this.eligibility.evaluate(
+          let verdict = await this.eligibility.evaluate(
             entry.visitId,
             entry.dto,
             {
               excludeAssignmentId: entry.replaceAssignmentId,
-              proposedVisit: entry.proposedVisit,
+              proposedVisit: move,
             },
             tx,
           );
+          if (!verdict.isEligible && move) {
+            // The engine has refused the move, so the move is not happening —
+            // and everything it just said is about a day this visit will not
+            // be on. Recorded as-is, those reasons name other people's clashes
+            // on another date beside a visit dated where it was generated:
+            // "on 2026-09-18" against a visit on Monday the 21st, with nothing
+            // on the screen to say the date is not the visit's own. A manager
+            // reading that checks the wrong day's crews.
+            //
+            // So the question is asked again about the day the visit keeps,
+            // exactly as a cap refusal does above. Refusing a move is not
+            // refusing an assignment: a crew that cannot serve the day the
+            // solver wanted is often free on the day the visit was generated
+            // for, and either way what gets recorded describes that day.
+            move = undefined;
+            verdict = await this.eligibility.evaluate(
+              entry.visitId,
+              entry.dto,
+              {
+                excludeAssignmentId: entry.replaceAssignmentId,
+                proposedVisit: undefined,
+              },
+              tx,
+            );
+          }
           if (!verdict.isEligible) {
             this.logger.warn(
               `Solver proposed an assignment the engine refused for visit ${entry.visitId}: ${verdict.conflicts
@@ -925,18 +1015,31 @@ export class ScheduleRunService {
                 ...entry,
                 // Keep one explanation/remedy per conflict. The queue and visit
                 // detail read the same structured reasons as manual checks.
-                reasons: verdict.conflicts.map((conflict) => ({
-                  code: conflict.code,
-                  message: conflict.message,
-                  remediation: conflict.remediation,
-                  resources: conflict.resources,
-                })),
+                // A refused move is listed among them: without it the queue
+                // says the crew clashes and never says the visit is only on
+                // this day because the day the scheduler wanted was full.
+                reasons: [...(refused ? [refused] : []), ...verdict.conflicts].map(
+                  (conflict) => ({
+                    code: conflict.code,
+                    message: conflict.message,
+                    remediation: conflict.remediation,
+                    resources: conflict.resources,
+                  }),
+                ),
               },
             ]);
             rejected += 1;
             continue;
           }
-          await this.persist(tx, runId, entry, pmsById);
+          await this.persist(tx, runId, { ...entry, proposedVisit: move }, pmsById);
+          if (move) {
+            ledger.recordMove(
+              entry.branchCode,
+              dateOnly(entry.visitDate),
+              dateOnly(move.visitDate),
+              entry.crewMinutes,
+            );
+          }
           scheduled += 1;
         }
         await this.recordUnassigned(tx, runId, unassigned);
@@ -959,6 +1062,169 @@ export class ScheduleRunService {
         );
       }
       throw error;
+    });
+  }
+
+  /**
+   * How full every branch-day this run might move work between already is.
+   *
+   * The basis is generation's own: every visit standing on the branch-day that
+   * is not cancelled, whatever agreement it belongs to and whoever planned it.
+   * `docs/ARCHITECTURE.md` states that basis for the generation guard, and the
+   * two have to agree — a backstop that counted only this run's visits would
+   * read a day holding twelve as empty and wave the thirteenth straight on to
+   * it, which is exactly the hole this closes.
+   *
+   * Only the days a move could touch are read: its origin, which a committed
+   * move empties by one, and its destination. A run that proposes no move
+   * reads nothing at all — and takes no lock, because a run that moves nothing
+   * changes no day's load and has no business queueing behind one that does.
+   *
+   * ## Why the count is locked before it is read
+   *
+   * The count is an aggregate, and an aggregate locks nothing. At READ
+   * COMMITTED two runs over disjoint visits, agreements and crews could both
+   * read a day as carrying eleven and both commit their twelfth, leaving
+   * thirteen on a day whose cap is twelve; none of the row locks above
+   * serialise that, because neither run touches anything the other holds.
+   * {@link lockBranchDays} gives the day itself a name to contend for, and it
+   * is held until this transaction commits, so a count read after it is a
+   * count that cannot change underneath the moves it authorises.
+   *
+   * Only the *destinations* are locked, not the origins. A day's count is
+   * consulted for one purpose — deciding whether a move may land on it — and
+   * every day a move can land on is a destination. An origin that is not also
+   * a destination is never asked how full it is; an origin that is also a
+   * destination is locked on that account. Reading an unlocked origin can
+   * therefore only ever leave the ledger with a stale idea of a day nobody
+   * asks about.
+   *
+   * The lock binds the two writers that plan days — this one and generation's
+   * `apply`. It cannot bind a manager moving one visit by hand, and is not
+   * meant to: `docs/ARCHITECTURE.md` has always said the cap constrains what
+   * the system does on its own.
+   */
+  private async lockAndReadDailyLoad(
+    tx: Prisma.TransactionClient,
+    proposals: ProposedAssignment[],
+  ): Promise<DailyLoadLedger> {
+    const moves = proposals.filter((entry) => entry.proposedVisit !== undefined);
+    if (moves.length === 0) return new DailyLoadLedger(new Map(), new Map());
+
+    // Taken after the visit, agreement and resource locks, and in the sorted
+    // order `lockBranchDays` imposes: every schedule writer takes these locks
+    // in the same sequence, which is what keeps two runs over the same days
+    // queueing rather than deadlocking.
+    await lockBranchDays(
+      tx,
+      moves.map((entry) => ({
+        branchCode: entry.branchCode,
+        date: dateOnly(entry.proposedVisit!.visitDate),
+      })),
+    );
+
+    const branchCodes = [...new Set(moves.map((entry) => entry.branchCode))];
+    const dates = [
+      ...new Map(
+        moves
+          .flatMap((entry) => [entry.visitDate, entry.proposedVisit!.visitDate])
+          .map((date) => [date.getTime(), date]),
+      ).values(),
+    ];
+
+    // `groupBy` cannot sum a product of two columns, so the rows themselves
+    // are read and reduced here — the same approach generation's own
+    // commit-time recheck uses, and for the same reason: crew-minutes is
+    // duration times crew size, not a column either side can aggregate alone.
+    const rows = await tx.generatedVisit.findMany({
+      where: {
+        branchCode: { in: branchCodes },
+        visitDate: { in: dates },
+        // Cancelled work occupies no part of the day. Everything else does —
+        // pending, scheduled, unassigned, published, a manager's own visit.
+        status: { not: VisitStatus.CANCELLED },
+      },
+      select: {
+        branchCode: true,
+        visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
+      },
+    });
+
+    const minutes = new Map<string, number>();
+    for (const row of rows) {
+      const key = branchDayKey(row.branchCode, dateOnly(row.visitDate));
+      minutes.set(key, (minutes.get(key) ?? 0) + crewMinutesOf(row));
+    }
+
+    // Real, resource-derived capacity for every branch-day a move could
+    // land on or leave — origin and destination alike, paired with the
+    // move's own branch rather than the naive branch×date cross-product
+    // `rows` above reads load over.
+    const touchedBranchDays = new Map<string, { branchCode: BranchCode; date: string }>();
+    for (const entry of moves) {
+      const add = (date: Date) => {
+        const key = branchDayKey(entry.branchCode, dateOnly(date));
+        touchedBranchDays.set(key, { branchCode: entry.branchCode, date: dateOnly(date) });
+      };
+      add(entry.visitDate);
+      add(entry.proposedVisit!.visitDate);
+    }
+    const capacities = await this.branchDayCapacity.capacitiesFor(
+      [...touchedBranchDays.values()],
+      tx,
+    );
+    const capMinutesByDay = new Map(
+      [...capacities].map(([key, capacity]) => [key, capacity.capacityMinutes]),
+    );
+
+    return new DailyLoadLedger(minutes, capMinutesByDay);
+  }
+
+  /**
+   * The refusal, or nothing when the move may stand.
+   *
+   * Returns the conflict rather than a boolean so the caller can put it in
+   * front of a manager unchanged if the visit ends up unassigned. A proposal
+   * that moves nowhere is never refused: that is an assignment for the day the
+   * visit already sits on, and a full day still needs its crews.
+   *
+   * One limitation, stated rather than hidden: the ledger refuses **in
+   * proposal order**, which is the order the solver returned — by visit id —
+   * and each proposal is answered against the day as it stands at that
+   * moment. A mutual swap between two days that are both exactly at the cap is
+   * therefore refused rather than resolved: moving visit V from day A to day B
+   * and visit W from B to A would be legal applied in either order, but
+   * whichever is judged first sees a full destination and is refused, and
+   * nothing has moved by the time the other is judged. Nothing here reorders
+   * or retries. The outcome is deterministic and errs on the safe side — no
+   * day ever ends over the cap — and both visits keep their generated dates.
+   */
+  private refuseOvercapMove(
+    ledger: DailyLoadLedger,
+    entry: ProposedAssignment,
+  ): Conflict | undefined {
+    if (!entry.proposedVisit) return undefined;
+
+    const target = dateOnly(entry.proposedVisit.visitDate);
+    if (ledger.admitsMoveOnto(entry.branchCode, target, entry.crewMinutes)) return undefined;
+
+    const kept = dateOnly(entry.visitDate);
+    this.logger.warn(
+      `Solver proposed moving visit ${entry.visitId} to ${target}, which already carries ${ledger.minutesOn(
+        entry.branchCode,
+        target,
+      )} crew-minutes in ${entry.branchCode}; the visit stays on ${kept}.`,
+    );
+    return dailyCapRefusal({
+      visitId: entry.visitId,
+      branchCode: entry.branchCode,
+      proposedDate: target,
+      keptDate: kept,
+      carryingMinutes: ledger.minutesOn(entry.branchCode, target),
+      visitMinutes: entry.crewMinutes,
+      capMinutes: ledger.capOn(entry.branchCode, target),
     });
   }
 

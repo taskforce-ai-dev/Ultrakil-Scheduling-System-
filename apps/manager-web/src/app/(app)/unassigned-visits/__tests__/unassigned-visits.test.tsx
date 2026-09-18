@@ -194,11 +194,95 @@ describe("unassigned visits queue", () => {
     expect(screen.getByText("Grandview Hotel")).toBeInTheDocument();
   });
 
+  /**
+   * "Narrow the branch filter to see the rest" was advice that could not
+   * work — everything in the pilot is one branch — and it never mentioned
+   * the pager at the very bottom, which is the actual way to see rows 26
+   * onwards.
+   */
+  it("says how to reach the rest of the queue: the pager, not the branch", async () => {
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall], 70);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.getByText(/Showing 2 of 70 unassigned visits/)).toBeInTheDocument();
+    expect(screen.getByText(/pager at the end of this list/)).toBeInTheDocument();
+    expect(screen.queryByText(/Narrow the branch filter/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The pager, walked end to end on a backlog that actually needs one.
+   *
+   * The pilot dataset has 23 unassigned visits, so the queue never went past
+   * one page in the trial and the pager the banner points at was never
+   * exercised by anyone. 70 visits at 25 a page is three pages: the banner
+   * and the pager have to agree about which one of them a manager is on, and
+   * the ends have to stop — a Previous that steps off page 1, or a Next that
+   * asks the server for page 4 of 3, both answer with an empty list and no
+   * way to tell that from "nothing left to staff".
+   */
+  it("walks a backlog too large for one page, and stops at both ends", async () => {
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall], 70);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+    const user = userEvent.setup();
+
+    // Re-queried each time: every page change puts the list back through its
+    // loading state, so the pager is a new node afterwards.
+    const pager = () => screen.getByRole("navigation", { name: "Unassigned visit pages" });
+    const lastQuery = () => vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+
+    // Banner and pager, one page number between them.
+    expect(screen.getByText(/page 1 of 3\./)).toBeInTheDocument();
+    expect(within(pager()).getByText(/Page 1 of 3/)).toBeInTheDocument();
+    expect(within(pager()).getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(within(pager()).getByRole("button", { name: "Next" })).toBeEnabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/page 2 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 2 });
+    expect(within(pager()).getByText(/Page 2 of 3/)).toBeInTheDocument();
+    expect(within(pager()).getByRole("button", { name: "Previous" })).toBeEnabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Next" }));
+    expect(await screen.findByText(/page 3 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 3 });
+    // The last page is the last page: Next must not ask for a fourth.
+    expect(within(pager()).getByRole("button", { name: "Next" })).toBeDisabled();
+
+    await user.click(within(pager()).getByRole("button", { name: "Previous" }));
+    expect(await screen.findByText(/page 2 of 3\./)).toBeInTheDocument();
+    expect(lastQuery()).toMatchObject({ page: 2 });
+  });
+
+  it("always reports how many there are, even when they all fit on one page", async () => {
+    // A filtered queue that fits showed no total at all, so a coordinator
+    // could not tell 2 from 2-of-70 without scrolling to look for a pager.
+    mockUnassigned([kandyNoSupervisor, colomboCrewTooSmall]);
+    render(<UnassignedVisitsPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.getByText("All 2 unassigned visits are shown.")).toBeInTheDocument();
+  });
+
+  it("offers the backlog nobody has looked at as a conflict choice", async () => {
+    // 63 of 70 queued visits carry no conflicts at all. Without this the
+    // Conflict type filter could only name the seven that need a decision.
+    const user = await renderPage();
+
+    await user.click(screen.getByLabelText("Conflict type"));
+    await user.click(await screen.findByRole("option", { name: "Not yet checked" }));
+
+    const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(lastCall).toMatchObject({ checked: false, page: 1 });
+    expect(lastCall).not.toHaveProperty("conflictGroup");
+  });
+
   it("asks the server for an operation state rather than sending a status", async () => {
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Status"));
-    await user.click(await screen.findByRole("option", { name: "Exceptions" }));
+    await user.click(await screen.findByRole("option", { name: "Checked and refused" }));
 
     const lastCall = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
     expect(lastCall).toMatchObject({ operationState: "EXCEPTION", page: 1 });
@@ -209,7 +293,12 @@ describe("unassigned visits queue", () => {
     const user = await renderPage();
 
     await user.click(screen.getByLabelText("Status"));
-    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    // Not "Unassigned": on the Visit Calendar that word means the scheduler
+    // tried and failed, and here it means precisely the opposite — nobody has
+    // tried. The same word for opposite facts is how a coordinator came to
+    // read three different numbers as one.
+    expect(screen.queryByRole("option", { name: "Unassigned" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Not checked yet" }));
 
     expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
       operationState: "UNASSIGNED",
@@ -346,9 +435,65 @@ describe("unassigned visits queue", () => {
 
     const query = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
     expect(query).toMatchObject({ branchCode: "KANDY", page: 1, pageSize: 25 });
-    expect(query).toHaveProperty("from");
-    expect(query).toHaveProperty("to");
     expect(query).not.toHaveProperty("visitId");
+  });
+
+  /**
+   * The backlog is the page's whole purpose, and the date was hiding it.
+   *
+   * The filter opened on today and could not be cleared, so a queue holding a
+   * hundred-odd uncrewed visits across three months — four of them inside a
+   * week already published — showed "Nothing unassigned / Every visit
+   * currently has a valid crew and vehicle assignment", directly under a
+   * heading promising "including work nobody has tried to staff yet".
+   */
+  it("asks for the whole backlog, with no date, until a manager picks one", async () => {
+    await renderPage();
+
+    const query = vi.mocked(fetchUnassignedVisits).mock.calls.at(0)?.[0];
+    expect(query).not.toHaveProperty("from");
+    expect(query).not.toHaveProperty("to");
+  });
+
+  it("narrows to one date when a manager picks one, and lets them clear it again", async () => {
+    const user = await renderPage();
+
+    await user.type(screen.getByLabelText("Date"), "2026-09-18");
+    expect(vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0]).toMatchObject({
+      from: "2026-09-18",
+      to: "2026-09-18",
+      page: 1,
+    });
+
+    await user.click(screen.getByRole("button", { name: /Clear date/ }));
+    const cleared = vi.mocked(fetchUnassignedVisits).mock.calls.at(-1)?.[0];
+    expect(cleared).not.toHaveProperty("from");
+    expect(cleared).not.toHaveProperty("to");
+  });
+
+  it("names the date it found nothing on rather than clearing the whole system", async () => {
+    const user = await renderPage();
+    mockUnassigned([]);
+
+    await user.type(screen.getByLabelText("Date"), "2026-09-18");
+
+    expect(await screen.findByText("Nothing unassigned on Friday 18 September 2026")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every visit currently has a valid crew/)
+    ).not.toBeInTheDocument();
+  });
+
+  it("says a filter is hiding the queue instead of vouching for every visit", async () => {
+    const user = await renderPage();
+    mockUnassigned([]);
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+
+    expect(await screen.findByText("Nothing matches these filters")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Every visit currently has a valid crew/)
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the Kandy PMS shortage notice on a focused visit", async () => {
@@ -361,10 +506,14 @@ describe("unassigned visits queue", () => {
   });
 
   it("shows an empty state when nothing is unassigned", async () => {
+    // No filter is set, so the queue has looked at everything and may say so.
     mockUnassigned([]);
     render(<UnassignedVisitsPage />);
 
     expect(await screen.findByText("Nothing unassigned")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Every visit in the system has a crew/)
+    ).toBeInTheDocument();
   });
 
   it("says so when the page holds fewer visits than the API reports", async () => {
@@ -379,11 +528,15 @@ describe("unassigned visits queue", () => {
   it("does not use color as the only signal for a conflict group", async () => {
     await renderPage();
 
-    // Each conflict card carries the group's text label and stable code
-    // alongside its icon, not just a colored badge.
+    // Each conflict card carries the group's text label and the written
+    // sentence alongside its icon, not just a colored badge. The engine's own
+    // code is not shouted at the manager.
     const row = screen.getByText("Grandview Hotel").closest("li")!;
     expect(within(row).getByText("Missing PMS supervisor")).toBeInTheDocument();
-    expect(within(row).getByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).toBeInTheDocument();
+    expect(
+      within(row).getByText("No PMS-grade supervisor is available in Kandy for this visit.")
+    ).toBeInTheDocument();
+    expect(within(row).queryByText("BRANCH_HAS_NO_PMS_SUPERVISOR")).not.toBeInTheDocument();
   });
 
   it("never shows a not-yet-checked visit as if it had no problems", async () => {

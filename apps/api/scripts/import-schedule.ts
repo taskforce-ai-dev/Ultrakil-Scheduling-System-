@@ -55,6 +55,8 @@ const ISSUE_HEADINGS: Record<ImportIssue['code'], string> = {
   SITE_NAME_MISSING: 'Rows with no location',
   BRANCH_UNKNOWN: 'Sites whose UltraKIL branch needs confirming',
   SHEET_NOT_MAPPED: 'Sheets not in the import mapping',
+  BOOKED_DATE_INVALID:
+    'Booked days the month does not have — skipped rather than guessed',
   RECORD_INACTIVE: 'Marked red — imported as no longer serviced, history kept',
   RECORD_MARKING_AMBIGUOUS:
     'Red on some identity cells but not others — left serviced, needs a decision',
@@ -143,6 +145,7 @@ async function main(): Promise<void> {
   log(`  job types   ${summary.jobTypesCreated} created`);
   log(`  agreements  ${summary.agreementsCreated} created, ${summary.agreementsUpdated} updated`);
   log(`  skipped     ${summary.agreementsSkipped} agreement row(s) needing a decision`);
+  log(`  bookings    ${summary.bookingsImported} date(s) already agreed with customers`);
   log();
   log('Branches, worked out from each site\'s town:');
   log(`  Colombo   ${summary.sitesInColombo}`);

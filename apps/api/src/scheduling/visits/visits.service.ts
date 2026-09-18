@@ -8,7 +8,7 @@ import {
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
-import { describeFrequency } from '../../catalog/catalog.mapper';
+import { describeFrequency } from '../visit-generation/cadence';
 import { parseDateOnly, toDateOnly } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -22,10 +22,25 @@ import { protectionReasonFor } from '../visit-generation/plan';
 import {
   AdjustVisitDto,
   LockVisitDto,
+  VISIT_CREW_CHANGE_ACTIONS,
+  VisitCrewChangeAction,
+  VisitCrewChangeDto,
   VisitDetailDto,
   VisitDto,
   VisitQueryDto,
 } from './dto';
+
+/** A history panel is read backwards from now; twenty edits is already a lot. */
+const MAX_VISIT_CREW_CHANGES = 20;
+
+/** The assignment a crew would turn up for, in the order `get` prefers. */
+const LIVE_CREW_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.DRAFT,
+  AssignmentStatus.PROPOSED,
+  AssignmentStatus.PUBLISHED,
+  AssignmentStatus.ACKNOWLEDGED,
+  AssignmentStatus.IN_PROGRESS,
+];
 
 const VISIT_INCLUDE = {
   serviceAgreement: {
@@ -39,6 +54,26 @@ const VISIT_INCLUDE = {
   },
   agreementVersion: true,
   _count: { select: { assignments: true } },
+  /**
+   * How many people are actually on this visit.
+   *
+   * `_count.assignments` counts assignment *records*, one of which holds a
+   * whole crew — so the drawer printed "1 crew member" and "Crew needed: 2
+   * (1 assigned)" beside a dispatch row naming two people and a calendar tile
+   * badging 2, and a fully staffed job read as a man short. The crew is the
+   * crew of the assignment in force, which is the one the dispatch board and
+   * the calendar both already show.
+   */
+  assignments: {
+    where: { status: { in: LIVE_CREW_STATUSES } },
+    select: {
+      _count: { select: { crewMembers: true } },
+      plannedStart: true,
+      plannedEnd: true,
+    },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    take: 1,
+  },
 } satisfies Prisma.GeneratedVisitInclude;
 
 type VisitWithRelations = Prisma.GeneratedVisitGetPayload<{
@@ -149,6 +184,16 @@ export class VisitsService {
   async get(id: string): Promise<VisitDetailDto> {
     const visit = await this.load(id);
     const agreement = visit.serviceAgreement;
+    // The run's own horizon, because that is how every screen in the portal
+    // names a run — "Schedule run 15-21 Sep". A uuid tells a manager nothing
+    // they can act on. Looked up here rather than joined into VISIT_INCLUDE:
+    // this is one visit, and the list has no use for it.
+    const run = visit.generatedByRunId
+      ? await this.prisma.scheduleRun.findUnique({
+          where: { id: visit.generatedByRunId },
+          select: { rangeStart: true, rangeEnd: true },
+        })
+      : null;
     const snapshot = (visit.agreementVersion?.snapshot ?? null) as {
       allowedDays?: string[];
     } | null;
@@ -171,8 +216,53 @@ export class VisitsService {
         allowedDaysAtGeneration: snapshot?.allowedDays ?? [],
         generatedAt: visit.createdAt.toISOString(),
         generatedByRunId: visit.generatedByRunId,
+        generatedByRunRangeStart: run ? toDateOnly(run.rangeStart) : null,
+        generatedByRunRangeEnd: run ? toDateOnly(run.rangeEnd) : null,
       },
+      crewChanges: await this.crewChanges(id),
     };
+  }
+
+  /**
+   * Every hand edit to this visit's crew, newest first, with the reason given.
+   *
+   * The drawer requires a reason for a manual override and then showed no sign
+   * of it anywhere: the box reset to its placeholder on save and the visit's
+   * History listed only "Generated" and "Last updated". A required reason that
+   * cannot be read back is a form field, not a record.
+   *
+   * Read from the visit's own audit entries rather than its assignments':
+   * replacing a crew hard-deletes the draft it replaces, so an assignment-keyed
+   * history loses everything but the latest edit.
+   */
+  private async crewChanges(visitId: string): Promise<VisitCrewChangeDto[]> {
+    const events = await this.prisma.auditEvent.findMany({
+      where: {
+        entityType: 'GeneratedVisit',
+        entityId: visitId,
+        action: 'visit.crew_changed',
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: MAX_VISIT_CREW_CHANGES,
+      select: { createdAt: true, actorLabel: true, after: true },
+    });
+
+    return events.map((event) => {
+      const change = (event.after ?? {}) as {
+        action?: VisitCrewChangeAction;
+        reason?: string | null;
+        crewSize?: number;
+      };
+      return {
+        changedAt: event.createdAt.toISOString(),
+        action: VISIT_CREW_CHANGE_ACTIONS.includes(change.action as VisitCrewChangeAction)
+          ? (change.action as VisitCrewChangeAction)
+          : 'CREW_REPLACED',
+        actorLabel: event.actorLabel,
+        reason: change.reason ?? null,
+        crewSize: change.crewSize ?? 0,
+      };
+    });
   }
 
   /**
@@ -191,23 +281,38 @@ export class VisitsService {
 
       const windowStart = dto.windowStartMinute ?? before.windowStartMinute;
       const windowEnd = dto.windowEndMinute ?? before.windowEndMinute;
-      if (windowEnd <= windowStart) {
-        throw new AppException(
-          'SERVICE_WINDOW_INVALID',
-          `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
-          HttpStatus.BAD_REQUEST,
-          { windowStart, windowEnd },
-        );
-      }
-
       const duration = dto.durationMinutes ?? before.durationMinutes;
-      if (duration > windowEnd - windowStart) {
-        throw new AppException(
-          'SERVICE_WINDOW_INVALID',
-          `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
-          HttpStatus.BAD_REQUEST,
-          { duration, windowMinutes: windowEnd - windowStart },
-        );
+
+      // Only an edit that touches the window or the duration has to satisfy
+      // the invariant. A visit can already breach it without anyone having
+      // made a mistake: a booked date on hours the site records as an hour is
+      // planned on those hours deliberately, and reported as a booking
+      // warning. Validating it on every edit made such a visit uneditable —
+      // a manager changing the crew size was refused for a window they had
+      // not touched and could not fix from that screen.
+      const touchesTheWindow =
+        dto.windowStartMinute !== undefined ||
+        dto.windowEndMinute !== undefined ||
+        dto.durationMinutes !== undefined;
+
+      if (touchesTheWindow) {
+        if (windowEnd <= windowStart) {
+          throw new AppException(
+            'SERVICE_WINDOW_INVALID',
+            `The visit window ends at ${formatMinute(windowEnd)}, which is not after it starts at ${formatMinute(windowStart)}.`,
+            HttpStatus.BAD_REQUEST,
+            { windowStart, windowEnd },
+          );
+        }
+
+        if (duration > windowEnd - windowStart) {
+          throw new AppException(
+            'SERVICE_WINDOW_INVALID',
+            `A ${duration}-minute visit does not fit in a window of ${windowEnd - windowStart} minutes. Widen the window or shorten the visit.`,
+            HttpStatus.BAD_REQUEST,
+            { duration, windowMinutes: windowEnd - windowStart },
+          );
+        }
       }
 
       const visitDate = dto.visitDate
@@ -292,6 +397,35 @@ export class VisitsService {
           );
         }
       }
+      // A stored unassigned reason is an answer about one particular day.
+      //
+      // Every conflict a run records names the date, the hours and the people
+      // that clashed where the visit was standing when it was judged — "…from
+      // 09:00 to 11:00 on 2026-09-18". Move the visit, or change the window it
+      // has to fit, and none of that is about this visit any more. The rows
+      // used to stay, so the Unassigned queue went on naming a Friday's
+      // clashes for a visit now on the Monday while the Edit crew drawer,
+      // which checks live, correctly named the Monday.
+      //
+      // Dropped rather than re-evaluated: this edit knows the reasons are
+      // stale, not what the true ones are, and the queue already reads an
+      // empty conflict list as "not yet checked", which is what the visit now
+      // is. Only an edit that actually moved something the engine judges
+      // clears them — a note against an unchanged visit is not news about its
+      // day.
+      const engineInputsMoved =
+        visitDate.getTime() !== before.visitDate.getTime() ||
+        windowStart !== before.windowStartMinute ||
+        windowEnd !== before.windowEndMinute ||
+        duration !== before.durationMinutes ||
+        (dto.requiredCrewSize !== undefined &&
+          dto.requiredCrewSize !== before.requiredCrewSize);
+      if (engineInputsMoved) {
+        await tx.visitUnassignedReason.deleteMany({
+          where: { generatedVisitId: id },
+        });
+      }
+
       const visit = await tx.generatedVisit.update({
         where: { id },
         data: {
@@ -415,18 +549,14 @@ export class VisitsService {
 
 function toVisitDto(visit: VisitWithRelations): VisitDto {
   const protection = protectionReasonFor({
-    id: visit.id,
-    serviceAgreementId: visit.serviceAgreementId,
-    visitDate: toDateOnly(visit.visitDate),
-    windowStartMinute: visit.windowStartMinute,
-    windowEndMinute: visit.windowEndMinute,
-    durationMinutes: visit.durationMinutes,
-    requiredCrewSize: visit.requiredCrewSize,
     status: visit.status,
     isManuallyAdjusted: visit.isManuallyAdjusted,
     isLocked: visit.lockedAt !== null,
     hasAssignments: visit._count.assignments > 0,
   });
+
+  // The assignment in force, the one the Dispatch Board and the Calendar show.
+  const inForce = visit.assignments[0];
 
   return {
     id: visit.id,
@@ -442,6 +572,7 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     siteName: visit.serviceAgreement.serviceSite.name,
     jobTypeName: visit.serviceAgreement.jobType.name,
     hoursUnconfirmed: visit.serviceAgreement.serviceSite._count.operatingHours === 0,
+    placement: visit.placement,
     isProtected: protection !== null,
     protectionReason: protection,
     isManuallyAdjusted: visit.isManuallyAdjusted,
@@ -449,9 +580,26 @@ function toVisitDto(visit: VisitWithRelations): VisitDto {
     isLocked: visit.lockedAt !== null,
     lockReason: visit.lockReason,
     assignmentCount: visit._count.assignments,
+    assignedCrewCount: visit.assignments[0]?._count.crewMembers ?? 0,
+    // The hour a crew is actually due, which is not the service window. A
+    // calendar that prints the window as the time turns a defaulted
+    // 08:00-17:00 into "the crew arrives at 08:00" for every visit on the
+    // day. Null until somebody is assigned: nobody has decided yet, and
+    // saying so is the only honest answer.
+    plannedStartMinute: inForce ? minuteOfVisitDay(inForce.plannedStart, visit.visitDate) : null,
+    plannedEndMinute: inForce ? minuteOfVisitDay(inForce.plannedEnd, visit.visitDate) : null,
     createdAt: visit.createdAt.toISOString(),
     updatedAt: visit.updatedAt.toISOString(),
   };
+}
+
+/**
+ * Minutes from the visit's own UTC midnight, exactly as the calendar read
+ * model computes them — the two screens must not disagree about the same
+ * assignment by a timezone.
+ */
+function minuteOfVisitDay(moment: Date, visitDate: Date): number {
+  return Math.round((moment.getTime() - visitDate.getTime()) / 60_000);
 }
 
 function formatMinute(minute: number): string {

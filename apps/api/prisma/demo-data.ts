@@ -27,6 +27,7 @@
 import { BranchCode, DayRuleKind, FrequencyUnit, Weekday } from '@prisma/client';
 
 import {
+  formatVehicleLabel,
   parseVehicleHeader,
   toSkillCode,
 } from '../src/workforce/matrix-import/mapping';
@@ -224,7 +225,13 @@ function buildVehicles(): ParsedVehicle[] {
     if (!code) {
       throw new Error(`Demo vehicle header has no registration: "${header}"`);
     }
-    return { code, label: header, seatCapacity, ownershipGroup: 'Company Vehicles' };
+    // Written for a screen, exactly as the real importer writes it.
+    return {
+      code,
+      label: formatVehicleLabel(header),
+      seatCapacity,
+      ownershipGroup: 'Company Vehicles',
+    };
   });
 }
 

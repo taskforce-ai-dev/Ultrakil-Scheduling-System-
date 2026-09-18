@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -78,6 +78,72 @@ describe("ServiceAgreementsPage", () => {
     expect(screen.getByText("Termite Control")).toBeInTheDocument();
   });
 
+  it("names a cadence by its interval, not by its unit alone", async () => {
+    // ULK: a fortnightly agreement (1 visit, every 2 weeks) was rendered
+    // "1x / week" — the interval was dropped — so every fortnightly contract
+    // read as weekly on the screen a manager answers "how often do we serve
+    // this customer" from. A coordinator concluded the scheduler was dropping
+    // visits; it was not.
+    vi.mocked(fetchServiceAgreements).mockResolvedValue({
+      items: [
+        buildServiceAgreement({
+          id: "agreement-fortnightly",
+          customerName: "Synthetic Client 60",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "WEEK",
+          frequencyLabel: "Fortnightly",
+        }),
+        buildServiceAgreement({
+          id: "agreement-two-monthly",
+          customerName: "Synthetic Client 79",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "MONTH",
+          frequencyLabel: "Two-monthly",
+        }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<ServiceAgreementsPage />);
+
+    expect(await screen.findByText("Fortnightly")).toBeInTheDocument();
+    expect(screen.getByText("Two-monthly")).toBeInTheDocument();
+    expect(screen.queryByText("1x / week")).not.toBeInTheDocument();
+    expect(screen.queryByText("1x / month")).not.toBeInTheDocument();
+  });
+
+  it("lets a manager set the interval, so a fortnightly agreement can be created at all", async () => {
+    const user = await openForm();
+
+    const interval = screen.getByLabelText("Every");
+    await user.clear(interval);
+    await user.type(interval, "2");
+
+    // The cadence is named back before it is saved: a manager should not have
+    // to save an agreement to find out they built a weekly one.
+    expect(await screen.findByText("fortnightly")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), "2026-09-17");
+
+    vi.mocked(createServiceAgreement).mockResolvedValue(
+      buildServiceAgreement({ frequencyInterval: 2, frequencyLabel: "Fortnightly" }),
+    );
+    vi.mocked(fetchSchedulePreview).mockResolvedValue(buildSchedulePreview());
+
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    await vi.waitFor(() =>
+      expect(createServiceAgreement).toHaveBeenCalledWith(
+        expect.objectContaining({ frequencyCount: 1, frequencyInterval: 2, frequencyUnit: "WEEK" }),
+      ),
+    );
+  });
+
   it("is reachable by keyboard and exposes accessible labels for every field", async () => {
     await openForm();
 
@@ -127,6 +193,19 @@ describe("ServiceAgreementsPage", () => {
 
     expect(siteTrigger).toHaveTextContent(site.name);
     expect(siteTrigger).not.toHaveTextContent(site.id);
+  });
+
+  it("says the start date sets the cycle, not only when the work begins", async () => {
+    // A fortnight belongs to the agreement: its periods are counted from this
+    // day. Moving it re-phases every future one, and the next generation run
+    // then plans different days — which is not something to discover from a
+    // calendar that has quietly moved.
+    await openForm();
+
+    expect(
+      screen.getByText(/The start date also sets the cycle/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/re-phases every future\s+period/)).toBeInTheDocument();
   });
 
   it("requires a start date before saving", async () => {
@@ -303,6 +382,61 @@ describe("ServiceAgreementsPage", () => {
     expect(await screen.findByText("Harbour Logistics")).toBeInTheDocument();
     expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Archived");
+  });
+
+  /**
+   * An active agreement that has generated nothing must not be invisible.
+   *
+   * Synthetic Client 79 has an active two-monthly agreement and zero visits
+   * in September, October, November and December. It appears on no calendar,
+   * in no queue and in no schedule run — there is nothing of it to appear —
+   * and two testers raised it independently before anything on screen said a
+   * word about it. This list is the only place that can.
+   */
+  it("marks an agreement that has generated no visits, and gathers them behind a filter", async () => {
+    const barren = buildServiceAgreement({
+      id: "agreement-barren",
+      customerName: "Synthetic Client 79",
+      siteName: "Rear Store",
+      status: "ACTIVE",
+      isActive: true,
+      generatedVisitCount: 0,
+    });
+    vi.mocked(fetchServiceAgreements).mockImplementation((query) =>
+      Promise.resolve(
+        query?.withoutVisits
+          ? { items: [barren], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingAgreement, barren], total: 2, page: 1, pageSize: 200 }
+      )
+    );
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Synthetic Client 79");
+
+    // Said on the row, in words, without being asked for.
+    const barrenRow = screen.getByRole("row", { name: /Synthetic Client 79/ });
+    expect(within(barrenRow).getByText("No visits generated")).toBeInTheDocument();
+    // And not said about an agreement that has produced work.
+    const healthyRow = screen.getByRole("row", { name: /Cinnamon Grand Colombo/ });
+    expect(within(healthyRow).queryByText("No visits generated")).toBeNull();
+
+    // The default look asks the server for everything, not only these.
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.not.objectContaining({ withoutVisits: expect.anything() })
+    );
+
+    expect(screen.getByLabelText("Visits generated")).toHaveTextContent("Any");
+    await user.click(screen.getByLabelText("Visits generated"));
+    await user.click(await screen.findByRole("option", { name: "None generated" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Cinnamon Grand Colombo")).toBeNull();
+    });
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.objectContaining({ withoutVisits: true })
+    );
+    expect(screen.getByText("Synthetic Client 79")).toBeInTheDocument();
   });
 
   it("reaches archived agreements through the Status filter and labels them in text (ULK-O08)", async () => {

@@ -107,6 +107,12 @@ export interface OperationsVisit {
   windowEndMinute: number | null;
   hoursUnconfirmed: boolean;
   branchCode: BranchCode | "";
+  /**
+   * The visit's own stage, which is the vocabulary every screen uses. Null
+   * when the server did not send one this client recognises — the row still
+   * renders, it just cannot claim which kind of unstaffed it is.
+   */
+  status: VisitStatus | null;
 }
 
 export interface OperationsCrewMember {
@@ -140,13 +146,30 @@ export interface OperationViolation {
   remediation?: string;
 }
 
-export interface OperationsScheduleVersion {
-  id: string | null;
-  version?: number | null;
-  status: AssignmentStatus | "";
-  predecessorId?: string | null;
-  publishedAt: string | null;
-}
+/**
+ * The schedule run the current assignment came from, straight off the
+ * contract like the lineage types below.
+ *
+ * It used to be written out by hand, and had drifted: a `version` and a
+ * `predecessorId` the server has never sent, which compiled happily and would
+ * have let a screen tell a correction story the API never told. The one
+ * departure is `status`, which widens to "" for a response carrying a status
+ * this client does not recognise — a defensive default, never a claim.
+ */
+type OperationsScheduleVersionContract = NonNullable<
+  OperationsDayContractItem["scheduleVersion"]
+>;
+export type OperationsScheduleVersion = Omit<
+  OperationsScheduleVersionContract,
+  "status"
+> & { status: OperationsScheduleVersionContract["status"] | "" };
+
+/**
+ * The run statuses the contract actually names. `AssignmentDto.status` is a
+ * bare string in the document, so this is the narrower of the two and the one
+ * a parsed value has to land in.
+ */
+type ScheduleVersionStatus = OperationsScheduleVersionContract["status"];
 
 /**
  * Per-visit published-assignment lineage. Types come from the generated
@@ -184,7 +207,10 @@ export interface OperationsSummary {
   total: number;
   ready: number;
   proposed: number;
-  unassigned: number;
+  /** Nobody has tried to staff these yet. */
+  awaitingStaffing: number;
+  /** Staffing was attempted on these and refused. */
+  staffingFailed: number;
   exceptions: number;
   hoursUnconfirmed: number;
 }
@@ -226,6 +252,18 @@ export type ApplyPublishedAssignmentRepairRequest =
 export type PublishedAssignmentRepairResult = Json<
   paths["/api/operations/published-assignment-repairs/apply"]["post"]["responses"]["200"]
 >;
+
+/**
+ * The visit statuses this client knows. A row carrying anything else is still
+ * shown; it just does not get named with a word that might be wrong.
+ */
+const VISIT_STATUSES = new Set<VisitStatus>([
+  "PENDING",
+  "SCHEDULED",
+  "UNASSIGNED",
+  "COMPLETED",
+  "CANCELLED",
+]);
 
 const OPERATION_STATES = new Set<OperationState>([
   "READY",
@@ -387,6 +425,20 @@ function parsePublishedAssignmentLineage(value: unknown): OperationsPublishedAss
   };
 }
 
+function parseScheduleVersion(version: Record<string, unknown>): OperationsScheduleVersion {
+  const status = asString(version.status);
+  return {
+    id: typeof version.id === "string" ? version.id : null,
+    // An unrecognised status is not a claim about dispatch truth.
+    status: ASSIGNMENT_STATUSES.has(status as AssignmentStatus)
+      ? (status as ScheduleVersionStatus)
+      : "",
+    publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
+    rangeStart: typeof version.rangeStart === "string" ? version.rangeStart : null,
+    rangeEnd: typeof version.rangeEnd === "string" ? version.rangeEnd : null,
+  };
+}
+
 function parseOperationsItem(value: unknown): OperationsDayItem | null {
   if (typeof value !== "object" || value === null) return null;
   const record = asRecord(value);
@@ -435,6 +487,9 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
       branchCode: ["COLOMBO", "KANDY"].includes(asString(visitRecord.branchCode))
         ? (visitRecord.branchCode as BranchCode)
         : "",
+      status: VISIT_STATUSES.has(asString(visitRecord.status) as VisitStatus)
+        ? (visitRecord.status as VisitStatus)
+        : null,
     },
     state,
     // An unknown state cannot safely be treated as dispatch truth, even when
@@ -446,17 +501,7 @@ function parseOperationsItem(value: unknown): OperationsDayItem | null {
     proposedAssignment: parseAssignment(record.proposedAssignment),
     violations,
     nextAction: asString(record.nextAction, state === "READY" ? "No action needed" : "Review visit"),
-    scheduleVersion: hasVersion
-      ? {
-          id: typeof version.id === "string" ? version.id : null,
-          version: typeof version.version === "number" ? version.version : null,
-          status: ASSIGNMENT_STATUSES.has(asString(version.status) as AssignmentStatus)
-            ? (version.status as AssignmentStatus)
-            : "",
-          predecessorId: typeof version.predecessorId === "string" ? version.predecessorId : null,
-          publishedAt: typeof version.publishedAt === "string" ? version.publishedAt : null,
-        }
-      : null,
+    scheduleVersion: hasVersion ? parseScheduleVersion(version) : null,
     publishedAssignmentLineage,
     warnings: warnings.filter(
       (warning, index) => warnings.findIndex(
@@ -481,7 +526,8 @@ export function parseOperationsDay(payload: unknown): OperationsDayResponse {
       total: asNumber(summary.total),
       ready: asNumber(summary.ready),
       proposed: asNumber(summary.proposed),
-      unassigned: asNumber(summary.unassigned),
+      awaitingStaffing: asNumber(summary.awaitingStaffing),
+      staffingFailed: asNumber(summary.staffingFailed),
       exceptions: asNumber(summary.exceptions),
       hoursUnconfirmed: asNumber(summary.hoursUnconfirmed),
     },
@@ -555,13 +601,18 @@ export interface StartScheduleRunRequest {
   timeLimitSeconds?: number;
 }
 
-/** `ScheduleRunQueryDto` — the query gap, same pattern as `UnassignedVisitsQuery`. */
-export interface ScheduleRunQuery {
-  page?: number;
-  pageSize?: number;
-  status?: ScheduleRunStatus;
-  ids?: string[];
-}
+/**
+ * Straight from the published contract, no longer hand-typed.
+ *
+ * `ids` was hand-typed as `string[]` here while `buildQuery` serialized any
+ * array with `String(value)` — a comma-joined single value, not a repeated
+ * parameter. The API accepts both, but a query type that promises a real
+ * array and a builder that never sends one is exactly the gap
+ * `UnassignedVisitsQuery` was deriving from the contract to close.
+ */
+export type ScheduleRunQuery = NonNullable<
+  paths["/api/schedule-runs"]["get"]["parameters"]["query"]
+>;
 
 /** `PublishScheduleDto` — same request-body gap. */
 export interface PublishScheduleRequest {
@@ -633,6 +684,8 @@ export interface CreateServiceAgreementRequest {
   serviceSiteId: string;
   jobTypeId: string;
   frequencyCount: number;
+  /** Units to one cycle. 1 per WEEK with an interval of 2 is fortnightly. */
+  frequencyInterval?: number;
   frequencyUnit: "WEEK" | "MONTH";
   crewSize?: number;
   durationMinutes?: number;
@@ -714,6 +767,16 @@ function buildQuery(params?: Record<string, unknown>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
+    // An array becomes a repeated parameter (`ids=a&ids=b`), the form every
+    // array-typed query in the contract actually declares, rather than
+    // `String(value)`'s comma-joined single value.
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null || item === "") continue;
+        search.append(key, String(item));
+      }
+      continue;
+    }
     search.set(key, String(value));
   }
   const query = search.toString();

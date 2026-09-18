@@ -45,19 +45,13 @@ import {
   type OperationsDayResponse,
   type Visit,
 } from "@/lib/api-client";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
 import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 import { OperationsDayPanel } from "@/components/shared/operations";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 /**
  * Who is on each visit today, with a direct path to change it: "Edit crew"
@@ -142,9 +136,16 @@ export default function DispatchBoardPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dispatch Board</h1>
+          {/*
+            The board's own subject is the crew on each visit: every row names a
+            supervisor, a crew and a vehicle, and Edit crew changes them here.
+            This line used to say "Nobody is assigned here", which is the Visits
+            page's sentence — true of generated work nobody has staffed yet, and
+            a flat contradiction of the nineteen staffed rows underneath it.
+          */}
           <p className="text-muted-foreground">
-            Who is on each scheduled visit. Nobody is assigned here — see Unassigned Visits for
-            work that still needs a crew.
+            Who is on each scheduled visit, and where to change it. Visits still waiting for a
+            crew are queued in Unassigned Visits.
           </p>
         </div>
 
@@ -216,7 +217,7 @@ export default function DispatchBoardPage() {
           <div className="space-y-1.5">
             <Label htmlFor="dispatch-branch">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value as BranchFilter) ?? "ALL")}
             >
@@ -224,7 +225,7 @@ export default function DispatchBoardPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>
@@ -255,7 +256,7 @@ export default function DispatchBoardPage() {
                 <TableHead>Customer / Site</TableHead>
                 <TableHead>Booked</TableHead>
                 <TableHead>Duration</TableHead>
-                <TableHead>Supervisor</TableHead>
+                <TableHead>PMS supervisor</TableHead>
                 <TableHead>Crew</TableHead>
                 <TableHead>Vehicle</TableHead>
                 <TableHead>Status</TableHead>
@@ -265,7 +266,17 @@ export default function DispatchBoardPage() {
             <TableBody>
               {sorted.map((visit) => {
                 const assignment = assignments[visit.id];
-                const supervisor = assignment?.crew.find((member) => member.isPmsSupervisor);
+                // The same rule the API's own read models use. This column
+                // answers "who holds the PMS grade on this visit", which is
+                // what the supervisor requirement is about; the Edit crew
+                // drawer's role labels answer "what job is each person doing".
+                // They named different people on the same visit while this
+                // took whoever came first in name order, so where the crew
+                // itself has a Supervisor row, that person wins.
+                const supervisor =
+                  assignment?.crew.find(
+                    (member) => member.isPmsSupervisor && member.role === "SUPERVISOR",
+                  ) ?? assignment?.crew.find((member) => member.isPmsSupervisor);
   
                 return (
                   <TableRow key={visit.id}>

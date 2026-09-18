@@ -68,6 +68,64 @@ beforeEach(() => {
 
 describe("CalendarPage", () => {
 
+  /**
+   * An unstaffed 60-minute visit rendered "08:00–17:00" — the fallback service
+   * window, the whole working day — and carried no crew marker at all. The
+   * tiles that most need attention read as all-day jobs and looked blank
+   * rather than like a problem.
+   */
+  it("does not print a service window as if it were a plan", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [
+        buildCalendarEntry({
+          visitId: "visit-untimed",
+          visitDate: todayIso(),
+          customerName: "Grandview Hotel",
+          windowStartMinute: 480,
+          windowEndMinute: 1020,
+          durationMinutes: 60,
+          visitStatus: "PENDING",
+          assignment: null,
+        }),
+      ],
+      total: 1,
+    });
+    render(<CalendarPage />);
+    await screen.findByText("Grandview Hotel");
+
+    expect(screen.queryByText("08:00–17:00")).not.toBeInTheDocument();
+    // The real length of the job, and an honest statement that when it runs
+    // has not been decided.
+    expect(screen.getByText(/60 min/)).toBeInTheDocument();
+    expect(screen.getByText(/time not set/)).toBeInTheDocument();
+  });
+
+  it("marks an unstaffed tile as unstaffed instead of leaving it blank", async () => {
+    render(<CalendarPage />);
+    await screen.findByText("Grandview Hotel");
+
+    const tile = screen.getByText("Grandview Hotel").closest("button")!;
+    expect(within(tile).getByText("No crew")).toBeInTheDocument();
+  });
+
+  it("says that the overflow link changes the view", async () => {
+    const busy = Array.from({ length: 6 }, (_, index) =>
+      buildCalendarEntry({
+        visitId: `busy-${index}`,
+        visitDate: todayIso(),
+        customerName: `Customer ${index}`,
+        windowStartMinute: 540 + index * 30,
+      })
+    );
+    vi.mocked(fetchCalendar).mockResolvedValue({ items: busy, total: busy.length });
+    render(<CalendarPage />);
+    await screen.findByText("Customer 0");
+
+    // Clicking it switched the whole month view to Week without a word, and
+    // the next arrow then stepped by week.
+    expect(screen.getByRole("button", { name: /\+ 3 more in Week view/ })).toBeInTheDocument();
+  });
+
   it.each<CalendarView>(["month", "week"])("gives the populated %s calendar valid accessible rows and column headers", async (view) => {
     const user = userEvent.setup();
     render(<CalendarPage />);
@@ -104,7 +162,7 @@ describe("CalendarPage", () => {
     expect(screen.queryByText(/09:00–17:00/)).not.toBeInTheDocument();
   });
 
-  it("sorts by assigned start time and uses the allowed window for unassigned visits", async () => {
+  it("sorts by assigned start time, and by the allowed window when there is none", async () => {
     vi.mocked(fetchCalendar).mockResolvedValue({ items: [
       { ...published, windowStartMinute: 480, assignment: buildCalendarAssignment({
         plannedStartMinute: 660, plannedEndMinute: 750,
@@ -112,8 +170,10 @@ describe("CalendarPage", () => {
       { ...unassigned, windowStartMinute: 600, windowEndMinute: 1020 },
     ], total: 2 });
     render(<CalendarPage />);
+    // Ordered by the window it must fall in, but never *labelled* with it:
+    // the window is a constraint, not a plan.
     const earlier = await screen.findByRole("button", {
-      name: `Grandview Hotel at 10:00–17:00 on ${todayIso()}, needs a crew`,
+      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, needs a crew`,
     });
     const later = screen.getByRole("button", { name: /Cinnamon Grand Colombo at 11:00–12:30/ });
     expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

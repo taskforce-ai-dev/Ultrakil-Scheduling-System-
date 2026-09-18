@@ -45,7 +45,7 @@ export class AuthorizedVehicleDto {
   @ApiProperty({ type: String, example: '253-4289' })
   code!: string;
 
-  @ApiProperty({ type: String, example: 'Van( 04 People) 253-4289' })
+  @ApiProperty({ type: String, example: 'Van (4 People) 253-4289' })
   label!: string;
 
   @ApiPropertyOptional({ type: Number, nullable: true, example: 4 })
@@ -160,7 +160,7 @@ export class VehicleDto {
   @ApiProperty({ type: String, example: '253-4289' })
   code!: string;
 
-  @ApiProperty({ type: String, example: 'Van( 04 People) 253-4289' })
+  @ApiProperty({ type: String, example: 'Van (4 People) 253-4289' })
   label!: string;
 
   @ApiPropertyOptional({ type: Number, nullable: true, example: 4 })
@@ -236,6 +236,13 @@ export class BranchListItemDto extends BranchSummaryDto {
       'Active PMS-grade supervisors. A branch with zero cannot be scheduled at all — every job needs one.',
   })
   pmsSupervisorCount!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      "Most visits this branch's day is planned to carry. Generation spreads work off a day above it and warns when it cannot; the calendar marks such a day so the limit is visible outside that one panel.",
+  })
+  dailyVisitCap!: number;
 }
 
 export class SkillListItemDto extends EmployeeSkillDto {

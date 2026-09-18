@@ -29,6 +29,27 @@ export const PMS_GRADE_LABELS = [
 export type PmsGradeLabel = (typeof PMS_GRADE_LABELS)[number];
 
 /**
+ * The PMS grades as the portal actually prints them.
+ *
+ * `PMS_GRADE_LABELS` is the project's canonical list, and three of its five
+ * entries — "Senior PMS", "Assistant PMS" — are spellings the workforce matrix
+ * does not use, so they never reach the Workforce screen's Grade column. Advice
+ * that told a manager to "add a Senior PMS" sent them looking for a grade the
+ * portal never shows. These are the ones it does.
+ */
+export const PMS_GRADE_COLUMN_LABELS = ['PMS', 'SPMS', 'APMS'] as const;
+
+/**
+ * How a manager is told to satisfy the supervisor rule, in one place.
+ *
+ * Says what a PMS grade is *for* — supervising the job — and where to see it,
+ * rather than reciting grade names on their own.
+ */
+export function pmsSupervisorRemediation(branchCode: string): string {
+  return `Every job needs one PMS-grade supervisor on site. Add a crew member from ${branchCode} whose Grade column on the Workforce screen reads ${PMS_GRADE_COLUMN_LABELS.slice(0, -1).join(', ')} or ${PMS_GRADE_COLUMN_LABELS.at(-1)}.`;
+}
+
+/**
  * Normalised spellings that map to a PMS grade. Only additions agreed with the
  * client belong here — never a guess.
  */

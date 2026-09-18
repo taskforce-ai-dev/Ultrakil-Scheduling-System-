@@ -127,11 +127,25 @@ export function toSkillCode(label: string): string {
  * "Motor Bike( 01 Person) BJG 4419". The registration is at the end and may
  * include a province ("WP CAB-1234"); description and capacity are optional.
  */
+/** "( 04 People)" / "(1 Person)" — the workbook's own capacity bracket. */
+const VEHICLE_CAPACITY = /\(\s*0*(\d+)\s*(?:People|Person)\s*\)/i;
+
+/**
+ * A complete trailing registration, including when there is no capacity
+ * bracket ("Bolero Truck DAC- 2485"). The leading boundary prevents numeric
+ * skill labels such as "Safety Level 2026" from yielding "vel 2026". Numeric
+ * prefixes need a separator so an ordinary six/seven-digit skill number is not
+ * mistaken for a registration. Keep an optional two-letter provincial prefix:
+ * WP CAB-1234 and CP CAB-1234 identify different vehicles.
+ */
+const VEHICLE_REGISTRATION =
+  /(?:^|\s)((?:[A-Za-z]{2}\s+)?(?:[A-Za-z]{1,3}\s*(?:-\s*)?|\d{2,3}(?:\s*-\s*|\s+))\d{4})$/;
+
 export function parseVehicleHeader(label: string): {
   code: string | null;
   seatCapacity: number | null;
 } {
-  const capacityMatch = label.match(/\(\s*0*(\d+)\s*(?:People|Person)\s*\)/i);
+  const capacityMatch = label.match(VEHICLE_CAPACITY);
   const seatCapacity = capacityMatch ? Number(capacityMatch[1]) : null;
 
   // Everything after the closing bracket is the registration.
@@ -141,19 +155,44 @@ export function parseVehicleHeader(label: string): {
 
   const compact = afterBracket.trim().replace(/\s+/g, ' ');
 
-  // Match a complete trailing registration, including when there is no capacity
-  // bracket ("Bolero Truck DAC- 2485"). The leading boundary prevents numeric
-  // skill labels such as "Safety Level 2026" from yielding "vel 2026". Numeric
-  // prefixes need a separator so an ordinary six/seven-digit skill number is
-  // not mistaken for a registration. Keep an optional two-letter provincial
-  // prefix: WP CAB-1234 and CP CAB-1234 identify different vehicles. Never
-  // fall back to arbitrary text.
-  const registration = compact.match(
-    /(?:^|\s)((?:[A-Za-z]{2}\s+)?(?:[A-Za-z]{1,3}\s*(?:-\s*)?|\d{2,3}(?:\s*-\s*|\s+))\d{4})$/,
-  )?.[1];
+  // Never fall back to arbitrary text.
+  const registration = compact.match(VEHICLE_REGISTRATION)?.[1];
   const code = registration?.replace(/\s*-\s*/g, '-') ?? null;
 
   return { code, seatCapacity };
+}
+
+/**
+ * The vehicle label a manager reads, built from the parts rather than copied.
+ *
+ * Workbook column headings are written for a spreadsheet, not a screen:
+ * "Van( 04 People) SYN-1003" has no space before the bracket and pads the
+ * capacity to two digits. Stored verbatim, that spelling turned up wherever a
+ * vehicle is named — the dispatch board, the crew editor, the vehicle page,
+ * and inside eligibility refusals. The description, the capacity and the
+ * registration are already understood here, so the label is assembled from
+ * them once instead of being patched with another regex at every place it is
+ * displayed.
+ */
+export function formatVehicleLabel(header: string): string {
+  const compact = header.replace(/\s+/g, ' ').trim();
+  const capacity = compact.match(VEHICLE_CAPACITY);
+  const seatCapacity = capacity ? Number(capacity[1]) : null;
+  const { code } = parseVehicleHeader(header);
+  // With a bracket the registration follows it, so whatever precedes the
+  // bracket is already the description; without one it sits at the end.
+  const head = capacity ? compact.slice(0, capacity.index) : compact;
+  const description = (capacity ? head : head.replace(VEHICLE_REGISTRATION, '')).trim();
+
+  return [
+    description,
+    seatCapacity === null
+      ? null
+      : `(${seatCapacity} ${seatCapacity === 1 ? 'Person' : 'People'})`,
+    code,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
 }
 
 export function isCheckmark(value: string, mapping: MatrixMapping): boolean {

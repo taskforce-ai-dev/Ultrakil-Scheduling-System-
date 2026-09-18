@@ -1,5 +1,5 @@
 import { BranchCode } from '@prisma/client';
-import { DEFAULT_MAPPING, parseVehicleHeader } from './mapping';
+import { DEFAULT_MAPPING, formatVehicleLabel, parseVehicleHeader } from './mapping';
 import { buildSourceKey, parseMatrix } from './parser';
 import { Grid } from './types';
 
@@ -111,6 +111,38 @@ describe('parseVehicleHeader', () => {
       code: null,
       seatCapacity: null,
     });
+  });
+});
+
+describe('formatVehicleLabel', () => {
+  /**
+   * The workbook's column headings are written for a spreadsheet: no space
+   * before the bracket, and a capacity padded to two digits. Stored verbatim,
+   * "Van( 04 People) SYN-1003" appeared wherever a vehicle is named — the
+   * dispatch board, the crew editor, the conflict messages, the vehicle page.
+   */
+  it.each([
+    ['Van( 04 People) SYN-1003', 'Van (4 People) SYN-1003'],
+    ['Van( 04 People) 253-4289', 'Van (4 People) 253-4289'],
+    ['Motor Bike( 01 Person) BJG 4419', 'Motor Bike (1 Person) BJG 4419'],
+    ['Van( 04 People) CP CAB-1234', 'Van (4 People) CP CAB-1234'],
+    ['Bolero( 02 People) DAC- 2485', 'Bolero (2 People) DAC-2485'],
+  ])('rewrites the workbook heading %s as %s', (header, expected) => {
+    expect(formatVehicleLabel(header as string)).toBe(expected);
+  });
+
+  it('keeps a heading that states no capacity to its description and registration', () => {
+    expect(formatVehicleLabel('Bolero Truck DAC- 2485')).toBe('Bolero Truck DAC-2485');
+  });
+
+  it('leaves a bare registration alone', () => {
+    expect(formatVehicleLabel('WP CAB-1234')).toBe('WP CAB-1234');
+  });
+
+  it('collapses the runs of whitespace a spreadsheet leaves behind', () => {
+    expect(formatVehicleLabel('  Van (  04   People )   253-4289  ')).toBe(
+      'Van (4 People) 253-4289',
+    );
   });
 });
 
@@ -319,13 +351,13 @@ describe('parseMatrix', () => {
     expect(result.vehicles).toEqual([
       {
         code: '253-4289',
-        label: 'Van( 04 People) 253-4289',
+        label: 'Van (4 People) 253-4289',
         seatCapacity: 4,
         ownershipGroup: 'Public Vehicles',
       },
       {
         code: 'BJG 4419',
-        label: 'Motor Bike( 01 Person) BJG 4419',
+        label: 'Motor Bike (1 Person) BJG 4419',
         seatCapacity: 1,
         ownershipGroup: 'Personal',
       },

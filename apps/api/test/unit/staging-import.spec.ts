@@ -21,7 +21,7 @@ const schedule: ParsedSchedule = {
     agreements: [{ siteName: 'PRIVATE SITE', isServiced: true, treatmentCodes: ['GPC'],
       frequency: { kind: 'parsed', source: 'monthly', frequency: { count: 1, unit: FrequencyUnit.MONTH, interval: 1 } },
       dayRule: { kind: 'parsed', source: 'Monday', allowedDays: [Weekday.MONDAY] },
-      effort: { crewSize: 2, durationMinutes: 60 }, endDate: null, notes: null }] }],
+      effort: { crewSize: 2, durationMinutes: 60 }, endDate: null, bookedDates: [], notes: null }] }],
   issues: [{ code: 'BRANCH_UNKNOWN', sheet: 'PRIVATE SHEET', rowNumber: 4, message: 'PRIVATE CUSTOMER', source: 'PRIVATE VALUE' }],
   sheetSummary: [],
 };

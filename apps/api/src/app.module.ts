@@ -9,6 +9,7 @@ import {
   redisConfig,
   scheduleDispatchConfig,
   schedulerConfig,
+  visitGenerationConfig,
 } from './config/configuration';
 import { validateEnv } from './config/env.validation';
 import { HealthModule } from './health/health.module';
@@ -32,6 +33,7 @@ import { WorkforceModule } from './workforce/workforce.module';
         schedulerConfig,
         importConfig,
         authConfig,
+        visitGenerationConfig,
       ],
       envFilePath: ['.env', '../../.env'],
     }),

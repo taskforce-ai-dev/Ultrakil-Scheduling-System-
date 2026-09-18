@@ -83,6 +83,171 @@ a safe change to an existing visit, what's no longer required (because an
 agreement changed or was paused), and what's protected and won't be
 touched (see "Locks," section 6).
 
+**Generation shows up in Schedule History.** Confirming a run writes a record
+there, badged **Visit generation** and counted as *"105 visits generated."* It
+is not a schedule: generation creates the visits, and staffs nobody. There is
+nothing to publish on it, and no Publish button on it. To staff those visits,
+solve the range from the Schedule History page as usual.
+
+**What range gets generated, and what each view can plan.** A run plans only
+the periods it can see **whole**, and a period is a whole week (Monday to
+Sunday) or a whole calendar month, counted from the agreement's own start date
+— never from the range you happen to be generating.
+
+- **Week view** generates the seven days on screen. That is one whole week, so
+  it plans every weekly agreement in range and nothing longer: a fortnightly,
+  monthly or quarterly agreement has no whole cycle inside a single week.
+- **Month view** generates the whole grid you are looking at — including the
+  last days of the previous month and the first of the next, because the grid
+  begins on a Monday and ends on a Sunday. That gives it whole weeks *and* the
+  whole calendar month, so it plans weekly and monthly agreements alike, and
+  fortnightly ones in almost every month. Quarterly ones need a longer range.
+
+  *Almost* every month, because a fortnight is counted from each agreement's
+  own start date and can straddle the join between two months. Where one
+  month's grid ends the day before the next begins — May 2026 ends on Sunday
+  31 May and June begins on Monday 1 June — the run reaches a week further so
+  that the fortnight across the join belongs to somebody. You will see visits
+  created in that extra week; they are the ones no other run would plan.
+
+  With that week of overlap in place, **a fortnight is always covered by one
+  month or the next**, so you will not see a warning about one. Cycles of
+  three weeks or longer are the ones that can still fall between two months,
+  and those are what the warning below is for.
+
+Because the two views measure periods the same way, they agree. Generate a week
+from the week view and then the month it sits in, or the other way round, and
+the second run has nothing to add and nothing to remove. Neither view ever
+proposes deleting work the other created: a visit in a period this range holds
+only part of is left to the run that can see that period whole.
+
+**When a range cannot plan an agreement at all**, the panel says so under **Not
+planned by this range** — *"Quarterly agreements need a range covering a whole
+quarter; 3 skipped."* Nothing is wrong with those agreements. Move to the month
+view, or ask for a longer range, and the run that covers a whole cycle will
+plan them. A silent zero would read exactly like a calendar already in order,
+which is why it is never left silent.
+
+The same panel has a second, sharper line: *"Every three weeks agreements: 1
+three weeks runs past an edge of this range with no visit in it, and no
+neighbouring month's grid holds it whole either."* That one is not a hand-off.
+Neither the month before nor the month after reaches the whole cycle, and
+nothing is standing in it — so switching views will not help. **Generate from
+the month the cycle starts in**, or ask for a wider range, or it stays
+unplanned.
+
+Two things about when you see it. A cycle cut at the *start* of a range is
+normally the previous month's, and is not mentioned — unless nothing is in it,
+which is what happens when an agreement is created after that month was
+already generated. Its first cycle belongs to a run that has been and gone, so
+the panel names it and you can plan it from the month it starts in. And a
+fortnight is never named here at all: the week of overlap above covers every
+one of them.
+
+### Why a visit is on the date it is
+
+Open a visit and the detail panel gives a one-line answer under **Why this
+date**:
+
+- **Booked with the customer** — this date came from the master schedule
+  workbook, where UltraKIL had already agreed it. It is a commitment. The
+  system never moves it, however busy the day gets.
+- **Near this site's usual day** — nothing was booked for that month, so the
+  visit was placed close to the days this site is normally served on, worked
+  out from the dates the workbook did book.
+- **Moved off a day that was full** — the visit could have sat on a busier
+  day, but that day had already reached the branch's daily limit, so it moved
+  to the quietest other day its agreement allows in the same week or month.
+- **First allowed day of the period** — nothing is booked for this agreement
+  and nothing is on record about its usual days, so it takes the first
+  allowed day. Adding the real dates to the workbook and re-importing is what
+  turns this into one of the answers above.
+
+The same panel's **History** block names the run that created the visit by the
+weeks it covered — *"Schedule run 15-21 Sep"* — not by an id. If nothing
+generated the visit it says *"Not recorded"*. On the operations board, the line
+naming a visit's published schedule links straight to that run in Schedule
+History, where it is marked and scrolled to for you.
+
+A visit you have locked, edited by hand, or already staffed keeps its date
+even when the agreement would now put that period's visit somewhere else. It
+is not moved, and no second visit is created alongside it — your date *is*
+that week's or month's visit. The panel lists it under "Protected," and tells
+you where the agreement now points: *"generation would have moved it to
+2026-09-18."* Nothing is done about it — the visit is yours — but if the
+agreement's allowed days have changed under it, that line is how you find out.
+Move it yourself if you want the new day.
+
+A **cancelled** visit is protected too: it is never deleted. But it does not
+count as that week's or month's visit, because the work did not happen — the
+period still asks for a visit, and the day it sits on is treated as free when
+the branch's daily limit is worked out, both in the generation panel and on the
+calendar's own **Over the branch's daily limit** badge.
+
+Its *slot* is spent, though. A visit is identified by its agreement, its date
+and its start time, so the cancelled row keeps that day and time for ever and
+nothing new can be put on it. Generation therefore plans that period onto
+another day the agreement allows. Where the period has no other day — a weekly
+agreement allowed only Mondays, say — it reports a shortfall saying the only
+visit is cancelled. Reinstate it, or allow another weekday. If the period was
+short of days *anyway* — the site shut on the other allowed day, or open for
+less time than the visit needs — the shortfall names that instead, because
+reinstating the cancelled visit would still leave the week short.
+
+A **booked** date whose visit is cancelled is the one case a booking cannot
+answer for itself. The date is a commitment and is never moved, but the
+cancelled row holds that day for ever, so nothing can be planned on it again
+and the calendar would otherwise read as already correct while the customer
+has no visit. The panel names the date under the booking warnings — *"the
+visit on that booked date is cancelled"*. Reinstate that visit, or agree
+another date with the customer.
+
+The "generation would have moved it to…" line is shown only when the day your
+visit sits on is one the agreement **no longer allows**. Moving a visit from one
+allowed day to another is a choice the agreement is content with, and you are
+not told about it again on every run.
+
+If a single day still carries more work than the branch plans for, the
+generation panel says so by date, count and limit, under **Days over the
+branch's limit**. That happens when the work on that day is already booked
+with customers, is already in the calendar and not this run's to move, or —
+most often — belongs to weekly agreements allowed only one weekday, which have
+nowhere inside their week to move to. The system reports it rather than
+quietly moving a date somebody promised.
+
+That panel closes, and the day goes on carrying the work. So the calendar
+marks it too: a day over its branch's limit is badged **Over the branch's
+daily limit** in the visit calendar. The count is per branch — two Colombo and
+one Kandy visit on the same day is not three against one limit. (If the range
+holds more visits than the calendar has loaded, the banner above the grid says
+so, and the badge can only speak for what is loaded.)
+
+### Two more things the generation panel tells you
+
+**Booked on a day the site's hours do not allow.** A booked date is honoured
+whatever the opening hours say — it is a commitment. But if the site has no
+hours recorded for that weekday, if the hours it does have are shorter than
+the visit needs, or if the agreement's own service window and the site's hours
+do not overlap at all, the panel names the date and says which of them it is
+(a fourth, a booked date whose visit is cancelled, is described above). The visit is planned either way, on the site's recorded window; this is
+your warning that the crew may find a locked door, or an hour where they
+expected a day. Recording the site's real hours clears the first two. The
+third is fixed on the agreement, by widening its service window — the hours
+were never the problem.
+
+The warning is on the panel, and the panel closes. So the visit itself carries
+it too: open a visit whose window is shorter than the work takes and it is
+badged **Window shorter than the visit**. You can still edit that visit —
+change its crew, move its date — without being made to fix the window first.
+Only an edit that actually touches the window or the duration has to leave the
+visit fitting inside it.
+
+**Booked fewer times than the frequency promises.** An agreement written as
+twice a week, with only one date booked in a week, appears under Conflicts.
+The booked dates are used exactly as the workbook wrote them and no extra
+visit is invented — add the missing date to the workbook, or correct the
+frequency.
+
 ---
 
 ## 4. Reading the Dispatch Board and assigning a crew
@@ -90,7 +255,14 @@ touched (see "Locks," section 6).
 **Dispatch Board** shows, for a given date and branch, every visit and who
 (if anyone) is on it. A visit with no crew shows a plain-language reason
 why, e.g. "No PMS supervisor." Click **Edit crew** to open the assignment
-editor.
+editor. Visits still waiting for a crew are queued on their own page,
+**Unassigned Visits**; the board itself is where the crew on a visit is read
+and changed.
+
+Under each visit the board names the schedule run its assignment came from by
+the weeks that run covered and when it was published — *"Published schedule
+15–21 Sep, published 15 Sep 20:05"* — and links to Schedule History for the
+rest of that run's story.
 
 In the editor:
 

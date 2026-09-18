@@ -1,4 +1,6 @@
-import { BranchCode, DataProvenance } from '@prisma/client';
+import { BranchCode, DataProvenance, VisitPlacement } from '@prisma/client';
+
+import { PreviewAlternative } from '../../catalog/schedule-preview';
 
 /**
  * Decides what a generation run would change, before anything is written.
@@ -29,6 +31,26 @@ export interface RequiredVisit {
   agreementVersionId: string | null;
   windowProvenance?: DataProvenance;
   isPreferredDay: boolean;
+  /** Why this date: a customer booking, an anchor, a spread, or the earliest. */
+  placement: VisitPlacement;
+  /**
+   * Which cycle of the agreement's horizon this visit belongs to. The load
+   * guard may only move a visit within its own period — a month's visit
+   * pushed into the next month is a different commitment.
+   */
+  periodIndex: number;
+  /** The other days of the same period this visit could sit on. */
+  alternatives: PreviewAlternative[];
+  /**
+   * The day this requirement was planned onto before a protected visit
+   * claimed its period, when the two differ.
+   *
+   * Pinning is what stops a re-planned period becoming one addition and one
+   * refused removal. It must not also make the difference invisible: a visit
+   * a manager holds on a weekday the agreement no longer allows would
+   * otherwise read as "unchanged", and nobody would ever move it.
+   */
+  pinnedFrom?: string;
 }
 
 /** A visit already in the calendar. */
@@ -43,6 +65,7 @@ export interface ExistingVisit {
   durationMinutes: number;
   requiredCrewSize: number;
   status: string;
+  placement: VisitPlacement;
   isManuallyAdjusted: boolean;
   isLocked: boolean;
   hasAssignments: boolean;
@@ -69,9 +92,15 @@ const PROTECTED_STATUSES: Record<string, ProtectionReason> = {
   CANCELLED: 'CANCELLED',
 };
 
+/** The handful of fields protection actually turns on. */
+export type ProtectableVisit = Pick<
+  ExistingVisit,
+  'status' | 'isManuallyAdjusted' | 'isLocked' | 'hasAssignments'
+>;
+
 /** Why this visit cannot be touched, or null when it can. */
 export function protectionReasonFor(
-  visit: Omit<ExistingVisit, 'updatedAt'>,
+  visit: ProtectableVisit,
 ): ProtectionReason | null {
   if (visit.isLocked) return 'LOCKED';
   if (visit.isManuallyAdjusted) return 'MANUALLY_ADJUSTED';
@@ -153,6 +182,15 @@ function diff(
       to: required.requiredCrewSize,
     });
   }
+  // Placement is only an explanation, but a stale one explains the visit
+  // wrongly — and a manager who cannot trust the label will not read it.
+  if (existing.placement !== required.placement) {
+    changes.push({
+      field: 'placement',
+      from: existing.placement,
+      to: required.placement,
+    });
+  }
 
   return changes;
 }
@@ -197,14 +235,26 @@ export function planGeneration(
 
     matchedIds.add(found.id);
     const changes = diff(found, want);
-
-    if (changes.length === 0) {
-      plan.unchangedCount += 1;
-      continue;
-    }
-
     const protection = protectionReasonFor(found);
+
     if (protection) {
+      // The day generation had chosen, before this visit's protection pinned
+      // the period to the manager's day. Added here rather than in `diff`
+      // because it is only ever reported: an ordinary update would pick it up
+      // and promise a move that nothing performs.
+      if (want.pinnedFrom && want.pinnedFrom !== found.visitDate) {
+        changes.unshift({
+          field: 'visitDate',
+          from: found.visitDate,
+          to: want.pinnedFrom,
+        });
+      }
+
+      if (changes.length === 0) {
+        plan.unchangedCount += 1;
+        continue;
+      }
+
       plan.protectedVisits.push({
         visitId: found.id,
         serviceAgreementId: found.serviceAgreementId,
@@ -213,6 +263,11 @@ export function planGeneration(
         wouldHave: 'UPDATE',
         changes,
       });
+      continue;
+    }
+
+    if (changes.length === 0) {
+      plan.unchangedCount += 1;
       continue;
     }
 

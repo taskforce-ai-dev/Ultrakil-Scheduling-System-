@@ -39,6 +39,25 @@ function DialogOverlay({
   )
 }
 
+/**
+ * The dialog itself, never taller than the window it opens in.
+ *
+ * A dialog is `position: fixed` and centred on the viewport, so anything that
+ * does not fit falls off both ends and nothing — not the page, not the
+ * browser — can scroll it back. On a 1280x720 laptop the Publish dialog grew
+ * past that with four unconfirmed-source sections listed in it and put its own
+ * Publish button at y=745: visible and enabled to any test that asks, and
+ * unclickable, because the point is off-screen. The more a schedule needed
+ * checking, the less publishable it became.
+ *
+ * So the popup is capped at the viewport and lays its children out in a
+ * column. Wrap the middle of a dialog in {@link DialogBody} and that part
+ * scrolls while the header and the actions stay put — which is what a
+ * confirmation dialog needs, since the decision is in the footer. A dialog
+ * that does not use `DialogBody` still cannot lose its actions: the popup
+ * scrolls as a whole instead, so the footer is reached by scrolling rather
+ * than being stranded outside the window.
+ */
 function DialogContent({
   className,
   children,
@@ -53,7 +72,7 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
@@ -84,7 +103,35 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2", className)}
+      className={cn("flex shrink-0 flex-col gap-2", className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * The part of a dialog that may be any length, and the only part that scrolls.
+ *
+ * Everything between the header and the actions belongs in here — the gate
+ * list a schedule has to clear, a form, a preview. It keeps the dialog's own
+ * 1rem rhythm between its children, so wrapping an existing dialog's middle
+ * in it changes nothing about how that dialog looks until the content is tall
+ * enough to need scrolling.
+ *
+ * Pass `tabIndex={0}` when the content inside is read-only and has nothing
+ * focusable of its own: a scrollable region a keyboard cannot reach is an
+ * accessibility failure in its own right. Leave it off for a form, where
+ * making the wrapper focusable would out-rank the first field for the
+ * dialog's open-time autofocus.
+ */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-body"
+      className={cn(
+        "flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto",
+        className
+      )}
       {...props}
     />
   )
@@ -102,7 +149,7 @@ function DialogFooter({
     <div
       data-slot="dialog-footer"
       className={cn(
-        "-mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
+        "-mx-4 -mb-4 flex shrink-0 flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 p-4 sm:flex-row sm:justify-end",
         className
       )}
       {...props}
@@ -148,6 +195,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,

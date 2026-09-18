@@ -104,7 +104,10 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
       && new URL(response.url()).pathname.endsWith('/assignment'));
     await saveButton.click();
     expect((await saved).ok()).toBe(true);
-    await expect(page.getByText('Assignment saved.', { exact: true })).toBeVisible({ timeout: 10_000 });
+    // Pinned to the sentence that reports the save, not to the whole toast:
+    // the confirmation also says where the reason went, and that clause is
+    // free to improve without this acceptance run failing over wording.
+    await expect(page.getByText(/^Assignment saved\./)).toBeVisible({ timeout: 10_000 });
     await page.reload();
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('Ajith Alwis', { timeout: 10_000 });
     await expect(seededRow.getByRole('cell').nth(4)).toContainText('T M Supun Tharaka Wijeweera');
@@ -137,7 +140,12 @@ test("visit calendar: locks and releases a visit", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Visit Calendar" })).toBeVisible();
   await page.waitForLoadState('networkidle');
 
-  const visitButton = page.locator('button[aria-label*=" at "][aria-label*=" on "]').first();
+  // Every visit tile names its date. It names an hour only when a crew is
+  // actually due — an unstaffed visit's tile says its time is not set rather
+  // than printing the service window as though it were a plan — so matching
+  // on " at " would have quietly skipped this spec on a month with nothing
+  // staffed in it.
+  const visitButton = page.getByRole("button", { name: /\bon \d{4}-\d{2}-\d{2}\b/ }).first();
   if ((await visitButton.count()) === 0) {
     test.skip(true, "No visit on the current month's calendar in this environment.");
   }
@@ -152,22 +160,21 @@ test("visit calendar: locks and releases a visit", async ({ page }) => {
     page.getByRole("button", { name: wasLocked ? "Lock this visit" : "Release this visit" })
   ).toBeVisible({ timeout: 10_000 });
 
-  // The success toast from that click sits over this same footer button
-  // (bottom-positioned, same as the drawer's own footer). Sonner pauses a
-  // toast's auto-dismiss timer while the pointer is over it, and Playwright's
-  // virtual cursor is left sitting exactly there after the click above — so
-  // waiting alone never resolves it. Moving the pointer away first lets the
-  // timer actually run; forcing the click after is a guaranteed fallback,
-  // since the button underneath is genuinely there and enabled the whole
-  // time — only the toast's own hover-pause is in the way, not the app.
-  await page.mouse.move(0, 0);
-  await page.locator('[data-sonner-toast]').first().waitFor({ state: "hidden", timeout: 10_000 }).catch(() => {});
+  // The confirmation raised by that click must not become an obstacle to the
+  // next one. This used to be a workaround — move the pointer off the toast
+  // so its hover-paused timer could run, then force the click through it —
+  // because the toast was bottom-anchored, landed on the drawer's own footer
+  // and sat there indefinitely. Both halves are now the assertion: the toast
+  // clears itself with the pointer left exactly where the click put it, and
+  // the button underneath is clicked without `force`, so Playwright's
+  // hit-target check fails the run if anything is covering it again.
+  await expect(page.locator('[data-sonner-toast]').first()).toBeHidden({ timeout: 15_000 });
 
   // Leave the visit as it was found — this spec observes state, it doesn't
   // decide for the manager whether a real visit should end up locked.
   await page
     .getByRole("button", { name: wasLocked ? "Lock this visit" : "Release this visit" })
-    .click({ force: true });
+    .click();
   await expect(
     page.getByRole("button", { name: wasLocked ? "Release this visit" : "Lock this visit" })
   ).toBeVisible({ timeout: 10_000 });

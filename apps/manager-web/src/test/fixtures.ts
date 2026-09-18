@@ -33,7 +33,7 @@ export function buildVehicle(overrides: Partial<Vehicle> = {}): Vehicle {
   return {
     id: "vehicle-1",
     code: "253-4289",
-    label: "Van( 04 People) 253-4289",
+    label: "Van (4 People) 253-4289",
     seatCapacity: 4,
     branchCode: "COLOMBO",
     isActive: true,
@@ -74,7 +74,7 @@ export function buildAuthorizedDrivers(
     vehicle: {
       id: "vehicle-1",
       code: "253-4289",
-      label: "Van( 04 People) 253-4289",
+      label: "Van (4 People) 253-4289",
       seatCapacity: 4,
     },
     drivers: [],
@@ -169,6 +169,7 @@ export function buildServiceAgreement(overrides: Partial<ServiceAgreement> = {})
     endDate: null,
     status: "ACTIVE",
     isActive: true,
+    generatedVisitCount: 4,
     currentVersion: 1,
     dayRules: [
       { weekday: "MONDAY", kind: "ALLOWED" },
@@ -177,6 +178,7 @@ export function buildServiceAgreement(overrides: Partial<ServiceAgreement> = {})
     allowedDays: ["MONDAY", "WEDNESDAY"],
     preferredDays: ["MONDAY"],
     requiredSkillCodes: [],
+    bookedDates: [],
     notes: null,
     createdAt: "2026-08-24T00:00:00.000Z",
     updatedAt: "2026-08-24T00:00:00.000Z",
@@ -202,6 +204,7 @@ export function buildSchedulePreview(overrides: Partial<SchedulePreview> = {}): 
         windowStartMinute: 6 * 60,
         windowEndMinute: 22 * 60,
         isPreferredDay: true,
+        placement: "EARLIEST",
       },
     ],
     shortfalls: [],
@@ -226,6 +229,7 @@ export function buildVisit(overrides: Partial<Visit> = {}): Visit {
     siteName: "Main Kitchen",
     jobTypeName: "Termite Control",
     hoursUnconfirmed: false,
+    placement: "EARLIEST",
     isProtected: false,
     protectionReason: null,
     isManuallyAdjusted: false,
@@ -233,6 +237,9 @@ export function buildVisit(overrides: Partial<Visit> = {}): Visit {
     isLocked: false,
     lockReason: null,
     assignmentCount: 0,
+    assignedCrewCount: 0,
+    plannedStartMinute: null,
+    plannedEndMinute: null,
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,
@@ -252,7 +259,10 @@ export function buildVisitDetail(overrides: Partial<VisitDetail> = {}): VisitDet
       allowedDaysAtGeneration: ["WEDNESDAY"],
       generatedAt: "2026-08-31T00:00:00.000Z",
       generatedByRunId: "run-1",
+      generatedByRunRangeStart: "2026-08-31",
+      generatedByRunRangeEnd: "2026-09-06",
     },
+    crewChanges: [],
     ...overrides,
   };
 }
@@ -295,7 +305,7 @@ export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment
     vehicles: [
       {
         vehicleId: "vehicle-1",
-        label: "Van( 04 People) 253-4289",
+        label: "Van (4 People) 253-4289",
         driverEmployeeId: "employee-1",
         driverName: "A Perera",
       },
@@ -336,6 +346,7 @@ export function buildEligibilityResult(
 export function buildScheduleRun(overrides: Partial<ScheduleRun> = {}): ScheduleRun {
   return {
     id: "run-1",
+    kind: "OPTIMIZER",
     status: "SUCCEEDED",
     rangeStart: "2026-09-07",
     rangeEnd: "2026-09-13",
@@ -438,6 +449,9 @@ export function buildGenerationImpact(overrides: Partial<GenerationImpact> = {})
     protectedVisits: [],
     unchangedCount: 0,
     shortfalls: [],
+    loadWarnings: [],
+    bookingWarnings: [],
+    skippedPeriods: [],
     isPreview: true,
     scheduleRunId: null,
     ...overrides,

@@ -8,6 +8,7 @@ import {
   fetchMeta,
   fetchOperationsDay,
   fetchPublishedAssignmentRepairFindings,
+  fetchScheduleRuns,
   fetchVisitAssignment,
   publishScheduleRun,
 } from "../api-client";
@@ -171,6 +172,28 @@ describe("api-client", () => {
         method: "POST",
         body: expect.stringContaining('"idempotencyKey":"repair-browser-1"'),
       }),
+    );
+  });
+
+  it("sends a multi-id schedule-run query as a repeated parameter, not one comma-joined value", async () => {
+    // `ScheduleRunQuery.ids` is a real array in the generated contract, and
+    // the API accepts a repeated `?ids=a&ids=b` — the shape a plain
+    // `URLSearchParams` produces from an array only if the builder iterates
+    // it. `String(["a", "b"])` instead comma-joins to `"a,b"`, which is a
+    // single query value the DTO's array validation used to 400 on for a
+    // single-id filter, and which `URLSearchParams` would then URL-encode as
+    // one opaque token rather than two ids.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 20 })),
+    }) as unknown as typeof fetch;
+
+    await fetchScheduleRuns({ ids: ["run-1", "run-2"], pageSize: 20 });
+
+    expect(global.fetch).toHaveBeenLastCalledWith(
+      "http://localhost:3001/api/schedule-runs?ids=run-1&ids=run-2&pageSize=20",
+      expect.objectContaining({ method: "GET" }),
     );
   });
 

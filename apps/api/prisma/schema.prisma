@@ -111,6 +111,22 @@ enum VisitStatus {
   CANCELLED
 }
 
+/// Why a generated visit sits on the date it does.
+///
+/// The master schedule workbook already records the days UltraKIL has booked
+/// with each customer. BOOKED means the date came straight from one of those
+/// bookings and is a fact, not a plan. ANCHORED means no booking covered the
+/// period, so the date was placed near the days this agreement is usually
+/// served on. SPREAD means the daily load guard moved it off a day that was
+/// already full. EARLIEST is the old behaviour — no booking and no anchor to
+/// aim at, so the first allowed day of the period.
+enum VisitPlacement {
+  BOOKED
+  ANCHORED
+  SPREAD
+  EARLIEST
+}
+
 enum AssignmentStatus {
   DRAFT
   PROPOSED
@@ -641,6 +657,7 @@ model ServiceAgreement {
   requiredSkills  ServiceAgreementRequiredSkill[]
   versions        ServiceAgreementVersion[]
   generatedVisits GeneratedVisit[]
+  bookings        ServiceAgreementBooking[]
 
   @@index([customerId])
   @@index([serviceSiteId])
@@ -648,8 +665,36 @@ model ServiceAgreement {
   @@map("service_agreements")
 }
 
-/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
-/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
+/// A date the workbook has already booked with the customer.
+///
+/// The master schedule's twelve month columns hold the day numbers UltraKIL
+/// has agreed with each client — "10", or "5 & 20". Until now those numbers
+/// were read only to infer which weekdays a site is serviced on and then
+/// thrown away, so generation re-planned every visit from the frequency and
+/// piled the whole month onto its first allowed weekday. A booked date is a
+/// commitment, not a suggestion: it is kept here so generation can place the
+/// visit where the customer is actually expecting it.
+///
+/// `provenance` is SOURCE for a date read from the workbook. A re-import
+/// replaces only its own SOURCE rows — anything a manager entered stays.
+model ServiceAgreementBooking {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  /// The booked calendar date, in Asia/Colombo terms.
+  bookedDate DateTime @db.Date
+
+  provenance DataProvenance @default(SOURCE)
+
+  createdAt DateTime @default(now())
+
+  @@unique([serviceAgreementId, bookedDate])
+  @@index([serviceAgreementId])
+  @@map("service_agreement_bookings")
+}
+
 /// A skill a crew member must hold for this agreement's work.
 ///
 /// The job type carries a default, but a particular customer can need more —
@@ -702,6 +747,10 @@ model ServiceAgreementVersion {
   @@map("service_agreement_versions")
 }
 
+/// Which weekdays an agreement may be served on.
+///
+/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
+/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
 model ServiceAgreementDayRule {
   id String @id @default(uuid()) @db.Uuid
 
@@ -750,6 +799,12 @@ model GeneratedVisit {
 
   status VisitStatus @default(PENDING)
 
+  /// Why the visit sits on this date: straight from a customer booking, near
+  /// the agreement's usual days, moved off a full day by the load guard, or
+  /// simply the first allowed day. EARLIEST is the honest default for rows
+  /// generated before placement was recorded — that is what they were.
+  placement VisitPlacement @default(EARLIEST)
+
   /// True once a manager has changed this visit by hand — moved its date,
   /// widened its window, altered the crew size. Regeneration must never
   /// overwrite one: the manager knows something the agreement does not.
@@ -785,6 +840,10 @@ model GeneratedVisit {
   @@index([branchId, visitDate, status])
   @@index([status])
   @@index([serviceAgreementId, visitDate])
+  /// The load guard reads every visit standing in a branch's horizon on every
+  /// generation run, by branch code and date. Without this it is a sequential
+  /// scan of the whole table each time.
+  @@index([branchCode, visitDate])
   @@map("generated_visits")
 }
 

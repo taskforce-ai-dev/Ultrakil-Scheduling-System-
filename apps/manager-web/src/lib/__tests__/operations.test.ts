@@ -63,7 +63,8 @@ describe("operations day contract parser", () => {
       total: 0,
       ready: 0,
       proposed: 0,
-      unassigned: 0,
+      awaitingStaffing: 0,
+      staffingFailed: 0,
       exceptions: 0,
       hoursUnconfirmed: 0,
     });
@@ -71,6 +72,10 @@ describe("operations day contract parser", () => {
     expect(parsed.items[0].state).toBe("UNASSIGNED");
     expect(parsed.items[0].dispatchAssignment).toBeNull();
     expect(parsed.items[0].visit.windowStartMinute).toBeNull();
+    // A row with no recognised visit status is not given one. The badge falls
+    // back to a word that is true of any unstaffed visit rather than guessing
+    // between "nobody tried" and "the attempt failed".
+    expect(parsed.items[0].visit.status).toBeNull();
   });
 
   it("does not treat a proposal snapshot as published dispatch truth", () => {
@@ -100,13 +105,28 @@ describe("operations day contract parser", () => {
           { code: "HOURS_UNCONFIRMED", message: "Opening hours are assumed" },
         ],
         nextAction: "Confirm branch",
-        scheduleVersion: { id: "v1", status: "PUBLISHED", predecessorId: "v0" },
+        scheduleVersion: {
+          id: "v1",
+          status: "PUBLISHED",
+          publishedAt: "2026-09-10T08:00:00.000Z",
+          rangeStart: "2026-09-15",
+          rangeEnd: "2026-09-21",
+        },
       }],
     });
 
     expect(parsed.items[0].violations[0].code).toBe("UNKNOWN_BRANCH");
     expect(parsed.items[0].nextAction).toBe("Confirm branch");
-    expect(parsed.items[0].scheduleVersion?.predecessorId).toBe("v0");
+    // Exactly the fields the contract describes — nothing hand-written. A
+    // `predecessorId` the server never sends compiled happily for a year and
+    // would have rendered a story the API had not told.
+    expect(parsed.items[0].scheduleVersion).toEqual({
+      id: "v1",
+      status: "PUBLISHED",
+      publishedAt: "2026-09-10T08:00:00.000Z",
+      rangeStart: "2026-09-15",
+      rangeEnd: "2026-09-21",
+    });
     expect(parsed.items[0].warnings).toContainEqual({
       code: "HOURS_UNCONFIRMED",
       message: "Opening hours are assumed",

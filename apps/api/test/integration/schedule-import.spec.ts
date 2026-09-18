@@ -79,6 +79,7 @@ function buildSchedule(overrides: Partial<ParsedSchedule> = {}): ParsedSchedule 
             },
             effort: { durationMinutes: 90, crewSize: 3 },
             endDate: null,
+            bookedDates: [],
             notes: null,
           },
         ],
@@ -548,4 +549,213 @@ describe('records the workbook marks red', () => {
       record.serviceSites.find((site) => site.name.endsWith('Closed Branch'))?.isActive,
     ).toBe(false);
   });
+});
+
+/**
+ * The dates the workbook has already booked with the customer.
+ *
+ * These are commitments, so the test that matters is what a *second* import
+ * does to them: a date the workbook has dropped must stop being a commitment,
+ * and a date a manager entered must survive an import that never mentions it.
+ */
+describe('booked dates from the workbook', () => {
+  function scheduleWithBookings(bookedDates: string[]) {
+    const schedule = buildSchedule();
+    const customer = schedule.customers[0];
+    return {
+      ...schedule,
+      customers: [
+        {
+          ...customer,
+          agreements: customer.agreements.map((agreement) => ({
+            ...agreement,
+            bookedDates,
+          })),
+        },
+      ],
+    };
+  }
+
+  async function agreementId(): Promise<string> {
+    const agreement = await prisma.serviceAgreement.findFirstOrThrow({
+      where: { customer: { name: CUSTOMER } },
+    });
+    return agreement.id;
+  }
+
+  const asDates = (rows: { bookedDate: Date }[]) =>
+    rows.map((row) => row.bookedDate.toISOString().slice(0, 10)).sort();
+
+  it('persists one booking per booked date, marked as read from the workbook', async () => {
+    const summary = await importSchedule(
+      prisma,
+      scheduleWithBookings(['2026-01-05', '2026-01-20']),
+    );
+
+    expect(summary.bookingsImported).toBe(2);
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId() },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-05', '2026-01-20']);
+    expect(bookings.every((booking) => booking.provenance === 'SOURCE')).toBe(true);
+  });
+
+  it('replaces its own bookings on a re-import rather than accumulating them', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05', '2026-01-20']));
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-06']));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId() },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-06']);
+  });
+
+  it('leaves a booking a manager entered alone', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05']));
+    const id = await agreementId();
+    await prisma.serviceAgreementBooking.create({
+      data: {
+        serviceAgreementId: id,
+        bookedDate: new Date('2026-02-11T00:00:00.000Z'),
+        provenance: 'MANAGER_CONFIRMED',
+      },
+    });
+
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-06']));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: id },
+    });
+
+    expect(asDates(bookings)).toEqual(['2026-01-06', '2026-02-11']);
+    expect(
+      bookings.find((booking) => booking.provenance === 'MANAGER_CONFIRMED')
+        ?.bookedDate.toISOString()
+        .slice(0, 10),
+    ).toBe('2026-02-11');
+  });
+
+  it('clears its bookings when the workbook stops naming any', async () => {
+    await importSchedule(prisma, scheduleWithBookings(['2026-01-05']));
+    await importSchedule(prisma, scheduleWithBookings([]));
+
+    const bookings = await prisma.serviceAgreementBooking.findMany({
+      where: { serviceAgreementId: await agreementId(), provenance: 'SOURCE' },
+    });
+
+    expect(bookings).toEqual([]);
+  });
+});
+
+/**
+ * Re-importing the workbook must not move an agreement's period anchor.
+ *
+ * `periodIndexOf` counts an agreement's periods from its `startDate`: a
+ * fortnightly agreement's fortnights are the two ISO weeks from the week it
+ * began in. The importer stamped `startDate` with the day the import ran, on
+ * updates as well as creates, so re-uploading a corrected workbook a week
+ * later moved every fortnightly agreement's boundaries by seven days and every
+ * quarterly one's by a month. Periods already planned became different
+ * periods, and the property this whole branch rests on — ask for the same
+ * range twice and nothing changes — did not survive it.
+ */
+describe('a second import of the same workbook', () => {
+  const RE_IMPORT_CUSTOMER = `Re-import Co ${suffix}`;
+  /** A Monday, so the fortnights are countable by eye. */
+  const ANCHOR = '2026-01-12';
+  /** September 2026's grid: Monday to Sunday, containing the whole month. */
+  const GRID = { from: '2026-08-31', to: '2026-10-04' };
+
+  function fortnightlySchedule(): ParsedSchedule {
+    return buildSchedule({
+      customers: [
+        {
+          name: RE_IMPORT_CUSTOMER,
+          sourceSheet: 'Main',
+          isServiced: true,
+          sites: [
+            {
+              name: `${RE_IMPORT_CUSTOMER} — Head Office`,
+              addressLine: '2 Test Road, Colombo 03',
+              regionLabel: 'Metro',
+              locationCode: 'HO-2',
+              isServiced: true,
+            },
+          ],
+          agreements: [
+            {
+              siteName: `${RE_IMPORT_CUSTOMER} — Head Office`,
+              isServiced: true,
+              treatmentCodes: ['GPC'],
+              frequency: {
+                kind: 'parsed',
+                frequency: { count: 1, unit: FrequencyUnit.WEEK, interval: 2 },
+                source: 'Fortnightly',
+              },
+              dayRule: {
+                kind: 'parsed',
+                allowedDays: [Weekday.MONDAY, Weekday.THURSDAY],
+                source: 'Monday, Thursday',
+              },
+              effort: { durationMinutes: 90, crewSize: 2 },
+              endDate: null,
+              bookedDates: [],
+              notes: null,
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  const generate = (path: 'preview' | 'confirm', agreementId: string) =>
+    request(http)
+      .post(`/api/visit-generation/${path}`)
+      .set(auth(adminToken))
+      .send({ ...GRID, serviceAgreementIds: [agreementId] });
+
+  it('leaves the anchor alone, so regenerating the same month changes nothing', async () => {
+    await importSchedule(prisma, fortnightlySchedule());
+    const created = await prisma.serviceAgreement.findFirstOrThrow({
+      where: { customer: { name: RE_IMPORT_CUSTOMER } },
+      select: { id: true },
+    });
+
+    try {
+      // Stand in for an agreement imported some months ago: the anchor it has
+      // always had, rather than the day this test happened to run.
+      await prisma.serviceAgreement.update({
+        where: { id: created.id },
+        data: { startDate: new Date(`${ANCHOR}T00:00:00.000Z`) },
+      });
+
+      const first = await generate('confirm', created.id);
+      expect(first.status).toBe(200);
+      expect(first.body.additions.length).toBeGreaterThan(0);
+
+      // The manager corrects a cell and uploads the workbook again.
+      await importSchedule(prisma, fortnightlySchedule());
+
+      const after = await prisma.serviceAgreement.findUniqueOrThrow({
+        where: { id: created.id },
+        select: { startDate: true },
+      });
+      expect(after.startDate.toISOString().slice(0, 10)).toBe(ANCHOR);
+
+      // And the same range is still in order: the fortnights are where they
+      // were, so there is nothing to add, change or remove.
+      const again = await generate('preview', created.id);
+      expect(again.status).toBe(200);
+      expect(again.body.additions).toEqual([]);
+      expect(again.body.updates).toEqual([]);
+      expect(again.body.removals).toEqual([]);
+    } finally {
+      await prisma.generatedVisit.deleteMany({
+        where: { serviceAgreementId: created.id },
+      });
+    }
+  }, 180_000);
 });

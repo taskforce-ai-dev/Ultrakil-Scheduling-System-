@@ -39,10 +39,12 @@ export type ConflictGroup = (typeof CONFLICT_GROUPS)[number];
  * entire API down at boot over a mistake the compiler catches before it can
  * ever be deployed.
  *
- * Five codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
- * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW) have no natural home among the eleven
- * named groups, so they sit under OTHER rather than being force-fitted
- * somewhere misleading.
+ * Six codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
+ * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW, DAILY_VISIT_CAP_REACHED) have no
+ * natural home among the eleven named groups, so they sit under OTHER rather
+ * than being force-fitted somewhere misleading. The last of them is about the
+ * day rather than about the crew, which is exactly why none of the crew- and
+ * vehicle-shaped groups would be honest for it.
  *
  * This must stay in step with `apps/manager-web/src/lib/conflict-groups.ts`.
  * That agreement is asserted by a test, not entrusted to this sentence.
@@ -70,6 +72,7 @@ const CODE_TO_GROUP: Record<ConflictCode, ConflictGroup> = {
   VISIT_NOT_SCHEDULABLE: 'OTHER',
   ASSIGNMENT_LOCKED: 'OTHER',
   NO_FEASIBLE_CREW: 'OTHER',
+  DAILY_VISIT_CAP_REACHED: 'OTHER',
 };
 
 /** Which group a conflict code belongs to. */

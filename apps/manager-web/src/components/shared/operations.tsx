@@ -1,26 +1,62 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock3, Info, Users, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { VISIT_STATUS_LABEL } from "@/components/shared/visit-badges";
+import { formatDayRange, formatStamp, formatStampDay } from "@/lib/calendar";
 import { cn } from "@/lib/utils";
 import {
   isDispatchableOperation,
   type OperationState,
+  type OperationsPublishedAssignmentLineageEntry,
   type OperationsDayItem,
   type OperationsDayResponse,
   type OperationsPublishedAssignmentProvenance,
+  type OperationsScheduleVersion,
+  type OperationsVisit,
 } from "@/lib/api-client";
 
-const STATE_LABELS: Record<OperationState, string> = {
+/**
+ * What to call each operational state.
+ *
+ * UNASSIGNED is missing on purpose. This enum answers "is there anything to
+ * dispatch", and its UNASSIGNED covers two facts the rest of the portal names
+ * separately: a visit nobody has tried to staff, and one the scheduler tried
+ * and could not. Calling both "Unassigned" here was the last place the old
+ * vocabulary survived, and it sat on the same Dispatch Board screen as a table
+ * saying "Awaiting staffing" and "Staffing failed" about the very same rows.
+ * {@link unstaffedLabel} reads the visit's own status instead, from the one
+ * map that names a visit status anywhere in this portal.
+ */
+const STATE_LABELS: Record<Exclude<OperationState, "UNASSIGNED">, string> = {
   READY: "Ready",
   PROPOSED: "Proposed",
-  UNASSIGNED: "Unassigned",
   EXCEPTION: "Exception",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
 };
+
+/**
+ * Which kind of unstaffed, in the portal's own words.
+ *
+ * A visit with no assignment whose status is neither of the two unstaffed
+ * ones is a contradiction the read model should never produce — and if it
+ * ever does, "No crew yet" is the one thing that is certainly true of it.
+ * VISIT_STATUS_LABEL.SCHEDULED would read "Crew assigned" beside a row that
+ * plainly has none.
+ */
+function unstaffedLabel(status: OperationsVisit["status"]): string {
+  if (status === "PENDING") return VISIT_STATUS_LABEL.PENDING;
+  if (status === "UNASSIGNED") return VISIT_STATUS_LABEL.UNASSIGNED;
+  return "No crew yet";
+}
+
+function stateLabel(state: OperationState, status: OperationsVisit["status"]): string {
+  return state === "UNASSIGNED" ? unstaffedLabel(status) : STATE_LABELS[state];
+}
 
 const STATE_VARIANTS: Record<OperationState, "success" | "outline" | "destructive" | "secondary"> = {
   READY: "success",
@@ -36,11 +72,17 @@ function StateIcon({ state }: { state: OperationState }) {
   return <Icon className="h-3 w-3" aria-hidden="true" />;
 }
 
-export function OperationStateBadge({ state }: { state: OperationState }) {
+export function OperationStateBadge({
+  state,
+  visitStatus = null,
+}: {
+  state: OperationState;
+  visitStatus?: OperationsVisit["status"];
+}) {
   return (
     <Badge variant={STATE_VARIANTS[state]}>
       <StateIcon state={state} />
-      {STATE_LABELS[state]}
+      {stateLabel(state, visitStatus)}
     </Badge>
   );
 }
@@ -88,29 +130,75 @@ function WarningList({ item }: { item: OperationsDayItem }) {
   );
 }
 
+const DISPATCHED_VERSION_STATUSES = ["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"];
+
+/**
+ * How a schedule run is named on screen.
+ *
+ * It used to be named by its id — "Published schedule version
+ * 6a1d0f2e-9c4b-…", nineteen times down a day's list, which tells a manager
+ * nothing they can do anything with and makes every row look different from
+ * every other. A run is recognised by the weeks it covers and the moment it
+ * was published, both of which the read model now carries; the id stays in the
+ * payload only because the link to Schedule History is built from the fact
+ * that a run exists, never printed.
+ */
+function scheduleRunLabel(version: OperationsScheduleVersion, isDispatched: boolean): string {
+  const horizon =
+    version.rangeStart && version.rangeEnd
+      ? ` ${formatDayRange(version.rangeStart, version.rangeEnd)}`
+      : "";
+  const status = version.status?.toUpperCase();
+
+  if (isDispatched) {
+    const stamp = version.publishedAt ? formatStamp(version.publishedAt) : "";
+    return `Published schedule${horizon}${stamp ? `, published ${stamp}` : ""}`;
+  }
+  const kind = status === "DRAFT" ? "Draft schedule" : "Schedule";
+  return `${kind}${horizon} — not dispatch truth`;
+}
+
 function ScheduleLineage({ item }: { item: OperationsDayItem }) {
   const version = item.scheduleVersion;
   if (!version) return null;
-  const versionName = version.version != null ? `v${version.version}` : version.id ?? "recorded";
-  const status = version.status?.toUpperCase();
-  if (["PUBLISHED", "ACKNOWLEDGED", "IN_PROGRESS", "COMPLETED"].includes(status)) {
-    return <p className="mt-2 text-xs text-muted-foreground">Published schedule version {versionName}</p>;
-  }
+  const isDispatched = DISPATCHED_VERSION_STATUSES.includes(version.status?.toUpperCase());
+  const label = scheduleRunLabel(version, isDispatched);
+
   return (
     <p className="mt-2 text-xs text-muted-foreground">
-      {status === "DRAFT" ? "Draft schedule version" : "Schedule version"} {versionName} — not dispatch truth
+      {version.id ? (
+        <Link
+          href={`/schedule-history?run=${encodeURIComponent(version.id)}`}
+          className="underline underline-offset-2"
+        >
+          {label}
+        </Link>
+      ) : (
+        label
+      )}
     </p>
   );
 }
 
 const PROVENANCE_LABELS: Record<OperationsPublishedAssignmentProvenance, string> = {
-  SCHEDULE_RUN: "schedule run",
-  REPAIR: "audited repair",
-  MANUAL_PUBLISH: "manual publish",
+  SCHEDULE_RUN: "a schedule run",
+  REPAIR: "an audited repair",
+  MANUAL_PUBLISH: "a manual publish",
 };
 
-function shortId(id: string): string {
-  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+/**
+ * How a published version is referred to on screen.
+ *
+ * By its place in the chain and by what produced it, never by eight
+ * characters of a uuid. "supersedes 8f2c1a0b…" is a string a manager can
+ * neither search for nor read out to a colleague, and three of them on one
+ * line turned a correction story into a hash.
+ */
+function provenancePhrase(entry: OperationsPublishedAssignmentLineageEntry): string {
+  if (entry.provenance !== "REPAIR") return PROVENANCE_LABELS[entry.provenance];
+  return entry.publishedAt
+    ? `the audited repair of ${formatStampDay(entry.publishedAt)}`
+    : "an audited repair";
 }
 
 /**
@@ -151,25 +239,38 @@ function PublishedAssignmentLineage({ item }: { item: OperationsDayItem }) {
         </p>
       )}
       <ol className="mt-1 space-y-1 text-muted-foreground">
-        {lineage.entries.map((entry, index) => (
-          <li key={entry.assignmentId} className={cn(entry.isCurrent && "text-foreground")}>
-            <span className="font-medium">
-              Version {lineage.totalCount - lineage.entries.length + index + 1}
-            </span>{" "}
-            <span className="font-mono">{shortId(entry.assignmentId)}</span> ·{" "}
-            {entry.isCurrent ? "current published version" : entry.status.toLowerCase().replaceAll("_", " ")} · from{" "}
-            {PROVENANCE_LABELS[entry.provenance]}
-            {entry.provenance === "REPAIR" && entry.publishedByRepairId
-              ? ` ${shortId(entry.publishedByRepairId)}`
-              : ""}
-            {entry.supersedesAssignmentId
-              ? ` · supersedes ${shortId(entry.supersedesAssignmentId)}`
-              : ""}
-            {!entry.supersededByAssignmentId && !entry.isCurrent && lineage.withdrawn
-              ? " · withdrawn, not replaced"
-              : ""}
-          </li>
-        ))}
+        {lineage.entries.map((entry, index) => {
+          // Counted from the whole chain, not from what fitted on screen, so
+          // "Version 12 of 13" stays true under truncation.
+          const numberOf = (position: number) =>
+            lineage.totalCount - lineage.entries.length + position + 1;
+          const predecessor = entry.supersedesAssignmentId
+            ? lineage.entries.findIndex(
+                (candidate) => candidate.assignmentId === entry.supersedesAssignmentId,
+              )
+            : -1;
+
+          return (
+            <li key={entry.assignmentId} className={cn(entry.isCurrent && "text-foreground")}>
+              <span className="font-medium">
+                Version {numberOf(index)} of {lineage.totalCount}
+              </span>{" "}
+              ·{" "}
+              {entry.isCurrent
+                ? "current published version"
+                : entry.status.toLowerCase().replaceAll("_", " ")}{" "}
+              · from {provenancePhrase(entry)}
+              {entry.supersedesAssignmentId
+                ? predecessor >= 0
+                  ? ` · replaces version ${numberOf(predecessor)}`
+                  : " · replaces an earlier version"
+                : ""}
+              {!entry.supersededByAssignmentId && !entry.isCurrent && lineage.withdrawn
+                ? " · withdrawn, not replaced"
+                : ""}
+            </li>
+          );
+        })}
       </ol>
     </section>
   );
@@ -184,9 +285,16 @@ function ViolationList({ violations }: { violations: OperationsDayItem["violatio
         Why this needs attention
       </p>
       <ul className="mt-1 space-y-1 text-muted-foreground">
+        {/*
+          * The written reason, not the engine's code. "EMPLOYEE_DOUBLE_BOOKED:
+          * This employee is already assigned to another visit at this time"
+          * shouted an internal name above a sentence that already said it, and
+          * made a handled refusal look like a crash. `violation.code` stays on
+          * the wire for support.
+          */}
         {violations.map((violation) => (
-          <li key={`${violation.code}-${violation.message}`}>
-            <span className="font-mono text-xs text-foreground">{violation.code}</span>: {violation.message}
+          <li key={`${violation.code}-${violation.message}`} className="text-foreground">
+            {violation.message}
           </li>
         ))}
       </ul>
@@ -210,7 +318,7 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
             {item.visit.siteName} · {item.visit.jobTypeName}
           </p>
         </div>
-        <OperationStateBadge state={item.state} />
+        <OperationStateBadge state={item.state} visitStatus={item.visit.status} />
       </div>
       <AssignmentSummary item={item} />
       <p className="mt-2 text-sm">
@@ -225,16 +333,20 @@ function OperationItemCard({ item, onSelect }: { item: OperationsDayItem; onSele
 }
 
 export function OperationsSummaryCards({ summary }: { summary: OperationsDayResponse["summary"] }) {
+  // Seven numbers, each one fact. The old six put "Unassigned" where two of
+  // these are now, and a manager reading that one number as the backlog read
+  // straight past the work nobody had attempted.
   const cards = [
     ["Total", summary.total],
     ["Ready", summary.ready],
     ["Proposed", summary.proposed],
-    ["Unassigned", summary.unassigned],
+    [VISIT_STATUS_LABEL.PENDING, summary.awaitingStaffing],
+    [VISIT_STATUS_LABEL.UNASSIGNED, summary.staffingFailed],
     ["Exceptions", summary.exceptions],
     ["Hours unconfirmed", summary.hoursUnconfirmed],
   ] as const;
   return (
-    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {cards.map(([label, value]) => (
         <div key={label} className="rounded-lg border bg-card p-3">
           <dt className="text-xs text-muted-foreground">{label}</dt>

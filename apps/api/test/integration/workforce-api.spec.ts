@@ -121,6 +121,21 @@ afterAll(async () => {
 
 // ---------------------------------------------------------------------------
 
+describe('branch reference data', () => {
+  it("carries the branch's daily visit limit, so the calendar can mark a day over it", async () => {
+    // The limit existed only inside the generation panel's warning, and that
+    // panel closes. A day carrying eighteen against a cap of twelve stayed
+    // that way for weeks with nothing on the calendar saying so.
+    const res = await request(http).get('/api/branches').set(auth(adminToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.length).toBeGreaterThan(0);
+    for (const branch of res.body) {
+      expect(branch.dailyVisitCap).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('unauthorized API access', () => {
   it.each([
     ['get', '/api/employees'],

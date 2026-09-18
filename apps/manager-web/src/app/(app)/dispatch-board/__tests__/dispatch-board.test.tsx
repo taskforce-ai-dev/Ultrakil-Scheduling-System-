@@ -74,6 +74,22 @@ async function renderBoard() {
 }
 
 describe("dispatch board", () => {
+  it("never says nobody is assigned here beside the crews it is listing", async () => {
+    await renderBoard();
+
+    // The board's own subject is who is on each visit — it lists a supervisor,
+    // a crew and an Edit crew button. The sentence it used to carry belongs to
+    // the Visits page, where the work really has nobody on it, and read as a
+    // flat contradiction of the rows underneath it.
+    expect(screen.queryByText(/Nobody is assigned here/)).not.toBeInTheDocument();
+    const staffedRow = screen.getByText("Cinnamon Grand Colombo").closest("tr")!;
+    expect(within(staffedRow).getByText("A Perera, N Fernando")).toBeInTheDocument();
+    expect(within(staffedRow).getByRole("button", { name: /Edit crew/ })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Visits still waiting for a crew are queued in Unassigned Visits/),
+    ).toBeInTheDocument();
+  });
+
   it("shows the supervisor, crew, and vehicle for a staffed visit", async () => {
     await renderBoard();
 
@@ -81,6 +97,39 @@ describe("dispatch board", () => {
     expect(within(row).getByText("A Perera")).toBeInTheDocument();
     expect(within(row).getByText("A Perera, N Fernando")).toBeInTheDocument();
     expect(within(row).getByText("Van 253-4289 (A Perera)")).toBeInTheDocument();
+  });
+
+  /**
+   * The column and the Edit crew drawer named different people on the same
+   * visit — the column reads the PMS grade, the drawer reads each crew row's
+   * role. The column now says which of the two it is showing, and picks the
+   * PMS-grade member the drawer also calls Supervisor when there is one.
+   */
+  it("says the supervisor it names is the PMS one", async () => {
+    await renderBoard();
+
+    expect(screen.getByRole("columnheader", { name: "PMS supervisor" })).toBeInTheDocument();
+  });
+
+  it("prefers the PMS-grade member the crew rows also call Supervisor", async () => {
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        generatedVisitId: "visit-staffed",
+        crew: [
+          // Name order would reach Tech 13 first; the crew's own Supervisor row
+          // is Tech 22, and both hold the PMS grade.
+          { employeeId: "e-13", fullName: "Tech 13", role: "TECHNICIAN", isPmsSupervisor: true },
+          { employeeId: "e-22", fullName: "Tech 22", role: "SUPERVISOR", isPmsSupervisor: true },
+        ],
+        vehicles: [],
+      })
+    );
+    await renderBoard();
+
+    const row = screen.getByText("Cinnamon Grand Colombo").closest("tr")!;
+    const supervisorCell = within(row).getAllByRole("cell")[3];
+    expect(supervisorCell).toHaveTextContent("Tech 22");
+    expect(supervisorCell).not.toHaveTextContent("Tech 13");
   });
 
   it("never implies a visit is staffed before an assignment exists", async () => {

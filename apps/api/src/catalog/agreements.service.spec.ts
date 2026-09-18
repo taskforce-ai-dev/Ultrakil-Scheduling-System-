@@ -21,6 +21,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
 import { PrismaService } from '../prisma/prisma.service';
+import { VisitGenerationService } from '../scheduling/visit-generation/visit-generation.service';
 import { AgreementsService } from './agreements.service';
 
 const actor = {
@@ -69,6 +70,8 @@ function agreementRow(overrides: Record<string, unknown> = {}) {
     jobType: { id: JOB_TYPE_ID, name: 'Job' },
     dayRules: [{ id: 'day-1', weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
     requiredSkills: [],
+    bookings: [],
+    _count: { generatedVisits: 0 },
     ...overrides,
   };
 }
@@ -101,10 +104,15 @@ function fixture(row = agreementRow()) {
         ...applied(row, data),
         currentVersion: row.currentVersion + 1,
       })),
+      // The fresh, locked read `update()`/`changeStatus()` take before
+      // falling back to any field the edit itself did not carry.
+      findUniqueOrThrow: jest.fn(async () => row),
     },
     serviceAgreementDayRule: { deleteMany: jest.fn() },
     serviceAgreementRequiredSkill: { deleteMany: jest.fn() },
     serviceAgreementVersion: { create: jest.fn() },
+    // The agreement-row lock `update()` takes before touching its children.
+    $queryRaw: jest.fn(async () => [{ id: row.id }]),
   };
 
   const audit = { record: jest.fn() };
@@ -138,12 +146,14 @@ function fixture(row = agreementRow()) {
     ),
   };
 
+  const visitGeneration = { confirm: jest.fn(async () => ({})) };
   const service = new AgreementsService(
     prisma as unknown as PrismaService,
     audit as unknown as AuditService,
+    visitGeneration as unknown as VisitGenerationService,
   );
 
-  return { service, tx, audit };
+  return { service, tx, audit, visitGeneration };
 }
 
 function dataOf(mock: jest.Mock): Record<string, unknown> {
@@ -291,5 +301,62 @@ describe('AgreementsService explicit reactivation', () => {
       service.changeStatus(AGREEMENT_ID, { status: AgreementStatus.ACTIVE }, actor),
     ).rejects.toMatchObject({ code: 'AGREEMENT_ARCHIVED' });
     expect(tx.serviceAgreement.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * An active agreement that has produced nothing has to be findable.
+ *
+ * Two testers raised the same customer independently: an active two-monthly
+ * agreement with no generated visits in September, October, November or
+ * December. It appears on no calendar, in no queue and in no run — the only
+ * screen that can show it at all is the list of agreements, so the list has
+ * to carry the fact and be able to narrow to it.
+ */
+describe('AgreementsService listing agreements that have generated nothing', () => {
+  function listFixture(rows: ReturnType<typeof agreementRow>[]) {
+    type Args = { where: Record<string, unknown> };
+    const findMany = jest.fn(async (_args: Args) => rows);
+    const count = jest.fn(async (_args: Args) => rows.length);
+    const prisma = { serviceAgreement: { findMany, count } };
+    const service = new AgreementsService(
+      prisma as unknown as PrismaService,
+      { record: jest.fn() } as unknown as AuditService,
+      { confirm: jest.fn(async () => ({})) } as unknown as VisitGenerationService,
+    );
+    return { service, findMany, count };
+  }
+
+  it('reports how many visits each agreement has ever generated', async () => {
+    const { service } = listFixture([
+      agreementRow({ _count: { generatedVisits: 0 } }),
+    ]);
+
+    const page = await service.list({});
+
+    expect(page.items[0]).toMatchObject({
+      status: AgreementStatus.ACTIVE,
+      isActive: true,
+      generatedVisitCount: 0,
+    });
+  });
+
+  it('narrows to the agreements that have generated nothing when asked', async () => {
+    const { service, findMany, count } = listFixture([]);
+
+    await service.list({ withoutVisits: true });
+
+    const where = findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ generatedVisits: { none: {} } });
+    // The total has to be the filtered total, or the pager lies about it.
+    expect(count.mock.calls[0][0].where).toEqual(where);
+  });
+
+  it('asks for no such narrowing by default', async () => {
+    const { service, findMany } = listFixture([]);
+
+    await service.list({});
+
+    expect(findMany.mock.calls[0][0].where).not.toHaveProperty('generatedVisits');
   });
 });
