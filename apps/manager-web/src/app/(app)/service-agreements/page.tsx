@@ -35,20 +35,22 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiError,
   changeAgreementStatus,
+  confirmVisitGeneration,
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
-  fetchSchedulePreview,
   fetchServiceAgreements,
   fetchSkills,
+  previewVisitGeneration,
   type Customer,
+  type GenerationImpact,
   type JobType,
   type ServiceAgreement,
   type ServiceSite,
-  type SchedulePreview,
   type SkillListItem,
 } from "@/lib/api-client";
 import { describeFrequency } from "@/lib/cadence";
+import { formatLongDate, rangeForGeneration, todayIso } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -78,6 +80,18 @@ function formatMinutes(minutes: number): string {
   const period = hours >= 12 ? "PM" : "AM";
   const hour12 = hours % 12 === 0 ? 12 : hours % 12;
   return `${hour12}:${mins.toString().padStart(2, "0")} ${period}`;
+}
+
+/**
+ * The range the post-save schedule preview asks about: from today (or the
+ * agreement's own start date, if that's later) through the first month grid
+ * that reaches — the same one-month-out horizon a manager gets generating
+ * from the Calendar page, so a brand-new agreement's first look matches what
+ * every other Generate Visits action already shows.
+ */
+function schedulingWindow(startDate: string): { from: string; to: string } {
+  const from = startDate > todayIso() ? startDate : todayIso();
+  return { from, to: rangeForGeneration(from, "month").to };
 }
 
 const WEEKDAY_SHORT: Record<Weekday, string> = {
@@ -180,13 +194,17 @@ const defaultValues: ServiceAgreementFormValues = {
  * enforced by the API, which rejects a genuinely-impossible agreement outright
  * (400/422 with a stable code) rather than the UI second-guessing it.
  *
- * The one API-shape consequence worth calling out: `GET .../schedule-preview`
- * only works on an *existing* agreement — there is no dry-run endpoint. So
- * "preview before saving" becomes "save, then immediately show the real
- * preview before the drawer closes" rather than a preview on unsaved draft
- * values. Flagged to Chanya; a dry-run preview endpoint would be a nice
- * follow-up but isn't required for this to be correct and honest about what
- * it shows.
+ * `/visit-generation/preview` and `/confirm` only work on an *existing*
+ * agreement's own id — there is no dry-run endpoint — so "preview before
+ * saving" becomes "save, then immediately preview the real schedule before
+ * the drawer closes" rather than a preview on unsaved draft values.
+ *
+ * The preview is scoped to `serviceAgreementIds: [agreement.id]`, which the
+ * backend guarantees can only place or move *this* agreement's own visits —
+ * another agreement's visit enters only as standing load, counted but never
+ * moved (see the scoped-generation regression test on the API side). That
+ * guarantee is what the "existing work was not moved" line below states
+ * outright rather than leaving a manager to assume it.
  */
 export default function ServiceAgreementsPage() {
   const [agreements, setAgreements] = React.useState<ServiceAgreement[]>([]);
@@ -213,9 +231,14 @@ export default function ServiceAgreementsPage() {
   const busyAgreementIdRef = React.useRef<string | null>(null);
 
   const [createdAgreement, setCreatedAgreement] = React.useState<ServiceAgreement | null>(null);
-  const [preview, setPreview] = React.useState<SchedulePreview | null>(null);
+  const [impact, setImpact] = React.useState<GenerationImpact | null>(null);
   const [previewError, setPreviewError] = React.useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = React.useState(false);
+  const [isScheduling, setIsScheduling] = React.useState(false);
+  // A ref alongside the state: two clicks fired in the same tick (a fast
+  // double-click) both close over the same pre-update `isScheduling`, so the
+  // state check alone can't stop the second one.
+  const isSchedulingRef = React.useRef(false);
 
   const {
     register,
@@ -345,7 +368,7 @@ export default function ServiceAgreementsPage() {
 
   function openDrawer() {
     setCreatedAgreement(null);
-    setPreview(null);
+    setImpact(null);
     setPreviewError(null);
     setSubmitError(null);
     const firstCustomer = customers[0];
@@ -391,11 +414,17 @@ export default function ServiceAgreementsPage() {
 
       setIsPreviewLoading(true);
       try {
-        const result = await fetchSchedulePreview(agreement.id);
-        setPreview(result);
+        const { from, to } = schedulingWindow(agreement.startDate);
+        const result = await previewVisitGeneration({
+          from,
+          to,
+          branchCode: agreement.branchCode,
+          serviceAgreementIds: [agreement.id],
+        });
+        setImpact(result);
       } catch (caught) {
         setPreviewError(
-          caught instanceof ApiError ? caught.message : "Could not load the schedule preview."
+          caught instanceof ApiError ? caught.message : "Could not calculate the schedule."
         );
       } finally {
         setIsPreviewLoading(false);
@@ -405,6 +434,34 @@ export default function ServiceAgreementsPage() {
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleScheduleNow() {
+    if (!createdAgreement || isSchedulingRef.current) return; // Collapses a double-click into one request.
+    isSchedulingRef.current = true;
+    setIsScheduling(true);
+    try {
+      const { from, to } = schedulingWindow(createdAgreement.startDate);
+      const result = await confirmVisitGeneration({
+        from,
+        to,
+        branchCode: createdAgreement.branchCode,
+        serviceAgreementIds: [createdAgreement.id],
+      });
+      setImpact(result);
+      notify.success(
+        result.additions.length === 0
+          ? "Nothing to schedule yet — check the conflicts below."
+          : `${result.additions.length} ${result.additions.length === 1 ? "visit" : "visits"} scheduled for ${createdAgreement.customerName}.`
+      );
+    } catch (caught) {
+      notify.error(
+        caught instanceof ApiError ? caught.message : "Could not schedule the visits."
+      );
+    } finally {
+      isSchedulingRef.current = false;
+      setIsScheduling(false);
     }
   }
 
@@ -609,9 +666,20 @@ export default function ServiceAgreementsPage() {
         contentTabIndex={Boolean(createdAgreement)}
         footer={
           createdAgreement ? (
-            <Button className="w-full" onClick={handleDone}>
-              Done
-            </Button>
+            <div className="flex w-full gap-2">
+              {impact?.isPreview && impact.additions.length > 0 && (
+                <Button className="flex-1" onClick={handleScheduleNow} disabled={isScheduling}>
+                  {isScheduling ? "Scheduling…" : "Schedule now"}
+                </Button>
+              )}
+              <Button
+                variant={impact?.isPreview && impact.additions.length > 0 ? "outline" : "default"}
+                className="flex-1"
+                onClick={handleDone}
+              >
+                Done
+              </Button>
+            </div>
           ) : (
             <Button
               type="submit"
@@ -637,55 +705,90 @@ export default function ServiceAgreementsPage() {
             <div className="space-y-3 rounded-xl border p-4">
               <h3 className="flex items-center gap-1.5 text-sm font-medium">
                 <CalendarClock className="h-4 w-4" aria-hidden="true" />
-                Schedule preview
+                {impact && !impact.isPreview ? "Scheduled" : "Schedule"}
               </h3>
+
+              {/*
+                Stated unconditionally, not only once visits exist: the
+                guarantee holds whether this run finds zero visits, a
+                shortfall, or a full month, and a manager reading a conflict
+                below still needs to know nobody else's calendar moved.
+              */}
+              <p className="text-xs text-muted-foreground">
+                This only plans {createdAgreement.customerName}&apos;s own visits — every
+                other customer&apos;s existing schedule is untouched.
+              </p>
 
               {isPreviewLoading ? (
                 <p role="status" className="text-sm text-muted-foreground">
-                  Calculating preview…
+                  Scheduling in progress…
                 </p>
               ) : previewError ? (
                 <p role="alert" className="text-sm text-destructive">
                   {previewError}
                 </p>
-              ) : preview ? (
+              ) : impact ? (
                 <>
-                  {preview.shortfalls.length > 0 && (
-                    <div className="space-y-2">
-                      {preview.shortfalls.map((shortfall, index) => (
-                        <p
-                          key={index}
-                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          {shortfall.message}
-                        </p>
-                      ))}
-                    </div>
-                  )}
+                  <p className="text-sm">
+                    {impact.additions.length === 0
+                      ? "No visits could be placed in the next month — see the conflicts below."
+                      : `${impact.additions.length} ${
+                          impact.additions.length === 1 ? "visit" : "visits"
+                        } ${impact.isPreview ? "ready to schedule" : "scheduled"} between ${formatLongDate(
+                          impact.from
+                        )} and ${formatLongDate(impact.to)}.`}
+                  </p>
 
-                  {preview.visits.length > 0 ? (
-                    <ul className="space-y-1 text-sm">
-                      {preview.visits.map((visit) => (
-                        <li key={visit.date} className="flex items-center justify-between">
+                  {impact.additions.length > 0 && (
+                    <ul className="space-y-1.5 text-sm">
+                      {impact.additions.map((visit, index) => (
+                        <li
+                          key={`${visit.visitDate}-${index}`}
+                          className="flex items-center justify-between gap-2"
+                        >
                           <span>
-                            {visit.date} ({WEEKDAY_SHORT[visit.weekday]})
+                            {formatLongDate(visit.visitDate)}
                             {visit.isPreferredDay && (
                               <Badge variant="success" className="ml-2">
                                 Preferred
                               </Badge>
                             )}
                           </span>
-                          <span className="text-muted-foreground">
-                            {formatMinutes(visit.windowStartMinute)}–{formatMinutes(visit.windowEndMinute)}
+                          <span className="text-right text-muted-foreground">
+                            {formatMinutes(visit.windowStartMinute)}–
+                            {formatMinutes(visit.windowEndMinute)} · crew of{" "}
+                            {visit.requiredCrewSize}
                           </span>
                         </li>
                       ))}
                     </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      No visits fall in the preview window.
-                    </p>
+                  )}
+
+                  {(impact.shortfalls.length > 0 || impact.loadWarnings.length > 0) && (
+                    <div className="space-y-2">
+                      <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                        Unresolved conflicts
+                      </h4>
+                      {impact.shortfalls.map((shortfall, index) => (
+                        <p
+                          key={`shortfall-${index}`}
+                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                        >
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                          {shortfall.message}
+                        </p>
+                      ))}
+                      {impact.loadWarnings.map((warning, index) => (
+                        <p
+                          key={`load-${index}`}
+                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
+                        >
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                          {warning.message}
+                        </p>
+                      ))}
+                    </div>
                   )}
                 </>
               ) : null}
