@@ -79,7 +79,9 @@ export const authConfig = registerAs('auth', () => {
 export const visitGenerationConfig = registerAs('visitGeneration', () => {
   const env = process.env as unknown as Env;
   return {
+    /** Reference-only; see `dailyCapacityMinutes` for what is enforced. */
     dailyCap: Number(env.VISIT_GENERATION_DAILY_CAP),
+    dailyCapacityMinutes: Number(env.VISIT_GENERATION_DAILY_CAPACITY_MINUTES),
   };
 });
 

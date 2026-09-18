@@ -54,6 +54,13 @@ async function login(email: string, password: string): Promise<string> {
   return res.body.accessToken as string;
 }
 
+/**
+ * `createAgreement`'s own default duration and crew size, unless overridden:
+ * ninety minutes, two crew — a hundred and eighty crew-minutes per visit,
+ * which is what a cap expressed as "N visits" below actually has to be N of.
+ */
+const DEFAULT_AGREEMENT_CREW_MINUTES = 90 * 2;
+
 async function createAgreement(overrides: Record<string, unknown> = {}) {
   const res = await request(http)
     .post('/api/service-agreements')
@@ -1038,7 +1045,8 @@ describe('a scoped run and a full run reach the same calendar', () => {
   /** The service with a cap small enough for three agreements to breach. */
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('does not move a visit back onto a full day just because the run was scoped', async () => {
@@ -1114,6 +1122,99 @@ describe('a scoped run and a full run reach the same calendar', () => {
     expect(full.additions).toHaveLength(0);
     expect(full.removals).toHaveLength(0);
     expect(full.updates).toHaveLength(0);
+  });
+});
+
+describe('a new agreement, generated on its own, never moves another agreement\'s visit', () => {
+  /** Small enough that one existing visit already fills the day. */
+  const cappedAtOne = () =>
+    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
+    } as unknown as ConfigService);
+
+  it("plans the new agreement's visits without touching the existing agreement's", async () => {
+    const week = { from: '2027-05-03', to: '2027-05-09' }; // Monday-Sunday
+    await prisma.generatedVisit.deleteMany({
+      where: {
+        branchCode: BranchCode.KANDY,
+        visitDate: {
+          gte: new Date(`${week.from}T00:00:00.000Z`),
+          lte: new Date(`${week.to}T00:00:00.000Z`),
+        },
+      },
+    });
+    const customer = await request(http)
+      .post('/api/customers')
+      .set(auth(adminToken))
+      .send({ name: `C04 New Agreement ${suffix}`, branchCode: BranchCode.KANDY });
+    const site = await request(http)
+      .post(`/api/customers/${customer.body.id}/sites`)
+      .set(auth(adminToken))
+      .send({
+        name: `C04 New Agreement Site ${suffix}`,
+        branchCode: BranchCode.KANDY,
+        // Both agreements below allow the same two weekdays, so the new one
+        // has somewhere else to go once the guard finds the first already
+        // full — an agreement allowed only one day has no alternative to
+        // spread to at all, which would prove nothing about not touching a
+        // neighbour.
+        operatingHours: [Weekday.WEDNESDAY, Weekday.THURSDAY].map((weekday) => ({
+          weekday,
+          opensAtMinute: 540,
+          closesAtMinute: 1020,
+        })),
+      });
+
+    const existing = await createAgreement({
+      serviceSiteId: site.body.id,
+      allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+      preferredDays: [Weekday.WEDNESDAY],
+    });
+    const generation = cappedAtOne();
+    const actor = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN.email } });
+
+    // The existing agreement, generated and settled first — one visit, on
+    // the branch-day's one and only slot at this cap.
+    await generation.confirm({ ...week, serviceAgreementIds: [existing.id] }, actor);
+    const before = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: existing.id },
+    });
+    expect(before).toHaveLength(1);
+
+    // A brand-new agreement, over the same site and the same preferred day,
+    // generated scoped to itself alone — the shape of "a manager just added
+    // a customer".
+    const created = await createAgreement({
+      serviceSiteId: site.body.id,
+      allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+      preferredDays: [Weekday.WEDNESDAY],
+    });
+    await generation.confirm({ ...week, serviceAgreementIds: [created.id] }, actor);
+
+    // The existing agreement's visit is exactly what it was — same id, same
+    // date, same revision. A scoped run for someone else never moved it,
+    // even though the new agreement wanted the identical day and the day
+    // could hold only one.
+    const after = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: existing.id },
+    });
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      id: before[0].id,
+      visitDate: before[0].visitDate,
+    });
+    expect(after[0].updatedAt.getTime()).toBe(before[0].updatedAt.getTime());
+
+    // The new agreement was still served — the guard found it somewhere
+    // else, or it is honestly reported unassigned. Either is fine; the only
+    // wrong outcome is a moved neighbour.
+    const newVisits = await prisma.generatedVisit.findMany({
+      where: { serviceAgreementId: created.id },
+    });
+    for (const visit of newVisits) {
+      expect(visit.visitDate.getTime()).not.toBe(before[0].visitDate.getTime());
+    }
   });
 });
 
@@ -1750,7 +1851,8 @@ describe('a cancelled visit on the day generation wants', () => {
 describe('a day the spread cannot rescue', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('says so by date, count and cap before anything is confirmed', async () => {
@@ -1801,7 +1903,8 @@ describe('a day the spread cannot rescue', () => {
         branchCode: BranchCode.KANDY,
         date: '2027-06-09', // the Wednesday
         plannedCount: 3,
-        cap: 2,
+        plannedMinutes: 3 * DEFAULT_AGREEMENT_CREW_MINUTES,
+        cap: 2 * DEFAULT_AGREEMENT_CREW_MINUTES,
       }),
     ]);
     expect(impact.loadWarnings[0].message).toContain('2027-06-09');
@@ -1812,7 +1915,8 @@ describe('a day the spread cannot rescue', () => {
 describe('a cancelled visit takes up no room in the day', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('does not push the next run off a day whose only other visit was cancelled', async () => {

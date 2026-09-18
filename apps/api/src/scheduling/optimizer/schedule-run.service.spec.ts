@@ -181,28 +181,36 @@ function fixture(
       return replacement;
     }),
   };
+  // The day-load read: how many crew-minutes each branch-day the run would
+  // move work between already carries. Each unit of `dayLoad` stands for a
+  // one-hour, one-crew reference visit, so `{ '2027-03-04': 12 }` reads
+  // exactly as it did when the cap was a raw count: twelve of them are
+  // seven hundred and twenty crew-minutes, the default cap itself.
+  const dayLoadFindMany = jest.fn(
+    async ({ where }: { where: { branchCode: { in: BranchCode[] }; visitDate: { in: Date[] } } }) =>
+      where.visitDate.in.flatMap((visitDate) => {
+        const date = visitDate.toISOString().slice(0, 10);
+        return Array.from({ length: dayLoad[date] ?? 0 }, () => ({
+          branchCode: where.branchCode.in[0],
+          visitDate,
+          durationMinutes: 60,
+          requiredCrewSize: 1,
+        }));
+      }),
+  );
   const generatedVisit = {
-    findMany: jest.fn(async () => [
-      { ...visit, assignments: assignments.map((a) => ({ ...a })) },
-    ]),
+    findMany: jest.fn(
+      async (args?: { where?: { branchCode?: { in: BranchCode[] } | BranchCode } }) =>
+        args?.where?.branchCode && typeof args.where.branchCode === 'object'
+          ? dayLoadFindMany(args as never)
+          : [{ ...visit, assignments: assignments.map((a) => ({ ...a })) }],
+    ),
     findUniqueOrThrow: jest.fn(async () => ({ ...visit })),
     update: jest.fn(async ({ data }: { data: Partial<typeof visit> }) =>
       Object.assign(visit, data),
     ),
-    // The day-load read: how full each branch-day the run would move work
-    // between already is. Only the dates asked for come back, exactly as
-    // Postgres would answer.
-    groupBy: jest.fn(
-      async ({ where }: { where: { visitDate: { in: Date[] } } }) =>
-        where.visitDate.in
-          .map((date) => date.toISOString().slice(0, 10))
-          .filter((date) => (dayLoad[date] ?? 0) > 0)
-          .map((date) => ({
-            branchCode: BranchCode.COLOMBO,
-            visitDate: new Date(`${date}T00:00:00.000Z`),
-            _count: { _all: dayLoad[date] },
-          })),
-    ),
+    /** The day-load half of `findMany`, exposed so tests can assert on it alone. */
+    dayLoadFindMany,
   };
   const scheduleRun = {
     findUnique: jest.fn(async () => ({ ...run })),
@@ -1603,7 +1611,7 @@ describe('the daily-cap backstop on a solver move', () => {
 
   it('lets a move on to a day with room through', async () => {
     const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
-      '2027-03-04': 11,
+      '2027-03-04': 10,
     });
 
     const pending = f.processor.process(f.job);
@@ -1611,9 +1619,9 @@ describe('the daily-cap backstop on a solver move', () => {
     f.release();
     await pending;
 
-    // Eleven is not full, so the twelfth is the solver's to place. A backstop
-    // that refused this would have satisfied the cap by destroying the
-    // optimizer.
+    // Ten reference hours plus the visit's own ninety minutes stays under
+    // twelve, so the move is the solver's to place. A backstop that refused
+    // this would have satisfied the cap by destroying the optimizer.
     expect(f.visit.visitDate).toEqual(new Date('2027-03-04T00:00:00Z'));
     expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
   });
@@ -1674,7 +1682,7 @@ describe('the daily-cap backstop on a solver move', () => {
       'EMPLOYEE_DOUBLE_BOOKED',
     ]);
     expect(written.data[0].message).toContain('2027-03-04');
-    expect(written.data[0].message).toContain('12');
+    expect(written.data[0].message).toContain('720 crew-minutes');
     expect(written.data[0].message).toContain('2027-03-03');
     expect(written.data[0].details).toMatchObject({
       remediation: expect.stringContaining('2027-03-04'),
@@ -1738,10 +1746,11 @@ describe('the daily-cap backstop on a solver move', () => {
    * visit's own. Sent to the wrong day, a manager checks the wrong crews.
    */
   it('re-judges a move the engine refuses against the day the visit keeps', async () => {
-    // Eleven on the 4th: the cap lets the move through, so the refusal here is
-    // the engine's own.
+    // Ten reference hours on the 4th, comfortably under the cap once the
+    // visit's own ninety minutes are added: the cap lets the move through,
+    // so the refusal here is the engine's own.
     const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
-      '2027-03-04': 11,
+      '2027-03-04': 10,
     });
     f.eligibility.evaluate.mockImplementation(
       (async (
@@ -1843,7 +1852,7 @@ describe('the daily-cap backstop on a solver move', () => {
     // a rule about moving work, so a solve that only staffs what is already
     // dated pays nothing for it — and takes no branch-day lock, so it never
     // queues behind a run that is actually moving something.
-    expect(f.generatedVisit.groupBy).not.toHaveBeenCalled();
+    expect(f.generatedVisit.dayLoadFindMany).not.toHaveBeenCalled();
     expect(f.tx.$executeRaw).not.toHaveBeenCalled();
     expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
   });
@@ -1868,7 +1877,7 @@ describe('the daily-cap backstop on a solver move', () => {
       branchDayLockKey(BranchCode.COLOMBO, '2027-03-04'),
     ]);
     expect(f.tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
-      f.generatedVisit.groupBy.mock.invocationCallOrder[0],
+      f.generatedVisit.dayLoadFindMany.mock.invocationCallOrder[0],
     );
   });
 });

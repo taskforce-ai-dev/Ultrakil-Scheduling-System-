@@ -11,7 +11,14 @@ import { UserRole } from '@prisma/client';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
-import { GenerateVisitsDto, GenerationImpactDto } from './dto';
+import {
+  ExtendHorizonsDto,
+  GenerateVisitsDto,
+  GenerationImpactDto,
+  HorizonExtensionSummaryDto,
+  RepairBunchingDto,
+  RepairBunchingSummaryDto,
+} from './dto';
 import { VisitGenerationService } from './visit-generation.service';
 
 @ApiTags('visit-generation')
@@ -56,5 +63,39 @@ export class VisitGenerationController {
     @CurrentUser() actor: AuthenticatedUser,
   ): Promise<GenerationImpactDto> {
     return this.generation.confirm(dto, actor);
+  }
+
+  @Post('extend-horizons')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Keep every open-ended agreement planned a rolling year ahead',
+    description:
+      "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+  })
+  @ApiBody({ type: ExtendHorizonsDto, required: false })
+  @ApiResponse({ status: 200, type: HorizonExtensionSummaryDto })
+  extendHorizons(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() scope: ExtendHorizonsDto = {},
+  ): Promise<HorizonExtensionSummaryDto> {
+    return this.generation.extendRollingHorizons(actor, scope);
+  }
+
+  @Post('repair-bunching')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Move an agreement\'s own unbooked visits off a day the current cap no longer allows',
+    description:
+      "Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.",
+  })
+  @ApiBody({ type: RepairBunchingDto, required: false })
+  @ApiResponse({ status: 200, type: RepairBunchingSummaryDto })
+  repairBunching(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() scope: RepairBunchingDto = {},
+  ): Promise<RepairBunchingSummaryDto> {
+    return this.generation.repairBunching(actor, scope);
   }
 }

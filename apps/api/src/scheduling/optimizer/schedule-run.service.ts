@@ -16,8 +16,9 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
+import { crewMinutesOf } from '../capacity';
 import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
 import { lockBranchDays } from './branch-day-lock';
@@ -170,6 +171,8 @@ interface ProposedAssignment extends SolveSnapshot {
   /** The branch-day the visit stands on now, which a move would empty. */
   branchCode: BranchCode;
   visitDate: Date;
+  /** This visit's own cost against the daily cap: duration times crew size. */
+  crewMinutes: number;
 }
 
 /**
@@ -645,6 +648,7 @@ export class ScheduleRunService {
         proposedVisit,
         branchCode: visit.branchCode,
         visitDate: visit.visitDate,
+        crewMinutes: crewMinutesOf(visit),
       });
     }
 
@@ -1034,6 +1038,7 @@ export class ScheduleRunService {
               entry.branchCode,
               dateOnly(entry.visitDate),
               dateOnly(move.visitDate),
+              entry.crewMinutes,
             );
           }
           scheduled += 1;
@@ -1061,11 +1066,11 @@ export class ScheduleRunService {
     });
   }
 
-  /** Most visits one branch-day may carry. The number generation spreads to. */
-  private get dailyCap(): number {
+  /** Most crew-minutes one branch-day may carry. The figure generation spreads to. */
+  private get dailyCapacityMinutes(): number {
     return (
-      this.config.get<number>('visitGeneration.dailyCap') ??
-      DEFAULT_DAILY_VISIT_CAP
+      this.config.get<number>('visitGeneration.dailyCapacityMinutes') ??
+      DEFAULT_DAILY_CAPACITY_MINUTES
     );
   }
 
@@ -1113,7 +1118,7 @@ export class ScheduleRunService {
     proposals: ProposedAssignment[],
   ): Promise<DailyLoadLedger> {
     const moves = proposals.filter((entry) => entry.proposedVisit !== undefined);
-    if (moves.length === 0) return new DailyLoadLedger(new Map(), this.dailyCap);
+    if (moves.length === 0) return new DailyLoadLedger(new Map(), this.dailyCapacityMinutes);
 
     // Taken after the visit, agreement and resource locks, and in the sorted
     // order `lockBranchDays` imposes: every schedule writer takes these locks
@@ -1136,8 +1141,11 @@ export class ScheduleRunService {
       ).values(),
     ];
 
-    const rows = await tx.generatedVisit.groupBy({
-      by: ['branchCode', 'visitDate'],
+    // `groupBy` cannot sum a product of two columns, so the rows themselves
+    // are read and reduced here — the same approach generation's own
+    // commit-time recheck uses, and for the same reason: crew-minutes is
+    // duration times crew size, not a column either side can aggregate alone.
+    const rows = await tx.generatedVisit.findMany({
       where: {
         branchCode: { in: branchCodes },
         visitDate: { in: dates },
@@ -1145,18 +1153,21 @@ export class ScheduleRunService {
         // pending, scheduled, unassigned, published, a manager's own visit.
         status: { not: VisitStatus.CANCELLED },
       },
-      _count: { _all: true },
+      select: {
+        branchCode: true,
+        visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
+      },
     });
 
-    return new DailyLoadLedger(
-      new Map(
-        rows.map((row) => [
-          branchDayKey(row.branchCode, dateOnly(row.visitDate)),
-          row._count._all,
-        ]),
-      ),
-      this.dailyCap,
-    );
+    const minutes = new Map<string, number>();
+    for (const row of rows) {
+      const key = branchDayKey(row.branchCode, dateOnly(row.visitDate));
+      minutes.set(key, (minutes.get(key) ?? 0) + crewMinutesOf(row));
+    }
+
+    return new DailyLoadLedger(minutes, this.dailyCapacityMinutes);
   }
 
   /**
@@ -1185,22 +1196,23 @@ export class ScheduleRunService {
     if (!entry.proposedVisit) return undefined;
 
     const target = dateOnly(entry.proposedVisit.visitDate);
-    if (ledger.admitsMoveOnto(entry.branchCode, target)) return undefined;
+    if (ledger.admitsMoveOnto(entry.branchCode, target, entry.crewMinutes)) return undefined;
 
     const kept = dateOnly(entry.visitDate);
     this.logger.warn(
-      `Solver proposed moving visit ${entry.visitId} to ${target}, which already carries ${ledger.countOn(
+      `Solver proposed moving visit ${entry.visitId} to ${target}, which already carries ${ledger.minutesOn(
         entry.branchCode,
         target,
-      )} visits in ${entry.branchCode}; the visit stays on ${kept}.`,
+      )} crew-minutes in ${entry.branchCode}; the visit stays on ${kept}.`,
     );
     return dailyCapRefusal({
       visitId: entry.visitId,
       branchCode: entry.branchCode,
       proposedDate: target,
       keptDate: kept,
-      carrying: ledger.countOn(entry.branchCode, target),
-      cap: this.dailyCap,
+      carryingMinutes: ledger.minutesOn(entry.branchCode, target),
+      visitMinutes: entry.crewMinutes,
+      capMinutes: this.dailyCapacityMinutes,
     });
   }
 

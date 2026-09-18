@@ -6,106 +6,132 @@ import {
   DailyLoadLedger,
 } from './daily-load-ledger';
 
-const CAP = 12;
+// A reference visit's own crew-minutes cost: one hour, one crew member. The
+// cap and every existing load below are expressed as a whole number of these,
+// so the tests read the same way the old count-based ones did.
+const UNIT = 60;
+const CAP = 12 * UNIT;
 
-const ledgerOf = (counts: Record<string, number>, cap = CAP) =>
+const ledgerOf = (unitsByDate: Record<string, number>, capMinutes = CAP) =>
   new DailyLoadLedger(
     new Map(
-      Object.entries(counts).map(([date, count]) => [
+      Object.entries(unitsByDate).map(([date, units]) => [
         branchDayKey(BranchCode.COLOMBO, date),
-        count,
+        units * UNIT,
       ]),
     ),
-    cap,
+    capMinutes,
   );
 
 describe('DailyLoadLedger', () => {
   it('reads a day nobody has planned as empty', () => {
     const ledger = ledgerOf({});
 
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-17')).toBe(0);
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(true);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(0);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(true);
   });
 
   it('refuses a move on to a day standing exactly at the cap', () => {
-    const ledger = ledgerOf({ '2026-09-17': CAP });
+    const ledger = ledgerOf({ '2026-09-17': 12 });
 
-    // At the cap, not merely over it. Twelve is a full day; the thirteenth is
-    // the visit the manager complained about.
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(false);
+    // At the cap, not merely over it. Twelve hours of crew-minutes is a full
+    // day; the thirteenth unit is the visit the manager complained about.
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(false);
   });
 
   it('refuses a move on to a day that was already over the cap before the run', () => {
     const ledger = ledgerOf({ '2026-09-17': 20 });
 
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(false);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(false);
   });
 
   it('accepts a move on to the last free slot of a day', () => {
-    const ledger = ledgerOf({ '2026-09-17': CAP - 1 });
+    const ledger = ledgerOf({ '2026-09-17': 11 });
 
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(true);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(true);
+  });
+
+  it('refuses a move whose own crew-minutes alone would push the day over the cap', () => {
+    // Ten hours standing, two hours of room — a reference one-hour visit
+    // fits, but a two-crew, ninety-minute visit (three hours) does not.
+    const ledger = ledgerOf({ '2026-09-17': 10 });
+
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', 2 * UNIT)).toBe(true);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', 3 * UNIT)).toBe(false);
   });
 
   it('keeps one branch-day out of another branch', () => {
-    const ledger = ledgerOf({ '2026-09-17': CAP });
+    const ledger = ledgerOf({ '2026-09-17': 12 });
 
     // A Colombo day says nothing about a Kandy one; branch isolation is as
     // true of the load guard as of everything else.
-    expect(ledger.admitsMoveOnto(BranchCode.KANDY, '2026-09-17')).toBe(true);
+    expect(ledger.admitsMoveOnto(BranchCode.KANDY, '2026-09-17', UNIT)).toBe(true);
   });
 
   it('closes a day once the run has filled it', () => {
-    const ledger = ledgerOf({ '2026-09-17': CAP - 1, '2026-09-21': 11 });
+    const ledger = ledgerOf({ '2026-09-17': 11, '2026-09-21': 11 });
 
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(true);
-    ledger.recordMove(BranchCode.COLOMBO, '2026-09-21', '2026-09-17');
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(true);
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-21', '2026-09-17', UNIT);
 
-    // The move the run just committed is the twelfth. Nothing else may follow
-    // it on to that day, which is what stops eight visits arriving one by one.
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-17')).toBe(CAP);
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(false);
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-21')).toBe(10);
+    // The move the run just committed is the twelfth hour. Nothing else may
+    // follow it on to that day, which is what stops eight visits arriving one
+    // by one.
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(CAP);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(false);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-21')).toBe(10 * UNIT);
   });
 
   it('opens a day again when the run moves work off it', () => {
-    const ledger = ledgerOf({ '2026-09-17': CAP, '2026-09-18': 7 });
+    const ledger = ledgerOf({ '2026-09-17': 12, '2026-09-18': 7 });
 
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(false);
-    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-18');
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(false);
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-18', UNIT);
 
     // A day the run emptied a slot on has room for one again. Counting the day
     // as it will stand after the run, rather than as it stood before it, is
     // the same basis generation's own warning uses.
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17')).toBe(true);
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-18')).toBe(8);
+    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, '2026-09-17', UNIT)).toBe(true);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-18')).toBe(8 * UNIT);
+  });
+
+  it('moves a visit by its own crew-minutes, not a flat unit', () => {
+    // A two-crew, ninety-minute visit costs three hours of crew-minutes, not
+    // one — the whole reason the ledger moved off counting visits.
+    const ledger = ledgerOf({ '2026-09-17': 5, '2026-09-18': 5 });
+    const visitMinutes = 2 * 90;
+
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-18', visitMinutes);
+
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(5 * UNIT - visitMinutes);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-18')).toBe(5 * UNIT + visitMinutes);
   });
 
   it('ignores a move that goes nowhere', () => {
     const ledger = ledgerOf({ '2026-09-17': 5 });
 
-    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-17');
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-17', UNIT);
 
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-17')).toBe(5);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(5 * UNIT);
   });
 
   it('never counts a day below zero', () => {
     const ledger = ledgerOf({});
 
-    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-18');
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-17', '2026-09-18', UNIT);
 
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-17')).toBe(0);
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-18')).toBe(1);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(0);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-18')).toBe(UNIT);
   });
 
-  it('does not write through to the counts it was given', () => {
-    const counts = new Map([[branchDayKey(BranchCode.COLOMBO, '2026-09-17'), 5]]);
-    const ledger = new DailyLoadLedger(counts, CAP);
+  it('does not write through to the map it was given', () => {
+    const minutes = new Map([[branchDayKey(BranchCode.COLOMBO, '2026-09-17'), 5 * UNIT]]);
+    const ledger = new DailyLoadLedger(minutes, CAP);
 
-    ledger.recordMove(BranchCode.COLOMBO, '2026-09-18', '2026-09-17');
+    ledger.recordMove(BranchCode.COLOMBO, '2026-09-18', '2026-09-17', UNIT);
 
-    expect(counts.get(branchDayKey(BranchCode.COLOMBO, '2026-09-17'))).toBe(5);
-    expect(ledger.countOn(BranchCode.COLOMBO, '2026-09-17')).toBe(6);
+    expect(minutes.get(branchDayKey(BranchCode.COLOMBO, '2026-09-17'))).toBe(5 * UNIT);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, '2026-09-17')).toBe(6 * UNIT);
   });
 });
 
@@ -115,14 +141,15 @@ describe('dailyCapRefusal', () => {
     branchCode: BranchCode.COLOMBO,
     proposedDate: '2026-09-17',
     keptDate: '2026-09-21',
-    carrying: 12,
-    cap: 12,
+    carryingMinutes: 720,
+    visitMinutes: 60,
+    capMinutes: 720,
   });
 
   it('names the full day, what it carries, and where the visit stayed', () => {
     expect(refusal.code).toBe('DAILY_VISIT_CAP_REACHED');
     expect(refusal.message).toContain('2026-09-17');
-    expect(refusal.message).toContain('12 visits in COLOMBO');
+    expect(refusal.message).toContain('720 crew-minutes of work in COLOMBO');
     expect(refusal.message).toContain('2026-09-21');
   });
 
@@ -145,16 +172,19 @@ describe('dailyCapRefusal', () => {
     expect(refusal.resources).toEqual({ visitId: 'visit-1' });
   });
 
-  it('says "visit" rather than "visits" when a cap of one is reached', () => {
-    const single = dailyCapRefusal({
+  it('names the visit\'s own crew-minutes alongside what the day already carries', () => {
+    const multiCrew = dailyCapRefusal({
       visitId: 'visit-1',
       branchCode: BranchCode.KANDY,
       proposedDate: '2026-09-17',
       keptDate: '2026-09-21',
-      carrying: 1,
-      cap: 1,
+      carryingMinutes: 700,
+      visitMinutes: 180,
+      capMinutes: 720,
     });
 
-    expect(single.message).toContain('1 visit in KANDY');
+    expect(multiCrew.message).toContain('700 crew-minutes of work in KANDY');
+    expect(multiCrew.message).toContain("visit's own 180");
+    expect(multiCrew.message).toContain('720 crew-minutes a day');
   });
 });

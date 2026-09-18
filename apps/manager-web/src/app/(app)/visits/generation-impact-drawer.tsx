@@ -403,8 +403,8 @@ export function GenerationImpactDrawer({
             {capped(impact.loadWarnings).shown.map((warning, index) => (
               <li key={`${warning.branchCode}-${warning.date}-${index}`}>
                 <span className="font-medium">
-                  {warning.date}, {warning.branchCode}: {warning.plannedCount} visits —
-                  limit {warning.cap}
+                  {warning.date}, {warning.branchCode}: {warning.plannedCount} visits,{" "}
+                  {warning.plannedMinutes} crew-min — limit {warning.cap} crew-min
                 </span>
                 <br />
                 <span className="text-muted-foreground">{warning.message}</span>

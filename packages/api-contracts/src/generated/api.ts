@@ -828,6 +828,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visit-generation/extend-horizons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Keep every open-ended agreement planned a rolling year ahead
+         * @description Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.
+         */
+        post: operations["VisitGenerationController_extendHorizons"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visit-generation/repair-bunching": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move an agreement's own unbooked visits off a day the current cap no longer allows
+         * @description Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.
+         */
+        post: operations["VisitGenerationController_repairBunching"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/visits": {
         parameters: {
             query?: never;
@@ -1857,9 +1897,13 @@ export interface components {
             branchCode: "COLOMBO" | "KANDY";
             /** Format: date */
             date: string;
+            /** @description How many visits the day carries. */
             plannedCount: number;
             /** @description How many of them are dates already booked, so unmovable. */
             bookedCount: number;
+            /** @description The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits. */
+            plannedMinutes: number;
+            /** @description The crew-minutes cap itself. */
             cap: number;
             message: string;
         };
@@ -1925,6 +1969,70 @@ export interface components {
              * @description The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.
              */
             scheduleRunId: string | null;
+        };
+        ExtendHorizonsDto: {
+            /**
+             * @description Limit to one branch. Omit to consider every open-ended agreement in the company.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit to particular agreements. Omit for every open-ended agreement in scope. */
+            serviceAgreementIds?: string[];
+        };
+        HorizonExtensionDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            visitsAdded: number;
+        };
+        HorizonExtensionSummaryDto: {
+            /** Format: date */
+            today: string;
+            /**
+             * Format: date
+             * @description today plus a rolling year — every open-ended agreement is planned up to here.
+             */
+            targetHorizon: string;
+            /** @description Every active, open-ended agreement considered — extended or already caught up. */
+            agreementsConsidered: number;
+            /** @description Only the agreements this call actually planned further into. */
+            agreementsExtended: components["schemas"]["HorizonExtensionDto"][];
+        };
+        RepairBunchingDto: {
+            /**
+             * @description Limit to one branch. Omit to consider every active agreement in the company.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit to particular agreements. Omit for every active agreement in scope. */
+            serviceAgreementIds?: string[];
+        };
+        RepairedAgreementDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            /** @description How many of this agreement's own unbooked visits moved to a different day. */
+            visitsMoved: number;
+        };
+        RepairBunchingSummaryDto: {
+            /** Format: date */
+            today: string;
+            /** @description Every active agreement with a generated visit in scope, whether or not it needed repair. */
+            agreementsConsidered: number;
+            /** @description Only the agreements this call actually moved a visit for. */
+            agreementsRepaired: components["schemas"]["RepairedAgreementDto"][];
+            /** @description Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager's own decision, only its own unbooked, unpublished work. */
+            stillOverCap: components["schemas"]["DailyLoadWarningDto"][];
         };
         VisitDto: {
             /** Format: uuid */
@@ -4340,6 +4448,66 @@ export interface operations {
             };
         };
     };
+    VisitGenerationController_extendHorizons: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ExtendHorizonsDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HorizonExtensionSummaryDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_repairBunching: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RepairBunchingDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairBunchingSummaryDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     VisitsController_list: {
         parameters: {
             query?: {
@@ -4747,7 +4915,7 @@ export interface operations {
                 /** @description Up to 100 per page. */
                 pageSize?: number;
                 status?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "SUPERSEDED";
-                /** @description Up to 50. Repeat the parameter for more than one id (?ids=a&ids=b) — the API also accepts a single bare id. */
+                /** @description Up to 50. Accepts a repeated parameter (?ids=a&ids=b), one comma-separated value (?ids=a,b — what the manager portal itself sends), or a single bare id. */
                 ids?: string[];
             };
             header?: never;

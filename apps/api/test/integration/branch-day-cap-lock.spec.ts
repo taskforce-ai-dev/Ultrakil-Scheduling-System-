@@ -38,7 +38,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../src/config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
 import {
   BRANCH_DAY_LOCK_CLASS,
   branchDayLockKey,
@@ -70,8 +70,16 @@ const RACE_DAY = RACE_WEEK.from;
 const WAIT_DAY = WAIT_WEEK.from;
 const at = (date: string) => new Date(`${date}T00:00:00.000Z`);
 
+/**
+ * One crew-hour: every agreement and filler visit in this suite is this
+ * size, so a visit's crew-minutes cost is exactly one unit of it, and the
+ * cap reads as a plain visit count again.
+ */
+const REFERENCE_VISIT_MINUTES = 60;
+const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
+
 /** One short of full, so exactly one writer can have the last slot. */
-const FILLERS = DEFAULT_DAILY_VISIT_CAP - 1;
+const FILLERS = CAP_VISITS - 1;
 
 const ALL_WEEKDAYS = [
   Weekday.MONDAY,
@@ -134,8 +142,8 @@ async function makeAgreement(label: string, startDate: string): Promise<string> 
       frequencyCount: 1,
       frequencyUnit: FrequencyUnit.WEEK,
       frequencyInterval: 1,
-      crewSize: 2,
-      durationMinutes: 90,
+      crewSize: 1,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
       startDate: at(startDate),
       dayRules: {
         create: ALL_WEEKDAYS.map((weekday) => ({
@@ -166,8 +174,8 @@ async function fillDay(agreementId: string, date: string, count: number) {
         visitDate: at(date),
         windowStartMinute: 8 * 60 + index,
         windowEndMinute: 17 * 60,
-        durationMinutes: 90,
-        requiredCrewSize: 2,
+        durationMinutes: REFERENCE_VISIT_MINUTES,
+        requiredCrewSize: 1,
         status: VisitStatus.PENDING,
         isManuallyAdjusted: true,
       },
@@ -331,8 +339,8 @@ beforeAll(async () => {
     data: {
       code: `DAYLOCK_${suffix}`,
       name: 'Day Lock Treatment',
-      defaultCrewSize: 2,
-      defaultDurationMinutes: 90,
+      defaultCrewSize: 1,
+      defaultDurationMinutes: REFERENCE_VISIT_MINUTES,
     },
   });
   jobTypeId = jobType.id;
@@ -438,7 +446,7 @@ describe('two generation confirms racing for the last slot on a day', () => {
       }
     }
     // The day is the whole point: twelve, never thirteen.
-    expect(await loadOn(RACE_DAY)).toBeLessThanOrEqual(DEFAULT_DAILY_VISIT_CAP);
+    expect(await loadOn(RACE_DAY)).toBeLessThanOrEqual(CAP_VISITS);
 
     // A refusal must cost the manager nothing but a second press. Previewing
     // again sees the day as it now is, and the load guard spreads the visit to
@@ -472,7 +480,7 @@ describe('two generation confirms racing for the last slot on a day', () => {
       _count: { _all: true },
     });
     for (const day of days) {
-      expect(day._count._all).toBeLessThanOrEqual(DEFAULT_DAILY_VISIT_CAP);
+      expect(day._count._all).toBeLessThanOrEqual(CAP_VISITS);
     }
   }, 180_000);
 });
@@ -517,8 +525,8 @@ describe('a writer already holding the branch-day', () => {
           visitDate: at(WAIT_DAY),
           windowStartMinute: 7 * 60,
           windowEndMinute: 17 * 60,
-          durationMinutes: 90,
-          requiredCrewSize: 2,
+          durationMinutes: REFERENCE_VISIT_MINUTES,
+          requiredCrewSize: 1,
           status: VisitStatus.PENDING,
           isManuallyAdjusted: true,
         },
@@ -532,7 +540,7 @@ describe('a writer already holding the branch-day', () => {
     expect(response.status).toBe(409);
     expect(response.body.code).toBe('RESOURCE_CONFLICT');
     expect(response.body.message).toContain(WAIT_DAY);
-    expect(await loadOn(WAIT_DAY)).toBe(DEFAULT_DAILY_VISIT_CAP);
+    expect(await loadOn(WAIT_DAY)).toBe(CAP_VISITS);
   }, 180_000);
 
   it('makes the optimizer wait for the day, and count it afterwards', async () => {
@@ -559,10 +567,15 @@ describe('a writer already holding the branch-day', () => {
                 branchCode: BranchCode;
                 visitDate: Date;
                 proposedVisit?: { visitDate: Date };
+                crewMinutes: number;
               }[],
             ): Promise<{
-              countOn(branchCode: BranchCode, date: string): number;
-              admitsMoveOnto(branchCode: BranchCode, date: string): boolean;
+              minutesOn(branchCode: BranchCode, date: string): number;
+              admitsMoveOnto(
+                branchCode: BranchCode,
+                date: string,
+                crewMinutes: number,
+              ): boolean;
             }>;
           }
         ).lockAndReadDailyLoad(tx, [
@@ -570,6 +583,7 @@ describe('a writer already holding the branch-day', () => {
             branchCode: BranchCode.COLOMBO,
             visitDate: at(WAIT_WEEK.from),
             proposedVisit: { visitDate: at(day) },
+            crewMinutes: REFERENCE_VISIT_MINUTES,
           },
         ]),
       { timeout: 60_000, maxWait: 30_000 },
@@ -586,8 +600,8 @@ describe('a writer already holding the branch-day', () => {
           visitDate: at(day),
           windowStartMinute: 7 * 60,
           windowEndMinute: 17 * 60,
-          durationMinutes: 90,
-          requiredCrewSize: 2,
+          durationMinutes: REFERENCE_VISIT_MINUTES,
+          requiredCrewSize: 1,
           status: VisitStatus.PENDING,
           isManuallyAdjusted: true,
         },
@@ -595,8 +609,12 @@ describe('a writer already holding the branch-day', () => {
     });
 
     const ledger = await ledgerRead;
-    expect(ledger.countOn(BranchCode.COLOMBO, day)).toBe(DEFAULT_DAILY_VISIT_CAP);
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, day)).toBe(false);
+    expect(ledger.minutesOn(BranchCode.COLOMBO, day)).toBe(
+      CAP_VISITS * REFERENCE_VISIT_MINUTES,
+    );
+    expect(
+      ledger.admitsMoveOnto(BranchCode.COLOMBO, day, REFERENCE_VISIT_MINUTES),
+    ).toBe(false);
   }, 180_000);
 
   it('does not hold up a writer working on another day or another branch', async () => {

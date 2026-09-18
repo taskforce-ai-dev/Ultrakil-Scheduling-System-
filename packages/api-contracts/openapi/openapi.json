@@ -2093,6 +2093,88 @@
         ]
       }
     },
+    "/api/visit-generation/extend-horizons": {
+      "post": {
+        "description": "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+        "operationId": "VisitGenerationController_extendHorizons",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendHorizonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HorizonExtensionSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Keep every open-ended agreement planned a rolling year ahead",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/repair-bunching": {
+      "post": {
+        "description": "Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.",
+        "operationId": "VisitGenerationController_repairBunching",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairBunchingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBunchingSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Move an agreement's own unbooked visits off a day the current cap no longer allows",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
     "/api/visits": {
       "get": {
         "description": "Visits in date order. Filter by branch, date range, status, customer or site. Each row says whether regeneration would leave it alone, and why.",
@@ -2844,7 +2926,7 @@
             "name": "ids",
             "required": false,
             "in": "query",
-            "description": "Up to 50. Repeat the parameter for more than one id (?ids=a&ids=b) — the API also accepts a single bare id.",
+            "description": "Up to 50. Accepts a repeated parameter (?ids=a&ids=b), one comma-separated value (?ids=a,b — what the manager portal itself sends), or a single bare id.",
             "schema": {
               "type": "array",
               "items": {
@@ -5054,14 +5136,20 @@
             "format": "date"
           },
           "plannedCount": {
-            "type": "number"
+            "type": "number",
+            "description": "How many visits the day carries."
           },
           "bookedCount": {
             "type": "number",
             "description": "How many of them are dates already booked, so unmovable."
           },
+          "plannedMinutes": {
+            "type": "number",
+            "description": "The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits."
+          },
           "cap": {
-            "type": "number"
+            "type": "number",
+            "description": "The crew-minutes cap itself."
           },
           "message": {
             "type": "string"
@@ -5072,6 +5160,7 @@
           "date",
           "plannedCount",
           "bookedCount",
+          "plannedMinutes",
           "cap",
           "message"
         ]
@@ -5254,6 +5343,188 @@
           "skippedPeriods",
           "isPreview",
           "scheduleRunId"
+        ]
+      },
+      "ExtendHorizonsDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every open-ended agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every open-ended agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "HorizonExtensionDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "visitsAdded": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "from",
+          "to",
+          "visitsAdded"
+        ]
+      },
+      "HorizonExtensionSummaryDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "targetHorizon": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "today plus a rolling year — every open-ended agreement is planned up to here."
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active, open-ended agreement considered — extended or already caught up."
+          },
+          "agreementsExtended": {
+            "description": "Only the agreements this call actually planned further into.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HorizonExtensionDto"
+            }
+          }
+        },
+        "required": [
+          "today",
+          "targetHorizon",
+          "agreementsConsidered",
+          "agreementsExtended"
+        ]
+      },
+      "RepairBunchingDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every active agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every active agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "RepairedAgreementDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "visitsMoved": {
+            "type": "number",
+            "description": "How many of this agreement's own unbooked visits moved to a different day."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "from",
+          "to",
+          "visitsMoved"
+        ]
+      },
+      "RepairBunchingSummaryDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active agreement with a generated visit in scope, whether or not it needed repair."
+          },
+          "agreementsRepaired": {
+            "description": "Only the agreements this call actually moved a visit for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairedAgreementDto"
+            }
+          },
+          "stillOverCap": {
+            "description": "Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager's own decision, only its own unbooked, unpublished work.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DailyLoadWarningDto"
+            }
+          }
+        },
+        "required": [
+          "today",
+          "agreementsConsidered",
+          "agreementsRepaired",
+          "stillOverCap"
         ]
       },
       "VisitDto": {

@@ -19,20 +19,27 @@ import {
   PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
+  periodBoundsOf,
   periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { crewMinutesOf } from '../capacity';
 import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
-import { GenerateVisitsDto, GenerationImpactDto } from './dto';
+import {
+  ExtendHorizonsDto,
+  GenerateVisitsDto,
+  GenerationImpactDto,
+  RepairBunchingDto,
+} from './dto';
 import {
   DailyLoadWarning,
   StandingVisit,
@@ -59,6 +66,57 @@ interface RangeAsItStands {
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
 const MAX_HORIZON_DAYS = 366;
+/** How far ahead {@link VisitGenerationService.extendRollingHorizons} plans an open-ended agreement. */
+const ROLLING_HORIZON_DAYS = 365;
+
+function addDays(date: string, days: number): string {
+  return toDateOnly(new Date(parseDateOnly(date).getTime() + days * DAY_MS));
+}
+
+function laterDateOnly(a: string, b: string): string {
+  return a >= b ? a : b;
+}
+
+/** One open-ended agreement {@link VisitGenerationService.extendRollingHorizons} planned further into. */
+export interface HorizonExtension {
+  serviceAgreementId: string;
+  customerName: string;
+  siteName: string;
+  from: string;
+  to: string;
+  visitsAdded: number;
+}
+
+export interface HorizonExtensionSummary {
+  today: string;
+  targetHorizon: string;
+  /** Every active, open-ended agreement considered — extended or already caught up. */
+  agreementsConsidered: number;
+  agreementsExtended: HorizonExtension[];
+}
+
+/** One agreement {@link VisitGenerationService.repairBunching} moved a visit for. */
+export interface RepairedAgreement {
+  serviceAgreementId: string;
+  customerName: string;
+  siteName: string;
+  from: string;
+  to: string;
+  visitsMoved: number;
+}
+
+export interface RepairBunchingSummary {
+  today: string;
+  /** Every active agreement with a generated visit in scope, whether or not it needed repair. */
+  agreementsConsidered: number;
+  agreementsRepaired: RepairedAgreement[];
+  /**
+   * Days still over the cap after repair. Every visit still on one of these
+   * is booked, published, locked or hand-adjusted — this operation moves
+   * only its own unbooked, unpublished work, never a manager's decision.
+   */
+  stillOverCap: GenerationImpactDto['loadWarnings'];
+}
 
 const AGREEMENT_INCLUDE = {
   customer: { select: { name: true } },
@@ -129,9 +187,12 @@ export class VisitGenerationService {
     private readonly config: ConfigService,
   ) {}
 
-  /** Most visits one branch's day may carry. Configurable; rarely configured. */
-  private get dailyCap(): number {
-    return this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP;
+  /** Most crew-minutes one branch's day may carry. Configurable; rarely configured. */
+  private get dailyCapacityMinutes(): number {
+    return (
+      this.config.get<number>('visitGeneration.dailyCapacityMinutes') ??
+      DEFAULT_DAILY_CAPACITY_MINUTES
+    );
   }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
@@ -140,6 +201,294 @@ export class VisitGenerationService {
 
   confirm(dto: GenerateVisitsDto, actor: AuthenticatedUser): Promise<GenerationImpactDto> {
     return this.build(dto, actor);
+  }
+
+  /**
+   * Keeps every open-ended agreement planned a rolling year ahead.
+   *
+   * An agreement with an end date stops there, the same as any other
+   * generation call — this only ever widens the horizon for one that never
+   * ends, and only for the stretch it does not have yet. "Has" means the
+   * latest date among its own non-cancelled visits; an agreement with none
+   * yet is planned from its own start date, and never from earlier than
+   * today either — an agreement that started years ago and somehow has no
+   * visits at all is not this operation's chance to backfill its whole
+   * history, only to make sure the year ahead of it is covered.
+   *
+   * Each agreement is generated through the ordinary, scoped {@link confirm}
+   * — the same call a manager's own Generate Visits makes for one agreement
+   * — so it inherits every protection that path already has: it can only
+   * ever add, update or remove *this* agreement's own visits, published and
+   * locked work stays put, and a second call over ground already covered
+   * reports nothing to do. Calling this twice in a row, or while a manager
+   * is generating something else entirely, is exactly as safe as calling
+   * `confirm` twice in a row already is.
+   *
+   * Nothing here runs this on a schedule. `docs/ARCHITECTURE.md` and the PR
+   * that added it say why: wiring a live cron changes what happens in every
+   * environment the moment it deploys, and this branch's own rule is no
+   * deploy, no staging changes. This is the operation a scheduled job (or an
+   * operator, by hand) calls; deciding when to call it is a deployment
+   * decision for later.
+   *
+   * `scope` narrows which open-ended agreements are considered — by branch,
+   * by id, or both — the same two filters {@link GenerateVisitsDto} already
+   * offers. Omitted, every open-ended agreement in the company is
+   * considered, which is the real operation: a company has one financial
+   * calendar, not one per branch. Narrowing it is for an operator fixing one
+   * branch or one customer's horizon without touching anyone else's.
+   */
+  async extendRollingHorizons(
+    actor: AuthenticatedUser,
+    scope: ExtendHorizonsDto = {},
+  ): Promise<HorizonExtensionSummary> {
+    const today = toDateOnly(new Date());
+    const targetHorizon = addDays(today, ROLLING_HORIZON_DAYS);
+
+    const agreements = await this.prisma.serviceAgreement.findMany({
+      where: {
+        status: AgreementStatus.ACTIVE,
+        endDate: null,
+        serviceSite: { isActive: true, customer: { isActive: true } },
+        ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+        ...(scope.serviceAgreementIds?.length
+          ? { id: { in: scope.serviceAgreementIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        startDate: true,
+        customer: { select: { name: true } },
+        serviceSite: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const plannedThroughRows = await this.prisma.generatedVisit.groupBy({
+      by: ['serviceAgreementId'],
+      where: {
+        serviceAgreementId: { in: agreements.map((agreement) => agreement.id) },
+        status: { not: VisitStatus.CANCELLED },
+      },
+      _max: { visitDate: true },
+    });
+    const plannedThroughById = new Map(
+      plannedThroughRows.map((row) => [row.serviceAgreementId, row._max.visitDate]),
+    );
+
+    const extended: HorizonExtension[] = [];
+    for (const agreement of agreements) {
+      const agreementStart = toDateOnly(agreement.startDate);
+      const lastPlanned = plannedThroughById.get(agreement.id);
+      const plannedThrough = lastPlanned
+        ? toDateOnly(lastPlanned)
+        : addDays(agreementStart, -1);
+
+      // Already planned to the target, or past it — nothing to extend. True,
+      // harmlessly, on every call after the first one for a given agreement
+      // once it has caught up, which is what keeps this idempotent.
+      if (plannedThrough >= targetHorizon) continue;
+
+      const from = laterDateOnly(laterDateOnly(addDays(plannedThrough, 1), agreementStart), today);
+      // The agreement's own start is still further out than a year from now
+      // — nothing is due yet.
+      if (from > targetHorizon) continue;
+
+      const impact = await this.confirm(
+        { from, to: targetHorizon, serviceAgreementIds: [agreement.id] },
+        actor,
+      );
+      if (impact.additions.length === 0 && impact.updates.length === 0) continue;
+
+      extended.push({
+        serviceAgreementId: agreement.id,
+        customerName: agreement.customer.name,
+        siteName: agreement.serviceSite.name,
+        from,
+        to: targetHorizon,
+        visitsAdded: impact.additions.length,
+      });
+    }
+
+    return {
+      today,
+      targetHorizon,
+      agreementsConsidered: agreements.length,
+      agreementsExtended: extended,
+    };
+  }
+
+  /**
+   * Un-bunches a calendar that was generated under a looser cap.
+   *
+   * The capacity-aware cap ({@link dailyCapacityMinutes}) is stricter than
+   * the flat visit count it replaced for a day whose visits are large — long,
+   * or crewed by more than one person — even though it is looser for a day
+   * of small ones. Any calendar generated before this change can therefore
+   * have days that were fine under the old rule and are not under the new
+   * one, and nothing regenerates them on its own: `confirm` only ever
+   * touches the dates an agreement's own next call asks about.
+   *
+   * This is not new machinery. It calls the same scoped {@link confirm}
+   * every other operation in this file does, one active agreement at a
+   * time, over the stretch it already has generated from today onward —
+   * widened, precisely, to the true end of the last period that stretch
+   * reaches into, using the same period arithmetic ({@link periodIndexOf} /
+   * {@link periodBoundsOf}) generation itself plans by. Stopping exactly at
+   * the last generated date would show the guard a day over the cap with no
+   * later day in that same period to spread into; reaching to the period's
+   * own end gives it that room without reaching into the next period, which
+   * would not be a repair, it would be new coverage nobody asked this call
+   * to add. `confirm` re-derives that agreement's required dates fresh over
+   * that window and hands them to the load guard, which — now reading the
+   * day's true crew-minutes — moves whichever of the agreement's own
+   * unbooked, unpublished visits no longer fit, exactly as it would for a
+   * newly generated one. Every protection `confirm` already has is
+   * inherited unchanged: a booked date, a published or locked visit, a
+   * hand-adjusted one, is never touched, whichever agreement it belongs to.
+   * A day that stays over the cap after every agreement on it has had this
+   * chance is a day nothing here is allowed to move, and is reported rather
+   * than forced.
+   *
+   * Calling this twice in a row is exactly as safe as calling `confirm`
+   * twice in a row already is: the second call finds nothing left to move
+   * and reports it. Nothing before today is touched — a repair is about the
+   * calendar still ahead of a manager, never about rewriting history.
+   *
+   * `scope` narrows which agreements are considered, the same as
+   * {@link extendRollingHorizons}. Omitted, every active agreement in the
+   * company is considered.
+   */
+  async repairBunching(
+    actor: AuthenticatedUser,
+    scope: RepairBunchingDto = {},
+  ): Promise<RepairBunchingSummary> {
+    const today = toDateOnly(new Date());
+    const horizonLimit = addDays(today, ROLLING_HORIZON_DAYS);
+
+    const agreements = await this.prisma.serviceAgreement.findMany({
+      where: {
+        status: AgreementStatus.ACTIVE,
+        serviceSite: { isActive: true, customer: { isActive: true } },
+        ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+        ...(scope.serviceAgreementIds?.length
+          ? { id: { in: scope.serviceAgreementIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        startDate: true,
+        frequencyUnit: true,
+        frequencyInterval: true,
+        customer: { select: { name: true } },
+        serviceSite: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const plannedThroughRows = await this.prisma.generatedVisit.groupBy({
+      by: ['serviceAgreementId'],
+      where: {
+        serviceAgreementId: { in: agreements.map((agreement) => agreement.id) },
+        status: { not: VisitStatus.CANCELLED },
+      },
+      _max: { visitDate: true },
+    });
+    const plannedThroughById = new Map(
+      plannedThroughRows.map((row) => [row.serviceAgreementId, row._max.visitDate]),
+    );
+
+    const repaired: RepairedAgreement[] = [];
+    let considered = 0;
+    let latestTo = today;
+
+    for (const agreement of agreements) {
+      const lastPlanned = plannedThroughById.get(agreement.id);
+      // Nothing generated for this agreement yet, so there is no bunching of
+      // its own to repair — its turn will come the first time it is
+      // generated, under the current cap from the start.
+      if (!lastPlanned) continue;
+
+      const lastDate = toDateOnly(lastPlanned);
+      // Every one of its visits is already in the past — nothing current or
+      // future to repair, and repair never rewrites history.
+      if (lastDate < today) continue;
+
+      considered += 1;
+      // An alternative day is another allowed day inside the *same* period as
+      // the one being moved, and `confirm` only ever offers an alternative
+      // inside the range it was asked about — stopping exactly at the last
+      // generated date leaves the guard with no later day in that final
+      // period to spread into, so it can see the day is over the cap and
+      // still have nowhere to move anything. Reaching to the true end of
+      // that last period, via the same period arithmetic generation itself
+      // plans by, gives it that room without crossing into a period this
+      // agreement has never been generated for — which would not be a
+      // repair, it would be new coverage nobody asked this call to add.
+      const periodIndex = periodIndexOf(
+        parseDateOnly(lastDate),
+        parseDateOnly(toDateOnly(agreement.startDate)),
+        agreement.frequencyUnit,
+        agreement.frequencyInterval,
+      );
+      const periodEnd = periodBoundsOf(
+        periodIndex,
+        parseDateOnly(toDateOnly(agreement.startDate)),
+        agreement.frequencyUnit,
+        agreement.frequencyInterval,
+      ).end;
+      const reach = periodEnd > lastDate ? periodEnd : lastDate;
+      const to = reach < horizonLimit ? reach : horizonLimit;
+      latestTo = to > latestTo ? to : latestTo;
+
+      const impact = await this.confirm(
+        { from: today, to, serviceAgreementIds: [agreement.id] },
+        actor,
+      );
+      if (impact.additions.length === 0 && impact.removals.length === 0) continue;
+
+      repaired.push({
+        serviceAgreementId: agreement.id,
+        customerName: agreement.customer.name,
+        siteName: agreement.serviceSite.name,
+        from: today,
+        to,
+        // A move is one addition (the new date) paired with one removal (the
+        // old one) — `confirm`'s own vocabulary for "this visit's date
+        // changed", the same as an ordinary spread.
+        visitsMoved: Math.min(impact.additions.length, impact.removals.length),
+      });
+    }
+
+    // One last read of the calendar as it now stands, over every agreement
+    // this call was asked about — not accumulated from each agreement's own
+    // call above, because a day an early agreement's move already fixed
+    // would otherwise still show as a warning from before that move landed.
+    const stillOverCap =
+      agreements.length === 0
+        ? []
+        : (
+            await this.preview({
+              from: today,
+              to: latestTo,
+              ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+              // The same scope this call itself was given — never the
+              // resolved agreement list, which can run past the 500-id
+              // limit `GenerateVisitsDto` enforces on an unscoped, whole-
+              // company sweep. Omitting it here means the same thing it
+              // means everywhere else: every active agreement in range.
+              ...(scope.serviceAgreementIds?.length
+                ? { serviceAgreementIds: scope.serviceAgreementIds }
+                : {}),
+            })
+          ).loadWarnings;
+
+    return {
+      today,
+      agreementsConsidered: considered,
+      agreementsRepaired: repaired,
+      stillOverCap,
+    };
   }
 
   /** Shared by preview and confirm, so the two can never disagree. */
@@ -189,7 +538,7 @@ export class VisitGenerationService {
       plannedPeriods: planned.periods,
       lives,
     });
-    const guarded = applyDailyLoadGuard(honoured, this.dailyCap, range.standing);
+    const guarded = applyDailyLoadGuard(honoured, this.dailyCapacityMinutes, range.standing);
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
     // requirement onto a protected visit outside it — which is dropped from
@@ -551,6 +900,8 @@ export class VisitGenerationService {
         serviceAgreementId: true,
         branchCode: true,
         visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
         status: true,
         isManuallyAdjusted: true,
         lockedAt: true,
@@ -561,10 +912,12 @@ export class VisitGenerationService {
     // Every row, whoever it belongs to and whether or not this run judges it:
     // a day is as full as the work on it. Counted before anything is filtered
     // out, because the filter below is about *authorship*, and the cap is not.
+    // Crew-minutes, not a raw count: a visit's duration times its crew size,
+    // the same basis the load guard and the commit-time recheck both use.
     const loadByDay = new Map<string, number>();
     for (const visit of visits) {
       const key = branchDayKey(visit.branchCode, toDateOnly(visit.visitDate));
-      loadByDay.set(key, (loadByDay.get(key) ?? 0) + 1);
+      loadByDay.set(key, (loadByDay.get(key) ?? 0) + crewMinutesOf(visit));
     }
 
     const standing = visits
@@ -572,6 +925,8 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: toDateOnly(visit.visitDate),
+        durationMinutes: visit.durationMinutes,
+        requiredCrewSize: visit.requiredCrewSize,
         isInScope: inScope.has(visit.serviceAgreementId),
         isProtected:
           protectionReasonFor({
@@ -588,6 +943,8 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: visit.visitDate,
+        durationMinutes: visit.durationMinutes,
+        requiredCrewSize: visit.requiredCrewSize,
       }));
 
     return { standing, loadByDay };
@@ -745,16 +1102,20 @@ export class VisitGenerationService {
    */
   private async assertTheDaysStillHaveRoom(
     tx: Prisma.TransactionClient,
-    dto: GenerateVisitsDto,
-    from: Date,
-    to: Date,
     plan: GenerationPlan,
-    changing: Map<string, { branchCode: BranchCode }>,
-    /** Each day's load in the same read the guard planned against. */
+    changing: Map<
+      string,
+      { branchCode: BranchCode; durationMinutes: number; requiredCrewSize: number }
+    >,
+    /** Each day's crew-minutes load in the same read the guard planned against. */
     loadWhenPlanned: Map<string, number>,
   ): Promise<void> {
     // A run that adds nothing cannot make a day fuller, so it queues behind
-    // nobody. Updates change a visit's window, never its date.
+    // nobody. Updates change a visit's window, never its date, and a
+    // duration or crew-size change on an unchanged date is exactly the
+    // arithmetic the load guard already ran, at plan time, against this
+    // run's own new values — only an addition can make a day carry crew-
+    // minutes the guard's plan-time picture of *other* writers never saw.
     if (plan.additions.length === 0) return;
 
     const days = new Map<string, BranchDay>();
@@ -766,16 +1127,16 @@ export class VisitGenerationService {
       };
       const key = branchDayKey(day.branchCode, day.date);
       days.set(key, day);
-      delta.set(key, (delta.get(key) ?? 0) + 1);
+      delta.set(key, (delta.get(key) ?? 0) + crewMinutesOf(addition.required));
     }
     // A removal on the same day makes room for an addition, and the plan
-    // commits both or neither. The branch comes from the locked row rather
-    // than the plan, which carries only the date.
+    // commits both or neither. The branch and crew-minutes come from the
+    // locked row rather than the plan, which carries only the date.
     for (const removal of plan.removals) {
-      const branchCode = changing.get(removal.visitId)?.branchCode;
-      if (!branchCode) continue;
-      const key = branchDayKey(branchCode, removal.visitDate);
-      delta.set(key, (delta.get(key) ?? 0) - 1);
+      const removed = changing.get(removal.visitId);
+      if (!removed) continue;
+      const key = branchDayKey(removed.branchCode, removal.visitDate);
+      delta.set(key, (delta.get(key) ?? 0) - crewMinutesOf(removed));
     }
 
     // Last of the three, after the agreement and visit rows `apply` has
@@ -784,56 +1145,70 @@ export class VisitGenerationService {
     // queueing. Only the days this run adds to are locked — a day it only
     // removes from can only get emptier.
     await lockBranchDays(tx, [...days.values()]);
-    const loadNow = await this.readBranchDayLoad(tx, dto, from, to);
+    const loadNow = await this.readBranchDayLoad(tx, [...days.values()]);
 
     for (const [key, day] of days) {
       const now = loadNow.get(key) ?? 0;
       const ending = now + (delta.get(key) ?? 0);
       if (now <= (loadWhenPlanned.get(key) ?? 0)) continue;
-      if (ending <= this.dailyCap) continue;
+      if (ending <= this.dailyCapacityMinutes) continue;
 
       throw new AppException(
         'RESOURCE_CONFLICT',
-        `${day.date} filled up while this generation was being confirmed: it now carries ${now} ${
-          now === 1 ? 'visit' : 'visits'
-        } in ${day.branchCode}, and this run would leave ${ending} there, over the ${this.dailyCap} a day this branch plans for. Preview again before confirming.`,
+        `${day.date} filled up while this generation was being confirmed: it now carries ${now} crew-minutes of work in ${day.branchCode}, and this run would leave ${ending} there, over the ${this.dailyCapacityMinutes} crew-minutes a day this branch plans for. Preview again before confirming.`,
         HttpStatus.CONFLICT,
-        { branchCode: day.branchCode, date: day.date, carrying: now, cap: this.dailyCap },
+        { branchCode: day.branchCode, date: day.date, carrying: now, cap: this.dailyCapacityMinutes },
       );
     }
   }
 
   /**
-   * How many visits each branch-day of the horizon carries, read inside the
-   * transaction that is about to add to it.
+   * How many crew-minutes each of the given branch-days carries, read inside
+   * the transaction that is about to add to them.
    *
    * The plan-time half of the comparison is not another call to this: it is
    * counted from the rows {@link readTheRange} already fetched, so that the
    * baseline and the guard's own picture are one snapshot rather than two
-   * moments. What both halves share is `theRangeCounted` — the same rows, the
-   * same basis, and no way for the two to drift into counting different days.
+   * moments. Both share the same basis — the load guard's own, and the
+   * optimizer's: every visit standing on the day that is not cancelled,
+   * whatever agreement it belongs to and whoever put it there — and neither
+   * can drift into counting different days, because the exclusion rule
+   * (`status !== CANCELLED`) is the only rule either applies.
    *
-   * That basis is the load guard's own, and the optimizer's: every visit
-   * standing on the day that is not cancelled, whatever agreement it belongs
-   * to and whoever put it there.
+   * Narrowed to the days actually being added to, unlike the plan-time read:
+   * this runs holding a lock, so it reads as little of the calendar as the
+   * question actually needs. `groupBy` cannot sum a product of two columns
+   * (duration times crew size is not a stored column either side can
+   * aggregate), so the rows themselves are read and reduced here.
    */
   private async readBranchDayLoad(
     client: Prisma.TransactionClient,
-    dto: GenerateVisitsDto,
-    from: Date,
-    to: Date,
+    days: BranchDay[],
   ): Promise<Map<string, number>> {
-    const rows = await client.generatedVisit.groupBy({
-      by: ['branchCode', 'visitDate'],
-      where: this.theRangeCounted(dto, from, to),
-      _count: { _all: true },
+    if (days.length === 0) return new Map();
+
+    const rows = await client.generatedVisit.findMany({
+      where: {
+        status: { not: VisitStatus.CANCELLED },
+        OR: days.map((day) => ({
+          branchCode: day.branchCode,
+          visitDate: parseDateOnly(day.date),
+        })),
+      },
+      select: {
+        branchCode: true,
+        visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
+      },
     });
-    return new Map(
-      rows.map((row) => [
-        branchDayKey(row.branchCode, toDateOnly(row.visitDate)),
-        row._count._all,
-      ]),
-    );
+
+    const load = new Map<string, number>();
+    for (const row of rows) {
+      const key = branchDayKey(row.branchCode, toDateOnly(row.visitDate));
+      load.set(key, (load.get(key) ?? 0) + crewMinutesOf(row));
+    }
+    return load;
   }
 
   /**
@@ -918,7 +1293,7 @@ export class VisitGenerationService {
       // The cap, this time under a lock and against the calendar as it stands
       // now. Everything above was planned against a calendar read before this
       // transaction opened.
-      await this.assertTheDaysStillHaveRoom(tx, dto, from, to, plan, byId, loadWhenPlanned);
+      await this.assertTheDaysStillHaveRoom(tx, plan, byId, loadWhenPlanned);
 
       const run = await tx.scheduleRun.create({
         data: {

@@ -68,6 +68,48 @@ export class GenerateVisitsDto {
   serviceAgreementIds?: string[];
 }
 
+export class ExtendHorizonsDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every open-ended agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every open-ended agreement in scope.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
+export class RepairBunchingDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every active agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every active agreement in scope.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
 class VisitChangeDto {
   @ApiProperty({ type: String }) field!: string;
   @ApiProperty({ type: String }) from!: string;
@@ -157,13 +199,21 @@ class DailyLoadWarningDto {
   @ApiProperty({ type: String, enum: Object.values(BranchCode) })
   branchCode!: string;
   @ApiProperty({ type: String, format: 'date' }) date!: string;
-  @ApiProperty({ type: Number }) plannedCount!: number;
+  @ApiProperty({ type: Number, description: 'How many visits the day carries.' })
+  plannedCount!: number;
   @ApiProperty({
     type: Number,
     description: 'How many of them are dates already booked, so unmovable.',
   })
   bookedCount!: number;
-  @ApiProperty({ type: Number }) cap!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      "The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits.",
+  })
+  plannedMinutes!: number;
+  @ApiProperty({ type: Number, description: 'The crew-minutes cap itself.' })
+  cap!: number;
   @ApiProperty({ type: String }) message!: string;
 }
 
@@ -284,4 +334,80 @@ export class GenerationImpactDto {
       'The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.',
   })
   scheduleRunId!: string | null;
+}
+
+export class HorizonExtensionDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({ type: Number })
+  visitsAdded!: number;
+}
+
+export class HorizonExtensionSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: String,
+    format: 'date',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'today plus a rolling year — every open-ended agreement is planned up to here.',
+  })
+  targetHorizon!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active, open-ended agreement considered — extended or already caught up.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [HorizonExtensionDto],
+    description: 'Only the agreements this call actually planned further into.',
+  })
+  agreementsExtended!: HorizonExtensionDto[];
+}
+
+export class RepairedAgreementDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({
+    type: Number,
+    description: "How many of this agreement's own unbooked visits moved to a different day.",
+  })
+  visitsMoved!: number;
+}
+
+export class RepairBunchingSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active agreement with a generated visit in scope, whether or not it needed repair.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [RepairedAgreementDto],
+    description: 'Only the agreements this call actually moved a visit for.',
+  })
+  agreementsRepaired!: RepairedAgreementDto[];
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description:
+      'Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager\'s own decision, only its own unbooked, unpublished work.',
+  })
+  stillOverCap!: DailyLoadWarningDto[];
 }
