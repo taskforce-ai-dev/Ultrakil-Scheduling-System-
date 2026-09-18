@@ -184,6 +184,19 @@ export function formatMinuteOfDay(minute: number): string {
   return `${String(hour).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
 }
 
+/**
+ * A span of minutes in words: "2 hours 30 minutes", "1 hour", "45 minutes".
+ * Never rounds — an off-grid value (e.g. a manager-typed 47) is said exactly,
+ * not to the nearest step a slider next to it happens to move in.
+ */
+export function formatDurationMinutes(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const hourPart = hours > 0 ? `${hours} ${hours === 1 ? "hour" : "hours"}` : "";
+  const minutePart = rest > 0 ? `${rest} ${rest === 1 ? "minute" : "minutes"}` : "";
+  return [hourPart, minutePart].filter(Boolean).join(" ") || "0 minutes";
+}
+
 const SHORT_MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
