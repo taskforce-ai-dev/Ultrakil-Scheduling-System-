@@ -19,6 +19,7 @@ import {
   PreviewBookingIssue,
   computeSchedulePreview,
   parseDateOnly,
+  periodBoundsOf,
   periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
@@ -33,7 +34,12 @@ import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-v
 import { anchorDaysFrom } from './anchors';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
-import { ExtendHorizonsDto, GenerateVisitsDto, GenerationImpactDto } from './dto';
+import {
+  ExtendHorizonsDto,
+  GenerateVisitsDto,
+  GenerationImpactDto,
+  RepairBunchingDto,
+} from './dto';
 import {
   DailyLoadWarning,
   StandingVisit,
@@ -87,6 +93,29 @@ export interface HorizonExtensionSummary {
   /** Every active, open-ended agreement considered — extended or already caught up. */
   agreementsConsidered: number;
   agreementsExtended: HorizonExtension[];
+}
+
+/** One agreement {@link VisitGenerationService.repairBunching} moved a visit for. */
+export interface RepairedAgreement {
+  serviceAgreementId: string;
+  customerName: string;
+  siteName: string;
+  from: string;
+  to: string;
+  visitsMoved: number;
+}
+
+export interface RepairBunchingSummary {
+  today: string;
+  /** Every active agreement with a generated visit in scope, whether or not it needed repair. */
+  agreementsConsidered: number;
+  agreementsRepaired: RepairedAgreement[];
+  /**
+   * Days still over the cap after repair. Every visit still on one of these
+   * is booked, published, locked or hand-adjusted — this operation moves
+   * only its own unbooked, unpublished work, never a manager's decision.
+   */
+  stillOverCap: GenerationImpactDto['loadWarnings'];
 }
 
 const AGREEMENT_INCLUDE = {
@@ -286,6 +315,179 @@ export class VisitGenerationService {
       targetHorizon,
       agreementsConsidered: agreements.length,
       agreementsExtended: extended,
+    };
+  }
+
+  /**
+   * Un-bunches a calendar that was generated under a looser cap.
+   *
+   * The capacity-aware cap ({@link dailyCapacityMinutes}) is stricter than
+   * the flat visit count it replaced for a day whose visits are large — long,
+   * or crewed by more than one person — even though it is looser for a day
+   * of small ones. Any calendar generated before this change can therefore
+   * have days that were fine under the old rule and are not under the new
+   * one, and nothing regenerates them on its own: `confirm` only ever
+   * touches the dates an agreement's own next call asks about.
+   *
+   * This is not new machinery. It calls the same scoped {@link confirm}
+   * every other operation in this file does, one active agreement at a
+   * time, over the stretch it already has generated from today onward —
+   * widened, precisely, to the true end of the last period that stretch
+   * reaches into, using the same period arithmetic ({@link periodIndexOf} /
+   * {@link periodBoundsOf}) generation itself plans by. Stopping exactly at
+   * the last generated date would show the guard a day over the cap with no
+   * later day in that same period to spread into; reaching to the period's
+   * own end gives it that room without reaching into the next period, which
+   * would not be a repair, it would be new coverage nobody asked this call
+   * to add. `confirm` re-derives that agreement's required dates fresh over
+   * that window and hands them to the load guard, which — now reading the
+   * day's true crew-minutes — moves whichever of the agreement's own
+   * unbooked, unpublished visits no longer fit, exactly as it would for a
+   * newly generated one. Every protection `confirm` already has is
+   * inherited unchanged: a booked date, a published or locked visit, a
+   * hand-adjusted one, is never touched, whichever agreement it belongs to.
+   * A day that stays over the cap after every agreement on it has had this
+   * chance is a day nothing here is allowed to move, and is reported rather
+   * than forced.
+   *
+   * Calling this twice in a row is exactly as safe as calling `confirm`
+   * twice in a row already is: the second call finds nothing left to move
+   * and reports it. Nothing before today is touched — a repair is about the
+   * calendar still ahead of a manager, never about rewriting history.
+   *
+   * `scope` narrows which agreements are considered, the same as
+   * {@link extendRollingHorizons}. Omitted, every active agreement in the
+   * company is considered.
+   */
+  async repairBunching(
+    actor: AuthenticatedUser,
+    scope: RepairBunchingDto = {},
+  ): Promise<RepairBunchingSummary> {
+    const today = toDateOnly(new Date());
+    const horizonLimit = addDays(today, ROLLING_HORIZON_DAYS);
+
+    const agreements = await this.prisma.serviceAgreement.findMany({
+      where: {
+        status: AgreementStatus.ACTIVE,
+        serviceSite: { isActive: true, customer: { isActive: true } },
+        ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+        ...(scope.serviceAgreementIds?.length
+          ? { id: { in: scope.serviceAgreementIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        startDate: true,
+        frequencyUnit: true,
+        frequencyInterval: true,
+        customer: { select: { name: true } },
+        serviceSite: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const plannedThroughRows = await this.prisma.generatedVisit.groupBy({
+      by: ['serviceAgreementId'],
+      where: {
+        serviceAgreementId: { in: agreements.map((agreement) => agreement.id) },
+        status: { not: VisitStatus.CANCELLED },
+      },
+      _max: { visitDate: true },
+    });
+    const plannedThroughById = new Map(
+      plannedThroughRows.map((row) => [row.serviceAgreementId, row._max.visitDate]),
+    );
+
+    const repaired: RepairedAgreement[] = [];
+    let considered = 0;
+    let latestTo = today;
+
+    for (const agreement of agreements) {
+      const lastPlanned = plannedThroughById.get(agreement.id);
+      // Nothing generated for this agreement yet, so there is no bunching of
+      // its own to repair — its turn will come the first time it is
+      // generated, under the current cap from the start.
+      if (!lastPlanned) continue;
+
+      const lastDate = toDateOnly(lastPlanned);
+      // Every one of its visits is already in the past — nothing current or
+      // future to repair, and repair never rewrites history.
+      if (lastDate < today) continue;
+
+      considered += 1;
+      // An alternative day is another allowed day inside the *same* period as
+      // the one being moved, and `confirm` only ever offers an alternative
+      // inside the range it was asked about — stopping exactly at the last
+      // generated date leaves the guard with no later day in that final
+      // period to spread into, so it can see the day is over the cap and
+      // still have nowhere to move anything. Reaching to the true end of
+      // that last period, via the same period arithmetic generation itself
+      // plans by, gives it that room without crossing into a period this
+      // agreement has never been generated for — which would not be a
+      // repair, it would be new coverage nobody asked this call to add.
+      const periodIndex = periodIndexOf(
+        parseDateOnly(lastDate),
+        parseDateOnly(toDateOnly(agreement.startDate)),
+        agreement.frequencyUnit,
+        agreement.frequencyInterval,
+      );
+      const periodEnd = periodBoundsOf(
+        periodIndex,
+        parseDateOnly(toDateOnly(agreement.startDate)),
+        agreement.frequencyUnit,
+        agreement.frequencyInterval,
+      ).end;
+      const reach = periodEnd > lastDate ? periodEnd : lastDate;
+      const to = reach < horizonLimit ? reach : horizonLimit;
+      latestTo = to > latestTo ? to : latestTo;
+
+      const impact = await this.confirm(
+        { from: today, to, serviceAgreementIds: [agreement.id] },
+        actor,
+      );
+      if (impact.additions.length === 0 && impact.removals.length === 0) continue;
+
+      repaired.push({
+        serviceAgreementId: agreement.id,
+        customerName: agreement.customer.name,
+        siteName: agreement.serviceSite.name,
+        from: today,
+        to,
+        // A move is one addition (the new date) paired with one removal (the
+        // old one) — `confirm`'s own vocabulary for "this visit's date
+        // changed", the same as an ordinary spread.
+        visitsMoved: Math.min(impact.additions.length, impact.removals.length),
+      });
+    }
+
+    // One last read of the calendar as it now stands, over every agreement
+    // this call was asked about — not accumulated from each agreement's own
+    // call above, because a day an early agreement's move already fixed
+    // would otherwise still show as a warning from before that move landed.
+    const stillOverCap =
+      agreements.length === 0
+        ? []
+        : (
+            await this.preview({
+              from: today,
+              to: latestTo,
+              ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+              // The same scope this call itself was given — never the
+              // resolved agreement list, which can run past the 500-id
+              // limit `GenerateVisitsDto` enforces on an unscoped, whole-
+              // company sweep. Omitting it here means the same thing it
+              // means everywhere else: every active agreement in range.
+              ...(scope.serviceAgreementIds?.length
+                ? { serviceAgreementIds: scope.serviceAgreementIds }
+                : {}),
+            })
+          ).loadWarnings;
+
+    return {
+      today,
+      agreementsConsidered: considered,
+      agreementsRepaired: repaired,
+      stillOverCap,
     };
   }
 

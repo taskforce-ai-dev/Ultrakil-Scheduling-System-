@@ -16,6 +16,8 @@ import {
   GenerateVisitsDto,
   GenerationImpactDto,
   HorizonExtensionSummaryDto,
+  RepairBunchingDto,
+  RepairBunchingSummaryDto,
 } from './dto';
 import { VisitGenerationService } from './visit-generation.service';
 
@@ -78,5 +80,22 @@ export class VisitGenerationController {
     @Body() scope: ExtendHorizonsDto = {},
   ): Promise<HorizonExtensionSummaryDto> {
     return this.generation.extendRollingHorizons(actor, scope);
+  }
+
+  @Post('repair-bunching')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Move an agreement\'s own unbooked visits off a day the current cap no longer allows',
+    description:
+      "Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.",
+  })
+  @ApiBody({ type: RepairBunchingDto, required: false })
+  @ApiResponse({ status: 200, type: RepairBunchingSummaryDto })
+  repairBunching(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() scope: RepairBunchingDto = {},
+  ): Promise<RepairBunchingSummaryDto> {
+    return this.generation.repairBunching(actor, scope);
   }
 }

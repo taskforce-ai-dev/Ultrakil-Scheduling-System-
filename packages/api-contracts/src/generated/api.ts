@@ -848,6 +848,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visit-generation/repair-bunching": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Move an agreement's own unbooked visits off a day the current cap no longer allows
+         * @description Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.
+         */
+        post: operations["VisitGenerationController_repairBunching"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/visits": {
         parameters: {
             query?: never;
@@ -1982,6 +2002,37 @@ export interface components {
             agreementsConsidered: number;
             /** @description Only the agreements this call actually planned further into. */
             agreementsExtended: components["schemas"]["HorizonExtensionDto"][];
+        };
+        RepairBunchingDto: {
+            /**
+             * @description Limit to one branch. Omit to consider every active agreement in the company.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit to particular agreements. Omit for every active agreement in scope. */
+            serviceAgreementIds?: string[];
+        };
+        RepairedAgreementDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            /** @description How many of this agreement's own unbooked visits moved to a different day. */
+            visitsMoved: number;
+        };
+        RepairBunchingSummaryDto: {
+            /** Format: date */
+            today: string;
+            /** @description Every active agreement with a generated visit in scope, whether or not it needed repair. */
+            agreementsConsidered: number;
+            /** @description Only the agreements this call actually moved a visit for. */
+            agreementsRepaired: components["schemas"]["RepairedAgreementDto"][];
+            /** @description Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager's own decision, only its own unbooked, unpublished work. */
+            stillOverCap: components["schemas"]["DailyLoadWarningDto"][];
         };
         VisitDto: {
             /** Format: uuid */
@@ -4416,6 +4467,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HorizonExtensionSummaryDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_repairBunching: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RepairBunchingDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairBunchingSummaryDto"];
                 };
             };
             /** @description Missing or invalid token. */

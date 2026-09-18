@@ -89,6 +89,27 @@ export class ExtendHorizonsDto {
   serviceAgreementIds?: string[];
 }
 
+export class RepairBunchingDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every active agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every active agreement in scope.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
 class VisitChangeDto {
   @ApiProperty({ type: String }) field!: string;
   @ApiProperty({ type: String }) from!: string;
@@ -350,4 +371,43 @@ export class HorizonExtensionSummaryDto {
     description: 'Only the agreements this call actually planned further into.',
   })
   agreementsExtended!: HorizonExtensionDto[];
+}
+
+export class RepairedAgreementDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({
+    type: Number,
+    description: "How many of this agreement's own unbooked visits moved to a different day.",
+  })
+  visitsMoved!: number;
+}
+
+export class RepairBunchingSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active agreement with a generated visit in scope, whether or not it needed repair.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [RepairedAgreementDto],
+    description: 'Only the agreements this call actually moved a visit for.',
+  })
+  agreementsRepaired!: RepairedAgreementDto[];
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description:
+      'Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager\'s own decision, only its own unbooked, unpublished work.',
+  })
+  stillOverCap!: DailyLoadWarningDto[];
 }
