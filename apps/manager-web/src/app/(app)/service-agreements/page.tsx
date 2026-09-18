@@ -239,6 +239,14 @@ export default function ServiceAgreementsPage() {
   // double-click) both close over the same pre-update `isScheduling`, so the
   // state check alone can't stop the second one.
   const isSchedulingRef = React.useRef(false);
+  // Fences the post-save preview and confirm requests against the drawer
+  // being closed (including via Done, while a request is still in flight)
+  // and reopened for a different agreement. Bumped on every open, on every
+  // close, and again once an agreement is created, so a preview or confirm
+  // response belonging to an earlier agreement can never land on whichever
+  // one is now on screen — the same requestGeneration fencing pattern used
+  // for the agreements list above and for Dispatch Board/Calendar.
+  const scheduleGeneration = React.useRef(0);
 
   const {
     register,
@@ -367,9 +375,17 @@ export default function ServiceAgreementsPage() {
   }
 
   function openDrawer() {
+    // Invalidates any preview/confirm still in flight from whatever was
+    // open before, and clears the double-click guard those left behind —
+    // without this, a stale finally from the last agreement could disable
+    // this one's own Schedule now before it's ever been clicked.
+    scheduleGeneration.current += 1;
+    isSchedulingRef.current = false;
     setCreatedAgreement(null);
     setImpact(null);
     setPreviewError(null);
+    setIsPreviewLoading(false);
+    setIsScheduling(false);
     setSubmitError(null);
     const firstCustomer = customers[0];
     const firstActiveSite = firstCustomer?.sites.find((site) => site.isActive);
@@ -381,13 +397,33 @@ export default function ServiceAgreementsPage() {
     setDrawerOpen(true);
   }
 
+  // Escape, backdrop click or the drawer's own close control — every path
+  // that closes the drawer other than Done, which has its own handler below.
+  // Closing has to invalidate in-flight requests the same way reopening
+  // does: Done stays enabled while a preview or confirm is still running, so
+  // a manager can close mid-request and a late response must not write into
+  // a drawer nobody is looking at.
+  function handleDrawerOpenChange(open: boolean) {
+    if (!open) scheduleGeneration.current += 1;
+    setDrawerOpen(open);
+  }
+
   async function onSubmit(values: ServiceAgreementFormValues) {
     if (isSubmittingRef.current) return; // Collapses a double-click into one request.
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
+
+    // The guard and "Saving…" state cover only the request that creates the
+    // agreement — the request the still-visible Save button is guarding
+    // against a double-click on. Once it settles, the form is gone (the
+    // drawer has moved to the created-agreement view, whatever it now shows),
+    // so nothing is left for either to protect; leaving them tied up through
+    // the scheduling preview below as well left a slow preview blocking a
+    // manager from saving their next agreement even after closing this one.
+    let agreement: ServiceAgreement;
     try {
-      const agreement = await createServiceAgreement({
+      agreement = await createServiceAgreement({
         serviceSiteId: values.serviceSiteId,
         jobTypeId: values.jobTypeId,
         frequencyCount: Number(values.frequencyCount),
@@ -408,37 +444,48 @@ export default function ServiceAgreementsPage() {
         requiredSkillCodes: values.requiredSkillCodes,
         notes: values.notes || null,
       });
-
-      setCreatedAgreement(agreement);
-      notify.success(`Service agreement for ${agreement.customerName} created.`);
-
-      setIsPreviewLoading(true);
-      try {
-        const { from, to } = schedulingWindow(agreement.startDate);
-        const result = await previewVisitGeneration({
-          from,
-          to,
-          branchCode: agreement.branchCode,
-          serviceAgreementIds: [agreement.id],
-        });
-        setImpact(result);
-      } catch (caught) {
-        setPreviewError(
-          caught instanceof ApiError ? caught.message : "Could not calculate the schedule."
-        );
-      } finally {
-        setIsPreviewLoading(false);
-      }
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
+      return;
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
+    }
+
+    // A fresh session for this specific agreement: any response tagged
+    // with an earlier generation (a stale confirm from whatever was open
+    // before, still resolving) is discarded below rather than applied here.
+    const generation = ++scheduleGeneration.current;
+    setCreatedAgreement(agreement);
+    notify.success(`Service agreement for ${agreement.customerName} created.`);
+
+    setIsPreviewLoading(true);
+    try {
+      const { from, to } = schedulingWindow(agreement.startDate);
+      const result = await previewVisitGeneration({
+        from,
+        to,
+        branchCode: agreement.branchCode,
+        serviceAgreementIds: [agreement.id],
+      });
+      if (generation === scheduleGeneration.current) setImpact(result);
+    } catch (caught) {
+      if (generation === scheduleGeneration.current) {
+        setPreviewError(
+          caught instanceof ApiError ? caught.message : "Could not calculate the schedule."
+        );
+      }
+    } finally {
+      if (generation === scheduleGeneration.current) setIsPreviewLoading(false);
     }
   }
 
   async function handleScheduleNow() {
     if (!createdAgreement || isSchedulingRef.current) return; // Collapses a double-click into one request.
+    // Captured, not bumped: this confirms the same agreement onSubmit
+    // already opened a session for, so it must match that session, not
+    // start a new one.
+    const generation = scheduleGeneration.current;
     isSchedulingRef.current = true;
     setIsScheduling(true);
     try {
@@ -449,6 +496,10 @@ export default function ServiceAgreementsPage() {
         branchCode: createdAgreement.branchCode,
         serviceAgreementIds: [createdAgreement.id],
       });
+      // The drawer was closed (or closed and reopened for another
+      // agreement) while this was in flight — its result belongs to a
+      // screen nobody is looking at anymore.
+      if (generation !== scheduleGeneration.current) return;
       setImpact(result);
       notify.success(
         result.additions.length === 0
@@ -456,16 +507,21 @@ export default function ServiceAgreementsPage() {
           : `${result.additions.length} ${result.additions.length === 1 ? "visit" : "visits"} scheduled for ${createdAgreement.customerName}.`
       );
     } catch (caught) {
+      if (generation !== scheduleGeneration.current) return;
       notify.error(
         caught instanceof ApiError ? caught.message : "Could not schedule the visits."
       );
     } finally {
+      // The double-click guard is reset unconditionally: it belongs to
+      // whichever button is on screen right now, not to this specific
+      // (possibly stale) request.
       isSchedulingRef.current = false;
-      setIsScheduling(false);
+      if (generation === scheduleGeneration.current) setIsScheduling(false);
     }
   }
 
   function handleDone() {
+    scheduleGeneration.current += 1;
     setDrawerOpen(false);
     reload();
   }
@@ -652,11 +708,13 @@ export default function ServiceAgreementsPage() {
 
       <AppDrawer
         open={drawerOpen}
-        onOpenChange={setDrawerOpen}
+        onOpenChange={handleDrawerOpenChange}
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? "Here's what the system will schedule for it."
+            ? impact && !impact.isPreview
+              ? "Here's what was scheduled for it."
+              : "Here's a preview of what would be scheduled for it — nothing is written until Schedule now is pressed."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
         // The created-agreement view is a read-only schedule preview (no
@@ -705,7 +763,7 @@ export default function ServiceAgreementsPage() {
             <div className="space-y-3 rounded-xl border p-4">
               <h3 className="flex items-center gap-1.5 text-sm font-medium">
                 <CalendarClock className="h-4 w-4" aria-hidden="true" />
-                {impact && !impact.isPreview ? "Scheduled" : "Schedule"}
+                {impact && !impact.isPreview ? "Scheduled" : "Schedule preview"}
               </h3>
 
               {/*
@@ -721,7 +779,7 @@ export default function ServiceAgreementsPage() {
 
               {isPreviewLoading ? (
                 <p role="status" className="text-sm text-muted-foreground">
-                  Scheduling in progress…
+                  Calculating schedule preview…
                 </p>
               ) : previewError ? (
                 <p role="alert" className="text-sm text-destructive">
@@ -755,8 +813,8 @@ export default function ServiceAgreementsPage() {
                             )}
                           </span>
                           <span className="text-right text-muted-foreground">
-                            {formatMinutes(visit.windowStartMinute)}–
-                            {formatMinutes(visit.windowEndMinute)} · crew of{" "}
+                            {formatWindowMinute(visit.windowStartMinute)}–
+                            {formatWindowMinute(visit.windowEndMinute)} · crew of{" "}
                             {visit.requiredCrewSize}
                           </span>
                         </li>

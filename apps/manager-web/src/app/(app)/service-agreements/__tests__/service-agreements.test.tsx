@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -284,7 +284,7 @@ describe("ServiceAgreementsPage", () => {
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Scheduling in progress…");
+    expect(screen.getByRole("status")).toHaveTextContent("Calculating schedule preview…");
     // The "existing work" guarantee is stated up front, before the run even
     // answers — it holds regardless of what comes back.
     expect(
@@ -421,6 +421,221 @@ describe("ServiceAgreementsPage", () => {
     expect(await screen.findByRole("heading", { name: "Scheduled" })).toBeInTheDocument();
     expect(screen.getByText(/1 visit scheduled between/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Schedule now" })).not.toBeInTheDocument();
+  });
+
+  it("discards a stale preview from an earlier agreement closed and reopened for a new one", async () => {
+    const agreementA = buildServiceAgreement({
+      id: "agreement-a",
+      customerName: "Agreement A Customer",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+    const agreementB = buildServiceAgreement({
+      id: "agreement-b",
+      customerName: "Agreement B Customer",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+
+    let resolvePreviewA!: (impact: ReturnType<typeof buildGenerationImpact>) => void;
+    const previewAPromise = new Promise<ReturnType<typeof buildGenerationImpact>>((resolve) => {
+      resolvePreviewA = resolve;
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValueOnce(agreementA);
+    vi.mocked(previewVisitGeneration).mockReturnValueOnce(previewAPromise);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
+    expect(screen.getByText("Agreement A Customer")).toBeInTheDocument();
+
+    // Closed — via the still-enabled Done button — while A's preview is
+    // still in flight, then reopened for a different agreement.
+    await user.click(screen.getByRole("button", { name: "Done" }));
+
+    vi.mocked(createServiceAgreement).mockResolvedValueOnce(agreementB);
+    vi.mocked(previewVisitGeneration).mockResolvedValueOnce(
+      buildGenerationImpact({ from: FAR_FUTURE_START, to: expectedWindow.to })
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add agreement" }));
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
+    expect(screen.getByText("Agreement B Customer")).toBeInTheDocument();
+
+    // A's preview finally answers. Its result belongs to a drawer nobody is
+    // looking at anymore and must not land on B's screen.
+    await act(async () => {
+      resolvePreviewA(
+        buildGenerationImpact({
+          from: FAR_FUTURE_START,
+          to: expectedWindow.to,
+          shortfalls: [
+            {
+              serviceAgreementId: "agreement-a",
+              customerName: "Agreement A Customer",
+              siteName: agreementA.siteName,
+              periodStart: FAR_FUTURE_START,
+              periodEnd: "2099-01-12",
+              requested: 2,
+              scheduled: 1,
+              reason: "NOT_ENOUGH_ALLOWED_DAYS",
+              message: "Stale message that belongs to agreement A.",
+            },
+          ],
+        })
+      );
+      // Flushes the now-resolved (but stale) promise's continuation before
+      // asserting nothing changed as a result of it.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByText("Stale message that belongs to agreement A.")).not.toBeInTheDocument();
+    expect(screen.getByText("Agreement B Customer")).toBeInTheDocument();
+  });
+
+  it("discards a stale confirm from an earlier agreement closed mid-request", async () => {
+    const agreementA = buildServiceAgreement({
+      id: "agreement-a",
+      customerName: "Agreement A Customer",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+    const agreementB = buildServiceAgreement({
+      id: "agreement-b",
+      customerName: "Agreement B Customer",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+
+    vi.mocked(createServiceAgreement).mockResolvedValueOnce(agreementA);
+    vi.mocked(previewVisitGeneration).mockResolvedValueOnce(
+      buildGenerationImpact({
+        from: FAR_FUTURE_START,
+        to: expectedWindow.to,
+        additions: [
+          {
+            serviceAgreementId: "agreement-a",
+            customerName: agreementA.customerName,
+            siteName: agreementA.siteName,
+            visitDate: FAR_FUTURE_START,
+            windowStartMinute: 540,
+            windowEndMinute: 1020,
+            durationMinutes: 90,
+            requiredCrewSize: 1,
+            branchCode: "COLOMBO",
+            isPreferredDay: false,
+            placement: "EARLIEST",
+          },
+        ],
+      })
+    );
+
+    let resolveConfirmA!: (impact: ReturnType<typeof buildGenerationImpact>) => void;
+    const confirmAPromise = new Promise<ReturnType<typeof buildGenerationImpact>>((resolve) => {
+      resolveConfirmA = resolve;
+    });
+    vi.mocked(confirmVisitGeneration).mockReturnValueOnce(confirmAPromise);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    await user.click(await screen.findByRole("button", { name: "Schedule now" }));
+    // Confirm is now in flight; Done stays enabled and closes the drawer
+    // while it's still running — the exact case this fencing has to cover.
+    await user.click(screen.getByRole("button", { name: "Done" }));
+
+    vi.mocked(createServiceAgreement).mockResolvedValueOnce(agreementB);
+    vi.mocked(previewVisitGeneration).mockResolvedValueOnce(
+      buildGenerationImpact({ from: FAR_FUTURE_START, to: expectedWindow.to })
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add agreement" }));
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
+    expect(screen.getByText("Agreement B Customer")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Schedule preview" })).toBeInTheDocument();
+
+    // A's confirm finally answers. It must not flip B's still-a-preview
+    // screen over to "Scheduled".
+    await act(async () => {
+      resolveConfirmA(
+        buildGenerationImpact({
+          from: FAR_FUTURE_START,
+          to: expectedWindow.to,
+          isPreview: false,
+          scheduleRunId: "run-a",
+          additions: [
+            {
+              serviceAgreementId: "agreement-a",
+              customerName: agreementA.customerName,
+              siteName: agreementA.siteName,
+              visitDate: FAR_FUTURE_START,
+              windowStartMinute: 540,
+              windowEndMinute: 1020,
+              durationMinutes: 90,
+              requiredCrewSize: 1,
+              branchCode: "COLOMBO",
+              isPreferredDay: false,
+              placement: "EARLIEST",
+            },
+          ],
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByRole("heading", { name: "Schedule preview" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Scheduled" })).not.toBeInTheDocument();
+    expect(screen.getByText("Agreement B Customer")).toBeInTheDocument();
+  });
+
+  it("shows a visit ending at midnight as midnight, not noon", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-midnight",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        from: FAR_FUTURE_START,
+        to: expectedWindow.to,
+        additions: [
+          {
+            serviceAgreementId: "agreement-midnight",
+            customerName: created.customerName,
+            siteName: created.siteName,
+            visitDate: FAR_FUTURE_START,
+            windowStartMinute: 540,
+            windowEndMinute: 1440,
+            durationMinutes: 60,
+            requiredCrewSize: 1,
+            branchCode: "COLOMBO",
+            isPreferredDay: false,
+            placement: "EARLIEST",
+          },
+        ],
+      })
+    );
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText(/9:00 AM–midnight/)).toBeInTheDocument();
   });
 
   it("shows an error if the schedule preview fails to load, without losing the created agreement", async () => {
