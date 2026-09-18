@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AgreementStatus,
   DataProvenance,
@@ -14,6 +14,7 @@ import { AppException } from '../common/errors/app.exception';
 import { lockAgreementRows } from '../common/locks/agreement-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { anchorDaysFrom } from '../scheduling/visit-generation/anchors';
+import { VisitGenerationService } from '../scheduling/visit-generation/visit-generation.service';
 import {
   AgreementWithRelations,
   sortWeekdays,
@@ -31,6 +32,19 @@ import {
 import { SchedulePreviewDto } from './dto/responses.dto';
 import { computeSchedulePreview, parseDateOnly } from './schedule-preview';
 
+/**
+ * How far past today (or the agreement's own start, if later) the automatic
+ * onboarding generation reaches — the same one-month window a manager's own
+ * first Generate Visits click gets from the Calendar page, so a new
+ * agreement's first look is not a different range convention from an
+ * existing one's.
+ */
+const ONBOARDING_HORIZON_DAYS = 30;
+
+function addDaysOnly(date: string, days: number): string {
+  return toDateOnly(new Date(parseDateOnly(date).getTime() + days * 86_400_000));
+}
+
 const AGREEMENT_INCLUDE = {
   customer: { select: { id: true, name: true } },
   serviceSite: { select: { id: true, name: true } },
@@ -47,9 +61,12 @@ const AGREEMENT_INCLUDE = {
 
 @Injectable()
 export class AgreementsService {
+  private readonly logger = new Logger(AgreementsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly visitGeneration: VisitGenerationService,
   ) {}
 
   async list(query: ServiceAgreementQueryDto) {
@@ -194,7 +211,39 @@ export class AgreementsService {
       return agreement;
     });
 
-    return toAgreementDto(created as AgreementWithRelations);
+    // Automatic, not merely available: a manager registering a new client no
+    // longer has to remember a separate Generate Visits click for it to be
+    // accommodated. Scoped to this one agreement's own id, so it goes through
+    // exactly the same guarantee a manually-scoped run already has — it can
+    // only ever place or move this agreement's own visits, never another
+    // customer's — proven in `visit-generation.spec.ts`. Runs after the
+    // creation transaction commits, since generation opens and locks its own
+    // transaction; a failure here is not a reason to fail the agreement's own
+    // creation, which already succeeded — an over-capacity branch-day is a
+    // legitimate, expected outcome for the manager to see on the calendar,
+    // not a defect in creating the agreement.
+    const today = toDateOnly(new Date());
+    const from = today > dto.startDate ? today : dto.startDate;
+    try {
+      await this.visitGeneration.confirm(
+        {
+          from,
+          to: addDaysOnly(from, ONBOARDING_HORIZON_DAYS),
+          serviceAgreementIds: [created.id],
+        },
+        actor,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Automatic onboarding generation for agreement ${created.id} did not complete: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    return toAgreementDto(
+      (await this.load(created.id)) as AgreementWithRelations,
+    );
   }
 
   async update(

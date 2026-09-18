@@ -84,6 +84,12 @@ async function createAgreement(label: string): Promise<string> {
     });
   expect(res.status).toBe(201);
   agreementIds.push(res.body.id);
+  // Agreement creation now automatically plans a scoped onboarding horizon.
+  // This suite deliberately drives generation itself (via the loosened-cap
+  // `VisitGenerationService` instance below) to simulate exactly what
+  // shipped before the crew-minutes cap — the automatic side effect would
+  // otherwise plant an extra, uncontrolled visit ahead of that setup.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
   return res.body.id as string;
 }
 
@@ -298,6 +304,9 @@ it('reports a day it cannot fix because every visit still on it is protected', a
       });
     expect(res.status).toBe(201);
     stubbornAgreements.push(res.body.id);
+    // Same automatic-onboarding side effect noted on `createAgreement()`
+    // above: this test drives its own loosened-cap generation below.
+    await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
   }
   agreementIds.push(...stubbornAgreements);
 

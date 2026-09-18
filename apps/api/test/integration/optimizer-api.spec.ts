@@ -173,6 +173,14 @@ async function makeVisit(): Promise<string> {
     });
   expect(agreement.status).toBe(201);
   agreementIds.push(agreement.body.id);
+  // Agreement creation now automatically plans a scoped onboarding horizon,
+  // which lands on whatever the real clock's "today" is — a different window
+  // than this fixture's own fixed `RANGE`. Clear it so the explicit confirm
+  // below is the only thing that plants a visit, as every assertion here
+  // assumes.
+  await prisma.generatedVisit.deleteMany({
+    where: { serviceAgreementId: agreement.body.id },
+  });
 
   await request(http)
     .post('/api/visit-generation/confirm')
@@ -511,6 +519,10 @@ describe('solving', () => {
         crewSize: 20,
       });
     agreementIds.push(agreement.body.id);
+    // Same automatic-onboarding side effect as `makeVisit()` above.
+    await prisma.generatedVisit.deleteMany({
+      where: { serviceAgreementId: agreement.body.id },
+    });
     await request(http)
       .post('/api/visit-generation/confirm')
       .set(auth(adminToken))

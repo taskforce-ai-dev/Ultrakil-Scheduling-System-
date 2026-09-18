@@ -58,6 +58,12 @@ async function createAgreement(overrides: Record<string, unknown> = {}) {
       ...overrides,
     });
   expect(res.status).toBe(201);
+  // Agreement creation now automatically plans a scoped onboarding horizon
+  // (the review's "automatic new-agreement planning" ask) — this suite is
+  // about `extend-horizons` specifically, so its own fixtures start from the
+  // same blank slate they always have; the automatic side effect is proven
+  // separately in `automatic-agreement-planning.spec.ts`.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
   return res.body;
 }
 

@@ -21,6 +21,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
 import { PrismaService } from '../prisma/prisma.service';
+import { VisitGenerationService } from '../scheduling/visit-generation/visit-generation.service';
 import { AgreementsService } from './agreements.service';
 
 const actor = {
@@ -145,12 +146,14 @@ function fixture(row = agreementRow()) {
     ),
   };
 
+  const visitGeneration = { confirm: jest.fn(async () => ({})) };
   const service = new AgreementsService(
     prisma as unknown as PrismaService,
     audit as unknown as AuditService,
+    visitGeneration as unknown as VisitGenerationService,
   );
 
-  return { service, tx, audit };
+  return { service, tx, audit, visitGeneration };
 }
 
 function dataOf(mock: jest.Mock): Record<string, unknown> {
@@ -319,6 +322,7 @@ describe('AgreementsService listing agreements that have generated nothing', () 
     const service = new AgreementsService(
       prisma as unknown as PrismaService,
       { record: jest.fn() } as unknown as AuditService,
+      { confirm: jest.fn(async () => ({})) } as unknown as VisitGenerationService,
     );
     return { service, findMany, count };
   }

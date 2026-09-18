@@ -81,6 +81,13 @@ async function makeVisit(): Promise<string> {
     });
   expect(agreement.status).toBe(201);
   expect(agreement.body.id).toEqual(expect.any(String));
+  // Agreement creation now automatically plans a scoped onboarding horizon,
+  // which lands on the real clock's "today" — a different window than this
+  // fixture's own fixed `HORIZON`. Clear it so the explicit confirm below is
+  // the only thing that plants the one visit this suite expects.
+  await prisma.generatedVisit.deleteMany({
+    where: { serviceAgreementId: agreement.body.id },
+  });
 
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
