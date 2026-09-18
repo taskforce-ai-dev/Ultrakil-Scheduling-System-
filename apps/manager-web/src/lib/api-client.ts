@@ -601,13 +601,18 @@ export interface StartScheduleRunRequest {
   timeLimitSeconds?: number;
 }
 
-/** `ScheduleRunQueryDto` — the query gap, same pattern as `UnassignedVisitsQuery`. */
-export interface ScheduleRunQuery {
-  page?: number;
-  pageSize?: number;
-  status?: ScheduleRunStatus;
-  ids?: string[];
-}
+/**
+ * Straight from the published contract, no longer hand-typed.
+ *
+ * `ids` was hand-typed as `string[]` here while `buildQuery` serialized any
+ * array with `String(value)` — a comma-joined single value, not a repeated
+ * parameter. The API accepts both, but a query type that promises a real
+ * array and a builder that never sends one is exactly the gap
+ * `UnassignedVisitsQuery` was deriving from the contract to close.
+ */
+export type ScheduleRunQuery = NonNullable<
+  paths["/api/schedule-runs"]["get"]["parameters"]["query"]
+>;
 
 /** `PublishScheduleDto` — same request-body gap. */
 export interface PublishScheduleRequest {
@@ -762,6 +767,16 @@ function buildQuery(params?: Record<string, unknown>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null || value === "") continue;
+    // An array becomes a repeated parameter (`ids=a&ids=b`), the form every
+    // array-typed query in the contract actually declares, rather than
+    // `String(value)`'s comma-joined single value.
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item === undefined || item === null || item === "") continue;
+        search.append(key, String(item));
+      }
+      continue;
+    }
     search.set(key, String(value));
   }
   const query = search.toString();
