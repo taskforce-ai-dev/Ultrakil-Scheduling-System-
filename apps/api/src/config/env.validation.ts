@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_DAILY_VISIT_CAP } from './constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES, DEFAULT_DAILY_VISIT_CAP } from './constants';
 import {
   QSTASH_MAX_EXECUTION_SECONDS,
   QSTASH_MINIMUM_EXECUTION_SECONDS,
@@ -115,18 +115,27 @@ export const envSchema = z.object({
   TECHNICIAN_MATRIX_PATH: z.string().default('./data/technician-matrix.xlsx'),
 
   /**
-   * Most visits one branch plans for in a single day.
-   *
-   * The default is the busiest day in the workbook's own July plan — 159
-   * visits over 28 days, never more than twelve on one of them. Generation
-   * spreads unbooked work off any day that would exceed it; dates already
-   * booked with a customer are kept and reported instead.
+   * The reference visit count `GET /branches` shows a manager for context.
+   * No longer what generation, the load guard or the optimizer plan against —
+   * see `VISIT_GENERATION_DAILY_CAPACITY_MINUTES` for that.
    */
   VISIT_GENERATION_DAILY_CAP: z.coerce
     .number()
     .int()
     .positive()
     .default(DEFAULT_DAILY_VISIT_CAP),
+
+  /**
+   * Most crew-minutes one branch plans for in a single day — a visit's
+   * duration times its crew size, summed across every visit standing on the
+   * day. Generation spreads unbooked work off any day that would exceed it;
+   * dates already booked with a customer are kept and reported instead.
+   */
+  VISIT_GENERATION_DAILY_CAPACITY_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_DAILY_CAPACITY_MINUTES),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -809,9 +809,10 @@ describe("regeneration impact review", () => {
             date: "2026-09-14",
             plannedCount: 14,
             bookedCount: 14,
-            cap: 12,
+            plannedMinutes: 840,
+            cap: 720,
             message:
-              "2026-09-14 carries 14 visits in COLOMBO, over the 12 a day this branch plans for. Every one of them is a date already booked with the customer, so none was moved.",
+              "2026-09-14 carries 14 visits in COLOMBO, totalling 840 crew-minutes of work — over the 720 crew-minutes a day this branch plans for. Every one of them is a date already booked with the customer, so none was moved.",
           },
         ],
       })
@@ -825,7 +826,9 @@ describe("regeneration impact review", () => {
       within(drawer).getByText("Days over the branch's limit")
     ).toBeInTheDocument();
     expect(
-      within(drawer).getByText("2026-09-14, COLOMBO: 14 visits — limit 12")
+      within(drawer).getByText(
+        "2026-09-14, COLOMBO: 14 visits, 840 crew-min — limit 720 crew-min"
+      )
     ).toBeInTheDocument();
   });
 

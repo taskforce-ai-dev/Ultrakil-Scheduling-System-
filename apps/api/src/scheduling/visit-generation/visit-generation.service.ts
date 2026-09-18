@@ -23,9 +23,10 @@ import {
   toDateOnly,
 } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { crewMinutesOf } from '../capacity';
 import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
@@ -157,9 +158,12 @@ export class VisitGenerationService {
     private readonly config: ConfigService,
   ) {}
 
-  /** Most visits one branch's day may carry. Configurable; rarely configured. */
-  private get dailyCap(): number {
-    return this.config.get<number>('visitGeneration.dailyCap') ?? DEFAULT_DAILY_VISIT_CAP;
+  /** Most crew-minutes one branch's day may carry. Configurable; rarely configured. */
+  private get dailyCapacityMinutes(): number {
+    return (
+      this.config.get<number>('visitGeneration.dailyCapacityMinutes') ??
+      DEFAULT_DAILY_CAPACITY_MINUTES
+    );
   }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
@@ -332,7 +336,7 @@ export class VisitGenerationService {
       plannedPeriods: planned.periods,
       lives,
     });
-    const guarded = applyDailyLoadGuard(honoured, this.dailyCap, range.standing);
+    const guarded = applyDailyLoadGuard(honoured, this.dailyCapacityMinutes, range.standing);
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
     // requirement onto a protected visit outside it — which is dropped from
@@ -694,6 +698,8 @@ export class VisitGenerationService {
         serviceAgreementId: true,
         branchCode: true,
         visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
         status: true,
         isManuallyAdjusted: true,
         lockedAt: true,
@@ -704,10 +710,12 @@ export class VisitGenerationService {
     // Every row, whoever it belongs to and whether or not this run judges it:
     // a day is as full as the work on it. Counted before anything is filtered
     // out, because the filter below is about *authorship*, and the cap is not.
+    // Crew-minutes, not a raw count: a visit's duration times its crew size,
+    // the same basis the load guard and the commit-time recheck both use.
     const loadByDay = new Map<string, number>();
     for (const visit of visits) {
       const key = branchDayKey(visit.branchCode, toDateOnly(visit.visitDate));
-      loadByDay.set(key, (loadByDay.get(key) ?? 0) + 1);
+      loadByDay.set(key, (loadByDay.get(key) ?? 0) + crewMinutesOf(visit));
     }
 
     const standing = visits
@@ -715,6 +723,8 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: toDateOnly(visit.visitDate),
+        durationMinutes: visit.durationMinutes,
+        requiredCrewSize: visit.requiredCrewSize,
         isInScope: inScope.has(visit.serviceAgreementId),
         isProtected:
           protectionReasonFor({
@@ -731,6 +741,8 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: visit.visitDate,
+        durationMinutes: visit.durationMinutes,
+        requiredCrewSize: visit.requiredCrewSize,
       }));
 
     return { standing, loadByDay };
@@ -888,16 +900,20 @@ export class VisitGenerationService {
    */
   private async assertTheDaysStillHaveRoom(
     tx: Prisma.TransactionClient,
-    dto: GenerateVisitsDto,
-    from: Date,
-    to: Date,
     plan: GenerationPlan,
-    changing: Map<string, { branchCode: BranchCode }>,
-    /** Each day's load in the same read the guard planned against. */
+    changing: Map<
+      string,
+      { branchCode: BranchCode; durationMinutes: number; requiredCrewSize: number }
+    >,
+    /** Each day's crew-minutes load in the same read the guard planned against. */
     loadWhenPlanned: Map<string, number>,
   ): Promise<void> {
     // A run that adds nothing cannot make a day fuller, so it queues behind
-    // nobody. Updates change a visit's window, never its date.
+    // nobody. Updates change a visit's window, never its date, and a
+    // duration or crew-size change on an unchanged date is exactly the
+    // arithmetic the load guard already ran, at plan time, against this
+    // run's own new values — only an addition can make a day carry crew-
+    // minutes the guard's plan-time picture of *other* writers never saw.
     if (plan.additions.length === 0) return;
 
     const days = new Map<string, BranchDay>();
@@ -909,16 +925,16 @@ export class VisitGenerationService {
       };
       const key = branchDayKey(day.branchCode, day.date);
       days.set(key, day);
-      delta.set(key, (delta.get(key) ?? 0) + 1);
+      delta.set(key, (delta.get(key) ?? 0) + crewMinutesOf(addition.required));
     }
     // A removal on the same day makes room for an addition, and the plan
-    // commits both or neither. The branch comes from the locked row rather
-    // than the plan, which carries only the date.
+    // commits both or neither. The branch and crew-minutes come from the
+    // locked row rather than the plan, which carries only the date.
     for (const removal of plan.removals) {
-      const branchCode = changing.get(removal.visitId)?.branchCode;
-      if (!branchCode) continue;
-      const key = branchDayKey(branchCode, removal.visitDate);
-      delta.set(key, (delta.get(key) ?? 0) - 1);
+      const removed = changing.get(removal.visitId);
+      if (!removed) continue;
+      const key = branchDayKey(removed.branchCode, removal.visitDate);
+      delta.set(key, (delta.get(key) ?? 0) - crewMinutesOf(removed));
     }
 
     // Last of the three, after the agreement and visit rows `apply` has
@@ -927,56 +943,70 @@ export class VisitGenerationService {
     // queueing. Only the days this run adds to are locked — a day it only
     // removes from can only get emptier.
     await lockBranchDays(tx, [...days.values()]);
-    const loadNow = await this.readBranchDayLoad(tx, dto, from, to);
+    const loadNow = await this.readBranchDayLoad(tx, [...days.values()]);
 
     for (const [key, day] of days) {
       const now = loadNow.get(key) ?? 0;
       const ending = now + (delta.get(key) ?? 0);
       if (now <= (loadWhenPlanned.get(key) ?? 0)) continue;
-      if (ending <= this.dailyCap) continue;
+      if (ending <= this.dailyCapacityMinutes) continue;
 
       throw new AppException(
         'RESOURCE_CONFLICT',
-        `${day.date} filled up while this generation was being confirmed: it now carries ${now} ${
-          now === 1 ? 'visit' : 'visits'
-        } in ${day.branchCode}, and this run would leave ${ending} there, over the ${this.dailyCap} a day this branch plans for. Preview again before confirming.`,
+        `${day.date} filled up while this generation was being confirmed: it now carries ${now} crew-minutes of work in ${day.branchCode}, and this run would leave ${ending} there, over the ${this.dailyCapacityMinutes} crew-minutes a day this branch plans for. Preview again before confirming.`,
         HttpStatus.CONFLICT,
-        { branchCode: day.branchCode, date: day.date, carrying: now, cap: this.dailyCap },
+        { branchCode: day.branchCode, date: day.date, carrying: now, cap: this.dailyCapacityMinutes },
       );
     }
   }
 
   /**
-   * How many visits each branch-day of the horizon carries, read inside the
-   * transaction that is about to add to it.
+   * How many crew-minutes each of the given branch-days carries, read inside
+   * the transaction that is about to add to them.
    *
    * The plan-time half of the comparison is not another call to this: it is
    * counted from the rows {@link readTheRange} already fetched, so that the
    * baseline and the guard's own picture are one snapshot rather than two
-   * moments. What both halves share is `theRangeCounted` — the same rows, the
-   * same basis, and no way for the two to drift into counting different days.
+   * moments. Both share the same basis — the load guard's own, and the
+   * optimizer's: every visit standing on the day that is not cancelled,
+   * whatever agreement it belongs to and whoever put it there — and neither
+   * can drift into counting different days, because the exclusion rule
+   * (`status !== CANCELLED`) is the only rule either applies.
    *
-   * That basis is the load guard's own, and the optimizer's: every visit
-   * standing on the day that is not cancelled, whatever agreement it belongs
-   * to and whoever put it there.
+   * Narrowed to the days actually being added to, unlike the plan-time read:
+   * this runs holding a lock, so it reads as little of the calendar as the
+   * question actually needs. `groupBy` cannot sum a product of two columns
+   * (duration times crew size is not a stored column either side can
+   * aggregate), so the rows themselves are read and reduced here.
    */
   private async readBranchDayLoad(
     client: Prisma.TransactionClient,
-    dto: GenerateVisitsDto,
-    from: Date,
-    to: Date,
+    days: BranchDay[],
   ): Promise<Map<string, number>> {
-    const rows = await client.generatedVisit.groupBy({
-      by: ['branchCode', 'visitDate'],
-      where: this.theRangeCounted(dto, from, to),
-      _count: { _all: true },
+    if (days.length === 0) return new Map();
+
+    const rows = await client.generatedVisit.findMany({
+      where: {
+        status: { not: VisitStatus.CANCELLED },
+        OR: days.map((day) => ({
+          branchCode: day.branchCode,
+          visitDate: parseDateOnly(day.date),
+        })),
+      },
+      select: {
+        branchCode: true,
+        visitDate: true,
+        durationMinutes: true,
+        requiredCrewSize: true,
+      },
     });
-    return new Map(
-      rows.map((row) => [
-        branchDayKey(row.branchCode, toDateOnly(row.visitDate)),
-        row._count._all,
-      ]),
-    );
+
+    const load = new Map<string, number>();
+    for (const row of rows) {
+      const key = branchDayKey(row.branchCode, toDateOnly(row.visitDate));
+      load.set(key, (load.get(key) ?? 0) + crewMinutesOf(row));
+    }
+    return load;
   }
 
   /**
@@ -1061,7 +1091,7 @@ export class VisitGenerationService {
       // The cap, this time under a lock and against the calendar as it stands
       // now. Everything above was planned against a calendar read before this
       // transaction opened.
-      await this.assertTheDaysStillHaveRoom(tx, dto, from, to, plan, byId, loadWhenPlanned);
+      await this.assertTheDaysStillHaveRoom(tx, plan, byId, loadWhenPlanned);
 
       const run = await tx.scheduleRun.create({
         data: {

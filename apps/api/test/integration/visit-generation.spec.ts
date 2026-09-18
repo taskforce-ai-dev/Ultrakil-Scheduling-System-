@@ -54,6 +54,13 @@ async function login(email: string, password: string): Promise<string> {
   return res.body.accessToken as string;
 }
 
+/**
+ * `createAgreement`'s own default duration and crew size, unless overridden:
+ * ninety minutes, two crew — a hundred and eighty crew-minutes per visit,
+ * which is what a cap expressed as "N visits" below actually has to be N of.
+ */
+const DEFAULT_AGREEMENT_CREW_MINUTES = 90 * 2;
+
 async function createAgreement(overrides: Record<string, unknown> = {}) {
   const res = await request(http)
     .post('/api/service-agreements')
@@ -1038,7 +1045,8 @@ describe('a scoped run and a full run reach the same calendar', () => {
   /** The service with a cap small enough for three agreements to breach. */
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('does not move a visit back onto a full day just because the run was scoped', async () => {
@@ -1121,7 +1129,8 @@ describe('a new agreement, generated on its own, never moves another agreement\'
   /** Small enough that one existing visit already fills the day. */
   const cappedAtOne = () =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? 1 : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it("plans the new agreement's visits without touching the existing agreement's", async () => {
@@ -1842,7 +1851,8 @@ describe('a cancelled visit on the day generation wants', () => {
 describe('a day the spread cannot rescue', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('says so by date, count and cap before anything is confirmed', async () => {
@@ -1893,7 +1903,8 @@ describe('a day the spread cannot rescue', () => {
         branchCode: BranchCode.KANDY,
         date: '2027-06-09', // the Wednesday
         plannedCount: 3,
-        cap: 2,
+        plannedMinutes: 3 * DEFAULT_AGREEMENT_CREW_MINUTES,
+        cap: 2 * DEFAULT_AGREEMENT_CREW_MINUTES,
       }),
     ]);
     expect(impact.loadWarnings[0].message).toContain('2027-06-09');
@@ -1904,7 +1915,8 @@ describe('a day the spread cannot rescue', () => {
 describe('a cancelled visit takes up no room in the day', () => {
   const cappedAt = (cap: number) =>
     new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) => (key === 'visitGeneration.dailyCap' ? cap : undefined),
+      get: (key: string) =>
+        key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
     } as unknown as ConfigService);
 
   it('does not push the next run off a day whose only other visit was cancelled', async () => {

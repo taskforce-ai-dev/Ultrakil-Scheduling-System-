@@ -32,7 +32,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../src/config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -69,8 +69,17 @@ const DAYS = [
  */
 const AGREEMENTS = 60;
 
-/** Five crews' worth of staff: far more than twelve visits a day can use. */
+/** Five crews' worth of staff: far more than a day at the cap can use. */
 const CREWS = 5;
+
+/**
+ * One crew-hour: the fixture's own agreements are all this size, so a
+ * visit's crew-minutes cost is exactly one unit of it, and the cap reads as a
+ * plain visit count again — the same number this suite measured before
+ * capacity moved to crew-minutes.
+ */
+const REFERENCE_VISIT_MINUTES = 60;
+const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
 
 let app: INestApplication;
 let http: string;
@@ -147,10 +156,11 @@ type DailyLoadReader = {
       branchCode: BranchCode;
       visitDate: Date;
       proposedVisit?: { visitDate: Date };
+      crewMinutes: number;
     }[],
   ): Promise<{
-    countOn(branchCode: BranchCode, date: string): number;
-    admitsMoveOnto(branchCode: BranchCode, date: string): boolean;
+    minutesOn(branchCode: BranchCode, date: string): number;
+    admitsMoveOnto(branchCode: BranchCode, date: string, crewMinutes: number): boolean;
   }>;
 };
 
@@ -233,12 +243,15 @@ beforeAll(async () => {
     employeeIds.push(supervisor.id, technician.id);
   }
 
+  // One crew-hour each, so twelve of them are exactly
+  // DEFAULT_DAILY_CAPACITY_MINUTES — the cap reads as a visit count of
+  // twelve, same as it did before capacity moved to crew-minutes.
   const jobType = await prisma.jobType.create({
     data: {
       code: `CAP_${suffix}`,
       name: 'Cap Treatment',
-      defaultCrewSize: 2,
-      defaultDurationMinutes: 90,
+      defaultCrewSize: 1,
+      defaultDurationMinutes: 60,
     },
   });
   jobTypeId = jobType.id;
@@ -280,8 +293,8 @@ beforeAll(async () => {
         frequencyCount: 1,
         frequencyUnit: FrequencyUnit.WEEK,
         frequencyInterval: 1,
-        crewSize: 2,
-        durationMinutes: 90,
+        crewSize: 1,
+        durationMinutes: 60,
         startDate: new Date(`${RANGE.from}T00:00:00.000Z`),
         // Every weekday allowed, so the solver has a whole week of legal days
         // to move a visit to and generation has a whole week to spread over.
@@ -390,18 +403,18 @@ describe('a generated week, then one solve over it', () => {
 
   it('generates a week no day of which is over the cap', () => {
     for (const date of DAYS) {
-      expect(before.get(date) ?? 0).toBeLessThanOrEqual(DEFAULT_DAILY_VISIT_CAP);
+      expect(before.get(date) ?? 0).toBeLessThanOrEqual(CAP_VISITS);
     }
     // A week that never came near the cap would pass the test below for the
     // wrong reason, so prove the fixture actually loads the days.
     expect(Math.max(...before.values())).toBeGreaterThan(
-      DEFAULT_DAILY_VISIT_CAP / 2,
+      CAP_VISITS / 2,
     );
   });
 
   it('leaves no day over the cap after the solve', () => {
     const over = DAYS.filter(
-      (date) => (after.get(date) ?? 0) > DEFAULT_DAILY_VISIT_CAP,
+      (date) => (after.get(date) ?? 0) > CAP_VISITS,
     ).map((date) => `${date} carries ${after.get(date)}`);
 
     expect(over).toEqual([]);
@@ -414,7 +427,7 @@ describe('a generated week, then one solve over it', () => {
       // Either the day ends inside the cap, or it ends no heavier than it
       // began. A day only ever gets worse by having work moved on to it.
       expect(
-        ended <= DEFAULT_DAILY_VISIT_CAP || ended <= started,
+        ended <= CAP_VISITS || ended <= started,
       ).toBe(true);
     }
   });
@@ -471,8 +484,8 @@ describe('a branch-day at the cap, one of its visits cancelled', () => {
 
   beforeAll(async () => {
     // One visit per agreement, because the basis is cross-agreement: the day
-    // is full on the number of visits standing on it, not on whose they are.
-    for (let index = 0; index < DEFAULT_DAILY_VISIT_CAP; index += 1) {
+    // is full on the crew-minutes standing on it, not on whose they are.
+    for (let index = 0; index < CAP_VISITS; index += 1) {
       await prisma.generatedVisit.create({
         data: {
           serviceAgreementId: agreementIds[index],
@@ -481,8 +494,8 @@ describe('a branch-day at the cap, one of its visits cancelled', () => {
           visitDate: dayAt,
           windowStartMinute: 8 * 60,
           windowEndMinute: 17 * 60,
-          durationMinutes: 90,
-          requiredCrewSize: 2,
+          durationMinutes: REFERENCE_VISIT_MINUTES,
+          requiredCrewSize: 1,
           // Exactly one of them called off. The day is at the cap in rows and
           // one short of it in work.
           status: index === 0 ? VisitStatus.CANCELLED : VisitStatus.PENDING,
@@ -496,19 +509,22 @@ describe('a branch-day at the cap, one of its visits cancelled', () => {
       where: { branchCode: BranchCode.COLOMBO, visitDate: dayAt },
     });
     // If this is not the cap, the fixture is not the day the test describes.
-    expect(rows).toBe(DEFAULT_DAILY_VISIT_CAP);
+    expect(rows).toBe(CAP_VISITS);
 
     const ledger = await capReader(runs).lockAndReadDailyLoad(prisma, [
       {
         branchCode: BranchCode.COLOMBO,
         visitDate: new Date(`${RANGE.to}T00:00:00.000Z`),
         proposedVisit: { visitDate: dayAt },
+        crewMinutes: REFERENCE_VISIT_MINUTES,
       },
     ]);
 
-    expect(ledger.countOn(BranchCode.COLOMBO, DAY)).toBe(
-      DEFAULT_DAILY_VISIT_CAP - 1,
+    expect(ledger.minutesOn(BranchCode.COLOMBO, DAY)).toBe(
+      (CAP_VISITS - 1) * REFERENCE_VISIT_MINUTES,
     );
-    expect(ledger.admitsMoveOnto(BranchCode.COLOMBO, DAY)).toBe(true);
+    expect(
+      ledger.admitsMoveOnto(BranchCode.COLOMBO, DAY, REFERENCE_VISIT_MINUTES),
+    ).toBe(true);
   });
 });

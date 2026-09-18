@@ -1,6 +1,7 @@
 import { BranchCode, DataProvenance, VisitPlacement } from '@prisma/client';
 
 import { parseDateOnly, weekdayOf } from '../../catalog/schedule-preview';
+import { crewMinutesOf } from '../capacity';
 import { RequiredVisit } from './plan';
 
 /**
@@ -9,28 +10,39 @@ import { RequiredVisit } from './plan';
  * Each agreement is planned on its own, so nothing in per-agreement planning
  * can see that forty of them have all chosen the same Monday. This is the one
  * pass that looks across every agreement at once: for a branch-day carrying
- * more than the cap, it moves unbooked visits to another day inside their own
- * period until the day sits at the cap.
+ * more crew-minutes than the cap, it moves unbooked visits to another day
+ * inside their own period until the day sits at the cap.
+ *
+ * Capacity is spent in crew-minutes — a visit's duration times its crew size
+ * — not in a raw count of visits. A count could not tell a fifteen-minute
+ * one-person check apart from a four-hour four-person job, and the source
+ * workbook itself has a fifteen-visit day nothing is wrong with; crew-minutes
+ * can tell the two apart, because it is the same quantity a crew's own day is
+ * measured in.
  *
  * Three rules keep it honest. A booked visit is a commitment and is never
  * moved, though it still counts towards the day's load. A visit only ever
  * moves inside its own period, because a month's visit pushed into the next
- * month is a different promise. And nothing is moved onto a day that is
- * already full, which would merely relocate the problem.
+ * month is a different promise. And nothing is moved onto a day that would
+ * end up over the cap, which would merely relocate the problem.
  *
  * Every ordering here is total — agreements by id, days by date — so running
  * it twice on the same horizon produces the same calendar, which is what lets
  * regeneration report nothing to do.
  */
 
-/** A day that still carries more work than the cap allows. */
+/** A day that still carries more crew-minutes than the cap allows. */
 export interface DailyLoadWarning {
   branchCode: BranchCode;
   /** YYYY-MM-DD. */
   date: string;
+  /** How many visits are on the day — for a dispatcher to recognise it by. */
   plannedCount: number;
   /** How many of those are booked dates, which cannot be moved. */
   bookedCount: number;
+  /** The day's total crew-minutes: each visit's duration times its crew size. */
+  plannedMinutes: number;
+  /** The crew-minutes cap itself. */
   cap: number;
   message: string;
 }
@@ -47,13 +59,16 @@ export interface LoadGuardResult {
  * and any visit of an agreement the run was not asked about — a run scoped to
  * one agreement leaves every other agreement's work exactly where it is.
  * Both occupy the day just as firmly as a visit this run planned, and a guard
- * that cannot see them reads a day holding twelve as empty.
+ * that cannot see them reads a day holding a full load of crew-minutes as
+ * empty.
  */
 export interface StandingVisit {
   serviceAgreementId: string;
   branchCode: BranchCode;
   /** YYYY-MM-DD. */
   visitDate: string;
+  durationMinutes: number;
+  requiredCrewSize: number;
 }
 
 const loadKey = (branchCode: BranchCode, date: string) => `${branchCode}|${date}`;
@@ -62,7 +77,8 @@ const periodKey = (visit: RequiredVisit) =>
 
 export function applyDailyLoadGuard(
   required: RequiredVisit[],
-  cap: number,
+  /** Crew-minutes one branch-day may carry: duration times crew size, summed. */
+  capMinutes: number,
   standing: StandingVisit[] = [],
 ): LoadGuardResult {
   // Copies throughout: the caller's list is its own account of what the
@@ -71,13 +87,17 @@ export function applyDailyLoadGuard(
   const visits = required.map((visit) => ({ ...visit }));
 
   const load = new Map<string, number>();
+  // Visit counts, kept only so a warning can tell a dispatcher how many
+  // visits a day carries. The cap itself is judged on `load` alone.
+  const counts = new Map<string, number>();
   const usedDates = new Map<string, Set<string>>();
   // How many of this run's own visits sit on each agreement-day, so a
   // standing visit this run is re-planning is not counted a second time.
   const planned = new Map<string, number>();
   for (const visit of visits) {
     const key = loadKey(visit.branchCode, visit.visitDate);
-    load.set(key, (load.get(key) ?? 0) + 1);
+    load.set(key, (load.get(key) ?? 0) + crewMinutesOf(visit));
+    counts.set(key, (counts.get(key) ?? 0) + 1);
     const period = periodKey(visit);
     const used = usedDates.get(period) ?? new Set<string>();
     used.add(visit.visitDate);
@@ -104,12 +124,13 @@ export function applyDailyLoadGuard(
     }
 
     const key = loadKey(visit.branchCode, visit.visitDate);
-    load.set(key, (load.get(key) ?? 0) + 1);
+    load.set(key, (load.get(key) ?? 0) + crewMinutesOf(visit));
+    counts.set(key, (counts.get(key) ?? 0) + 1);
     standingPerDay.set(key, (standingPerDay.get(key) ?? 0) + 1);
   }
 
   const overloaded = [...load.entries()]
-    .filter(([, count]) => count > cap)
+    .filter(([, minutes]) => minutes > capMinutes)
     .map(([key]) => key)
     // Earliest day first, then branch: a stable order, so two runs make the
     // same moves in the same sequence.
@@ -135,8 +156,9 @@ export function applyDailyLoadGuard(
       );
 
     for (const visit of movers) {
-      if ((load.get(key) ?? 0) <= cap) break;
+      if ((load.get(key) ?? 0) <= capMinutes) break;
 
+      const visitMinutes = crewMinutesOf(visit);
       const period = periodKey(visit);
       const used = usedDates.get(period) ?? new Set<string>();
       const occupied = standingByAgreement.get(visit.serviceAgreementId);
@@ -150,9 +172,9 @@ export function applyDailyLoadGuard(
           alternative,
           load: load.get(loadKey(visit.branchCode, alternative.date)) ?? 0,
         }))
-        // A day already at the cap is no help: moving there would only make
-        // the next pass undo it.
-        .filter((entry) => entry.load < cap)
+        // A day this visit would push over the cap is no help: moving there
+        // would only make the next pass undo it.
+        .filter((entry) => entry.load + visitMinutes <= capMinutes)
         .sort(
           (a, b) =>
             a.load - b.load || a.alternative.date.localeCompare(b.alternative.date),
@@ -175,8 +197,10 @@ export function applyDailyLoadGuard(
       };
 
       const targetKey = loadKey(visit.branchCode, target.alternative.date);
-      load.set(key, (load.get(key) ?? 1) - 1);
-      load.set(targetKey, (load.get(targetKey) ?? 0) + 1);
+      load.set(key, (load.get(key) ?? visitMinutes) - visitMinutes);
+      load.set(targetKey, (load.get(targetKey) ?? 0) + visitMinutes);
+      counts.set(key, (counts.get(key) ?? 1) - 1);
+      counts.set(targetKey, (counts.get(targetKey) ?? 0) + 1);
       used.delete(origin.date);
       used.add(target.alternative.date);
       usedDates.set(period, used);
@@ -196,9 +220,10 @@ export function applyDailyLoadGuard(
   }
 
   const warnings: DailyLoadWarning[] = [];
-  for (const [key, count] of [...load.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    if (count <= cap) continue;
+  for (const [key, minutes] of [...load.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (minutes <= capMinutes) continue;
     const [branchCode, date] = key.split('|') as [BranchCode, string];
+    const count = counts.get(key) ?? 0;
     const bookedCount = visits.filter(
       (visit) =>
         visit.branchCode === branchCode &&
@@ -219,7 +244,7 @@ export function applyDailyLoadGuard(
         : `${head} already in the calendar and not this run's to move`;
     };
 
-    const over = `${date} carries ${count} visits in ${branchCode}, over the ${cap} a day this branch plans for.`;
+    const over = `${date} carries ${count} ${count === 1 ? 'visit' : 'visits'} in ${branchCode}, totalling ${minutes} crew-minutes of work — over the ${capMinutes} crew-minutes a day this branch plans for.`;
 
     let message: string;
     if (bookedCount + standingCount >= count) {
@@ -248,7 +273,8 @@ export function applyDailyLoadGuard(
       date,
       plannedCount: count,
       bookedCount,
-      cap,
+      plannedMinutes: minutes,
+      cap: capMinutes,
       message,
     });
   }

@@ -52,13 +52,15 @@ const DAY = '2029-05-07';
 const IN_SCOPE = 'agreement-in-scope';
 const SOMEBODY_ELSE = 'agreement-elsewhere';
 
-/** One row per visit, exactly as the range read selects them. */
+/** One row per visit, exactly as the range read selects them. One hour, one crew member. */
 function visitRow(serviceAgreementId: string, startMinute: number) {
   return {
     serviceAgreementId,
     branchCode: BranchCode.COLOMBO,
     visitDate: new Date(`${DAY}T00:00:00.000Z`),
     windowStartMinute: startMinute,
+    durationMinutes: 60,
+    requiredCrewSize: 1,
     status: VisitStatus.PENDING,
     isManuallyAdjusted: false,
     lockedAt: null,
@@ -115,11 +117,12 @@ describe('the horizon as one read', () => {
     expect(answer.standing.map((visit) => visit.serviceAgreementId)).toEqual([
       SOMEBODY_ELSE,
     ]);
-    // The day still carries two. The cap is a fact about the day, not about
-    // whose work is on it, and the transaction will count it the same way —
-    // so a baseline built out of `standing` alone would read every run as
-    // having been raced by itself.
-    expect(answer.loadByDay.get(branchDayKey(BranchCode.COLOMBO, DAY))).toBe(2);
+    // The day still carries two visits' worth of crew-minutes — 120, at one
+    // hour and one crew member each. The cap is a fact about the day, not
+    // about whose work is on it, and the transaction will count it the same
+    // way — so a baseline built out of `standing` alone would read every run
+    // as having been raced by itself.
+    expect(answer.loadByDay.get(branchDayKey(BranchCode.COLOMBO, DAY))).toBe(120);
   });
 
   it('asks the database once, so the two answers are one calendar', async () => {

@@ -1877,9 +1877,13 @@ export interface components {
             branchCode: "COLOMBO" | "KANDY";
             /** Format: date */
             date: string;
+            /** @description How many visits the day carries. */
             plannedCount: number;
             /** @description How many of them are dates already booked, so unmovable. */
             bookedCount: number;
+            /** @description The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits. */
+            plannedMinutes: number;
+            /** @description The crew-minutes cap itself. */
             cap: number;
             message: string;
         };

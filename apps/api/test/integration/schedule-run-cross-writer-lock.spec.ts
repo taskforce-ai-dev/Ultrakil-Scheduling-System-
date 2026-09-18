@@ -34,7 +34,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_VISIT_CAP } from '../../src/config/constants';
+import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -52,8 +52,16 @@ const WRITERS_DAY = WRITERS_WEEK.from;
 const CROSS_DAY = CROSS_WEEK.from;
 const at = (date: string) => new Date(`${date}T00:00:00.000Z`);
 
+/**
+ * One crew-hour: every agreement and visit in this suite is this size, so a
+ * visit's crew-minutes cost is exactly one unit of it, and the cap reads as
+ * a plain visit count again.
+ */
+const REFERENCE_VISIT_MINUTES = 60;
+const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
+
 /** One short of full, so exactly one writer can have the last slot. */
-const FILLERS = DEFAULT_DAILY_VISIT_CAP - 1;
+const FILLERS = CAP_VISITS - 1;
 
 const ALL_WEEKDAYS = [
   Weekday.MONDAY,
@@ -132,8 +140,8 @@ async function makeAgreement(label: string, startDate: string): Promise<string> 
       frequencyCount: 1,
       frequencyUnit: FrequencyUnit.WEEK,
       frequencyInterval: 1,
-      crewSize: 2,
-      durationMinutes: 90,
+      crewSize: 1,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
       startDate: at(startDate),
       dayRules: {
         create: ALL_WEEKDAYS.map((weekday) => ({ weekday, kind: DayRuleKind.ALLOWED })),
@@ -155,8 +163,8 @@ async function fillDay(agreementId: string, date: string, count: number) {
         visitDate: at(date),
         windowStartMinute: 8 * 60 + index,
         windowEndMinute: 17 * 60,
-        durationMinutes: 90,
-        requiredCrewSize: 2,
+        durationMinutes: REFERENCE_VISIT_MINUTES,
+        requiredCrewSize: 1,
         status: VisitStatus.PENDING,
         isManuallyAdjusted: true,
       },
@@ -174,8 +182,8 @@ async function makeMovableVisit(agreementId: string, originDate: string) {
       visitDate: at(originDate),
       windowStartMinute: 8 * 60,
       windowEndMinute: 17 * 60,
-      durationMinutes: 90,
-      requiredCrewSize: 2,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
+      requiredCrewSize: 1,
       status: VisitStatus.PENDING,
     },
   });
@@ -244,6 +252,10 @@ function persistMoveTo(
         },
         branchCode: BranchCode.COLOMBO,
         visitDate: visit.visitDate,
+        // The visit's own cost against the cap: `makeMovableVisit` creates it
+        // at `REFERENCE_VISIT_MINUTES` minutes, one crew member — the same
+        // figure `persistResult`'s real caller reads off the row itself.
+        crewMinutes: REFERENCE_VISIT_MINUTES,
       },
     ],
     [],
@@ -382,7 +394,7 @@ it('two real optimizer writes racing for the last slot leave the day at the cap'
   expect(resultA.scheduled).toBe(1);
   expect(resultB.scheduled).toBe(1);
   const finalLoad = await loadOn(WRITERS_DAY);
-  expect(finalLoad).toBe(DEFAULT_DAILY_VISIT_CAP);
+  expect(finalLoad).toBe(CAP_VISITS);
 
   const [after, before] = await Promise.all([
     prisma.generatedVisit.findUniqueOrThrow({ where: { id: visitA.id } }),
@@ -438,8 +450,8 @@ it('a real generation confirm and a real optimizer write racing for the last slo
       frequencyCount: 1,
       frequencyUnit: FrequencyUnit.WEEK,
       frequencyInterval: 1,
-      crewSize: 2,
-      durationMinutes: 90,
+      crewSize: 1,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
       startDate: at(CROSS_WEEK.from),
       dayRules: {
         create: [{ weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
@@ -460,7 +472,7 @@ it('a real generation confirm and a real optimizer write racing for the last slo
     expect([200, 409]).toContain(status);
   }
   const finalLoad = await loadOn(CROSS_DAY);
-  expect(finalLoad).toBeLessThanOrEqual(DEFAULT_DAILY_VISIT_CAP);
+  expect(finalLoad).toBeLessThanOrEqual(CAP_VISITS);
 
   // Between them, at most one of the two actually landed on the contested
   // day — the cap is one slot, and neither writer may both think it won.

@@ -178,13 +178,21 @@ class DailyLoadWarningDto {
   @ApiProperty({ type: String, enum: Object.values(BranchCode) })
   branchCode!: string;
   @ApiProperty({ type: String, format: 'date' }) date!: string;
-  @ApiProperty({ type: Number }) plannedCount!: number;
+  @ApiProperty({ type: Number, description: 'How many visits the day carries.' })
+  plannedCount!: number;
   @ApiProperty({
     type: Number,
     description: 'How many of them are dates already booked, so unmovable.',
   })
   bookedCount!: number;
-  @ApiProperty({ type: Number }) cap!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      "The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits.",
+  })
+  plannedMinutes!: number;
+  @ApiProperty({ type: Number, description: 'The crew-minutes cap itself.' })
+  cap!: number;
   @ApiProperty({ type: String }) message!: string;
 }
 

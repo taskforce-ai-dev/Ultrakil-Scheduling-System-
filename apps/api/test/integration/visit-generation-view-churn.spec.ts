@@ -142,7 +142,9 @@ async function visitsNow(): Promise<{ agreement: string; date: string }[]> {
 beforeAll(async () => {
   // Set before the module is built: the cap is read from the environment when
   // configuration loads, and twelve a day would need a fixture nobody can read.
-  process.env.VISIT_GENERATION_DAILY_CAP = String(CAP);
+  // Every visit here is sixty minutes, one crew member, so CAP visits is
+  // CAP * 60 crew-minutes — the figure actually enforced.
+  process.env.VISIT_GENERATION_DAILY_CAPACITY_MINUTES = String(CAP * 60);
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = moduleRef.createNestApplication();

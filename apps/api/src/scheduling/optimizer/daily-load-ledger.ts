@@ -5,11 +5,12 @@ import { Conflict } from '../eligibility/conflict-codes';
 /**
  * How full each branch-day is, kept current as a solve's moves are applied.
  *
- * `VISIT_GENERATION_DAILY_CAP` used to be a promise generation made and the
- * optimizer silently revoked. Generation spread a September grid so no day
- * carried more than twelve; one solve over a single week of it then moved
- * eight visits off the 21st onto the 17th and left the manager looking at a
- * twenty-job day — the very complaint the cap was introduced to answer.
+ * `VISIT_GENERATION_DAILY_CAPACITY_MINUTES` used to be a promise generation
+ * made and the optimizer silently revoked. Generation spread a September grid
+ * so no day carried more crew-minutes than the cap; one solve over a single
+ * week of it then moved eight visits off the 21st onto the 17th and left the
+ * manager looking at an overloaded day — the very complaint the cap was
+ * introduced to answer.
  *
  * The solver is not the place to fix that on its own. It runs in another
  * process, it is handed crews and vehicles rather than the branch's book of
@@ -17,6 +18,11 @@ import { Conflict } from '../eligibility/conflict-codes';
  * an invariant. So the cap is enforced where the move is actually committed:
  * in the guarded persistence transaction, against a count of the day read
  * inside that transaction.
+ *
+ * Capacity is spent in crew-minutes — a visit's duration times its crew size
+ * — the same basis generation's own load guard plans against, not a raw
+ * count of visits: a fifteen-minute one-person visit and a four-hour
+ * four-person one are not the same unit of a day's work.
  *
  * Two things this deliberately does **not** do.
  *
@@ -31,34 +37,33 @@ import { Conflict } from '../eligibility/conflict-codes';
  * eligibility engine's question, asked immediately afterwards.
  */
 export class DailyLoadLedger {
-  private readonly counts: Map<string, number>;
+  private readonly minutes: Map<string, number>;
 
   /**
-   * @param counts How many visits each branch-day carries right now, keyed by
-   *   {@link branchDayKey}. A day absent from the map is read as empty, which
-   *   is the truth for any day the run never asked about.
-   * @param cap The most visits one branch-day may carry.
+   * @param minutes How many crew-minutes each branch-day carries right now,
+   *   keyed by {@link branchDayKey}. A day absent from the map is read as
+   *   empty, which is the truth for any day the run never asked about.
+   * @param capMinutes The most crew-minutes one branch-day may carry.
    */
-  constructor(counts: Map<string, number>, private readonly cap: number) {
-    this.counts = new Map(counts);
+  constructor(minutes: Map<string, number>, private readonly capMinutes: number) {
+    this.minutes = new Map(minutes);
   }
 
-  /** How many visits that branch-day carries as the run stands. */
-  countOn(branchCode: BranchCode, date: string): number {
-    return this.counts.get(branchDayKey(branchCode, date)) ?? 0;
+  /** How many crew-minutes that branch-day carries as the run stands. */
+  minutesOn(branchCode: BranchCode, date: string): number {
+    return this.minutes.get(branchDayKey(branchCode, date)) ?? 0;
   }
 
   /**
-   * Whether work may still be moved on to that branch-day.
+   * Whether `crewMinutes` more work may still be moved on to that branch-day.
    *
-   * At the cap is already refused, not merely over it: a day holding exactly
-   * twelve is a full day, and the thirteenth is the one the manager complained
-   * about. This is the same reading generation's own guard uses when it
-   * chooses somewhere to spread a visit to — "a day already at the cap is no
-   * help" — so the two halves of the system agree on what "full" means.
+   * Landing exactly on the cap is still admitted; only a move that would put
+   * the day over it is refused. This is the same reading generation's own
+   * guard uses when it chooses somewhere to spread a visit to, so the two
+   * halves of the system agree on what "full" means.
    */
-  admitsMoveOnto(branchCode: BranchCode, date: string): boolean {
-    return this.countOn(branchCode, date) < this.cap;
+  admitsMoveOnto(branchCode: BranchCode, date: string, crewMinutes: number): boolean {
+    return this.minutesOn(branchCode, date) + crewMinutes <= this.capMinutes;
   }
 
   /**
@@ -69,12 +74,12 @@ export class DailyLoadLedger {
    * on the day it started, and a ledger that had already credited the
    * departure would let the next proposal overfill that day.
    */
-  recordMove(branchCode: BranchCode, from: string, to: string): void {
+  recordMove(branchCode: BranchCode, from: string, to: string, crewMinutes: number): void {
     if (from === to) return;
     const origin = branchDayKey(branchCode, from);
     const target = branchDayKey(branchCode, to);
-    this.counts.set(origin, Math.max(0, (this.counts.get(origin) ?? 0) - 1));
-    this.counts.set(target, (this.counts.get(target) ?? 0) + 1);
+    this.minutes.set(origin, Math.max(0, (this.minutes.get(origin) ?? 0) - crewMinutes));
+    this.minutes.set(target, (this.minutes.get(target) ?? 0) + crewMinutes);
   }
 }
 
@@ -104,13 +109,15 @@ export function dailyCapRefusal(input: {
   proposedDate: string;
   /** The day the visit keeps, because the move was refused. */
   keptDate: string;
-  /** How many visits the proposed day already carries. */
-  carrying: number;
-  cap: number;
+  /** How many crew-minutes the proposed day already carries. */
+  carryingMinutes: number;
+  /** How many crew-minutes this visit itself would add. */
+  visitMinutes: number;
+  capMinutes: number;
 }): Conflict {
   return {
     code: 'DAILY_VISIT_CAP_REACHED',
-    message: `This visit is on ${input.keptDate}, where it was generated. The scheduler wanted to move it to ${input.proposedDate}, but that day already carries ${input.carrying} ${input.carrying === 1 ? 'visit' : 'visits'} in ${input.branchCode}, the ${input.cap} a day this branch plans for, so the move was refused.`,
+    message: `This visit is on ${input.keptDate}, where it was generated. The scheduler wanted to move it to ${input.proposedDate}, but that day already carries ${input.carryingMinutes} crew-minutes of work in ${input.branchCode}, and this visit's own ${input.visitMinutes} would put it over the ${input.capMinutes} crew-minutes a day this branch plans for, so the move was refused.`,
     remediation: `Move or cancel work already on ${input.proposedDate} to make room, or assign a crew that can serve this visit on ${input.keptDate}.`,
     resources: { visitId: input.visitId },
   };
