@@ -196,7 +196,10 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
   // One of the six is a manager's own decision — hand-adjusted, and
   // therefore the repair's to leave alone no matter how full its day is.
   const protectedVisit = before[0];
-  await prisma.generatedVisit.update({
+  // Captured straight from this update, so it is a genuine pre-repair
+  // baseline — not a value re-read after the repair call runs, which would
+  // only prove two reads of the same row agree with each other.
+  const protectedBeforeRepair = await prisma.generatedVisit.update({
     where: { id: protectedVisit.id },
     data: { isManuallyAdjusted: true },
   });
@@ -231,15 +234,13 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
     expect.arrayContaining([protectedVisit.id]),
   );
 
-  // The protected visit itself: same id, same date, same revision. Not
-  // merely "still on the day" but genuinely untouched.
+  // The protected visit itself: same id, same date, same revision. Compared
+  // against the row as it stood right after being marked hand-adjusted —
+  // strictly before the repair call ran — so this actually proves the
+  // repair never touched it, not merely that two post-repair reads agree.
   const stillProtected = after.find((visit) => visit.id === protectedVisit.id)!;
-  expect(stillProtected.visitDate.getTime()).toBe(protectedVisit.visitDate.getTime());
-  expect(stillProtected.updatedAt.getTime()).toBe(
-    (
-      await prisma.generatedVisit.findUniqueOrThrow({ where: { id: protectedVisit.id } })
-    ).updatedAt.getTime(),
-  );
+  expect(stillProtected.visitDate.getTime()).toBe(protectedBeforeRepair.visitDate.getTime());
+  expect(stillProtected.updatedAt.getTime()).toBe(protectedBeforeRepair.updatedAt.getTime());
 
   // `stillOverCap` is not asserted here: the shared integration database
   // holds hundreds of other suites' own stray fixtures that are never
