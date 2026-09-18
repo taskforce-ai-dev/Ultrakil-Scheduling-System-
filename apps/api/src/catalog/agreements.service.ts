@@ -288,7 +288,7 @@ export class AgreementsService {
       // than silently reverting it to what `before` happened to say.
       const current = await tx.serviceAgreement.findUniqueOrThrow({
         where: { id },
-        include: { dayRules: true },
+        include: AGREEMENT_INCLUDE,
       });
       if (current.status === AgreementStatus.ARCHIVED) {
         throw new AppException(
@@ -329,6 +329,32 @@ export class AgreementsService {
             : null;
       const currentCrewSize = dto.crewSize ?? current.crewSize;
       const currentDurationMinutes = dto.durationMinutes ?? current.durationMinutes;
+
+      // The checks above ran against `before`, read outside this transaction.
+      // Everything this edit did not itself carry has since been rebased onto
+      // `current` — including fields a concurrent writer changed in the gap —
+      // and that rebased combination has never been validated. Two edits each
+      // individually fine (one narrows the service window, the other adds a
+      // day) can combine into an agreement that can never produce a visit, and
+      // the pre-transaction checks, run against the wrong half of that
+      // combination each, would wave both through. Re-run every coupled check
+      // against the composition this write is actually about to persist.
+      assertDayRules(currentAllowedDays, currentPreferredDays);
+      assertServiceWindow(currentStartMinute, currentEndMinute);
+      assertDateRange(currentStartDate, currentEndDate);
+      this.assertSatisfiable({
+        allowedDays: currentAllowedDays,
+        preferredDays: currentPreferredDays,
+        frequencyCount: dto.frequencyCount ?? current.frequencyCount,
+        frequencyUnit: dto.frequencyUnit ?? current.frequencyUnit,
+        frequencyInterval: dto.frequencyInterval ?? current.frequencyInterval,
+        startDate: currentStartDate,
+        endDate: currentEndDate,
+        durationMinutes: currentDurationMinutes,
+        site,
+        serviceWindowStartMinute: currentStartMinute,
+        serviceWindowEndMinute: currentEndMinute,
+      });
 
       if (dto.allowedDays || dto.preferredDays) {
         await tx.serviceAgreementDayRule.deleteMany({
@@ -409,7 +435,10 @@ export class AgreementsService {
           entityId: id,
           action: 'service_agreement.updated',
           actor,
-          before,
+          // `current`, not the pre-lock `before`: the audit trail should read
+          // as "what this write actually changed", and `before` may already
+          // be a stale account of the row by the time this write commits.
+          before: current,
           after: agreement,
         },
         tx,
