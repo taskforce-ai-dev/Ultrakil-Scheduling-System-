@@ -17,7 +17,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { BranchCode, PrismaClient, UserRole, VisitStatus, Weekday } from '@prisma/client';
+import { BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
