@@ -1,5 +1,4 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
   AssignmentStatus,
@@ -16,11 +15,11 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
-import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { crewMinutesOf } from '../capacity';
 import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { BranchDayCapacityService } from '../visit-generation/branch-day-capacity.service';
 import { lockBranchDays } from './branch-day-lock';
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 import {
@@ -264,7 +263,7 @@ export class ScheduleRunService {
     private readonly scheduler: SchedulerClient,
     private readonly eligibility: EligibilityService,
     private readonly audit: AuditService,
-    private readonly config: ConfigService,
+    private readonly branchDayCapacity: BranchDayCapacityService,
   ) {}
 
   /** Records the run. The work itself happens in the queue worker. */
@@ -1066,14 +1065,6 @@ export class ScheduleRunService {
     });
   }
 
-  /** Most crew-minutes one branch-day may carry. The figure generation spreads to. */
-  private get dailyCapacityMinutes(): number {
-    return (
-      this.config.get<number>('visitGeneration.dailyCapacityMinutes') ??
-      DEFAULT_DAILY_CAPACITY_MINUTES
-    );
-  }
-
   /**
    * How full every branch-day this run might move work between already is.
    *
@@ -1118,7 +1109,7 @@ export class ScheduleRunService {
     proposals: ProposedAssignment[],
   ): Promise<DailyLoadLedger> {
     const moves = proposals.filter((entry) => entry.proposedVisit !== undefined);
-    if (moves.length === 0) return new DailyLoadLedger(new Map(), this.dailyCapacityMinutes);
+    if (moves.length === 0) return new DailyLoadLedger(new Map(), new Map());
 
     // Taken after the visit, agreement and resource locks, and in the sorted
     // order `lockBranchDays` imposes: every schedule writer takes these locks
@@ -1167,7 +1158,28 @@ export class ScheduleRunService {
       minutes.set(key, (minutes.get(key) ?? 0) + crewMinutesOf(row));
     }
 
-    return new DailyLoadLedger(minutes, this.dailyCapacityMinutes);
+    // Real, resource-derived capacity for every branch-day a move could
+    // land on or leave — origin and destination alike, paired with the
+    // move's own branch rather than the naive branch×date cross-product
+    // `rows` above reads load over.
+    const touchedBranchDays = new Map<string, { branchCode: BranchCode; date: string }>();
+    for (const entry of moves) {
+      const add = (date: Date) => {
+        const key = branchDayKey(entry.branchCode, dateOnly(date));
+        touchedBranchDays.set(key, { branchCode: entry.branchCode, date: dateOnly(date) });
+      };
+      add(entry.visitDate);
+      add(entry.proposedVisit!.visitDate);
+    }
+    const capacities = await this.branchDayCapacity.capacitiesFor(
+      [...touchedBranchDays.values()],
+      tx,
+    );
+    const capMinutesByDay = new Map(
+      [...capacities].map(([key, capacity]) => [key, capacity.capacityMinutes]),
+    );
+
+    return new DailyLoadLedger(minutes, capMinutesByDay);
   }
 
   /**
@@ -1212,7 +1224,7 @@ export class ScheduleRunService {
       keptDate: kept,
       carryingMinutes: ledger.minutesOn(entry.branchCode, target),
       visitMinutes: entry.crewMinutes,
-      capMinutes: this.dailyCapacityMinutes,
+      capMinutes: ledger.capOn(entry.branchCode, target),
     });
   }
 

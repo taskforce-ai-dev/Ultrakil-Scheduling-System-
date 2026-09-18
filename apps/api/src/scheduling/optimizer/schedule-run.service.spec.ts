@@ -14,6 +14,7 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { BranchDayCapacityService } from '../visit-generation/branch-day-capacity.service';
 import {
   BRANCH_DAY_LOCK_CLASS,
   branchDayLockKey,
@@ -383,6 +384,25 @@ function fixture(
     assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
+    // Read by `BranchDayCapacityService` inside the same transaction the
+    // daily-cap backstop runs in — one PMS-grade employee and no vehicles,
+    // matching the plain `prisma.employee`/`prisma.vehicle` mocks below, so
+    // capacity is real and available rather than the branch reading as
+    // having no workforce recorded at all.
+    employee: {
+      findMany: jest.fn(async () => [
+        {
+          id: 'employee',
+          branchCode: BranchCode.COLOMBO,
+          isPmsGrade: true,
+          permanentAssignments: [],
+          skills: [],
+          vehicleAuthorizations: [],
+          availability: [],
+        },
+      ]),
+    },
+    vehicle: { findMany: jest.fn(async () => []) },
     // The branch-day advisory lock. It returns a row count rather than rows,
     // which is why it is `$executeRaw` and not the `$queryRaw` the row locks use.
     $executeRaw: jest.fn(async () => 1),
@@ -402,20 +422,6 @@ function fixture(
   };
   const prisma = {
     ...tx,
-    employee: {
-      findMany: jest.fn(async () => [
-        {
-          id: 'employee',
-          branchCode: BranchCode.COLOMBO,
-          isPmsGrade: true,
-          permanentAssignments: [],
-          skills: [],
-          vehicleAuthorizations: [],
-          availability: [],
-        },
-      ]),
-    },
-    vehicle: { findMany: jest.fn(async () => []) },
     $transaction: jest.fn(
       async (work: (client: typeof tx) => Promise<unknown>) => work(tx),
     ),
@@ -434,9 +440,18 @@ function fixture(
     scheduler as unknown as SchedulerClient,
     eligibility as unknown as EligibilityService,
     {} as AuditService,
-    // Nothing configured: the service falls back to the default daily cap,
-    // which is what an environment without the override runs with too.
-    { get: () => undefined } as unknown as ConfigService,
+    // A 720-minute workday for the mock's one PMS-grade employee — this
+    // fixture's real resource-derived capacity therefore lands on exactly
+    // the same 720-crew-minute (twelve reference-hour) figure the daily-cap
+    // backstop tests below were written against, so their own numbers stay
+    // meaningful rather than being about dispatch/locking mechanics alone.
+    new BranchDayCapacityService(
+      prisma as unknown as PrismaService,
+      {
+        get: (key: string) =>
+          key === 'visitGeneration.employeeWorkdayMinutes' ? 720 : undefined,
+      } as unknown as ConfigService,
+    ),
   );
   const processor = new ScheduleRunProcessor(service, {
     isCurrentDispatch: jest.fn(async () => true),

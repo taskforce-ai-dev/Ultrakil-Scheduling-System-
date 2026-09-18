@@ -79,6 +79,7 @@ let http: string;
 let adminToken: string;
 let customerId: string;
 let jobTypeId: string;
+let churnSupervisorId: string;
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -140,11 +141,13 @@ async function visitsNow(): Promise<{ agreement: string; date: string }[]> {
 }
 
 beforeAll(async () => {
-  // Set before the module is built: the cap is read from the environment when
-  // configuration loads, and twelve a day would need a fixture nobody can read.
-  // Every visit here is sixty minutes, one crew member, so CAP visits is
-  // CAP * 60 crew-minutes — the figure actually enforced.
-  process.env.VISIT_GENERATION_DAILY_CAPACITY_MINUTES = String(CAP * 60);
+  // Set before the module is built: the employee-workday length is read from
+  // the environment when configuration loads. Capacity is now computed per
+  // branch-day from real headcount, not a flat constant — two available
+  // employees (KANDY's own F Kumara, plus one PMS-grade employee this suite
+  // adds below) at sixty minutes each reproduces the same CAP * 60
+  // crew-minute figure this suite's arithmetic is built around.
+  process.env.VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES = '60';
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = moduleRef.createNestApplication();
@@ -168,6 +171,25 @@ beforeAll(async () => {
     create: { code: BranchCode.KANDY, name: 'KANDY Branch' },
     update: {},
   });
+
+  // KANDY's own real workforce (as of this database) has nobody PMS-grade —
+  // deliberately, elsewhere: the "Kandy problem" other suites rely on to
+  // prove a branch with no PMS supervisor cannot be staffed at all. This
+  // suite is about week/month view consistency, not that gap, so it adds its
+  // own PMS-grade employee rather than disturbing the shared fixture other
+  // tests depend on. Together with KANDY's existing employee this gives
+  // exactly two available employees, matching `CAP`.
+  const churnSupervisor = await prisma.employee.create({
+    data: {
+      sourceKey: `view-churn-supervisor-${suffix}`,
+      fullName: `View Churn Supervisor ${suffix}`,
+      gradeLabel: 'PMS',
+      isPmsGrade: true,
+      branchId: branch.id,
+      branchCode: BranchCode.KANDY,
+    },
+  });
+  churnSupervisorId = churnSupervisor.id;
 
   // A cap of two is only a cap if nothing else is on these days. This database
   // is shared with every other integration suite, so say so loudly rather than
@@ -290,6 +312,9 @@ afterAll(async () => {
     await prisma.customer.delete({ where: { id: customerId } });
   }
   if (jobTypeId) await prisma.jobType.delete({ where: { id: jobTypeId } }).catch(() => undefined);
+  if (churnSupervisorId) {
+    await prisma.employee.delete({ where: { id: churnSupervisorId } }).catch(() => undefined);
+  }
   await prisma.user.deleteMany({ where: { email: ADMIN.email } });
   await prisma.$disconnect();
   await app.close();

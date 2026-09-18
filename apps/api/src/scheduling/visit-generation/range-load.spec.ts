@@ -9,6 +9,7 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
+import { BranchDayCapacityService } from './branch-day-capacity.service';
 import { VisitGenerationService } from './visit-generation.service';
 
 /**
@@ -77,6 +78,7 @@ function reader(rows: ReturnType<typeof visitRow>[]) {
     prisma,
     {} as unknown as AuditService,
     { get: () => undefined } as unknown as ConfigService,
+    {} as unknown as BranchDayCapacityService,
   );
   return { findMany, range: service as unknown as RangeReader };
 }

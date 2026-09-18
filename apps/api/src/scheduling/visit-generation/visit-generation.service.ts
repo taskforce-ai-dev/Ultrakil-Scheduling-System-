@@ -32,6 +32,7 @@ import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
 import { branchDayKey } from '../optimizer/daily-load-ledger';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
+import { BranchDayCapacityService } from './branch-day-capacity.service';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
 import {
@@ -185,14 +186,48 @@ export class VisitGenerationService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly config: ConfigService,
+    private readonly branchDayCapacity: BranchDayCapacityService,
   ) {}
 
-  /** Most crew-minutes one branch's day may carry. Configurable; rarely configured. */
+  /**
+   * Falls back to this only when {@link BranchDayCapacityService} has no
+   * workforce data for a branch at all — see `branch-day-capacity.ts`.
+   * Otherwise capacity is computed per branch-day from real employee, PMS
+   * and vehicle/driver availability, not this flat constant.
+   */
   private get dailyCapacityMinutes(): number {
     return (
       this.config.get<number>('visitGeneration.dailyCapacityMinutes') ??
       DEFAULT_DAILY_CAPACITY_MINUTES
     );
+  }
+
+  /**
+   * Every branch-day a run's own requirements, their alternatives, or the
+   * standing calendar could touch, resolved to its real capacity in one
+   * pass — so `applyDailyLoadGuard` never has to ask for a day it wasn't
+   * given an answer for.
+   */
+  private async capacityByDayFor(
+    required: RequiredVisit[],
+    standing: StandingVisit[],
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<Map<string, number>> {
+    const branchDays = new Map<string, { branchCode: BranchCode; date: string }>();
+    const add = (branchCode: BranchCode, date: string) =>
+      branchDays.set(branchDayKey(branchCode, date), { branchCode, date });
+
+    for (const visit of required) {
+      add(visit.branchCode, visit.visitDate);
+      for (const alternative of visit.alternatives) add(visit.branchCode, alternative.date);
+    }
+    for (const visit of standing) add(visit.branchCode, visit.visitDate);
+
+    const capacities = await this.branchDayCapacity.capacitiesFor(
+      [...branchDays.values()],
+      client,
+    );
+    return new Map([...capacities].map(([key, capacity]) => [key, capacity.capacityMinutes]));
   }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
@@ -538,7 +573,11 @@ export class VisitGenerationService {
       plannedPeriods: planned.periods,
       lives,
     });
-    const guarded = applyDailyLoadGuard(honoured, this.dailyCapacityMinutes, range.standing);
+    // Real, resource-derived capacity for every branch-day this run's own
+    // requirements or their alternatives could land on, plus the standing
+    // calendar's own days — not a flat, branch-blind constant.
+    const capacityByDay = await this.capacityByDayFor(honoured, range.standing);
+    const guarded = applyDailyLoadGuard(honoured, capacityByDay, range.standing);
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
     // requirement onto a protected visit outside it — which is dropped from
@@ -1146,18 +1185,20 @@ export class VisitGenerationService {
     // removes from can only get emptier.
     await lockBranchDays(tx, [...days.values()]);
     const loadNow = await this.readBranchDayLoad(tx, [...days.values()]);
+    const capacities = await this.branchDayCapacity.capacitiesFor([...days.values()], tx);
 
     for (const [key, day] of days) {
       const now = loadNow.get(key) ?? 0;
       const ending = now + (delta.get(key) ?? 0);
+      const capMinutes = capacities.get(key)?.capacityMinutes ?? 0;
       if (now <= (loadWhenPlanned.get(key) ?? 0)) continue;
-      if (ending <= this.dailyCapacityMinutes) continue;
+      if (ending <= capMinutes) continue;
 
       throw new AppException(
         'RESOURCE_CONFLICT',
-        `${day.date} filled up while this generation was being confirmed: it now carries ${now} crew-minutes of work in ${day.branchCode}, and this run would leave ${ending} there, over the ${this.dailyCapacityMinutes} crew-minutes a day this branch plans for. Preview again before confirming.`,
+        `${day.date} filled up while this generation was being confirmed: it now carries ${now} crew-minutes of work in ${day.branchCode}, and this run would leave ${ending} there, over the ${capMinutes} crew-minutes a day this branch plans for. Preview again before confirming.`,
         HttpStatus.CONFLICT,
-        { branchCode: day.branchCode, date: day.date, carrying: now, cap: this.dailyCapacityMinutes },
+        { branchCode: day.branchCode, date: day.date, carrying: now, cap: capMinutes },
       );
     }
   }

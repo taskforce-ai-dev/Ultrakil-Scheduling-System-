@@ -43,15 +43,29 @@ export class DailyLoadLedger {
    * @param minutes How many crew-minutes each branch-day carries right now,
    *   keyed by {@link branchDayKey}. A day absent from the map is read as
    *   empty, which is the truth for any day the run never asked about.
-   * @param capMinutes The most crew-minutes one branch-day may carry.
+   * @param capMinutes The most crew-minutes one branch-day may carry. A
+   *   plain number applies the same cap everywhere; a map gives each
+   *   branch-day its own real, resource-derived figure (see
+   *   `branch-day-capacity.ts`) — a day absent from it reads as zero
+   *   capacity, the safe default for a day this run never asked about.
    */
-  constructor(minutes: Map<string, number>, private readonly capMinutes: number) {
+  constructor(
+    minutes: Map<string, number>,
+    private readonly capMinutes: number | Map<string, number>,
+  ) {
     this.minutes = new Map(minutes);
   }
 
   /** How many crew-minutes that branch-day carries as the run stands. */
   minutesOn(branchCode: BranchCode, date: string): number {
     return this.minutes.get(branchDayKey(branchCode, date)) ?? 0;
+  }
+
+  /** The cap this specific branch-day is held to. */
+  capOn(branchCode: BranchCode, date: string): number {
+    return typeof this.capMinutes === 'number'
+      ? this.capMinutes
+      : this.capMinutes.get(branchDayKey(branchCode, date)) ?? 0;
   }
 
   /**
@@ -63,7 +77,7 @@ export class DailyLoadLedger {
    * halves of the system agree on what "full" means.
    */
   admitsMoveOnto(branchCode: BranchCode, date: string, crewMinutes: number): boolean {
-    return this.minutesOn(branchCode, date) + crewMinutes <= this.capMinutes;
+    return this.minutesOn(branchCode, date) + crewMinutes <= this.capOn(branchCode, date);
   }
 
   /**

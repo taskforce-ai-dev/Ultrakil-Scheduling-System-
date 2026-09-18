@@ -81,7 +81,9 @@ export const visitGenerationConfig = registerAs('visitGeneration', () => {
   return {
     /** Reference-only; see `dailyCapacityMinutes` for what is enforced. */
     dailyCap: Number(env.VISIT_GENERATION_DAILY_CAP),
+    /** Fallback only, for a branch with no workforce imported at all. */
     dailyCapacityMinutes: Number(env.VISIT_GENERATION_DAILY_CAPACITY_MINUTES),
+    employeeWorkdayMinutes: Number(env.VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES),
   };
 });
 

@@ -14,7 +14,6 @@
  * ends up seeing RUNNING.
  */
 import { HttpStatus, INestApplication, ValidationPipe } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { AssignmentStatus, AvailabilityKind, BranchCode, CrewRole, DataProvenance, LockScope, Prisma, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import { Job } from 'bullmq';
@@ -28,6 +27,7 @@ import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.fil
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { EligibilityService } from '../../src/scheduling/eligibility/eligibility.service';
 import { AssignmentsService } from '../../src/scheduling/eligibility/assignments.service';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
 import { VisitsService } from '../../src/scheduling/visits/visits.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
 import { ScheduleRunJobData, ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
@@ -619,7 +619,7 @@ describe('assignment lock concurrency', () => {
     const started = deferred<void>();
     const answer = deferred<SolveResponse>();
     const scheduler = { solve: async () => { started.resolve(); return answer.promise; } } as unknown as SchedulerClient;
-    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService), app.get(ConfigService));
+    const service = new ScheduleRunService(solver.client, scheduler, app.get(EligibilityService), app.get(AuditService), app.get(BranchDayCapacityService));
     const publishing = new PublishingService(
       locker.client,
       app.get(AuditService),
@@ -842,7 +842,7 @@ describe('standard writer publication protocol', () => {
           })),
           unassigned: [],
         }),
-      } as unknown as SchedulerClient, eligibility, app.get(AuditService), app.get(ConfigService));
+      } as unknown as SchedulerClient, eligibility, app.get(AuditService), app.get(BranchDayCapacityService));
       return service.execute(run.id);
     };
     return { visits, run, solve };
@@ -989,7 +989,7 @@ describe('standard writer publication protocol', () => {
       } as unknown as SchedulerClient,
       app.get(EligibilityService),
       app.get(AuditService),
-      app.get(ConfigService),
+      app.get(BranchDayCapacityService),
     );
 
     await expect(service.execute(run.id)).rejects.toMatchObject({
@@ -1049,7 +1049,7 @@ describe('standard writer publication protocol', () => {
           : { isEligible: true, conflicts: [] };
       } } as unknown as EligibilityService,
       app.get(AuditService),
-      app.get(ConfigService),
+      app.get(BranchDayCapacityService),
     );
     const pending = new ScheduleRunProcessor(service, {
       isCurrentDispatch: async () => true,
@@ -1184,7 +1184,7 @@ describe('standard writer publication protocol', () => {
           },
         } as EligibilityService,
         app.get(AuditService),
-        app.get(ConfigService),
+        app.get(BranchDayCapacityService),
       );
       const pending = service.execute(staleRun.id).then(
         () => undefined,
@@ -2008,7 +2008,7 @@ describe('publishing', () => {
         scheduler,
         app.get(EligibilityService),
         app.get(AuditService),
-        app.get(ConfigService),
+        app.get(BranchDayCapacityService),
       );
       const publishing = new PublishingService(
         publisher.client,

@@ -24,24 +24,31 @@
 export const DEFAULT_DAILY_VISIT_CAP = 12;
 
 /**
- * Most crew-minutes one branch's day may carry, unless the environment says
- * otherwise. This is the figure `load-guard.ts`, the commit-time recheck in
- * `visit-generation.service.ts`, and the optimizer's `DailyLoadLedger`
- * actually enforce.
+ * Most crew-minutes one branch's day may carry when this database has no
+ * workforce imported for that branch at all — see
+ * `branch-day-capacity.ts`'s `NO_WORKFORCE_RECORDED` fallback.
  *
- * A visit's own cost is its duration times its crew size — the minutes a
- * crew actually spends on it, counted once per crew member rather than once
- * per visit — so a fifteen-minute single-person check and a four-hour
- * four-person job are no longer the same "one visit" a raw count made them.
- *
- * The default, 720 (twelve hours of crew-minutes), is a judgment call, not a
- * measurement: generation has no view of how many crews or vehicles a branch
- * actually has on a given day — that is the optimizer's and the eligibility
- * engine's question, asked against real employees, skills, PMS coverage and
- * vehicles, deliberately after generation has only placed a *date*. Twelve
- * crew-hours is chosen to read the old cap's implied assumption — twelve
- * visits of about an hour, one crew member each — as a starting point a
- * branch can retune with real throughput data, not as a fact about UltraKIL's
- * actual capacity.
+ * This used to be the figure enforced everywhere, a company-wide constant
+ * regardless of how many people or vehicles a branch actually had. The
+ * Technical Director's review rejected that directly: it could make a valid
+ * job "impossible everywhere... even when the branch has enough people."
+ * `load-guard.ts`, the commit-time recheck in `visit-generation.service.ts`,
+ * and the optimizer's `DailyLoadLedger` now enforce a figure computed per
+ * branch per day from real employee headcount, PMS-grade supervision and
+ * vehicle/driver availability. This constant survives only as the fallback
+ * for a branch this database has no workforce data for at all — a data gap,
+ * not a fact about that branch's real capacity — so generation does not
+ * silently read "never imported" as "zero people."
  */
 export const DEFAULT_DAILY_CAPACITY_MINUTES = 720;
+
+/**
+ * Minutes in one employee's standard working day, unless the environment
+ * says otherwise — what `branch-day-capacity.ts` multiplies a branch-day's
+ * real available headcount by. Eight hours, a standard business day: the
+ * schema records no per-employee shift length, so this is the same kind of
+ * starting assumption {@link DEFAULT_DAILY_CAPACITY_MINUTES} used to be, a
+ * branch can retune with real throughput data, not a fact about UltraKIL's
+ * actual shift lengths.
+ */
+export const DEFAULT_EMPLOYEE_WORKDAY_MINUTES = 480;

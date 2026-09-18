@@ -24,6 +24,7 @@ import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
 import { VisitGenerationService } from '../../src/scheduling/visit-generation/visit-generation.service';
 import {
   confirmAgreementProvenance,
@@ -84,6 +85,27 @@ async function createAgreement(overrides: Record<string, unknown> = {}) {
   // own coverage in `automatic-agreement-planning.spec.ts`.
   await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
   return res.body;
+}
+
+/**
+ * A `BranchDayCapacityService` stand-in that reports the same fixed
+ * capacity for whatever branch-day it is asked about, regardless of real
+ * workforce data. The shared integration database can carry other suites'
+ * own leftover employees on a branch these tests use (confirmed: COLOMBO
+ * and KANDY both already do), which would make the real, resource-derived
+ * capacity path answer with whatever headcount happens to be lying around
+ * rather than the exact figure a cap-breach test needs to control.
+ */
+function fixedCapacity(minutes: number): BranchDayCapacityService {
+  return {
+    capacitiesFor: async (branchDays: { branchCode: BranchCode; date: string }[]) =>
+      new Map(
+        branchDays.map(({ branchCode, date }) => [
+          `${branchCode}|${date}`,
+          { branchCode, date, capacityMinutes: minutes, reason: null },
+        ]),
+      ),
+  } as unknown as BranchDayCapacityService;
 }
 
 const preview = (body: Record<string, unknown> = {}) =>
@@ -457,6 +479,7 @@ describe('regeneration never loses manager-controlled work', () => {
         client,
         app.get(AuditService),
         app.get(ConfigService),
+        app.get(BranchDayCapacityService),
       );
       const actor = await prisma.user.findUniqueOrThrow({
         where: { email: ADMIN.email },
@@ -1050,10 +1073,14 @@ describe('a protected visit is never duplicated by its own replacement', () => {
 describe('a scoped run and a full run reach the same calendar', () => {
   /** The service with a cap small enough for three agreements to breach. */
   const cappedAt = (cap: number) =>
-    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) =>
+    new VisitGenerationService(
+      app.get(PrismaService),
+      app.get(AuditService),
+      { get: (key: string) =>
         key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
-    } as unknown as ConfigService);
+      } as unknown as ConfigService,
+      fixedCapacity(cap * DEFAULT_AGREEMENT_CREW_MINUTES),
+    );
 
   it('does not move a visit back onto a full day just because the run was scoped', async () => {
     // A branch and a week of its own, cleared first. The guard now counts
@@ -1134,10 +1161,14 @@ describe('a scoped run and a full run reach the same calendar', () => {
 describe('a new agreement, generated on its own, never moves another agreement\'s visit', () => {
   /** Small enough that one existing visit already fills the day. */
   const cappedAtOne = () =>
-    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) =>
+    new VisitGenerationService(
+      app.get(PrismaService),
+      app.get(AuditService),
+      { get: (key: string) =>
         key === 'visitGeneration.dailyCapacityMinutes' ? DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
-    } as unknown as ConfigService);
+      } as unknown as ConfigService,
+      fixedCapacity(DEFAULT_AGREEMENT_CREW_MINUTES),
+    );
 
   it("plans the new agreement's visits without touching the existing agreement's", async () => {
     const week = { from: '2027-05-03', to: '2027-05-09' }; // Monday-Sunday
@@ -1856,10 +1887,14 @@ describe('a cancelled visit on the day generation wants', () => {
 
 describe('a day the spread cannot rescue', () => {
   const cappedAt = (cap: number) =>
-    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) =>
+    new VisitGenerationService(
+      app.get(PrismaService),
+      app.get(AuditService),
+      { get: (key: string) =>
         key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
-    } as unknown as ConfigService);
+      } as unknown as ConfigService,
+      fixedCapacity(cap * DEFAULT_AGREEMENT_CREW_MINUTES),
+    );
 
   it('says so by date, count and cap before anything is confirmed', async () => {
     // Weekly agreements allowed exactly one weekday have nowhere inside their
@@ -1920,10 +1955,14 @@ describe('a day the spread cannot rescue', () => {
 
 describe('a cancelled visit takes up no room in the day', () => {
   const cappedAt = (cap: number) =>
-    new VisitGenerationService(app.get(PrismaService), app.get(AuditService), {
-      get: (key: string) =>
+    new VisitGenerationService(
+      app.get(PrismaService),
+      app.get(AuditService),
+      { get: (key: string) =>
         key === 'visitGeneration.dailyCapacityMinutes' ? cap * DEFAULT_AGREEMENT_CREW_MINUTES : undefined,
-    } as unknown as ConfigService);
+      } as unknown as ConfigService,
+      fixedCapacity(cap * DEFAULT_AGREEMENT_CREW_MINUTES),
+    );
 
   it('does not push the next run off a day whose only other visit was cancelled', async () => {
     // The optimizer never staffs a cancelled visit, so counting one towards

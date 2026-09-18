@@ -75,10 +75,29 @@ const loadKey = (branchCode: BranchCode, date: string) => `${branchCode}|${date}
 const periodKey = (visit: RequiredVisit) =>
   `${visit.serviceAgreementId}|${visit.periodIndex}`;
 
+/**
+ * Most crew-minutes one branch-day may carry. A plain number applies the
+ * same cap everywhere — what every existing caller in this file's own unit
+ * tests still passes. A map gives each branch-day its own real, resource-derived
+ * figure (see `branch-day-capacity.ts`); a day absent from the map is read
+ * as zero capacity, the safe default for a day this run never asked about.
+ */
+export type CapacityByDay = number | Map<string, number>;
+
+function capacityOf(capacity: CapacityByDay, branchCode: BranchCode, date: string): number {
+  return typeof capacity === 'number' ? capacity : capacity.get(loadKey(branchCode, date)) ?? 0;
+}
+
+/** Same lookup, from an already-built `branchCode|date` key. */
+function capacityForKey(capacity: CapacityByDay, key: string): number {
+  if (typeof capacity === 'number') return capacity;
+  const [branchCode, date] = key.split('|') as [BranchCode, string];
+  return capacityOf(capacity, branchCode, date);
+}
+
 export function applyDailyLoadGuard(
   required: RequiredVisit[],
-  /** Crew-minutes one branch-day may carry: duration times crew size, summed. */
-  capMinutes: number,
+  capacity: CapacityByDay,
   standing: StandingVisit[] = [],
 ): LoadGuardResult {
   // Copies throughout: the caller's list is its own account of what the
@@ -130,7 +149,7 @@ export function applyDailyLoadGuard(
   }
 
   const overloaded = [...load.entries()]
-    .filter(([, minutes]) => minutes > capMinutes)
+    .filter(([key, minutes]) => minutes > capacityForKey(capacity, key))
     .map(([key]) => key)
     // Earliest day first, then branch: a stable order, so two runs make the
     // same moves in the same sequence.
@@ -156,7 +175,7 @@ export function applyDailyLoadGuard(
       );
 
     for (const visit of movers) {
-      if ((load.get(key) ?? 0) <= capMinutes) break;
+      if ((load.get(key) ?? 0) <= capacityForKey(capacity, key)) break;
 
       const visitMinutes = crewMinutesOf(visit);
       const period = periodKey(visit);
@@ -173,8 +192,14 @@ export function applyDailyLoadGuard(
           load: load.get(loadKey(visit.branchCode, alternative.date)) ?? 0,
         }))
         // A day this visit would push over the cap is no help: moving there
-        // would only make the next pass undo it.
-        .filter((entry) => entry.load + visitMinutes <= capMinutes)
+        // would only make the next pass undo it. Each alternative is its own
+        // branch-day, so its own capacity is what governs it — not the
+        // overloaded origin day's.
+        .filter(
+          (entry) =>
+            entry.load + visitMinutes <=
+            capacityOf(capacity, visit.branchCode, entry.alternative.date),
+        )
         .sort(
           (a, b) =>
             a.load - b.load || a.alternative.date.localeCompare(b.alternative.date),
@@ -221,7 +246,8 @@ export function applyDailyLoadGuard(
 
   const warnings: DailyLoadWarning[] = [];
   for (const [key, minutes] of [...load.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    if (minutes <= capMinutes) continue;
+    const dayCapMinutes = capacityForKey(capacity, key);
+    if (minutes <= dayCapMinutes) continue;
     const [branchCode, date] = key.split('|') as [BranchCode, string];
     const count = counts.get(key) ?? 0;
     const bookedCount = visits.filter(
@@ -244,7 +270,7 @@ export function applyDailyLoadGuard(
         : `${head} already in the calendar and not this run's to move`;
     };
 
-    const over = `${date} carries ${count} ${count === 1 ? 'visit' : 'visits'} in ${branchCode}, totalling ${minutes} crew-minutes of work — over the ${capMinutes} crew-minutes a day this branch plans for.`;
+    const over = `${date} carries ${count} ${count === 1 ? 'visit' : 'visits'} in ${branchCode}, totalling ${minutes} crew-minutes of work — over the ${dayCapMinutes} crew-minutes a day this branch plans for.`;
 
     let message: string;
     if (bookedCount + standingCount >= count) {
@@ -274,7 +300,7 @@ export function applyDailyLoadGuard(
       plannedCount: count,
       bookedCount,
       plannedMinutes: minutes,
-      cap: capMinutes,
+      cap: dayCapMinutes,
       message,
     });
   }

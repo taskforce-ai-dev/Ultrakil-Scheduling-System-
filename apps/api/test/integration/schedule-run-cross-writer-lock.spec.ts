@@ -34,7 +34,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -58,10 +58,18 @@ const at = (date: string) => new Date(`${date}T00:00:00.000Z`);
  * a plain visit count again.
  */
 const REFERENCE_VISIT_MINUTES = 60;
-const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
 
-/** One short of full, so exactly one writer can have the last slot. */
-const FILLERS = CAP_VISITS - 1;
+/**
+ * How many reference-hour visits fill a branch-day, and one short of that —
+ * read fresh from the real, resource-derived capacity each test's own crew
+ * creation ends up affecting (a PMS-grade supervisor made for the race adds
+ * to COLOMBO's real headcount, and so to its real capacity), rather than a
+ * constant computed before that headcount existed.
+ */
+async function capVisitsOn(date: string): Promise<number> {
+  const capacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, date);
+  return Math.floor(capacity.capacityMinutes / REFERENCE_VISIT_MINUTES);
+}
 
 const ALL_WEEKDAYS = [
   Weekday.MONDAY,
@@ -369,15 +377,21 @@ afterAll(async () => {
 
 it('two real optimizer writes racing for the last slot leave the day at the cap', async () => {
   const filler = await makeAgreement('writers-filler', WRITERS_WEEK.from);
-  await fillDay(filler, WRITERS_DAY, FILLERS);
-  expect(await loadOn(WRITERS_DAY)).toBe(FILLERS);
-
   const agreementA = await makeAgreement('writers-a', WRITERS_WEEK.from);
   const agreementB = await makeAgreement('writers-b', WRITERS_WEEK.from);
   const visitA = await makeMovableVisit(agreementA, WRITERS_WEEK.to);
   const visitB = await makeMovableVisit(agreementB, WRITERS_WEEK.to);
+  // Each crew's own PMS-grade supervisor adds to COLOMBO's real headcount,
+  // so capacity is read only after both exist — not before, when it would
+  // already be stale by the time the race below actually checks it.
   const crewA = await makeCrew('writers-a');
   const crewB = await makeCrew('writers-b');
+
+  const capVisits = await capVisitsOn(WRITERS_DAY);
+  const fillers = capVisits - 1;
+  await fillDay(filler, WRITERS_DAY, fillers);
+  expect(await loadOn(WRITERS_DAY)).toBe(fillers);
+
   const { runId: runIdA, lease: leaseA } = await makeLeasedRun(WRITERS_WEEK);
   const { runId: runIdB, lease: leaseB } = await makeLeasedRun(WRITERS_WEEK);
 
@@ -394,7 +408,7 @@ it('two real optimizer writes racing for the last slot leave the day at the cap'
   expect(resultA.scheduled).toBe(1);
   expect(resultB.scheduled).toBe(1);
   const finalLoad = await loadOn(WRITERS_DAY);
-  expect(finalLoad).toBe(CAP_VISITS);
+  expect(finalLoad).toBe(capVisits);
 
   const [after, before] = await Promise.all([
     prisma.generatedVisit.findUniqueOrThrow({ where: { id: visitA.id } }),
@@ -409,15 +423,20 @@ it('two real optimizer writes racing for the last slot leave the day at the cap'
 
 it('a real generation confirm and a real optimizer write racing for the last slot leave the day at the cap', async () => {
   const filler = await makeAgreement('cross-filler', CROSS_WEEK.from);
-  await fillDay(filler, CROSS_DAY, FILLERS);
-  expect(await loadOn(CROSS_DAY)).toBe(FILLERS);
 
   // The optimizer's side: an existing visit elsewhere in the week, proposed
   // on to the contested day.
   const agreementOpt = await makeAgreement('cross-optimizer', CROSS_WEEK.from);
   const visitOpt = await makeMovableVisit(agreementOpt, CROSS_WEEK.to);
+  // This crew's own PMS-grade supervisor adds to COLOMBO's real headcount,
+  // so capacity is read only after it exists.
   const crewOpt = await makeCrew('cross-optimizer');
   const { runId, lease } = await makeLeasedRun(CROSS_WEEK);
+
+  const capVisits = await capVisitsOn(CROSS_DAY);
+  const fillers = capVisits - 1;
+  await fillDay(filler, CROSS_DAY, fillers);
+  expect(await loadOn(CROSS_DAY)).toBe(fillers);
 
   // Generation's side: a brand-new agreement generation itself will plan
   // straight on to the contested day, because every other weekday of its
@@ -472,7 +491,7 @@ it('a real generation confirm and a real optimizer write racing for the last slo
     expect([200, 409]).toContain(status);
   }
   const finalLoad = await loadOn(CROSS_DAY);
-  expect(finalLoad).toBeLessThanOrEqual(CAP_VISITS);
+  expect(finalLoad).toBeLessThanOrEqual(capVisits);
 
   // Between them, at most one of the two actually landed on the contested
   // day — the cap is one slot, and neither writer may both think it won.

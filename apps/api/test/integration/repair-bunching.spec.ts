@@ -25,6 +25,7 @@ import { AuditService } from '../../src/audit/audit.service';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../../src/prisma/prisma.service';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
 import { VisitGenerationService } from '../../src/scheduling/visit-generation/visit-generation.service';
 
 const prisma = new PrismaClient();
@@ -91,6 +92,26 @@ async function createAgreement(label: string): Promise<string> {
   // otherwise plant an extra, uncontrolled visit ahead of that setup.
   await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
   return res.body.id as string;
+}
+
+/**
+ * A `BranchDayCapacityService` stand-in reporting the same fixed capacity
+ * for any branch-day, regardless of real workforce data — the shared
+ * integration database can carry other suites' own leftover employees on
+ * COLOMBO, which would otherwise make the real, resource-derived capacity
+ * path answer with whatever headcount is lying around rather than the huge,
+ * deliberately-loosened figure this fixture needs.
+ */
+function fixedCapacity(minutes: number): BranchDayCapacityService {
+  return {
+    capacitiesFor: async (branchDays: { branchCode: BranchCode; date: string }[]) =>
+      new Map(
+        branchDays.map(({ branchCode, date }) => [
+          `${branchCode}|${date}`,
+          { branchCode, date, capacityMinutes: minutes, reason: null },
+        ]),
+      ),
+  } as unknown as BranchDayCapacityService;
 }
 
 beforeAll(async () => {
@@ -177,16 +198,31 @@ afterAll(async () => {
 }, 120_000);
 
 it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no longer allows, and never touches protected work', async () => {
-  for (let index = 0; index < 6; index += 1) {
+  // The real endpoint below is now capacity-aware from COLOMBO's actual
+  // workforce, not a flat constant — so how many agreements are needed to
+  // genuinely exceed that day's capacity depends on real, shared-database
+  // headcount rather than a number this fixture could hardcode. Asked once,
+  // up front, from the same service the endpoint itself uses.
+  const realCapacity = await app
+    .get(BranchDayCapacityService)
+    .capacityFor(BranchCode.COLOMBO, BUNCH_DAY);
+  const visitMinutes = 180;
+  const maxPerDay = Math.floor(realCapacity.capacityMinutes / visitMinutes);
+  // Comfortably over: at least two more than the day can hold, so there is
+  // always genuine work to move regardless of today's real headcount.
+  const agreementCount = maxPerDay + 2;
+
+  for (let index = 0; index < agreementCount; index += 1) {
     await createAgreement(`bunch-${index}`);
   }
 
-  // Simulate what shipped before this branch: every one of the six planned
+  // Simulate what shipped before this branch: every one of them planned
   // straight onto the same Wednesday, under a cap loose enough to allow it.
   const looseCap = new VisitGenerationService(
     app.get(PrismaService),
     app.get(AuditService),
     { get: (key: string) => (key === 'visitGeneration.dailyCapacityMinutes' ? 999_999 : undefined) } as unknown as ConfigService,
+    fixedCapacity(999_999),
   );
   const horizon = { from: BUNCH_DAY, to: addDays(BUNCH_DAY, 6) };
   await looseCap.confirm({ ...horizon, serviceAgreementIds: agreementIds }, actor);
@@ -194,7 +230,7 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
   const before = await prisma.generatedVisit.findMany({
     where: { serviceAgreementId: { in: agreementIds } },
   });
-  expect(before).toHaveLength(6);
+  expect(before).toHaveLength(agreementCount);
   expect(before.every((visit) => visit.visitDate.toISOString().slice(0, 10) === BUNCH_DAY)).toBe(
     true,
   );
@@ -220,7 +256,7 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
   const after = await prisma.generatedVisit.findMany({
     where: { serviceAgreementId: { in: agreementIds } },
   });
-  expect(after).toHaveLength(6);
+  expect(after).toHaveLength(agreementCount);
 
   const onBunchDay = after.filter(
     (visit) => visit.visitDate.toISOString().slice(0, 10) === BUNCH_DAY,
@@ -229,12 +265,15 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
     (visit) => visit.visitDate.toISOString().slice(0, 10) === addDays(BUNCH_DAY, 1),
   );
   // Every visit is still one of the two allowed days.
-  expect(onBunchDay.length + onThursday.length).toBe(6);
-  // The bunch day itself is at or under the cap: at most four of the
-  // hundred-and-eighty-minute visits (four are exactly seven hundred and
-  // twenty). Sequential per-agreement repair does not promise the fewest
-  // possible moves, only that no day it touches is left over the cap.
-  expect(onBunchDay.length).toBeLessThanOrEqual(4);
+  expect(onBunchDay.length + onThursday.length).toBe(agreementCount);
+  // The bunch day itself is at or under the cap this branch's real
+  // workforce actually carries — `maxPerDay` many of the hundred-and-eighty-
+  // minute visits fit, one more would not. Sequential per-agreement repair
+  // does not promise the fewest possible moves, only that no day it touches
+  // is left over the cap; the protected visit staying is the one exception
+  // the cap itself does not govern, so it can hold the count at 1 even on
+  // the rare real-world day capacity comes out to zero.
+  expect(onBunchDay.length).toBeLessThanOrEqual(Math.max(maxPerDay, 1));
   expect(onBunchDay.length).toBeGreaterThan(0);
   expect(onBunchDay.map((visit) => visit.id)).toEqual(
     expect.arrayContaining([protectedVisit.id]),
@@ -285,8 +324,14 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
 
 it('reports a day it cannot fix because every visit still on it is protected', async () => {
   const day = addDays(BUNCH_DAY, 14);
+  // Same reasoning as the test above: enough agreements to genuinely exceed
+  // this branch's real capacity that day, whatever today's real headcount is.
+  const realCapacity = await app
+    .get(BranchDayCapacityService)
+    .capacityFor(BranchCode.COLOMBO, day);
+  const stubbornCount = Math.floor(realCapacity.capacityMinutes / 180) + 1;
   const stubbornAgreements: string[] = [];
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < stubbornCount; index += 1) {
     const res = await request(http)
       .post('/api/service-agreements')
       .set(auth())
@@ -314,12 +359,13 @@ it('reports a day it cannot fix because every visit still on it is protected', a
     app.get(PrismaService),
     app.get(AuditService),
     { get: (key: string) => (key === 'visitGeneration.dailyCapacityMinutes' ? 999_999 : undefined) } as unknown as ConfigService,
+    fixedCapacity(999_999),
   );
   await looseCap.confirm(
     { from: day, to: addDays(day, 6), serviceAgreementIds: stubbornAgreements },
     actor,
   );
-  // Every one of the five hand-adjusted, so none can move.
+  // Every one of them hand-adjusted, so none can move.
   await prisma.generatedVisit.updateMany({
     where: { serviceAgreementId: { in: stubbornAgreements } },
     data: { isManuallyAdjusted: true },
@@ -338,5 +384,5 @@ it('reports a day it cannot fix because every visit still on it is protected', a
   const stillThere = await prisma.generatedVisit.count({
     where: { serviceAgreementId: { in: stubbornAgreements } },
   });
-  expect(stillThere).toBe(5);
+  expect(stillThere).toBe(stubbornCount);
 }, 180_000);

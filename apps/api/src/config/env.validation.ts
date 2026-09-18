@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { DEFAULT_DAILY_CAPACITY_MINUTES, DEFAULT_DAILY_VISIT_CAP } from './constants';
+import {
+  DEFAULT_DAILY_CAPACITY_MINUTES,
+  DEFAULT_DAILY_VISIT_CAP,
+  DEFAULT_EMPLOYEE_WORKDAY_MINUTES,
+} from './constants';
 import {
   QSTASH_MAX_EXECUTION_SECONDS,
   QSTASH_MINIMUM_EXECUTION_SECONDS,
@@ -126,16 +130,29 @@ export const envSchema = z.object({
     .default(DEFAULT_DAILY_VISIT_CAP),
 
   /**
-   * Most crew-minutes one branch plans for in a single day — a visit's
-   * duration times its crew size, summed across every visit standing on the
-   * day. Generation spreads unbooked work off any day that would exceed it;
-   * dates already booked with a customer are kept and reported instead.
+   * Most crew-minutes one branch plans for in a single day when this
+   * database has no workforce imported for that branch at all. See
+   * `VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES` for what is actually
+   * enforced everywhere else.
    */
   VISIT_GENERATION_DAILY_CAPACITY_MINUTES: z.coerce
     .number()
     .int()
     .positive()
     .default(DEFAULT_DAILY_CAPACITY_MINUTES),
+
+  /**
+   * Minutes in one employee's standard working day. A branch-day's real
+   * crew-minutes capacity is its available headcount times this figure —
+   * the resource-derived cap `load-guard.ts`, the commit-time recheck in
+   * `visit-generation.service.ts`, and the optimizer's `DailyLoadLedger`
+   * actually enforce.
+   */
+  VISIT_GENERATION_EMPLOYEE_WORKDAY_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_EMPLOYEE_WORKDAY_MINUTES),
 });
 
 export type Env = z.infer<typeof envSchema>;

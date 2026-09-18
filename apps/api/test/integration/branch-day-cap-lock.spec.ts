@@ -23,6 +23,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
+  AvailabilityKind,
   BranchCode,
   DataProvenance,
   DayRuleKind,
@@ -38,7 +39,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
+import { DEFAULT_EMPLOYEE_WORKDAY_MINUTES } from '../../src/config/constants';
 import {
   BRANCH_DAY_LOCK_CLASS,
   branchDayLockKey,
@@ -76,7 +77,14 @@ const at = (date: string) => new Date(`${date}T00:00:00.000Z`);
  * cap reads as a plain visit count again.
  */
 const REFERENCE_VISIT_MINUTES = 60;
-const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
+/**
+ * The real, resource-derived cap now depends on COLOMBO's actual workforce,
+ * which this shared database's other suites also leave fixtures in. `beforeAll`
+ * pins it to exactly one available PMS-grade employee for every date this
+ * suite touches, so the day's true capacity is this one figure rather than
+ * whatever headcount happens to be lying around.
+ */
+const CAP_VISITS = DEFAULT_EMPLOYEE_WORKDAY_MINUTES / REFERENCE_VISIT_MINUTES;
 
 /** One short of full, so exactly one writer can have the last slot. */
 const FILLERS = CAP_VISITS - 1;
@@ -101,6 +109,8 @@ let jobTypeId: string;
 /** Work on the days that belongs to no run these tests make. */
 let fillerAgreementId: string;
 const agreementIds: string[] = [];
+/** Cleared in `afterAll`: the leave rows that pin COLOMBO's real capacity. */
+const pinnedAvailabilityIds: string[] = [];
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -354,12 +364,47 @@ beforeAll(async () => {
   });
   customerId = customer.id;
 
+  // Pin COLOMBO's real, resource-derived capacity to exactly one available
+  // PMS-grade employee for every date this suite touches — this database is
+  // shared, and other suites' own leftover COLOMBO employees would otherwise
+  // make the day's true capacity whatever headcount happens to be lying
+  // around, rather than the fixed figure `CAP_VISITS` is built against.
+  const colomboEmployees = await prisma.employee.findMany({
+    where: { branchCode: BranchCode.COLOMBO, isActive: true },
+    select: { id: true, isPmsGrade: true },
+  });
+  const keep = colomboEmployees.find((employee) => employee.isPmsGrade);
+  if (!keep) {
+    throw new Error(
+      'COLOMBO has no active PMS-grade employee on record — this fixture cannot pin a deterministic capacity.',
+    );
+  }
+  const toPin = colomboEmployees.filter((employee) => employee.id !== keep.id);
+  if (toPin.length > 0) {
+    const pinned = await prisma.employeeAvailability.createManyAndReturn({
+      data: toPin.map((employee) => ({
+        employeeId: employee.id,
+        startDate: at('2029-01-01'),
+        endDate: at('2029-12-31'),
+        kind: AvailabilityKind.LEAVE,
+        reason: 'branch-day-cap-lock.spec.ts: pinned for a deterministic capacity',
+      })),
+      select: { id: true },
+    });
+    pinnedAvailabilityIds.push(...pinned.map((row) => row.id));
+  }
+
   fillerAgreementId = await makeAgreement('filler', RACE_WEEK.from);
   await fillDay(fillerAgreementId, RACE_DAY, FILLERS);
   await fillDay(fillerAgreementId, WAIT_DAY, FILLERS);
 }, 300_000);
 
 afterAll(async () => {
+  if (pinnedAvailabilityIds.length > 0) {
+    await prisma.employeeAvailability.deleteMany({
+      where: { id: { in: pinnedAvailabilityIds } },
+    });
+  }
   // This database is shared with every other integration suite, and a stray
   // visit on one of these days would quietly change another suite's counts.
   if (agreementIds.length > 0) {
