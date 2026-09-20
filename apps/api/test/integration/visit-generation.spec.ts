@@ -117,7 +117,12 @@ function fixedCapacity(minutes: number): BranchDayCapacityService {
             totalEmployeeCount: 99,
             availableEmployeeCount: 99,
             availablePmsCount: 99,
-            skillHolderCounts: new Map<string, number>(),
+            // Holds every skill, not none. An empty map means zero holders
+            // for any code, which makes a day carrying *another* suite's
+            // skill-requiring visit report SKILL_NOT_HELD and spread this
+            // fixture's work off the day it is built around. The stub's whole
+            // premise is a branch that can do anything.
+            skillHolderCounts: { get: () => 99 } as unknown as Map<string, number>,
             activeVehicleCount: 99,
             driverCapableVehicleCount: 99,
             publicTransportCapableCount: 99,
