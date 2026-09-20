@@ -29,6 +29,7 @@ function visit(overrides: Partial<RequiredVisit> = {}): RequiredVisit {
     windowEndMinute: 17 * 60,
     durationMinutes: UNIT_MINUTES,
     requiredCrewSize: 1,
+    requiredSkillCodes: [],
     branchCode: BranchCode.COLOMBO,
     agreementVersionId: null,
     windowProvenance: DataProvenance.SOURCE,
@@ -45,7 +46,10 @@ function standing(overrides: Partial<StandingVisit> & { serviceAgreementId: stri
     branchCode: BranchCode.COLOMBO,
     visitDate: '2026-09-07',
     durationMinutes: UNIT_MINUTES,
+    windowStartMinute: 8 * 60,
+    windowEndMinute: 17 * 60,
     requiredCrewSize: 1,
+    requiredSkillCodes: [],
     ...overrides,
   };
 }
@@ -151,6 +155,7 @@ describe('applyDailyLoadGuard', () => {
         serviceAgreementId: 'big-crew',
         durationMinutes: 30,
         requiredCrewSize: 4,
+        requiredSkillCodes: [],
       }),
       visit({
         serviceAgreementId: 'ordinary',
@@ -361,6 +366,7 @@ describe('applyDailyLoadGuard', () => {
             visitDate: '2026-09-08',
             durationMinutes: 30,
             requiredCrewSize: 4,
+            requiredSkillCodes: [],
           }),
         ],
       );

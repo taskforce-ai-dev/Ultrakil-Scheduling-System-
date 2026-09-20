@@ -14,6 +14,7 @@ function required(overrides: Partial<RequiredVisit> = {}): RequiredVisit {
     windowEndMinute: 1020,
     durationMinutes: 90,
     requiredCrewSize: 2,
+    requiredSkillCodes: [],
     branchCode: 'COLOMBO',
     agreementVersionId: 'version-1',
     isPreferredDay: true,

@@ -26,6 +26,12 @@ export interface RequiredVisit {
   windowEndMinute: number;
   durationMinutes: number;
   requiredCrewSize: number;
+  /**
+   * Skill codes the agreement requires. Carried on the requirement itself so
+   * placement can ask whether the branch has anyone holding them that day —
+   * a question the crew-minutes cap cannot express.
+   */
+  requiredSkillCodes: string[];
   branchCode: BranchCode;
   /** The agreement version this requirement came from. */
   agreementVersionId: string | null;

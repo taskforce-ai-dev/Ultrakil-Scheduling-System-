@@ -1,5 +1,7 @@
 import { BranchCode } from '@prisma/client';
 
+import { BranchDayWorkforce } from './day-feasibility';
+
 import {
   DEFAULT_DAILY_CAPACITY_MINUTES,
   DEFAULT_EMPLOYEE_WORKDAY_MINUTES,
@@ -87,11 +89,56 @@ export interface BranchDayCapacity {
  * that day) are cheap in-memory range checks, not a query per date.
  */
 export interface BranchResourcePool {
-  employees: { id: string; isPmsGrade: boolean }[];
+  employees: {
+    id: string;
+    isPmsGrade: boolean;
+    /** Skill codes this person holds, from the workforce matrix. */
+    skillCodes: string[];
+    /** Check-marked as able to reach a site without a company vehicle. */
+    canUsePublicTransport: boolean;
+  }[];
   /** Inclusive leave/sickness/training windows, whichever employee they cover. */
   unavailability: { employeeId: string; startDate: string; endDate: string }[];
   /** Active vehicles only, each with who is authorized to drive it. */
   vehicles: { id: string; authorizedEmployeeIds: string[] }[];
+}
+
+/**
+ * The same pool, resolved to one date and shaped for
+ * {@link import('./day-feasibility').checkDayFeasibility} — which asks what
+ * the branch can actually do that day, rather than how many minutes it has.
+ */
+export function workforceForDate(
+  pool: BranchResourcePool,
+  date: string,
+): BranchDayWorkforce {
+  const unavailableIds = new Set(
+    pool.unavailability
+      .filter((entry) => entry.startDate <= date && date <= entry.endDate)
+      .map((entry) => entry.employeeId),
+  );
+  const available = pool.employees.filter((employee) => !unavailableIds.has(employee.id));
+
+  const skillHolderCounts = new Map<string, number>();
+  for (const employee of available) {
+    for (const skillCode of employee.skillCodes) {
+      skillHolderCounts.set(skillCode, (skillHolderCounts.get(skillCode) ?? 0) + 1);
+    }
+  }
+
+  return {
+    totalEmployeeCount: pool.employees.length,
+    availableEmployeeCount: available.length,
+    availablePmsCount: available.filter((employee) => employee.isPmsGrade).length,
+    skillHolderCounts,
+    activeVehicleCount: pool.vehicles.length,
+    driverCapableVehicleCount: pool.vehicles.filter((vehicle) =>
+      vehicle.authorizedEmployeeIds.some((employeeId) => !unavailableIds.has(employeeId)),
+    ).length,
+    publicTransportCapableCount: available.filter(
+      (employee) => employee.canUsePublicTransport,
+    ).length,
+  };
 }
 
 /** Derives one date's resource facts from a branch's already-loaded pool. */

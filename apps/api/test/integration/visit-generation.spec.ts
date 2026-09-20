@@ -105,6 +105,25 @@ function fixedCapacity(minutes: number): BranchDayCapacityService {
           { branchCode, date, capacityMinutes: minutes, reason: null },
         ]),
       ),
+    // The feasibility pass asks the same service what each branch-day can
+    // actually do. This fixture is about a deliberately loosened *cap*, not
+    // about starving the branch, so it reports a pool comfortably able to
+    // perform whatever the fixture plans.
+    workforcesFor: async (branchDays: { branchCode: BranchCode; date: string }[]) =>
+      new Map(
+        branchDays.map(({ branchCode, date }) => [
+          `${branchCode}|${date}`,
+          {
+            totalEmployeeCount: 99,
+            availableEmployeeCount: 99,
+            availablePmsCount: 99,
+            skillHolderCounts: new Map<string, number>(),
+            activeVehicleCount: 99,
+            driverCapableVehicleCount: 99,
+            publicTransportCapableCount: 99,
+          },
+        ]),
+      ),
   } as unknown as BranchDayCapacityService;
 }
 

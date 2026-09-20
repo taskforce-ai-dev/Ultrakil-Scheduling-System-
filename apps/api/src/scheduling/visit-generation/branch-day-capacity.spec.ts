@@ -106,9 +106,9 @@ describe('factsForDate', () => {
   function pool(overrides: Partial<BranchResourcePool> = {}): BranchResourcePool {
     return {
       employees: [
-        { id: 'e1', isPmsGrade: true },
-        { id: 'e2', isPmsGrade: false },
-        { id: 'e3', isPmsGrade: false },
+        { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: true },
+        { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
+        { id: 'e3', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
       ],
       unavailability: [],
       vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],

@@ -38,6 +38,7 @@ import { branchDayKey } from '../optimizer/daily-load-ledger';
 import { assertVisitRevision, lockScheduleVisits } from '../optimizer/schedule-visit-lock';
 import { anchorDaysFrom } from './anchors';
 import { BranchDayCapacityService } from './branch-day-capacity.service';
+import { checkDayFeasibility } from './day-feasibility';
 import { cadenceName, cadenceNoun, spansOf } from './cadence';
 import { clippedPeriodsAtRisk, clippingOneMayLoseIt } from './clipped-periods';
 import {
@@ -53,6 +54,7 @@ import {
   DailyLoadWarning,
   StandingVisit,
   applyDailyLoadGuard,
+  DayFeasibilityCheck,
 } from './load-guard';
 import {
   ExistingVisit,
@@ -131,6 +133,7 @@ const AGREEMENT_INCLUDE = {
   customer: { select: { name: true } },
   serviceSite: { select: { name: true, operatingHours: true } },
   dayRules: true,
+  requiredSkills: { select: { skillCode: true } },
   // The dates already agreed with the customer. Ordered so the anchors read
   // from them are the same whichever run asks.
   bookings: { orderBy: { bookedDate: 'asc' } },
@@ -236,6 +239,41 @@ export class VisitGenerationService {
       client,
     );
     return new Map([...capacities].map(([key, capacity]) => [key, capacity.capacityMinutes]));
+  }
+
+  /**
+   * The same branch-days, resolved to a check that asks whether a day's work
+   * can actually be performed — the question crew-minutes cannot express.
+   *
+   * A day this run never asked about answers `null`: refusing a day on facts
+   * that were never loaded for it would be a claim about the branch nobody
+   * made. Every day the guard can place work on *is* in the map, because it
+   * is built from the same requirement, alternative and standing set.
+   */
+  private async feasibilityFor(
+    required: RequiredVisit[],
+    standing: StandingVisit[],
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<DayFeasibilityCheck> {
+    const branchDays = new Map<string, { branchCode: BranchCode; date: string }>();
+    const add = (branchCode: BranchCode, date: string) =>
+      branchDays.set(branchDayKey(branchCode, date), { branchCode, date });
+    for (const visit of required) {
+      add(visit.branchCode, visit.visitDate);
+      for (const alternative of visit.alternatives) add(visit.branchCode, alternative.date);
+    }
+    for (const visit of standing) add(visit.branchCode, visit.visitDate);
+
+    const workforces = await this.branchDayCapacity.workforcesFor(
+      [...branchDays.values()],
+      client,
+    );
+
+    return (branchCode, date, visits) => {
+      const workforce = workforces.get(branchDayKey(branchCode, date));
+      if (!workforce) return null;
+      return checkDayFeasibility(branchCode, date, visits, workforce);
+    };
   }
 
   preview(dto: GenerateVisitsDto): Promise<GenerationImpactDto> {
@@ -938,7 +976,12 @@ export class VisitGenerationService {
     // requirements or their alternatives could land on, plus the standing
     // calendar's own days — not a flat, branch-blind constant.
     const capacityByDay = await this.capacityByDayFor(honoured, range.standing);
-    const guarded = applyDailyLoadGuard(honoured, capacityByDay, range.standing);
+    const guarded = applyDailyLoadGuard(
+      honoured,
+      capacityByDay,
+      range.standing,
+      await this.feasibilityFor(honoured, range.standing),
+    );
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
     // requirement onto a protected visit outside it — which is dropped from
@@ -1170,6 +1213,9 @@ export class VisitGenerationService {
           windowEndMinute: visit.windowEndMinute,
           durationMinutes: agreement.durationMinutes,
           requiredCrewSize: agreement.crewSize,
+          requiredSkillCodes: agreement.requiredSkills
+            .map((skill) => skill.skillCode)
+            .sort(),
           branchCode: agreement.branchCode,
           agreementVersionId: null,
           // The preview says where each visit's window actually came from:
@@ -1300,8 +1346,11 @@ export class VisitGenerationService {
         serviceAgreementId: true,
         branchCode: true,
         visitDate: true,
+        windowStartMinute: true,
+        windowEndMinute: true,
         durationMinutes: true,
         requiredCrewSize: true,
+        serviceAgreement: { select: { requiredSkills: { select: { skillCode: true } } } },
         status: true,
         isManuallyAdjusted: true,
         lockedAt: true,
@@ -1325,8 +1374,13 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: toDateOnly(visit.visitDate),
+        windowStartMinute: visit.windowStartMinute,
+        windowEndMinute: visit.windowEndMinute,
         durationMinutes: visit.durationMinutes,
         requiredCrewSize: visit.requiredCrewSize,
+        requiredSkillCodes: visit.serviceAgreement.requiredSkills
+          .map((skill: { skillCode: string }) => skill.skillCode)
+          .sort(),
         isInScope: inScope.has(visit.serviceAgreementId),
         isProtected:
           protectionReasonFor({
@@ -1343,8 +1397,11 @@ export class VisitGenerationService {
         serviceAgreementId: visit.serviceAgreementId,
         branchCode: visit.branchCode,
         visitDate: visit.visitDate,
+        windowStartMinute: visit.windowStartMinute,
+        windowEndMinute: visit.windowEndMinute,
         durationMinutes: visit.durationMinutes,
         requiredCrewSize: visit.requiredCrewSize,
+        requiredSkillCodes: visit.requiredSkillCodes,
       }));
 
     return { standing, loadByDay };

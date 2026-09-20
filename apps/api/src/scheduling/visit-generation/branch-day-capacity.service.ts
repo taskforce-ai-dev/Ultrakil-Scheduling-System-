@@ -12,7 +12,9 @@ import {
   BranchResourcePool,
   computeBranchDayCapacity,
   factsForDate,
+  workforceForDate,
 } from './branch-day-capacity';
+import { BranchDayWorkforce } from './day-feasibility';
 
 /**
  * Loads each branch's resource pool once — active employees with their
@@ -81,6 +83,34 @@ export class BranchDayCapacityService {
     return result;
   }
 
+  /**
+   * The same pools, resolved to what each branch-day can actually *do* rather
+   * than how many minutes it has — see `day-feasibility.ts`. Loaded through
+   * the same one-query-per-branch path as `capacitiesFor`.
+   */
+  async workforcesFor(
+    branchDays: { branchCode: BranchCode; date: string }[],
+    client: Prisma.TransactionClient = this.prisma,
+  ): Promise<Map<string, BranchDayWorkforce>> {
+    const byBranch = new Map<BranchCode, Set<string>>();
+    for (const { branchCode, date } of branchDays) {
+      const dates = byBranch.get(branchCode) ?? new Set<string>();
+      dates.add(date);
+      byBranch.set(branchCode, dates);
+    }
+
+    const result = new Map<string, BranchDayWorkforce>();
+    await Promise.all(
+      [...byBranch.entries()].map(async ([branchCode, dates]) => {
+        const pool = await this.loadPool(client, branchCode);
+        for (const date of dates) {
+          result.set(key(branchCode, date), workforceForDate(pool, date));
+        }
+      }),
+    );
+    return result;
+  }
+
   /** Convenience for a single (branch, date) pair. */
   async capacityFor(
     branchCode: BranchCode,
@@ -101,6 +131,8 @@ export class BranchDayCapacityService {
         select: {
           id: true,
           isPmsGrade: true,
+          canUsePublicTransport: true,
+          skills: { select: { skillCode: true } },
           availability: { select: { startDate: true, endDate: true } },
         },
         orderBy: { id: 'asc' },
@@ -119,6 +151,8 @@ export class BranchDayCapacityService {
       employees: employees.map((employee) => ({
         id: employee.id,
         isPmsGrade: employee.isPmsGrade,
+        skillCodes: employee.skills.map((skill) => skill.skillCode).sort(),
+        canUsePublicTransport: employee.canUsePublicTransport,
       })),
       unavailability: employees.flatMap((employee) =>
         employee.availability.map((period) => ({

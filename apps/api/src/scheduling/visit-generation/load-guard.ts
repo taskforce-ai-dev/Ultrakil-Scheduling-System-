@@ -2,6 +2,11 @@ import { BranchCode, DataProvenance, VisitPlacement } from '@prisma/client';
 
 import { parseDateOnly, weekdayOf } from '../../catalog/schedule-preview';
 import { crewMinutesOf } from '../capacity';
+import {
+  DayInfeasibility,
+  DayInfeasibilityCode,
+  DayVisitDemand,
+} from './day-feasibility';
 import { RequiredVisit } from './plan';
 
 /**
@@ -45,6 +50,14 @@ export interface DailyLoadWarning {
   /** The crew-minutes cap itself. */
   cap: number;
   message: string;
+  /**
+   * Set when the day is not merely full but provably cannot be performed —
+   * no crew, supervisor, skill-holder or transport combination exists for the
+   * work left on it. A day can be well under its crew-minutes cap and still
+   * carry this: minutes do not notice that four of its visits all have to
+   * happen at once. See `day-feasibility.ts`.
+   */
+  infeasibility?: { code: DayInfeasibilityCode; message: string };
 }
 
 export interface LoadGuardResult {
@@ -67,11 +80,25 @@ export interface StandingVisit {
   branchCode: BranchCode;
   /** YYYY-MM-DD. */
   visitDate: string;
+  windowStartMinute: number;
+  windowEndMinute: number;
   durationMinutes: number;
   requiredCrewSize: number;
+  /** Skills its own agreement requires — it competes for holders like any other visit. */
+  requiredSkillCodes: string[];
 }
 
 const loadKey = (branchCode: BranchCode, date: string) => `${branchCode}|${date}`;
+
+/** A planned or standing visit, as the feasibility check wants to see it. */
+const toDemand = (visit: RequiredVisit | StandingVisit): DayVisitDemand => ({
+  serviceAgreementId: visit.serviceAgreementId,
+  windowStartMinute: visit.windowStartMinute,
+  windowEndMinute: visit.windowEndMinute,
+  durationMinutes: visit.durationMinutes,
+  requiredCrewSize: visit.requiredCrewSize,
+  requiredSkillCodes: visit.requiredSkillCodes,
+});
 const periodKey = (visit: RequiredVisit) =>
   `${visit.serviceAgreementId}|${visit.periodIndex}`;
 
@@ -95,10 +122,23 @@ function capacityForKey(capacity: CapacityByDay, key: string): number {
   return capacityOf(capacity, branchCode, date);
 }
 
+/**
+ * Asks whether a branch-day's actual work can be performed at all by the
+ * people and vehicles that branch has that day. Optional: callers with no
+ * workforce facts to hand (every unit test in this file, for one) get the
+ * crew-minutes behaviour unchanged.
+ */
+export type DayFeasibilityCheck = (
+  branchCode: BranchCode,
+  date: string,
+  visits: DayVisitDemand[],
+) => DayInfeasibility | null;
+
 export function applyDailyLoadGuard(
   required: RequiredVisit[],
   capacity: CapacityByDay,
   standing: StandingVisit[] = [],
+  isFeasible?: DayFeasibilityCheck,
 ): LoadGuardResult {
   // Copies throughout: the caller's list is its own account of what the
   // agreements asked for, and a guard that edited it in place would make the
@@ -244,10 +284,148 @@ export function applyDailyLoadGuard(
     }
   }
 
+  // --- Feasibility -------------------------------------------------------
+  //
+  // Crew-minutes are an aggregate, and an aggregate cannot notice that four of
+  // a day's visits all have to happen at eleven o'clock, or that one person on
+  // the branch holds the skill three of them need. A day can sit comfortably
+  // under its cap and still be impossible.
+  //
+  // So after spreading by minutes, each day is asked whether its remaining
+  // work can be performed at all. An infeasible day sheds one movable visit at
+  // a time — least-loaded destination first, same rules as above, and only
+  // onto a day that is itself feasible with the visit added — and is re-asked
+  // after each move, because feasibility is a property of the set, not of any
+  // one visit. What cannot be moved is reported with the proven reason rather
+  // than left looking merely busy.
+  const infeasible = new Map<string, DayInfeasibility>();
+  if (isFeasible) {
+    const demandsOn = (branchCode: BranchCode, date: string): DayVisitDemand[] => [
+      ...visits
+        .filter((visit) => visit.branchCode === branchCode && visit.visitDate === date)
+        .map(toDemand),
+      ...standing
+        .filter((visit) => visit.branchCode === branchCode && visit.visitDate === date)
+        .map(toDemand),
+    ];
+
+    const dayKeys = [...new Set([...load.keys()])].sort();
+    for (const key of dayKeys) {
+      const [branchCode, date] = key.split('|') as [BranchCode, string];
+
+      // Bounded by the number of visits on the day: every iteration either
+      // moves one off or stops.
+      for (let guard = 0; guard <= visits.length; guard += 1) {
+        const verdict = isFeasible(branchCode, date, demandsOn(branchCode, date));
+        if (!verdict) {
+          infeasible.delete(key);
+          break;
+        }
+        infeasible.set(key, verdict);
+
+        const mover = visits
+          .filter(
+            (visit) =>
+              loadKey(visit.branchCode, visit.visitDate) === key &&
+              visit.placement !== VisitPlacement.BOOKED &&
+              visit.alternatives.length > 0,
+          )
+          .sort(
+            (a, b) =>
+              a.serviceAgreementId.localeCompare(b.serviceAgreementId) ||
+              a.windowStartMinute - b.windowStartMinute,
+          )[0];
+        if (!mover) break;
+
+        const moverMinutes = crewMinutesOf(mover);
+        const period = periodKey(mover);
+        const used = usedDates.get(period) ?? new Set<string>();
+        const occupied = standingByAgreement.get(mover.serviceAgreementId);
+
+        const target = mover.alternatives
+          .filter(
+            (alternative) =>
+              !used.has(alternative.date) && !occupied?.has(alternative.date),
+          )
+          .map((alternative) => ({
+            alternative,
+            load: load.get(loadKey(mover.branchCode, alternative.date)) ?? 0,
+          }))
+          .filter(
+            (entry) =>
+              entry.load + moverMinutes <=
+                capacityOf(capacity, mover.branchCode, entry.alternative.date) &&
+              // Moving an impossible visit onto another impossible day is not
+              // a repair, it is a relocation.
+              isFeasible(mover.branchCode, entry.alternative.date, [
+                ...demandsOn(mover.branchCode, entry.alternative.date),
+                toDemand(mover),
+              ]) === null,
+          )
+          .sort(
+            (a, b) =>
+              a.load - b.load || a.alternative.date.localeCompare(b.alternative.date),
+          )[0];
+        if (!target) break;
+
+        const origin = {
+          date: mover.visitDate,
+          weekday: weekdayOf(parseDateOnly(mover.visitDate)),
+          windowStartMinute: mover.windowStartMinute,
+          windowEndMinute: mover.windowEndMinute,
+          isPreferredDay: mover.isPreferredDay,
+          windowProvenance: mover.windowProvenance ?? DataProvenance.UNKNOWN,
+        };
+        const targetKey = loadKey(mover.branchCode, target.alternative.date);
+        load.set(key, (load.get(key) ?? moverMinutes) - moverMinutes);
+        load.set(targetKey, (load.get(targetKey) ?? 0) + moverMinutes);
+        counts.set(key, (counts.get(key) ?? 1) - 1);
+        counts.set(targetKey, (counts.get(targetKey) ?? 0) + 1);
+        used.delete(origin.date);
+        used.add(target.alternative.date);
+        usedDates.set(period, used);
+
+        mover.visitDate = target.alternative.date;
+        mover.windowStartMinute = target.alternative.windowStartMinute;
+        mover.windowEndMinute = target.alternative.windowEndMinute;
+        mover.isPreferredDay = target.alternative.isPreferredDay;
+        mover.windowProvenance = target.alternative.windowProvenance;
+        mover.placement = VisitPlacement.SPREAD;
+        mover.alternatives = mover.alternatives
+          .filter((alternative) => alternative.date !== target.alternative.date)
+          .concat(origin.date === target.alternative.date ? [] : [origin])
+          .sort((a, b) => a.date.localeCompare(b.date));
+      }
+    }
+  }
+
   const warnings: DailyLoadWarning[] = [];
   for (const [key, minutes] of [...load.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const dayCapMinutes = capacityForKey(capacity, key);
-    if (minutes <= dayCapMinutes) continue;
+    const verdict = infeasible.get(key);
+    // A day can be inside its cap and still impossible, so the two are
+    // reported independently — skipping only when neither has anything to say.
+    if (minutes <= dayCapMinutes && !verdict) continue;
+
+    if (minutes <= dayCapMinutes && verdict) {
+      const [branchCode, date] = key.split('|') as [BranchCode, string];
+      warnings.push({
+        branchCode,
+        date,
+        plannedCount: counts.get(key) ?? 0,
+        bookedCount: visits.filter(
+          (visit) =>
+            visit.branchCode === branchCode &&
+            visit.visitDate === date &&
+            visit.placement === VisitPlacement.BOOKED,
+        ).length,
+        plannedMinutes: minutes,
+        cap: dayCapMinutes,
+        message: verdict.message,
+        infeasibility: { code: verdict.code, message: verdict.message },
+      });
+      continue;
+    }
     const [branchCode, date] = key.split('|') as [BranchCode, string];
     const count = counts.get(key) ?? 0;
     const bookedCount = visits.filter(
@@ -301,7 +479,8 @@ export function applyDailyLoadGuard(
       bookedCount,
       plannedMinutes: minutes,
       cap: dayCapMinutes,
-      message,
+      message: verdict ? `${message} ${verdict.message}` : message,
+      ...(verdict ? { infeasibility: { code: verdict.code, message: verdict.message } } : {}),
     });
   }
 
