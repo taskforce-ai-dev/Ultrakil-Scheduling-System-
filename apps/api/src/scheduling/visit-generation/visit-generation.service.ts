@@ -88,12 +88,21 @@ export interface HorizonExtension {
   visitsAdded: number;
 }
 
+/** One open-ended agreement the sweep could not extend. */
+export interface HorizonExtensionFailure {
+  serviceAgreementId: string;
+  customerName: string;
+  siteName: string;
+  message: string;
+}
+
 export interface HorizonExtensionSummary {
   today: string;
   targetHorizon: string;
   /** Every active, open-ended agreement considered — extended or already caught up. */
   agreementsConsidered: number;
   agreementsExtended: HorizonExtension[];
+  failures: HorizonExtensionFailure[];
 }
 
 /** One agreement {@link VisitGenerationService.repairBunching} moved a visit for. */
@@ -259,12 +268,12 @@ export class VisitGenerationService {
    * is generating something else entirely, is exactly as safe as calling
    * `confirm` twice in a row already is.
    *
-   * Nothing here runs this on a schedule. `docs/ARCHITECTURE.md` and the PR
-   * that added it say why: wiring a live cron changes what happens in every
-   * environment the moment it deploys, and this branch's own rule is no
-   * deploy, no staging changes. This is the operation a scheduled job (or an
-   * operator, by hand) calls; deciding when to call it is a deployment
-   * decision for later.
+   * A self-hosted (BullMQ) deployment now calls this itself once a day — see
+   * `HorizonExtensionScheduler`/`HorizonExtensionProcessor`. This method
+   * itself has no opinion on who calls it or when; an operator (or a
+   * QStash/serverless deployment's own external Schedule, which has no
+   * persistent worker to run a BullMQ repeatable job) can still call the
+   * endpoint directly.
    *
    * `scope` narrows which open-ended agreements are considered — by branch,
    * by id, or both — the same two filters {@link GenerateVisitsDto} already
@@ -312,6 +321,7 @@ export class VisitGenerationService {
     );
 
     const extended: HorizonExtension[] = [];
+    const failures: HorizonExtensionFailure[] = [];
     for (const agreement of agreements) {
       const agreementStart = toDateOnly(agreement.startDate);
       const lastPlanned = plannedThroughById.get(agreement.id);
@@ -329,10 +339,25 @@ export class VisitGenerationService {
       // — nothing is due yet.
       if (from > targetHorizon) continue;
 
-      const impact = await this.confirm(
-        { from, to: targetHorizon, serviceAgreementIds: [agreement.id] },
-        actor,
-      );
+      // One agreement's own conflict — a branch-day genuinely full, most
+      // often — is not a reason the other hundred never get their turn. This
+      // sweep runs unattended; a company-wide call that aborted on its first
+      // difficult agreement would defeat the point of scheduling it at all.
+      let impact;
+      try {
+        impact = await this.confirm(
+          { from, to: targetHorizon, serviceAgreementIds: [agreement.id] },
+          actor,
+        );
+      } catch (error) {
+        failures.push({
+          serviceAgreementId: agreement.id,
+          customerName: agreement.customer.name,
+          siteName: agreement.serviceSite.name,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       if (impact.additions.length === 0 && impact.updates.length === 0) continue;
 
       extended.push({
@@ -350,6 +375,7 @@ export class VisitGenerationService {
       targetHorizon,
       agreementsConsidered: agreements.length,
       agreementsExtended: extended,
+      failures,
     };
   }
 

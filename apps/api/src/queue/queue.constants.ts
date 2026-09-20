@@ -7,5 +7,10 @@
  */
 export const QUEUE_VISIT_GENERATION = 'visit-generation';
 export const QUEUE_SCHEDULE_RUN = 'schedule-run';
+export const QUEUE_HORIZON_EXTENSION = 'horizon-extension';
 
-export const ALL_QUEUES = [QUEUE_VISIT_GENERATION, QUEUE_SCHEDULE_RUN] as const;
+export const ALL_QUEUES = [
+  QUEUE_VISIT_GENERATION,
+  QUEUE_SCHEDULE_RUN,
+  QUEUE_HORIZON_EXTENSION,
+] as const;

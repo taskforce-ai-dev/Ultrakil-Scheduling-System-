@@ -2095,7 +2095,7 @@
     },
     "/api/visit-generation/extend-horizons": {
       "post": {
-        "description": "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+        "description": "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. A self-hosted (BullMQ) deployment already calls this itself once a day (see HorizonExtensionScheduler) — this endpoint remains for an operator to sweep on demand, or for a QStash/serverless deployment's own external Schedule to call. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
         "operationId": "VisitGenerationController_extendHorizons",
         "parameters": [],
         "requestBody": {
@@ -5402,6 +5402,31 @@
           "visitsAdded"
         ]
       },
+      "HorizonExtensionFailureDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "Why this one agreement could not be extended — e.g. a branch-day genuinely full."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "message"
+        ]
+      },
       "HorizonExtensionSummaryDto": {
         "type": "object",
         "properties": {
@@ -5426,13 +5451,21 @@
             "items": {
               "$ref": "#/components/schemas/HorizonExtensionDto"
             }
+          },
+          "failures": {
+            "description": "One agreement's own conflict never stops the sweep from reaching the rest of the company — each one that could not be extended is reported here instead of aborting the call.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HorizonExtensionFailureDto"
+            }
           }
         },
         "required": [
           "today",
           "targetHorizon",
           "agreementsConsidered",
-          "agreementsExtended"
+          "agreementsExtended",
+          "failures"
         ]
       },
       "RepairBunchingDto": {

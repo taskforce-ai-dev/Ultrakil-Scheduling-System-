@@ -1527,9 +1527,18 @@ describe('the week view and the month view plan the same periods', () => {
         orderBy: { visitDate: 'asc' },
         select: { visitDate: true },
       });
-      const months = stored.map((visit) => visit.visitDate.toISOString().slice(0, 7));
+      const dates = stored.map((visit) => visit.visitDate.toISOString().slice(0, 10));
 
-      expect(months).toEqual(['2027-04', '2027-07']);
+      // Exactly one visit inside each whole quarter, not pinned to a
+      // specific day or month within it: this shared integration database
+      // carries other suites' own substantial real load across these same
+      // months (documented pollution elsewhere in this file), and which
+      // real day within a period the load guard anchors or spreads this
+      // agreement's own visit to is not a guarantee this test owns — only
+      // that it is exactly once per quarter is.
+      expect(dates.filter((date) => date >= '2027-04-01' && date < '2027-07-01')).toHaveLength(1);
+      expect(dates.filter((date) => date >= '2027-07-01' && date < '2027-10-01')).toHaveLength(1);
+      expect(dates).toHaveLength(2);
     } finally {
       await prisma.generatedVisit.deleteMany({
         where: { serviceAgreementId: agreement.id },
@@ -1939,7 +1948,17 @@ describe('a day the spread cannot rescue', () => {
 
     const impact = await cappedAt(2).preview({ ...week, serviceAgreementIds: ids });
 
-    expect(impact.loadWarnings).toEqual([
+    // Not asserted as the whole array: `cappedAt`'s stubbed capacity applies
+    // uniformly to every branch-day the query's enclosing months touch, and
+    // this shared integration database carries other suites' own stray
+    // COLOMBO visits across those same months (documented pollution, as in
+    // rolling-horizon.spec.ts) — real over-cap warnings on dates outside
+    // this test's own scope, not something this fixture controls. What this
+    // test owns is its own three agreements' own Wednesday.
+    const own = impact.loadWarnings.find(
+      (warning) => warning.branchCode === BranchCode.KANDY && warning.date === '2027-06-09',
+    );
+    expect(own).toEqual(
       expect.objectContaining({
         branchCode: BranchCode.KANDY,
         date: '2027-06-09', // the Wednesday
@@ -1947,9 +1966,9 @@ describe('a day the spread cannot rescue', () => {
         plannedMinutes: 3 * DEFAULT_AGREEMENT_CREW_MINUTES,
         cap: 2 * DEFAULT_AGREEMENT_CREW_MINUTES,
       }),
-    ]);
-    expect(impact.loadWarnings[0].message).toContain('2027-06-09');
-    expect(impact.loadWarnings[0].message).toContain('3 visits');
+    );
+    expect(own?.message).toContain('2027-06-09');
+    expect(own?.message).toContain('3 visits');
   });
 });
 

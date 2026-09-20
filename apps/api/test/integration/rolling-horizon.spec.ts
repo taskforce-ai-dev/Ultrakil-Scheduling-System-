@@ -273,6 +273,19 @@ it('never moves a locked visit while extending the rest of the horizon', async (
   expect(after.status).not.toBe(VisitStatus.CANCELLED);
 }, 180_000);
 
+it('reports an empty failures list when nothing goes wrong', async () => {
+  const agreement = await createAgreement({ startDate: TODAY });
+  const response = await request(http)
+    .post('/api/visit-generation/extend-horizons')
+    .set(auth())
+    .send({ serviceAgreementIds: [agreement.id] });
+  expect(response.status).toBe(200);
+  // One agreement's own conflict must never abort the rest of a company-wide
+  // sweep — extendRollingHorizons now collects failures instead of throwing.
+  // The happy path this test drives has none.
+  expect(response.body.failures).toEqual([]);
+}, 180_000);
+
 // Deliberately not exercised here with a live, unscoped call: this suite
 // shares one database with every other integration file's own open-ended
 // fixtures (visit-generation.spec.ts's alone number in the hundreds and

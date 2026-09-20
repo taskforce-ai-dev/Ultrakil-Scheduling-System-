@@ -351,6 +351,20 @@ export class HorizonExtensionDto {
   visitsAdded!: number;
 }
 
+export class HorizonExtensionFailureDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({
+    type: String,
+    description: 'Why this one agreement could not be extended — e.g. a branch-day genuinely full.',
+  })
+  message!: string;
+}
+
 export class HorizonExtensionSummaryDto {
   @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
   today!: string;
@@ -371,6 +385,12 @@ export class HorizonExtensionSummaryDto {
     description: 'Only the agreements this call actually planned further into.',
   })
   agreementsExtended!: HorizonExtensionDto[];
+  @ApiProperty({
+    type: [HorizonExtensionFailureDto],
+    description:
+      "One agreement's own conflict never stops the sweep from reaching the rest of the company — each one that could not be extended is reported here instead of aborting the call.",
+  })
+  failures!: HorizonExtensionFailureDto[];
 }
 
 export class RepairedAgreementDto {

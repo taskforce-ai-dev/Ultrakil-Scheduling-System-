@@ -839,7 +839,7 @@ export interface paths {
         put?: never;
         /**
          * Keep every open-ended agreement planned a rolling year ahead
-         * @description Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. Nothing calls this on its own; wiring it to a schedule is a deployment decision. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.
+         * @description Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. A self-hosted (BullMQ) deployment already calls this itself once a day (see HorizonExtensionScheduler) — this endpoint remains for an operator to sweep on demand, or for a QStash/serverless deployment's own external Schedule to call. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.
          */
         post: operations["VisitGenerationController_extendHorizons"];
         delete?: never;
@@ -1990,6 +1990,14 @@ export interface components {
             to: string;
             visitsAdded: number;
         };
+        HorizonExtensionFailureDto: {
+            /** Format: uuid */
+            serviceAgreementId: string;
+            customerName: string;
+            siteName: string;
+            /** @description Why this one agreement could not be extended — e.g. a branch-day genuinely full. */
+            message: string;
+        };
         HorizonExtensionSummaryDto: {
             /** Format: date */
             today: string;
@@ -2002,6 +2010,8 @@ export interface components {
             agreementsConsidered: number;
             /** @description Only the agreements this call actually planned further into. */
             agreementsExtended: components["schemas"]["HorizonExtensionDto"][];
+            /** @description One agreement's own conflict never stops the sweep from reaching the rest of the company — each one that could not be extended is reported here instead of aborting the call. */
+            failures: components["schemas"]["HorizonExtensionFailureDto"][];
         };
         RepairBunchingDto: {
             /**
