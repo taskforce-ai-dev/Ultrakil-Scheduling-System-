@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   AgreementStatus,
   BranchCode,
@@ -150,9 +150,69 @@ export class ServiceAgreementDayRuleDto {
   kind!: DayRuleKind;
 }
 
+/**
+ * What the automatic onboarding plan actually did, returned with the
+ * agreement that triggered it.
+ *
+ * Creating an agreement used to plan silently: a failure was logged and the
+ * agreement handed back as though nothing had happened, so a manager whose
+ * new client got no visits at all had no way to know. Planning is part of
+ * what creating an agreement means here, so its outcome is part of the
+ * answer — including when the outcome is that nothing could be planned.
+ */
+export class AgreementOnboardingPlanDto {
+  @ApiProperty({
+    enum: ['PLANNED', 'PLANNED_WITH_SHORTFALLS', 'FAILED'],
+    description:
+      'PLANNED: the whole horizon is on the calendar. PLANNED_WITH_SHORTFALLS: visits were placed, but some periods could not hold everything the agreement promises, or land on days already over capacity. FAILED: nothing was planned, and `message` says why.',
+  })
+  status!: 'PLANNED' | 'PLANNED_WITH_SHORTFALLS' | 'FAILED';
+
+  @ApiProperty({ type: String, format: 'date' })
+  from!: string;
+
+  @ApiProperty({
+    type: String,
+    format: 'date',
+    description:
+      "End of the horizon planned, a rolling twelve months from the start, or the agreement's own end date when that comes first.",
+  })
+  to!: string;
+
+  @ApiProperty({ type: Number, description: 'Visits created across that horizon.' })
+  visitsPlanned!: number;
+
+  @ApiProperty({
+    type: Number,
+    description:
+      'Periods that could not hold the promised number of visits. Reported rather than quietly dropped.',
+  })
+  shortfallPeriods!: number;
+
+  @ApiProperty({
+    type: Number,
+    description: 'Days this agreement lands on that are already carrying more than the branch plans for.',
+  })
+  overCapacityDays!: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Why nothing could be planned. Null unless status is FAILED.',
+  })
+  message!: string | null;
+}
+
 export class ServiceAgreementDto {
   @ApiProperty({ type: String, format: 'uuid' })
   id!: string;
+
+  @ApiPropertyOptional({
+    type: AgreementOnboardingPlanDto,
+    description:
+      'Only on the response to creating an agreement: what the automatic onboarding plan did. Absent everywhere else, because it describes one event rather than the agreement.',
+  })
+  onboardingPlan?: AgreementOnboardingPlanDto;
 
   @ApiProperty({ type: String, format: 'uuid' })
   customerId!: string;

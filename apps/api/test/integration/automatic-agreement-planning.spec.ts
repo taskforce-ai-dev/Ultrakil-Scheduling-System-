@@ -146,10 +146,64 @@ it('generates a new agreement\'s own visits immediately, with no separate Genera
   const visits = await prisma.generatedVisit.findMany({
     where: { serviceAgreementId: agreement.id },
   });
-  // A weekly agreement over the one-month onboarding horizon plans at least
-  // three occurrences — nothing here called `/confirm` or `/preview` itself.
-  expect(visits.length).toBeGreaterThanOrEqual(3);
+  // A weekly agreement over the rolling twelve-month onboarding horizon plans
+  // most of a year of occurrences — nothing here called `/confirm` or
+  // `/preview` itself. Bounded well below 52 because the site opens only two
+  // weekdays and the load guard may spread some weeks.
+  expect(visits.length).toBeGreaterThanOrEqual(40);
 });
+
+it('plans the full rolling twelve months, not a first-look month', async () => {
+  const agreement = await createAgreement({ notes: 'full-horizon' });
+
+  const visits = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: agreement.id },
+    orderBy: { visitDate: 'desc' },
+    take: 1,
+  });
+
+  // The regression this guards: onboarding used to plan 30 days, leaving a new
+  // agreement a different shape from every existing one until a nightly sweep
+  // happened to catch it up.
+  const furthest = visits[0].visitDate.toISOString().slice(0, 10);
+  const sixMonthsOut = new Date(Date.now() + 182 * 86_400_000).toISOString().slice(0, 10);
+  expect(furthest > sixMonthsOut).toBe(true);
+  expect(agreement.onboardingPlan.to > sixMonthsOut).toBe(true);
+}, 120_000);
+
+it('returns what the automatic plan actually did, rather than only logging it', async () => {
+  const agreement = await createAgreement({ notes: 'reports-outcome' });
+
+  const plan = agreement.onboardingPlan;
+  expect(plan).toBeDefined();
+  expect(['PLANNED', 'PLANNED_WITH_SHORTFALLS']).toContain(plan.status);
+  expect(plan.from).toBe(TODAY);
+  expect(plan.message).toBeNull();
+
+  // The count is the plan's own, not re-derived from the database by the
+  // caller — a manager reading the response must be able to trust it.
+  const visits = await prisma.generatedVisit.count({
+    where: { serviceAgreementId: agreement.id },
+  });
+  expect(plan.visitsPlanned).toBe(visits);
+}, 120_000);
+
+it('stops the horizon at the agreement\'s own end date', async () => {
+  const endDate = new Date(Date.now() + 45 * 86_400_000).toISOString().slice(0, 10);
+  const agreement = await createAgreement({ notes: 'bounded', endDate });
+
+  // Planning past the work the customer has actually bought would be an
+  // invention, not a horizon.
+  expect(agreement.onboardingPlan.to).toBe(endDate);
+
+  const beyond = await prisma.generatedVisit.count({
+    where: {
+      serviceAgreementId: agreement.id,
+      visitDate: { gt: new Date(`${endDate}T00:00:00.000Z`) },
+    },
+  });
+  expect(beyond).toBe(0);
+}, 120_000);
 
 it('never touches another agreement\'s hand-adjusted visit while automatically planning a new one', async () => {
   const existing = await createAgreement({ notes: 'existing' });

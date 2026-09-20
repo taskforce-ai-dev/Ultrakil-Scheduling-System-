@@ -14,7 +14,10 @@ import { AppException } from '../common/errors/app.exception';
 import { lockAgreementRows } from '../common/locks/agreement-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { anchorDaysFrom } from '../scheduling/visit-generation/anchors';
-import { VisitGenerationService } from '../scheduling/visit-generation/visit-generation.service';
+import {
+  ROLLING_HORIZON_DAYS,
+  VisitGenerationService,
+} from '../scheduling/visit-generation/visit-generation.service';
 import {
   AgreementWithRelations,
   sortWeekdays,
@@ -29,17 +32,25 @@ import {
   SchedulePreviewQueryDto,
   ServiceAgreementQueryDto,
 } from './dto/query.dto';
-import { SchedulePreviewDto } from './dto/responses.dto';
+import {
+  AgreementOnboardingPlanDto,
+  SchedulePreviewDto,
+} from './dto/responses.dto';
 import { computeSchedulePreview, parseDateOnly } from './schedule-preview';
 
 /**
  * How far past today (or the agreement's own start, if later) the automatic
- * onboarding generation reaches — the same one-month window a manager's own
- * first Generate Visits click gets from the Calendar page, so a new
- * agreement's first look is not a different range convention from an
- * existing one's.
+ * onboarding generation reaches.
+ *
+ * The same rolling twelve months the nightly sweep keeps every other
+ * open-ended agreement at — deliberately not a shorter "first look" window.
+ * A new agreement planned only a month out is a new agreement that differs
+ * from every existing one until a sweep happens to catch it up, and the
+ * manager has no way to see which state theirs is in. Bounded by the
+ * agreement's own end date where it has one, since planning past the work
+ * the customer has actually bought is not a horizon, it is an invention.
  */
-const ONBOARDING_HORIZON_DAYS = 30;
+const ONBOARDING_HORIZON_DAYS = ROLLING_HORIZON_DAYS;
 
 function addDaysOnly(date: string, days: number): string {
   return toDateOnly(new Date(parseDateOnly(date).getTime() + days * 86_400_000));
@@ -224,26 +235,67 @@ export class AgreementsService {
     // not a defect in creating the agreement.
     const today = toDateOnly(new Date());
     const from = today > dto.startDate ? today : dto.startDate;
+    const horizonEnd = addDaysOnly(from, ONBOARDING_HORIZON_DAYS);
+    const to = dto.endDate && dto.endDate < horizonEnd ? dto.endDate : horizonEnd;
+
+    const onboardingPlan = await this.planNewAgreement(created.id, from, to, actor);
+
+    return {
+      ...toAgreementDto((await this.load(created.id)) as AgreementWithRelations),
+      onboardingPlan,
+    };
+  }
+
+  /**
+   * Plans a newly created agreement's first horizon and says what happened.
+   *
+   * A failure here still does not fail the creation — the agreement exists,
+   * and an over-capacity branch or an unstaffable day is a real answer about
+   * the calendar rather than a defect in creating the record. What changed is
+   * that the answer is returned instead of only logged: silently handing back
+   * an agreement with no visits, and no indication why, left the manager to
+   * discover it on an empty calendar days later.
+   */
+  private async planNewAgreement(
+    agreementId: string,
+    from: string,
+    to: string,
+    actor: AuthenticatedUser,
+  ): Promise<AgreementOnboardingPlanDto> {
     try {
-      await this.visitGeneration.confirm(
-        {
-          from,
-          to: addDaysOnly(from, ONBOARDING_HORIZON_DAYS),
-          serviceAgreementIds: [created.id],
-        },
+      const impact = await this.visitGeneration.confirm(
+        { from, to, serviceAgreementIds: [agreementId] },
         actor,
       );
+      const shortfallPeriods = impact.shortfalls.length;
+      const overCapacityDays = impact.loadWarnings.length;
+      return {
+        status:
+          shortfallPeriods > 0 || overCapacityDays > 0
+            ? 'PLANNED_WITH_SHORTFALLS'
+            : 'PLANNED',
+        from,
+        to,
+        visitsPlanned: impact.additions.length,
+        shortfallPeriods,
+        overCapacityDays,
+        message: null,
+      };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Automatic onboarding generation for agreement ${created.id} did not complete: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Automatic onboarding generation for agreement ${agreementId} did not complete: ${message}`,
       );
+      return {
+        status: 'FAILED',
+        from,
+        to,
+        visitsPlanned: 0,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message,
+      };
     }
-
-    return toAgreementDto(
-      (await this.load(created.id)) as AgreementWithRelations,
-    );
   }
 
   async update(

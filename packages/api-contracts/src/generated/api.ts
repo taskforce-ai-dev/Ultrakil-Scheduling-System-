@@ -1648,6 +1648,28 @@ export interface components {
             page: number;
             pageSize: number;
         };
+        AgreementOnboardingPlanDto: {
+            /**
+             * @description PLANNED: the whole horizon is on the calendar. PLANNED_WITH_SHORTFALLS: visits were placed, but some periods could not hold everything the agreement promises, or land on days already over capacity. FAILED: nothing was planned, and `message` says why.
+             * @enum {string}
+             */
+            status: "PLANNED" | "PLANNED_WITH_SHORTFALLS" | "FAILED";
+            /** Format: date */
+            from: string;
+            /**
+             * Format: date
+             * @description End of the horizon planned, a rolling twelve months from the start, or the agreement's own end date when that comes first.
+             */
+            to: string;
+            /** @description Visits created across that horizon. */
+            visitsPlanned: number;
+            /** @description Periods that could not hold the promised number of visits. Reported rather than quietly dropped. */
+            shortfallPeriods: number;
+            /** @description Days this agreement lands on that are already carrying more than the branch plans for. */
+            overCapacityDays: number;
+            /** @description Why nothing could be planned. Null unless status is FAILED. */
+            message: string | null;
+        };
         ServiceAgreementDayRuleDto: {
             /** @enum {string} */
             weekday: "MONDAY" | "TUESDAY" | "WEDNESDAY" | "THURSDAY" | "FRIDAY" | "SATURDAY" | "SUNDAY";
@@ -1657,6 +1679,8 @@ export interface components {
         ServiceAgreementDto: {
             /** Format: uuid */
             id: string;
+            /** @description Only on the response to creating an agreement: what the automatic onboarding plan did. Absent everywhere else, because it describes one event rather than the agreement. */
+            onboardingPlan?: components["schemas"]["AgreementOnboardingPlanDto"];
             /** Format: uuid */
             customerId: string;
             customerName: string;

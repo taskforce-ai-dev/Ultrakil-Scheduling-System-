@@ -987,6 +987,18 @@ model PublishedAssignmentRepairItem {
 /// generation already uses, which writes and protects each visit
 /// individually — so, unlike an assignment repair, no separate before/after
 /// item table is needed; the applied summary is recorded whole, in `result`.
+/// Where one bunching-repair apply got to.
+///
+/// The row is written *before* the first move, so the key is claimed by
+/// whoever starts rather than by whoever finishes. That is what makes a
+/// partial apply impossible to lose: a crash between two moves leaves an
+/// IN_PROGRESS row naming exactly what had already landed.
+enum RepairBunchingStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
 model RepairBunchingBatch {
   id String @id @default(uuid()) @db.Uuid
 
@@ -998,11 +1010,25 @@ model RepairBunchingBatch {
   actorUserId String
   actorLabel  String
 
-  result Json
+  status RepairBunchingStatus @default(IN_PROGRESS)
 
-  createdAt DateTime @default(now())
+  /// Every move that has actually landed, appended as each one commits, so
+  /// the ledger is never behind the calendar. Written even when the apply
+  /// later fails: an unrecorded partial repair is the one outcome this
+  /// table exists to rule out.
+  appliedMoves Json @default("[]")
+
+  /// Only once the whole plan has been applied. Null while in progress, and
+  /// on a failure — there is no complete result to replay in either case.
+  result Json?
+
+  failureReason String?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
 
   @@index([createdAt])
+  @@index([status])
   @@map("repair_bunching_batches")
 }
 

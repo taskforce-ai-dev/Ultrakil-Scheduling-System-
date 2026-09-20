@@ -537,6 +537,148 @@ it('replays an apply repeated with the same idempotency key instead of moving an
   expect(afterSecond).toEqual(afterFirst);
 }, 180_000);
 
+/**
+ * Builds a bunched day and returns the ids plus a reviewed plan hash, so the
+ * two durability tests below start from the same real over-cap calendar the
+ * other tests use rather than a contrived one.
+ */
+async function bunchedScopeFor(dayOffset: number, visitMinutes = 180) {
+  const day = addDays(BUNCH_DAY, dayOffset);
+  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
+  const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
+  const ids: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const res = await request(http)
+      .post('/api/service-agreements')
+      .set(auth())
+      .send({
+        serviceSiteId: siteId,
+        jobTypeId,
+        frequencyCount: 1,
+        frequencyUnit: 'WEEK',
+        allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+        preferredDays: [Weekday.WEDNESDAY],
+        startDate: day,
+        durationMinutes: visitMinutes,
+        crewSize: 1,
+      });
+    expect(res.status).toBe(201);
+    ids.push(res.body.id);
+    await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
+  }
+  agreementIds.push(...ids);
+
+  const looseCap = new VisitGenerationService(
+    app.get(PrismaService),
+    app.get(AuditService),
+    { get: (key: string) => (key === 'visitGeneration.dailyCapacityMinutes' ? 999_999 : undefined) } as unknown as ConfigService,
+    fixedCapacity(999_999),
+  );
+  await looseCap.confirm({ from: day, to: addDays(day, 6), serviceAgreementIds: ids }, actor);
+
+  const scope = { serviceAgreementIds: ids };
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
+    .set(auth())
+    .send(scope);
+  expect(planned.status).toBe(200);
+  expect(planned.body.moves.length).toBeGreaterThan(1);
+  return { scope, planHash: planned.body.planHash as string, moves: planned.body.moves.length };
+}
+
+it('records what a part-way failure already moved, instead of leaving it unrecorded', async () => {
+  const { scope, planHash, moves } = await bunchedScopeFor(28);
+  const service = app.get(VisitGenerationService);
+  const idempotencyKey = randomUUID();
+
+  // Fail the apply mid-loop, after the first agreement has genuinely moved.
+  // This is the case the review named: the ledger used to be written only
+  // after every move, so a failure here left the calendar changed with
+  // nothing at all recording it.
+  const realConfirm = service.confirm.bind(service);
+  let calls = 0;
+  const spy = jest
+    .spyOn(service, 'confirm')
+    .mockImplementation(async (input: Parameters<typeof realConfirm>[0], who) => {
+      calls += 1;
+      if (calls > 1) throw new Error('forced failure partway through the repair');
+      return realConfirm(input, who);
+    });
+
+  try {
+    await expect(
+      service.applyBunchingRepair(actor, {
+        ...scope,
+        planHash,
+        confirmation: true,
+        reason: 'forced-failure durability test',
+        idempotencyKey,
+      }),
+    ).rejects.toThrow('forced failure partway through the repair');
+  } finally {
+    spy.mockRestore();
+  }
+
+  expect(calls).toBeGreaterThan(1);
+  expect(moves).toBeGreaterThan(1);
+
+  const batch = await prisma.repairBunchingBatch.findUniqueOrThrow({
+    where: { idempotencyKey },
+  });
+
+  // The whole point: the row exists, it is not pretending to have succeeded,
+  // and it names exactly what did land.
+  expect(batch.status).toBe('FAILED');
+  expect(batch.result).toBeNull();
+  expect(batch.failureReason).toContain('forced failure');
+  expect(batch.completedAt).not.toBeNull();
+
+  const applied = batch.appliedMoves as { serviceAgreementId: string }[];
+  expect(applied.length).toBe(1);
+
+  // And the move it records is a move that really happened — the ledger is
+  // not merely non-empty, it agrees with the calendar.
+  const movedAgreement = applied[0].serviceAgreementId;
+  const visits = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: movedAgreement },
+  });
+  expect(visits.length).toBeGreaterThan(0);
+}, 180_000);
+
+it('lets only one of two concurrent applies sharing an idempotency key move anything', async () => {
+  const { scope, planHash } = await bunchedScopeFor(35);
+  const service = app.get(VisitGenerationService);
+  const idempotencyKey = randomUUID();
+  const body = {
+    ...scope,
+    planHash,
+    confirmation: true,
+    reason: 'same-key concurrency test',
+    idempotencyKey,
+  };
+
+  // Fired together, not in sequence. Before the key was claimed up front,
+  // both of these could run the entire move loop and only the final insert
+  // decided a winner — which is to say, both moved work.
+  const [first, second] = await Promise.allSettled([
+    service.applyBunchingRepair(actor, body),
+    service.applyBunchingRepair(actor, body),
+  ]);
+
+  const settled = [first, second];
+  const fulfilled = settled.filter((outcome) => outcome.status === 'fulfilled');
+  const rejected = settled.filter((outcome) => outcome.status === 'rejected');
+
+  // Exactly one applies. The loser is refused rather than silently repeating
+  // the work: it arrived while the winner still held the key.
+  expect(fulfilled.length).toBe(1);
+  expect(rejected.length).toBe(1);
+
+  const batches = await prisma.repairBunchingBatch.findMany({ where: { idempotencyKey } });
+  expect(batches.length).toBe(1);
+  expect(batches[0].status).toBe('COMPLETED');
+}, 180_000);
+
 it('rejects reusing an idempotency key for a materially different apply request', async () => {
   const day = addDays(BUNCH_DAY, 28);
   const res = await request(http)

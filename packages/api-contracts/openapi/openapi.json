@@ -4360,6 +4360,55 @@
           "pageSize"
         ]
       },
+      "AgreementOnboardingPlanDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "PLANNED",
+              "PLANNED_WITH_SHORTFALLS",
+              "FAILED"
+            ],
+            "description": "PLANNED: the whole horizon is on the calendar. PLANNED_WITH_SHORTFALLS: visits were placed, but some periods could not hold everything the agreement promises, or land on days already over capacity. FAILED: nothing was planned, and `message` says why."
+          },
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "description": "End of the horizon planned, a rolling twelve months from the start, or the agreement's own end date when that comes first."
+          },
+          "visitsPlanned": {
+            "type": "number",
+            "description": "Visits created across that horizon."
+          },
+          "shortfallPeriods": {
+            "type": "number",
+            "description": "Periods that could not hold the promised number of visits. Reported rather than quietly dropped."
+          },
+          "overCapacityDays": {
+            "type": "number",
+            "description": "Days this agreement lands on that are already carrying more than the branch plans for."
+          },
+          "message": {
+            "type": "string",
+            "nullable": true,
+            "description": "Why nothing could be planned. Null unless status is FAILED."
+          }
+        },
+        "required": [
+          "status",
+          "from",
+          "to",
+          "visitsPlanned",
+          "shortfallPeriods",
+          "overCapacityDays",
+          "message"
+        ]
+      },
       "ServiceAgreementDayRuleDto": {
         "type": "object",
         "properties": {
@@ -4394,6 +4443,14 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "onboardingPlan": {
+            "description": "Only on the response to creating an agreement: what the automatic onboarding plan did. Absent everywhere else, because it describes one event rather than the agreement.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AgreementOnboardingPlanDto"
+              }
+            ]
           },
           "customerId": {
             "type": "string",

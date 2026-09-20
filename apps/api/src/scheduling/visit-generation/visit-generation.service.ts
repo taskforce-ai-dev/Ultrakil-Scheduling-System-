@@ -9,6 +9,7 @@ import {
   DayRuleKind,
   FrequencyUnit,
   Prisma,
+  RepairBunchingStatus,
   ScheduleRunStatus,
   ScheduleRunTrigger,
   VisitPlacement,
@@ -75,7 +76,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** A run covering more than a year is almost certainly a mistyped date. */
 const MAX_HORIZON_DAYS = 366;
 /** How far ahead {@link VisitGenerationService.extendRollingHorizons} plans an open-ended agreement. */
-const ROLLING_HORIZON_DAYS = 365;
+export const ROLLING_HORIZON_DAYS = 365;
 
 function addDays(date: string, days: number): string {
   return toDateOnly(new Date(parseDateOnly(date).getTime() + days * DAY_MS));
@@ -490,22 +491,94 @@ export class VisitGenerationService {
       );
     }
 
-    const repaired: RepairedAgreement[] = [];
-    for (const move of fresh.moves) {
-      const impact = await this.confirm(
-        { from: move.from, to: move.to, serviceAgreementIds: [move.serviceAgreementId] },
-        actor,
-      );
-      const visitsMoved = Math.min(impact.additions.length, impact.removals.length);
-      if (visitsMoved === 0) continue;
-      repaired.push({
-        serviceAgreementId: move.serviceAgreementId,
-        customerName: move.customerName,
-        siteName: move.siteName,
-        from: move.from,
-        to: move.to,
-        visitsMoved,
+    // Claim the key before touching a single visit.
+    //
+    // Writing the ledger after the moves made two failures possible, and the
+    // review was right that neither is acceptable. A crash between two moves
+    // left work moved with nothing recording it; and two requests sharing a
+    // key could both run the whole loop, because neither saw the other until
+    // the final insert. Claiming first inverts both: the unique index settles
+    // who applies, and it settles it while the calendar is still untouched.
+    //
+    // This is the durable state machine rather than one transaction. `confirm`
+    // owns its own transactions per agreement, so a single enclosing one would
+    // mean restructuring every generation write; the row below instead names
+    // exactly what has landed at every instant, which is what makes a partial
+    // apply recoverable rather than invisible.
+    const batchId = randomUUID();
+    try {
+      await this.prisma.repairBunchingBatch.create({
+        data: {
+          id: batchId,
+          idempotencyKey: input.idempotencyKey,
+          requestHash,
+          planHash: fresh.planHash,
+          reason: input.reason.trim(),
+          actorUserId: actor.id,
+          actorLabel: `${actor.fullName} <${actor.email}>`,
+          status: RepairBunchingStatus.IN_PROGRESS,
+          appliedMoves: [],
+        },
       });
+    } catch (error) {
+      if (!isUniqueConflict(error)) throw error;
+      // Someone else claimed this key first, and did so before either of us
+      // moved anything. Whatever they are doing, this request must not also
+      // do it.
+      const claimed = await this.prisma.repairBunchingBatch.findUniqueOrThrow({
+        where: { idempotencyKey: input.idempotencyKey },
+      });
+      return this.replayOrRejectBunching(claimed, requestHash);
+    }
+
+    const repaired: RepairedAgreement[] = [];
+    try {
+      for (const move of fresh.moves) {
+        const impact = await this.confirm(
+          { from: move.from, to: move.to, serviceAgreementIds: [move.serviceAgreementId] },
+          actor,
+        );
+        const visitsMoved = Math.min(impact.additions.length, impact.removals.length);
+        if (visitsMoved === 0) continue;
+        repaired.push({
+          serviceAgreementId: move.serviceAgreementId,
+          customerName: move.customerName,
+          siteName: move.siteName,
+          from: move.from,
+          to: move.to,
+          visitsMoved,
+        });
+        // Appended as each move commits, so the ledger is never behind the
+        // calendar by more than the move in flight.
+        await this.prisma.repairBunchingBatch.update({
+          where: { id: batchId },
+          data: { appliedMoves: this.toJson(repaired) },
+        });
+      }
+    } catch (error) {
+      // What already landed stays recorded. The apply is finished — failed,
+      // and saying exactly how far it got.
+      await this.prisma.repairBunchingBatch.update({
+        where: { id: batchId },
+        data: {
+          status: RepairBunchingStatus.FAILED,
+          appliedMoves: this.toJson(repaired),
+          failureReason: error instanceof Error ? error.message : String(error),
+          completedAt: new Date(),
+        },
+      });
+      await this.audit.record({
+        entityType: 'RepairBunchingBatch',
+        entityId: input.idempotencyKey,
+        action: 'visit_generation.repair_bunching_failed',
+        actor,
+        after: {
+          planHash: fresh.planHash,
+          agreementsRepaired: repaired.length,
+          reason: input.reason.trim(),
+        },
+      });
+      throw error;
     }
 
     // Read fresh, after every move above has landed — the same reasoning
@@ -536,31 +609,18 @@ export class VisitGenerationService {
       replayed: false,
     };
 
-    try {
-      await this.prisma.repairBunchingBatch.create({
-        data: {
-          id: randomUUID(),
-          idempotencyKey: input.idempotencyKey,
-          requestHash,
-          planHash: fresh.planHash,
-          reason: input.reason.trim(),
-          actorUserId: actor.id,
-          actorLabel: `${actor.fullName} <${actor.email}>`,
-          result: this.toJson(result),
-        },
-      });
-    } catch (error) {
-      if (!isUniqueConflict(error)) throw error;
-      // A concurrent call with the same key won the race to write the
-      // ledger row after this one had already applied every move — each
-      // `confirm` above is idempotent, so this call's own writes are a
-      // harmless no-op replay of whatever the winner also did; only its
-      // bookkeeping loses.
-      const raced = await this.prisma.repairBunchingBatch.findUniqueOrThrow({
-        where: { idempotencyKey: input.idempotencyKey },
-      });
-      return this.replayOrRejectBunching(raced, requestHash);
-    }
+    // The row already exists and already names every move that landed; this
+    // only closes it. No unique conflict is possible here — the claim above
+    // settled that, before anything moved.
+    await this.prisma.repairBunchingBatch.update({
+      where: { id: batchId },
+      data: {
+        status: RepairBunchingStatus.COMPLETED,
+        appliedMoves: this.toJson(repaired),
+        result: this.toJson(result),
+        completedAt: new Date(),
+      },
+    });
 
     await this.audit.record({
       entityType: 'RepairBunchingBatch',
@@ -577,8 +637,23 @@ export class VisitGenerationService {
     return result;
   }
 
+  /**
+   * What an apply that finds the key already claimed should do.
+   *
+   * Only a COMPLETED batch has a result to hand back. The other two states are
+   * deliberately refused rather than retried: re-running a plan whose previous
+   * attempt is still in flight, or stopped part-way, is how one repair becomes
+   * two. A failed batch names what it did land, so the way forward is to plan
+   * again against the calendar as it now stands.
+   */
   private replayOrRejectBunching(
-    existing: { requestHash: string; result: Prisma.JsonValue },
+    existing: {
+      requestHash: string;
+      status: RepairBunchingStatus;
+      result: Prisma.JsonValue | null;
+      appliedMoves: Prisma.JsonValue;
+      failureReason: string | null;
+    },
     requestHash: string,
   ): RepairBunchingApplyResultDto {
     if (existing.requestHash !== requestHash) {
@@ -588,6 +663,27 @@ export class VisitGenerationService {
         HttpStatus.CONFLICT,
       );
     }
+
+    if (existing.status === RepairBunchingStatus.IN_PROGRESS) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'A bunching repair with this idempotency key is still being applied. Wait for it to finish before retrying.',
+        HttpStatus.CONFLICT,
+        { appliedMoves: existing.appliedMoves },
+      );
+    }
+
+    if (existing.status === RepairBunchingStatus.FAILED) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        `A bunching repair with this idempotency key already failed part-way: ${
+          existing.failureReason ?? 'reason not recorded'
+        }. The moves it did apply are recorded; plan again before retrying.`,
+        HttpStatus.CONFLICT,
+        { appliedMoves: existing.appliedMoves },
+      );
+    }
+
     return {
       ...(existing.result as unknown as RepairBunchingApplyResultDto),
       replayed: true,
