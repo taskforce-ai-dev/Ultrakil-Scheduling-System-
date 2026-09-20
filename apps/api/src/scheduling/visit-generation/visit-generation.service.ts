@@ -1551,6 +1551,23 @@ export class VisitGenerationService {
    *   deliberately, and a backstop that turned that warning into a refusal
    *   would stop a branch generating at all.
    *
+   * Known gap, deliberately left for a decision rather than patched here: the
+   * two conditions together do not hold the cap when a run *plans* against a
+   * day that is already exactly full. The guard sees no room, has nowhere
+   * else to put the visit, warns, and commits — and the day has not grown
+   * since this run read it, so nothing below fires. That is how a generation
+   * confirm and an optimizer write racing for a day's last slot can both
+   * win, whichever of them reads the calendar second.
+   *
+   * It cannot be closed from here. Every rule that refuses it also refuses
+   * the ordinary over-cap commits this backstop exists to let through: a day
+   * at 1845 crew-minutes against a cap of 480 taking another 180 is
+   * indistinguishable, at this point in the code, from a day at 480 taking
+   * another 60. The real answer is upstream — `applyDailyLoadGuard` should
+   * report work it cannot place as unplanned instead of placing it anyway —
+   * and that changes what generation promises, so it belongs in its own
+   * change.
+   *
    * The refusal is the whole run, not the one visit. A generation is all or
    * nothing by design — a half-applied one leaves a calendar nobody can
    * explain — and the honest answer to "the calendar moved under you" is the

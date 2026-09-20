@@ -21,7 +21,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { BranchCode, PrismaClient, UserRole, VisitStatus, Weekday } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 
@@ -65,6 +65,49 @@ function nextWeekday(from: string, weekday: number): string {
   return cursor;
 }
 const BUNCH_DAY = nextWeekday(TODAY, 3); // Wednesday
+
+/**
+ * A Wednesday on or after `BUNCH_DAY + fromOffset` whose Thursday can still
+ * take one more visit of `visitMinutes`.
+ *
+ * Every fixture below is built on the premise `createAgreement` states: both
+ * days are allowed, so the guard has somewhere to spread the overflow to. On
+ * the shared integration database that premise stopped being a given.
+ * Creating an agreement now plans a full twelve months of visits rather than
+ * a month, so a suite that ran earlier can leave the neighbouring Thursday
+ * sitting exactly at its cap — and on a Thursday with no room, "nothing could
+ * be moved" is the repair's correct answer, not a regression in it. Choosing
+ * the day rather than assuming it keeps these tests about the repair.
+ */
+async function wednesdayWithRoomNextDoor(
+  fromOffset: number,
+  visitMinutes: number,
+): Promise<string> {
+  const capacityService = app.get(BranchDayCapacityService);
+  // A quarter of Wednesdays is far more than enough to find one, and bounded
+  // so a genuinely saturated branch fails with a readable message rather than
+  // looping.
+  for (let offset = fromOffset; offset <= fromOffset + 13 * 7; offset += 7) {
+    const thursday = addDays(BUNCH_DAY, offset + 1);
+    const standing = await prisma.generatedVisit.findMany({
+      where: {
+        branchCode: BranchCode.COLOMBO,
+        visitDate: new Date(`${thursday}T00:00:00.000Z`),
+        status: { not: VisitStatus.CANCELLED },
+      },
+      select: { durationMinutes: true, requiredCrewSize: true },
+    });
+    const used = standing.reduce(
+      (total, visit) => total + visit.durationMinutes * visit.requiredCrewSize,
+      0,
+    );
+    const capacity = await capacityService.capacityFor(BranchCode.COLOMBO, thursday);
+    if (capacity.capacityMinutes - used >= visitMinutes) return addDays(BUNCH_DAY, offset);
+  }
+  throw new Error(
+    `No Wednesday from BUNCH_DAY+${fromOffset} onward has a Thursday with ${visitMinutes} free crew-minutes in COLOMBO.`,
+  );
+}
 
 const agreementIds: string[] = [];
 
@@ -480,9 +523,9 @@ it('reports a day it cannot fix because every visit still on it is protected', a
 }, 180_000);
 
 it('replays an apply repeated with the same idempotency key instead of moving anything twice', async () => {
-  const day = addDays(BUNCH_DAY, 21);
-  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
   const visitMinutes = 180;
+  const day = await wednesdayWithRoomNextDoor(21, visitMinutes);
+  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
   const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
   const ids: string[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -567,7 +610,7 @@ it('replays an apply repeated with the same idempotency key instead of moving an
  * other tests use rather than a contrived one.
  */
 async function bunchedScopeFor(dayOffset: number, visitMinutes = 180) {
-  const day = addDays(BUNCH_DAY, dayOffset);
+  const day = await wednesdayWithRoomNextDoor(dayOffset, visitMinutes);
   const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
   const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
   const ids: string[] = [];
@@ -752,9 +795,9 @@ it('rejects reusing an idempotency key for a materially different apply request'
 }, 180_000);
 
 it('refuses to apply a plan the calendar has moved past since it was reviewed', async () => {
-  const day = addDays(BUNCH_DAY, 35);
-  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
   const visitMinutes = 180;
+  const day = await wednesdayWithRoomNextDoor(35, visitMinutes);
+  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
   const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
   const ids: string[] = [];
   for (let index = 0; index < count; index += 1) {

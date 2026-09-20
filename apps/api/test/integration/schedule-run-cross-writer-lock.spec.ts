@@ -439,10 +439,22 @@ it('a real generation confirm and a real optimizer write racing for the last slo
   expect(await loadOn(CROSS_DAY)).toBe(fillers);
 
   // Generation's side: a brand-new agreement generation itself will plan
-  // straight on to the contested day, because every other weekday of its
-  // week already has its own filler-free visit from a wider fixture pass —
-  // simplest is a single-day allowance, so the load guard has nowhere else to
-  // put it and it goes to the one day this agreement allows.
+  // straight on to the contested day — the earliest weekday it allows, and
+  // the only one it prefers.
+  //
+  // Tuesday is allowed as well, and that is not padding. With Monday alone
+  // this test asserted something the system does not actually guarantee, and
+  // passed only on the ordering where generation read the calendar first: a
+  // run that plans against a day *already* at its cap has nowhere to put the
+  // visit, and `applyDailyLoadGuard` warns and places it anyway rather than
+  // blocking, by design. The day then ends one visit over the cap whatever
+  // the branch-day lock does, because the overfill was decided before the
+  // lock was ever taken (see the "known gap" note on
+  // `assertTheDaysStillHaveRoom`). Leaving generation somewhere to spread to
+  // makes the contest itself — two writers, one free slot, one lock —
+  // decidable in both orderings, which is what this test is about. The
+  // corner it gives up is the guard's over-cap escape hatch, which belongs
+  // with the change that closes it.
   const site = await prisma.serviceSite.create({
     data: {
       customerId,
@@ -473,7 +485,11 @@ it('a real generation confirm and a real optimizer write racing for the last slo
       durationMinutes: REFERENCE_VISIT_MINUTES,
       startDate: at(CROSS_WEEK.from),
       dayRules: {
-        create: [{ weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
+        create: [
+          { weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED },
+          { weekday: Weekday.TUESDAY, kind: DayRuleKind.ALLOWED },
+          { weekday: Weekday.MONDAY, kind: DayRuleKind.PREFERRED },
+        ],
       },
     },
   });
