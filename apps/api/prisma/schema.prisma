@@ -979,6 +979,33 @@ model PublishedAssignmentRepairItem {
   @@map("published_assignment_repair_items")
 }
 
+/// One administrator-confirmed, idempotent bunching-repair batch: the
+/// preview→review→apply ledger the Technical Director's review asked for,
+/// mirroring `PublishedAssignmentRepair`'s request/plan-hash pattern. A
+/// bunching repair only ever moves an agreement's own unbooked
+/// `GeneratedVisit` rows through the same scoped `confirm` ordinary
+/// generation already uses, which writes and protects each visit
+/// individually — so, unlike an assignment repair, no separate before/after
+/// item table is needed; the applied summary is recorded whole, in `result`.
+model RepairBunchingBatch {
+  id String @id @default(uuid()) @db.Uuid
+
+  idempotencyKey String @unique
+  requestHash    String
+  planHash       String
+  reason         String?
+
+  actorUserId String
+  actorLabel  String
+
+  result Json
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("repair_bunching_batches")
+}
+
 model AssignmentCrewMember {
   id String @id @default(uuid()) @db.Uuid
 

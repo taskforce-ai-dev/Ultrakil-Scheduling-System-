@@ -1,23 +1,28 @@
 /**
- * `POST /visit-generation/repair-bunching` — the "zero-surprise repair plan"
- * the Technical Director's review asked for: existing current/future
- * generated data has to be brought in line with the crew-minutes cap
- * (`repair-bunching-and-capacity.md` / the capacity-aware feasibility PR
- * comment), without rewriting history and without ever touching booked,
- * published, locked or hand-adjusted work.
+ * `POST /visit-generation/repair-bunching/plan` and `.../apply` — the
+ * "zero-surprise repair" the Technical Director's review asked for:
+ * existing current/future generated data has to be brought in line with the
+ * crew-minutes cap (`repair-bunching-and-capacity.md` / the capacity-aware
+ * feasibility PR comment) without rewriting history, without ever touching
+ * booked, published, locked or hand-adjusted work, and — the review's own
+ * addition — without mutating anything until an administrator has reviewed
+ * exactly what would move, confirmed it with a plan hash that proves the
+ * review still matches the calendar, and in a way that is safe to repeat.
  *
  * The fixture simulates exactly what shipped before this branch: several
  * agreements' visits landing on the same day under a cap loose enough to
  * allow it — built here with a `VisitGenerationService` instance whose
  * config is overridden to an enormous cap, so nothing spreads, the same
  * technique `visit-generation.spec.ts` already uses to force a small one.
- * The repair call itself drives the real HTTP endpoint, wired to the app's
- * real (default) cap, so what is proven is the production code path.
+ * The plan and apply calls themselves drive the real HTTP endpoints, wired
+ * to the app's real (default) cap, so what is proven is the production code
+ * path.
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
@@ -114,6 +119,22 @@ function fixedCapacity(minutes: number): BranchDayCapacityService {
   } as unknown as BranchDayCapacityService;
 }
 
+/** A plan/apply request body for the given scope, filled in with the plan's own planHash. */
+function applyBodyFor(
+  scope: { serviceAgreementIds?: string[] },
+  planHash: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    ...scope,
+    planHash,
+    confirmation: true,
+    reason: 'ULK-C10 bunching repair integration test',
+    idempotencyKey: randomUUID(),
+    ...overrides,
+  };
+}
+
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   app = moduleRef.createNestApplication();
@@ -197,7 +218,7 @@ afterAll(async () => {
   await app.close();
 }, 120_000);
 
-it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no longer allows, and never touches protected work', async () => {
+it('plans, then applies, moving an agreement\'s own unbooked visits off a day the crew-minutes cap no longer allows — and never touches protected work', async () => {
   // The real endpoint below is now capacity-aware from COLOMBO's actual
   // workforce, not a flat constant — so how many agreements are needed to
   // genuinely exceed that day's capacity depends on real, shared-database
@@ -246,12 +267,37 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
     data: { isManuallyAdjusted: true },
   });
 
-  // The real endpoint, wired to the app's real (default) crew-minutes cap.
-  const repaired = await request(http)
-    .post('/api/visit-generation/repair-bunching')
+  const scope = { serviceAgreementIds: agreementIds };
+
+  // Plan writes nothing: the calendar right after plan is byte-for-byte the
+  // one the fixture set up above.
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
     .set(auth())
-    .send({ serviceAgreementIds: agreementIds });
-  expect(repaired.status).toBe(200);
+    .send(scope);
+  expect(planned.status).toBe(200);
+  expect(typeof planned.body.planHash).toBe('string');
+  const stillOnBunchDayAfterPlan = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: { in: agreementIds } },
+  });
+  expect(
+    stillOnBunchDayAfterPlan.every(
+      (visit) => visit.visitDate.toISOString().slice(0, 10) === BUNCH_DAY,
+    ),
+  ).toBe(true);
+  expect(planned.body.moves.length).toBeGreaterThan(0);
+  for (const move of planned.body.moves) {
+    expect(agreementIds).toContain(move.serviceAgreementId);
+    expect(move.visitsMoved).toBeGreaterThan(0);
+  }
+
+  // The real endpoint, wired to the app's real (default) crew-minutes cap.
+  const applied = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, planned.body.planHash as string));
+  expect(applied.status).toBe(200);
+  expect(applied.body.replayed).toBe(false);
 
   const after = await prisma.generatedVisit.findMany({
     where: { serviceAgreementId: { in: agreementIds } },
@@ -296,19 +342,30 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
   // honestly-reported behaviour, not something this test's own fixture
   // controls. What this test owns and can assert is the database state
   // above: its own six visits, and that at most four of them share the day.
-  expect(repaired.body.agreementsRepaired.length).toBeGreaterThan(0);
-  for (const entry of repaired.body.agreementsRepaired) {
+  expect(applied.body.agreementsRepaired.length).toBeGreaterThan(0);
+  for (const entry of applied.body.agreementsRepaired) {
     expect(agreementIds).toContain(entry.serviceAgreementId);
     expect(entry.visitsMoved).toBeGreaterThan(0);
   }
 
-  // Idempotent: nothing left to move.
-  const second = await request(http)
-    .post('/api/visit-generation/repair-bunching')
+  // Idempotent end-to-end: a fresh plan over the now-settled calendar finds
+  // nothing left to move, and applying it (a different idempotency key —
+  // this is a distinct plan/apply round, not a replay of the one above)
+  // changes nothing further.
+  const secondPlan = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
     .set(auth())
-    .send({ serviceAgreementIds: agreementIds });
-  expect(second.status).toBe(200);
-  expect(second.body.agreementsRepaired).toEqual([]);
+    .send(scope);
+  expect(secondPlan.status).toBe(200);
+  expect(secondPlan.body.moves).toEqual([]);
+
+  const secondApply = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, secondPlan.body.planHash as string));
+  expect(secondApply.status).toBe(200);
+  expect(secondApply.body.agreementsRepaired).toEqual([]);
+  expect(secondApply.body.replayed).toBe(false);
 
   const settled = await prisma.generatedVisit.findMany({
     where: { serviceAgreementId: { in: agreementIds } },
@@ -316,7 +373,7 @@ it('moves an agreement\'s own unbooked visits off a day the crew-minutes cap no 
     select: { id: true, visitDate: true },
   });
   // Not merely six visits again, but the exact same six dates the first
-  // repair already settled on — the second call moved nothing.
+  // repair already settled on — the second round moved nothing.
   expect(settled.map((visit) => visit.visitDate.getTime()).sort()).toEqual(
     after.map((visit) => visit.visitDate.getTime()).sort(),
   );
@@ -371,13 +428,24 @@ it('reports a day it cannot fix because every visit still on it is protected', a
     data: { isManuallyAdjusted: true },
   });
 
-  const repaired = await request(http)
-    .post('/api/visit-generation/repair-bunching')
+  const scope = { serviceAgreementIds: stubbornAgreements };
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
     .set(auth())
-    .send({ serviceAgreementIds: stubbornAgreements });
-  expect(repaired.status).toBe(200);
-  expect(repaired.body.agreementsRepaired).toEqual([]);
-  expect(repaired.body.stillOverCap).toEqual(
+    .send(scope);
+  expect(planned.status).toBe(200);
+  expect(planned.body.moves).toEqual([]);
+  expect(planned.body.stillOverCap).toEqual(
+    expect.arrayContaining([expect.objectContaining({ date: day, branchCode: BranchCode.COLOMBO })]),
+  );
+
+  const applied = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, planned.body.planHash as string));
+  expect(applied.status).toBe(200);
+  expect(applied.body.agreementsRepaired).toEqual([]);
+  expect(applied.body.stillOverCap).toEqual(
     expect.arrayContaining([expect.objectContaining({ date: day, branchCode: BranchCode.COLOMBO })]),
   );
 
@@ -385,4 +453,223 @@ it('reports a day it cannot fix because every visit still on it is protected', a
     where: { serviceAgreementId: { in: stubbornAgreements } },
   });
   expect(stillThere).toBe(stubbornCount);
+}, 180_000);
+
+it('replays an apply repeated with the same idempotency key instead of moving anything twice', async () => {
+  const day = addDays(BUNCH_DAY, 21);
+  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
+  const visitMinutes = 180;
+  const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
+  const ids: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const res = await request(http)
+      .post('/api/service-agreements')
+      .set(auth())
+      .send({
+        serviceSiteId: siteId,
+        jobTypeId,
+        frequencyCount: 1,
+        frequencyUnit: 'WEEK',
+        allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+        preferredDays: [Weekday.WEDNESDAY],
+        startDate: day,
+        durationMinutes: visitMinutes,
+        crewSize: 1,
+      });
+    expect(res.status).toBe(201);
+    ids.push(res.body.id);
+    await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
+  }
+  agreementIds.push(...ids);
+
+  const looseCap = new VisitGenerationService(
+    app.get(PrismaService),
+    app.get(AuditService),
+    { get: (key: string) => (key === 'visitGeneration.dailyCapacityMinutes' ? 999_999 : undefined) } as unknown as ConfigService,
+    fixedCapacity(999_999),
+  );
+  await looseCap.confirm({ from: day, to: addDays(day, 6), serviceAgreementIds: ids }, actor);
+
+  const scope = { serviceAgreementIds: ids };
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
+    .set(auth())
+    .send(scope);
+  expect(planned.status).toBe(200);
+  expect(planned.body.moves.length).toBeGreaterThan(0);
+
+  const body = applyBodyFor(scope, planned.body.planHash as string);
+  const first = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(body);
+  expect(first.status).toBe(200);
+  expect(first.body.replayed).toBe(false);
+  expect(first.body.agreementsRepaired.length).toBeGreaterThan(0);
+
+  const afterFirst = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: { in: ids } },
+    orderBy: { id: 'asc' },
+    select: { id: true, visitDate: true, updatedAt: true },
+  });
+
+  // The exact same request body — same idempotencyKey, same everything —
+  // repeated. A genuine second apply would find the calendar already
+  // settled and simply move nothing; replay proves something stronger: no
+  // second write was attempted at all.
+  const second = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(body);
+  expect(second.status).toBe(200);
+  expect(second.body.replayed).toBe(true);
+  expect(second.body.agreementsRepaired).toEqual(first.body.agreementsRepaired);
+  expect(second.body.planHash).toBe(first.body.planHash);
+
+  const afterSecond = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: { in: ids } },
+    orderBy: { id: 'asc' },
+    select: { id: true, visitDate: true, updatedAt: true },
+  });
+  // Not merely the same dates: the same revisions — nothing was written a
+  // second time, which a same-outcome-different-write repair could still
+  // satisfy but a true replay must not.
+  expect(afterSecond).toEqual(afterFirst);
+}, 180_000);
+
+it('rejects reusing an idempotency key for a materially different apply request', async () => {
+  const day = addDays(BUNCH_DAY, 28);
+  const res = await request(http)
+    .post('/api/service-agreements')
+    .set(auth())
+    .send({
+      serviceSiteId: siteId,
+      jobTypeId,
+      frequencyCount: 1,
+      frequencyUnit: 'WEEK',
+      allowedDays: [Weekday.WEDNESDAY],
+      startDate: day,
+      durationMinutes: 60,
+      crewSize: 1,
+    });
+  expect(res.status).toBe(201);
+  agreementIds.push(res.body.id);
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
+
+  const scope = { serviceAgreementIds: [res.body.id] };
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
+    .set(auth())
+    .send(scope);
+  expect(planned.status).toBe(200);
+
+  const sharedKey = randomUUID();
+  const first = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, planned.body.planHash as string, { idempotencyKey: sharedKey }));
+  expect(first.status).toBe(200);
+
+  // Same key, but a different reason — the same "the key names one request"
+  // guarantee `published-assignment-repair` already gives assignment repairs.
+  const reused = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(
+      applyBodyFor(scope, planned.body.planHash as string, {
+        idempotencyKey: sharedKey,
+        reason: 'a completely different reason',
+      }),
+    );
+  expect(reused.status).toBe(409);
+  expect(reused.body.code).toBe('RESOURCE_CONFLICT');
+}, 180_000);
+
+it('refuses to apply a plan the calendar has moved past since it was reviewed', async () => {
+  const day = addDays(BUNCH_DAY, 35);
+  const realCapacity = await app.get(BranchDayCapacityService).capacityFor(BranchCode.COLOMBO, day);
+  const visitMinutes = 180;
+  const count = Math.floor(realCapacity.capacityMinutes / visitMinutes) + 2;
+  const ids: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const res = await request(http)
+      .post('/api/service-agreements')
+      .set(auth())
+      .send({
+        serviceSiteId: siteId,
+        jobTypeId,
+        frequencyCount: 1,
+        frequencyUnit: 'WEEK',
+        allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY],
+        preferredDays: [Weekday.WEDNESDAY],
+        startDate: day,
+        durationMinutes: visitMinutes,
+        crewSize: 1,
+      });
+    expect(res.status).toBe(201);
+    ids.push(res.body.id);
+    await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: res.body.id } });
+  }
+  agreementIds.push(...ids);
+
+  const looseCap = new VisitGenerationService(
+    app.get(PrismaService),
+    app.get(AuditService),
+    { get: (key: string) => (key === 'visitGeneration.dailyCapacityMinutes' ? 999_999 : undefined) } as unknown as ConfigService,
+    fixedCapacity(999_999),
+  );
+  await looseCap.confirm({ from: day, to: addDays(day, 6), serviceAgreementIds: ids }, actor);
+
+  const scope = { serviceAgreementIds: ids };
+  const planned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
+    .set(auth())
+    .send(scope);
+  expect(planned.status).toBe(200);
+  expect(planned.body.moves.length).toBeGreaterThan(0);
+
+  // The calendar moves after the plan was reviewed but before it is
+  // applied: a manager hand-adjusts one of the very visits the plan was
+  // about to move. Nothing about the request below changes — this is
+  // exactly the race the plan-hash check exists to catch.
+  const toProtect = await prisma.generatedVisit.findFirst({
+    where: { serviceAgreementId: { in: ids } },
+    orderBy: { visitDate: 'asc' },
+  });
+  await prisma.generatedVisit.update({
+    where: { id: toProtect!.id },
+    data: { isManuallyAdjusted: true },
+  });
+
+  const applied = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, planned.body.planHash as string));
+  expect(applied.status).toBe(409);
+  expect(applied.body.code).toBe('RESOURCE_CONFLICT');
+
+  // Refused wholesale: not one visit skipped and the rest applied, nothing
+  // moved at all.
+  const untouched = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: { in: ids } },
+  });
+  expect(untouched.every((visit) => visit.visitDate.toISOString().slice(0, 10) === day)).toBe(
+    true,
+  );
+
+  // A fresh plan now describes the calendar as it actually stands, and that
+  // one applies cleanly.
+  const replanned = await request(http)
+    .post('/api/visit-generation/repair-bunching/plan')
+    .set(auth())
+    .send(scope);
+  expect(replanned.status).toBe(200);
+  expect(replanned.body.planHash).not.toBe(planned.body.planHash);
+
+  const reapplied = await request(http)
+    .post('/api/visit-generation/repair-bunching/apply')
+    .set(auth())
+    .send(applyBodyFor(scope, replanned.body.planHash as string));
+  expect(reapplied.status).toBe(200);
+  expect(reapplied.body.agreementsRepaired.length).toBeGreaterThan(0);
 }, 180_000);

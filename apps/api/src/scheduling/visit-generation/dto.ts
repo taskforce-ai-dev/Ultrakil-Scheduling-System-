@@ -4,11 +4,15 @@ import { BranchCode, VisitPlacement } from '@prisma/client';
 import { BOOKING_ISSUE_REASONS } from '../../catalog/schedule-preview';
 import {
   ArrayMaxSize,
+  Equals,
   IsArray,
   IsDateString,
   IsEnum,
+  IsHash,
   IsOptional,
+  IsString,
   IsUUID,
+  Length,
   Matches,
 } from 'class-validator';
 
@@ -430,4 +434,74 @@ export class RepairBunchingSummaryDto {
       'Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager\'s own decision, only its own unbooked, unpublished work.',
   })
   stillOverCap!: DailyLoadWarningDto[];
+}
+
+/**
+ * What `plan` returned, echoed back by the caller so `apply` can prove the
+ * calendar has not moved since — the same "no surprise write" contract
+ * `PublishedAssignmentRepairApplyDto` already uses for assignment repairs.
+ */
+export class RepairBunchingApplyDto extends RepairBunchingDto {
+  @ApiProperty({
+    type: String,
+    description: 'Canonical SHA-256 plan hash returned by plan.',
+  })
+  @IsHash('sha256')
+  planHash!: string;
+
+  @ApiProperty({ type: Boolean, enum: [true], description: 'Must be exactly true.' })
+  @Equals(true)
+  confirmation!: boolean;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 500 })
+  @IsString()
+  @Length(1, 500)
+  reason!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    description:
+      'Repeating a call with the same key and the same body returns the first result again rather than repeating the write.',
+  })
+  @IsString()
+  @Length(1, 200)
+  idempotencyKey!: string;
+}
+
+export class RepairBunchingPlanResponseDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active agreement with a generated visit in scope, whether or not it needed repair.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [RepairedAgreementDto],
+    description: 'Only the agreements applying this plan would actually move a visit for.',
+  })
+  moves!: RepairedAgreementDto[];
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description: 'Days this plan would still leave over the cap, because every visit on them is protected.',
+  })
+  stillOverCap!: DailyLoadWarningDto[];
+  @ApiProperty({
+    type: String,
+    description:
+      'Canonical SHA-256 hash of this plan and the calendar state it was computed from. Pass back unchanged to apply.',
+  })
+  planHash!: string;
+}
+
+export class RepairBunchingApplyResultDto extends RepairBunchingSummaryDto {
+  @ApiProperty({ type: String }) planHash!: string;
+  @ApiProperty({ type: String }) idempotencyKey!: string;
+  @ApiProperty({
+    type: Boolean,
+    description: 'True when this call did no new work and returned an earlier apply of the same idempotency key.',
+  })
+  replayed!: boolean;
 }

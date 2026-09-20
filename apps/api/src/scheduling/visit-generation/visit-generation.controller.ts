@@ -16,8 +16,10 @@ import {
   GenerateVisitsDto,
   GenerationImpactDto,
   HorizonExtensionSummaryDto,
+  RepairBunchingApplyDto,
+  RepairBunchingApplyResultDto,
   RepairBunchingDto,
-  RepairBunchingSummaryDto,
+  RepairBunchingPlanResponseDto,
 } from './dto';
 import { VisitGenerationService } from './visit-generation.service';
 
@@ -82,20 +84,41 @@ export class VisitGenerationController {
     return this.generation.extendRollingHorizons(actor, scope);
   }
 
-  @Post('repair-bunching')
+  @Post('repair-bunching/plan')
   @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Move an agreement\'s own unbooked visits off a day the current cap no longer allows',
+    summary: "What un-bunching an agreement's own visits off a day the current cap no longer allows would move",
     description:
-      "Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.",
+      "Writes nothing. For every active agreement with a generated visit today or later, works out — over the stretch that agreement already has generated — which of its own unbooked, unpublished visits the current crew-minutes cap would move, exactly as a newly generated one would be placed. A booked date, a published or locked visit, a hand-adjusted one is never listed as moving. Returns a planHash: pass it unchanged to apply, which refuses to run if the calendar has moved since.",
   })
   @ApiBody({ type: RepairBunchingDto, required: false })
-  @ApiResponse({ status: 200, type: RepairBunchingSummaryDto })
-  repairBunching(
-    @CurrentUser() actor: AuthenticatedUser,
+  @ApiResponse({ status: 200, type: RepairBunchingPlanResponseDto })
+  planBunchingRepair(
     @Body() scope: RepairBunchingDto = {},
-  ): Promise<RepairBunchingSummaryDto> {
-    return this.generation.repairBunching(actor, scope);
+  ): Promise<RepairBunchingPlanResponseDto> {
+    return this.generation.planBunchingRepair(scope);
+  }
+
+  @Post('repair-bunching/apply')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Apply exactly the plan repair-bunching/plan described',
+    description:
+      "Applies what plan described, calling the same scoped confirm a manager's own Generate Visits already uses for each moved agreement — never a new kind of write. Requires the planHash plan returned, explicit confirmation, a reason and an idempotencyKey: repeating the same key with the same body returns the first application's own result again rather than moving anything twice; the same key with a different body is refused. If the calendar changed since the plan was reviewed, nothing is applied and a fresh plan is required. Calling it again after everything settled finds nothing left to move.",
+  })
+  @ApiBody({ type: RepairBunchingApplyDto })
+  @ApiResponse({ status: 200, type: RepairBunchingApplyResultDto })
+  @ApiResponse({
+    status: 409,
+    description:
+      'RESOURCE_CONFLICT — either the plan is stale, or this idempotency key was already used for a different request.',
+  })
+  applyBunchingRepair(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Body() input: RepairBunchingApplyDto,
+  ): Promise<RepairBunchingApplyResultDto> {
+    return this.generation.applyBunchingRepair(actor, input);
   }
 }

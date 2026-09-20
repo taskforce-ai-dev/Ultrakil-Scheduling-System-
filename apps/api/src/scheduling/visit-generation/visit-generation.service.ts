@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -23,9 +25,11 @@ import {
   periodIndexOf,
   toDateOnly,
 } from '../../catalog/schedule-preview';
+import { hashCanonical } from '../../common/canonical-hash';
 import { AppException } from '../../common/errors/app.exception';
 import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
+import { isUniqueConflict } from '../../common/prisma-errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { crewMinutesOf } from '../capacity';
 import { BranchDay, lockBranchDays } from '../optimizer/branch-day-lock';
@@ -39,7 +43,10 @@ import {
   ExtendHorizonsDto,
   GenerateVisitsDto,
   GenerationImpactDto,
+  RepairBunchingApplyDto,
+  RepairBunchingApplyResultDto,
   RepairBunchingDto,
+  RepairBunchingPlanResponseDto,
 } from './dto';
 import {
   DailyLoadWarning,
@@ -105,7 +112,11 @@ export interface HorizonExtensionSummary {
   failures: HorizonExtensionFailure[];
 }
 
-/** One agreement {@link VisitGenerationService.repairBunching} moved a visit for. */
+/**
+ * One agreement a bunching-repair plan would move a visit for
+ * ({@link VisitGenerationService.planBunchingRepair}), or has
+ * ({@link VisitGenerationService.applyBunchingRepair}).
+ */
 export interface RepairedAgreement {
   serviceAgreementId: string;
   customerName: string;
@@ -113,19 +124,6 @@ export interface RepairedAgreement {
   from: string;
   to: string;
   visitsMoved: number;
-}
-
-export interface RepairBunchingSummary {
-  today: string;
-  /** Every active agreement with a generated visit in scope, whether or not it needed repair. */
-  agreementsConsidered: number;
-  agreementsRepaired: RepairedAgreement[];
-  /**
-   * Days still over the cap after repair. Every visit still on one of these
-   * is booked, published, locked or hand-adjusted — this operation moves
-   * only its own unbooked, unpublished work, never a manager's decision.
-   */
-  stillOverCap: GenerationImpactDto['loadWarnings'];
 }
 
 const AGREEMENT_INCLUDE = {
@@ -380,7 +378,8 @@ export class VisitGenerationService {
   }
 
   /**
-   * Un-bunches a calendar that was generated under a looser cap.
+   * Works out what un-bunching a calendar generated under a looser cap would
+   * move, without moving anything.
    *
    * The capacity-aware cap ({@link dailyCapacityMinutes}) is stricter than
    * the flat visit count it replaced for a day whose visits are large — long,
@@ -390,9 +389,13 @@ export class VisitGenerationService {
    * one, and nothing regenerates them on its own: `confirm` only ever
    * touches the dates an agreement's own next call asks about.
    *
-   * This is not new machinery. It calls the same scoped {@link confirm}
-   * every other operation in this file does, one active agreement at a
-   * time, over the stretch it already has generated from today onward —
+   * The Technical Director's review asked for a "zero-surprise" repair: no
+   * mutation until an administrator has reviewed exactly what would move and
+   * confirmed it, replayable if the confirmation is repeated, and rejected —
+   * never half-applied — if the calendar moved underneath the review. This
+   * is the review half of that: it calls the same read-only {@link preview}
+   * every other operation in this file already has, one active agreement at
+   * a time, over the stretch it already has generated from today onward —
    * widened, precisely, to the true end of the last period that stretch
    * reaches into, using the same period arithmetic ({@link periodIndexOf} /
    * {@link periodBoundsOf}) generation itself plans by. Stopping exactly at
@@ -400,30 +403,210 @@ export class VisitGenerationService {
    * later day in that same period to spread into; reaching to the period's
    * own end gives it that room without reaching into the next period, which
    * would not be a repair, it would be new coverage nobody asked this call
-   * to add. `confirm` re-derives that agreement's required dates fresh over
-   * that window and hands them to the load guard, which — now reading the
-   * day's true crew-minutes — moves whichever of the agreement's own
-   * unbooked, unpublished visits no longer fit, exactly as it would for a
-   * newly generated one. Every protection `confirm` already has is
-   * inherited unchanged: a booked date, a published or locked visit, a
-   * hand-adjusted one, is never touched, whichever agreement it belongs to.
-   * A day that stays over the cap after every agreement on it has had this
-   * chance is a day nothing here is allowed to move, and is reported rather
-   * than forced.
+   * to add.
    *
-   * Calling this twice in a row is exactly as safe as calling `confirm`
-   * twice in a row already is: the second call finds nothing left to move
-   * and reports it. Nothing before today is touched — a repair is about the
-   * calendar still ahead of a manager, never about rewriting history.
+   * `planHash` is a canonical hash of this plan and the exact rows each of
+   * its moves depends on (see {@link fingerprintAgreementWindow}) — pass it
+   * back unchanged to {@link applyBunchingRepair}, which recomputes the same
+   * plan fresh and rejects the apply if anything moved it.
    *
    * `scope` narrows which agreements are considered, the same as
    * {@link extendRollingHorizons}. Omitted, every active agreement in the
    * company is considered.
    */
-  async repairBunching(
+  async planBunchingRepair(scope: RepairBunchingDto = {}): Promise<RepairBunchingPlanResponseDto> {
+    const plan = await this.computeBunchingPlan(scope);
+    return {
+      today: plan.today,
+      agreementsConsidered: plan.agreementsConsidered,
+      moves: plan.moves,
+      stillOverCap: plan.stillOverCap,
+      planHash: plan.planHash,
+    };
+  }
+
+  /**
+   * Applies exactly the plan {@link planBunchingRepair} described, or
+   * refuses to.
+   *
+   * Not new mutation machinery of its own: once the fresh plan hash is
+   * confirmed to match, this calls the same scoped {@link confirm} every
+   * other operation in this file already uses, one moved agreement at a
+   * time — the load guard, reading the day's true crew-minutes, moves
+   * whichever of that agreement's own unbooked, unpublished visits no
+   * longer fit, exactly as it would for a newly generated one. Every
+   * protection `confirm` already has is inherited unchanged: a booked date,
+   * a published or locked visit, a hand-adjusted one, is never touched,
+   * whichever agreement it belongs to. A day that stays over the cap after
+   * every agreement on it has had this chance is reported, never forced.
+   *
+   * Each of those `confirm` calls is already its own safe, idempotent
+   * transaction — repeating one finds nothing left to move — so applying a
+   * multi-agreement plan does not need its own all-or-nothing transaction
+   * around the whole batch the way {@link PublishedAssignmentRepairService}
+   * needs around a set of raw assignment writes that are not individually
+   * idempotent. What this adds on top is the two things that loop did not
+   * have: the plan hash re-check immediately below, which refuses to touch
+   * anything if the calendar moved since the plan was reviewed, and the
+   * idempotency ledger, which makes the request itself — not just each
+   * `confirm` inside it — safe to repeat.
+   *
+   * `input.idempotencyKey` is looked up first: repeating a call with the
+   * same key and the same body returns the first application's own result
+   * again, applying nothing a second time; the same key with a different
+   * body is refused. A concurrent request racing this one to the same key
+   * is caught by the ledger table's own unique constraint and replayed the
+   * same way, after its own `confirm` calls — already idempotent — land
+   * harmlessly a second time.
+   */
+  async applyBunchingRepair(
     actor: AuthenticatedUser,
-    scope: RepairBunchingDto = {},
-  ): Promise<RepairBunchingSummary> {
+    input: RepairBunchingApplyDto,
+  ): Promise<RepairBunchingApplyResultDto> {
+    const scope: RepairBunchingDto = {
+      branchCode: input.branchCode,
+      serviceAgreementIds: input.serviceAgreementIds,
+    };
+    const requestHash = hashCanonical({
+      actorUserId: actor.id,
+      branchCode: scope.branchCode ?? null,
+      serviceAgreementIds: [...(scope.serviceAgreementIds ?? [])].sort(),
+      planHash: input.planHash,
+      confirmation: input.confirmation,
+      reason: input.reason.trim(),
+    });
+
+    const existing = await this.prisma.repairBunchingBatch.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+    });
+    if (existing) return this.replayOrRejectBunching(existing, requestHash);
+
+    const fresh = await this.computeBunchingPlan(scope);
+    if (fresh.planHash !== input.planHash) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'The repair plan changed since it was previewed. Plan again before applying.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const repaired: RepairedAgreement[] = [];
+    for (const move of fresh.moves) {
+      const impact = await this.confirm(
+        { from: move.from, to: move.to, serviceAgreementIds: [move.serviceAgreementId] },
+        actor,
+      );
+      const visitsMoved = Math.min(impact.additions.length, impact.removals.length);
+      if (visitsMoved === 0) continue;
+      repaired.push({
+        serviceAgreementId: move.serviceAgreementId,
+        customerName: move.customerName,
+        siteName: move.siteName,
+        from: move.from,
+        to: move.to,
+        visitsMoved,
+      });
+    }
+
+    // Read fresh, after every move above has landed — the same reasoning
+    // the single-pass repair always used: an early agreement's own move can
+    // clear a day a later agreement would otherwise still report as over
+    // cap.
+    const stillOverCap =
+      fresh.agreementsConsidered === 0
+        ? []
+        : (
+            await this.preview({
+              from: fresh.today,
+              to: fresh.latestTo,
+              ...(scope.branchCode ? { branchCode: scope.branchCode } : {}),
+              ...(scope.serviceAgreementIds?.length
+                ? { serviceAgreementIds: scope.serviceAgreementIds }
+                : {}),
+            })
+          ).loadWarnings;
+
+    const result: RepairBunchingApplyResultDto = {
+      today: fresh.today,
+      agreementsConsidered: fresh.agreementsConsidered,
+      agreementsRepaired: repaired,
+      stillOverCap,
+      planHash: fresh.planHash,
+      idempotencyKey: input.idempotencyKey,
+      replayed: false,
+    };
+
+    try {
+      await this.prisma.repairBunchingBatch.create({
+        data: {
+          id: randomUUID(),
+          idempotencyKey: input.idempotencyKey,
+          requestHash,
+          planHash: fresh.planHash,
+          reason: input.reason.trim(),
+          actorUserId: actor.id,
+          actorLabel: `${actor.fullName} <${actor.email}>`,
+          result: this.toJson(result),
+        },
+      });
+    } catch (error) {
+      if (!isUniqueConflict(error)) throw error;
+      // A concurrent call with the same key won the race to write the
+      // ledger row after this one had already applied every move — each
+      // `confirm` above is idempotent, so this call's own writes are a
+      // harmless no-op replay of whatever the winner also did; only its
+      // bookkeeping loses.
+      const raced = await this.prisma.repairBunchingBatch.findUniqueOrThrow({
+        where: { idempotencyKey: input.idempotencyKey },
+      });
+      return this.replayOrRejectBunching(raced, requestHash);
+    }
+
+    await this.audit.record({
+      entityType: 'RepairBunchingBatch',
+      entityId: input.idempotencyKey,
+      action: 'visit_generation.repair_bunching_applied',
+      actor,
+      after: {
+        planHash: fresh.planHash,
+        agreementsRepaired: repaired.length,
+        reason: input.reason.trim(),
+      },
+    });
+
+    return result;
+  }
+
+  private replayOrRejectBunching(
+    existing: { requestHash: string; result: Prisma.JsonValue },
+    requestHash: string,
+  ): RepairBunchingApplyResultDto {
+    if (existing.requestHash !== requestHash) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'This idempotency key was already used for a different bunching-repair request.',
+        HttpStatus.CONFLICT,
+      );
+    }
+    return {
+      ...(existing.result as unknown as RepairBunchingApplyResultDto),
+      replayed: true,
+    };
+  }
+
+  private toJson(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  /** Shared by {@link planBunchingRepair} and {@link applyBunchingRepair}, so the two can never disagree. */
+  private async computeBunchingPlan(scope: RepairBunchingDto): Promise<{
+    today: string;
+    agreementsConsidered: number;
+    moves: RepairedAgreement[];
+    latestTo: string;
+    stillOverCap: GenerationImpactDto['loadWarnings'];
+    planHash: string;
+  }> {
     const today = toDateOnly(new Date());
     const horizonLimit = addDays(today, ROLLING_HORIZON_DAYS);
 
@@ -459,7 +642,7 @@ export class VisitGenerationService {
       plannedThroughRows.map((row) => [row.serviceAgreementId, row._max.visitDate]),
     );
 
-    const repaired: RepairedAgreement[] = [];
+    const moves: RepairedAgreement[] = [];
     let considered = 0;
     let latestTo = today;
 
@@ -502,13 +685,17 @@ export class VisitGenerationService {
       const to = reach < horizonLimit ? reach : horizonLimit;
       latestTo = to > latestTo ? to : latestTo;
 
-      const impact = await this.confirm(
-        { from: today, to, serviceAgreementIds: [agreement.id] },
-        actor,
-      );
+      // Read-only: a plan must never write, whether it is being shown to an
+      // administrator for review or recomputed fresh inside apply to check
+      // the calendar has not moved.
+      const impact = await this.preview({
+        from: today,
+        to,
+        serviceAgreementIds: [agreement.id],
+      });
       if (impact.additions.length === 0 && impact.removals.length === 0) continue;
 
-      repaired.push({
+      moves.push({
         serviceAgreementId: agreement.id,
         customerName: agreement.customer.name,
         siteName: agreement.serviceSite.name,
@@ -523,8 +710,8 @@ export class VisitGenerationService {
 
     // One last read of the calendar as it now stands, over every agreement
     // this call was asked about — not accumulated from each agreement's own
-    // call above, because a day an early agreement's move already fixed
-    // would otherwise still show as a warning from before that move landed.
+    // preview above, because a day an early agreement's move would clear
+    // could otherwise still show as a warning from before that move lands.
     const stillOverCap =
       agreements.length === 0
         ? []
@@ -544,12 +731,64 @@ export class VisitGenerationService {
             })
           ).loadWarnings;
 
-    return {
+    // A fresh fingerprint of exactly the rows each move depends on, hashed
+    // together with the moves themselves. Anything that changes one of
+    // those rows before apply runs — a booking, a lock, a hand adjustment,
+    // another repair — changes this plan's hash, which is what lets apply
+    // detect a stale plan instead of silently repeating a review that no
+    // longer describes the calendar.
+    const fingerprints = await Promise.all(
+      moves.map((move) =>
+        this.fingerprintAgreementWindow(move.serviceAgreementId, move.from, move.to),
+      ),
+    );
+    const planHash = hashCanonical({
       today,
-      agreementsConsidered: considered,
-      agreementsRepaired: repaired,
-      stillOverCap,
-    };
+      scope: {
+        branchCode: scope.branchCode ?? null,
+        serviceAgreementIds: [...(scope.serviceAgreementIds ?? [])].sort(),
+      },
+      moves: moves.map((move, index) => ({
+        serviceAgreementId: move.serviceAgreementId,
+        from: move.from,
+        to: move.to,
+        visitsMoved: move.visitsMoved,
+        fingerprint: fingerprints[index],
+      })),
+    });
+
+    return { today, agreementsConsidered: considered, moves, latestTo, stillOverCap, planHash };
+  }
+
+  /**
+   * A canonical hash of exactly the {@link GeneratedVisit} rows one
+   * agreement's own move in {@link computeBunchingPlan} depends on — its
+   * id, date, status and revision, for every visit of that agreement in the
+   * window the move covers. Two calls agree if and only if none of those
+   * rows changed in between, which is the property {@link RepairedAgreement}
+   * plan-hash staleness detection needs.
+   */
+  private async fingerprintAgreementWindow(
+    agreementId: string,
+    from: string,
+    to: string,
+  ): Promise<string> {
+    const visits = await this.prisma.generatedVisit.findMany({
+      where: {
+        serviceAgreementId: agreementId,
+        visitDate: { gte: parseDateOnly(from), lte: parseDateOnly(to) },
+      },
+      select: { id: true, visitDate: true, updatedAt: true, status: true },
+      orderBy: { id: 'asc' },
+    });
+    return hashCanonical(
+      visits.map((visit) => ({
+        id: visit.id,
+        visitDate: visit.visitDate.toISOString(),
+        updatedAt: visit.updatedAt.toISOString(),
+        status: visit.status,
+      })),
+    );
   }
 
   /** Shared by preview and confirm, so the two can never disagree. */

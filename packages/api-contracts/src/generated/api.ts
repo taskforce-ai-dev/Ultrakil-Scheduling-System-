@@ -848,7 +848,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/visit-generation/repair-bunching": {
+    "/api/visit-generation/repair-bunching/plan": {
         parameters: {
             query?: never;
             header?: never;
@@ -858,10 +858,30 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Move an agreement's own unbooked visits off a day the current cap no longer allows
-         * @description Not a new kind of write: for every active agreement with a generated visit today or later, it calls the same scoped confirm a manager's own Generate Visits already uses, over the stretch that agreement already has generated. The load guard, reading the day's true crew-minutes, moves whichever of that agreement's own unbooked, unpublished visits no longer fit — exactly as it would for a newly generated one. A booked date, a published or locked visit, a hand-adjusted one, is never touched. For a calendar generated before capacity moved to crew-minutes, this is what brings it in line with the current cap without rewriting anything before today. Calling it again finds nothing left to move.
+         * What un-bunching an agreement's own visits off a day the current cap no longer allows would move
+         * @description Writes nothing. For every active agreement with a generated visit today or later, works out — over the stretch that agreement already has generated — which of its own unbooked, unpublished visits the current crew-minutes cap would move, exactly as a newly generated one would be placed. A booked date, a published or locked visit, a hand-adjusted one is never listed as moving. Returns a planHash: pass it unchanged to apply, which refuses to run if the calendar has moved since.
          */
-        post: operations["VisitGenerationController_repairBunching"];
+        post: operations["VisitGenerationController_planBunchingRepair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/visit-generation/repair-bunching/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply exactly the plan repair-bunching/plan described
+         * @description Applies what plan described, calling the same scoped confirm a manager's own Generate Visits already uses for each moved agreement — never a new kind of write. Requires the planHash plan returned, explicit confirmation, a reason and an idempotencyKey: repeating the same key with the same body returns the first application's own result again rather than moving anything twice; the same key with a different body is refused. If the calendar changed since the plan was reviewed, nothing is applied and a fresh plan is required. Calling it again after everything settled finds nothing left to move.
+         */
+        post: operations["VisitGenerationController_applyBunchingRepair"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2034,7 +2054,38 @@ export interface components {
             /** @description How many of this agreement's own unbooked visits moved to a different day. */
             visitsMoved: number;
         };
-        RepairBunchingSummaryDto: {
+        RepairBunchingPlanResponseDto: {
+            /** Format: date */
+            today: string;
+            /** @description Every active agreement with a generated visit in scope, whether or not it needed repair. */
+            agreementsConsidered: number;
+            /** @description Only the agreements applying this plan would actually move a visit for. */
+            moves: components["schemas"]["RepairedAgreementDto"][];
+            /** @description Days this plan would still leave over the cap, because every visit on them is protected. */
+            stillOverCap: components["schemas"]["DailyLoadWarningDto"][];
+            /** @description Canonical SHA-256 hash of this plan and the calendar state it was computed from. Pass back unchanged to apply. */
+            planHash: string;
+        };
+        RepairBunchingApplyDto: {
+            /**
+             * @description Limit to one branch. Omit to consider every active agreement in the company.
+             * @enum {string}
+             */
+            branchCode?: "COLOMBO" | "KANDY";
+            /** @description Limit to particular agreements. Omit for every active agreement in scope. */
+            serviceAgreementIds?: string[];
+            /** @description Canonical SHA-256 plan hash returned by plan. */
+            planHash: string;
+            /**
+             * @description Must be exactly true.
+             * @enum {boolean}
+             */
+            confirmation: true;
+            reason: string;
+            /** @description Repeating a call with the same key and the same body returns the first result again rather than repeating the write. */
+            idempotencyKey: string;
+        };
+        RepairBunchingApplyResultDto: {
             /** Format: date */
             today: string;
             /** @description Every active agreement with a generated visit in scope, whether or not it needed repair. */
@@ -2043,6 +2094,10 @@ export interface components {
             agreementsRepaired: components["schemas"]["RepairedAgreementDto"][];
             /** @description Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager's own decision, only its own unbooked, unpublished work. */
             stillOverCap: components["schemas"]["DailyLoadWarningDto"][];
+            planHash: string;
+            idempotencyKey: string;
+            /** @description True when this call did no new work and returned an earlier apply of the same idempotency key. */
+            replayed: boolean;
         };
         VisitDto: {
             /** Format: uuid */
@@ -4488,7 +4543,7 @@ export interface operations {
             };
         };
     };
-    VisitGenerationController_repairBunching: {
+    VisitGenerationController_planBunchingRepair: {
         parameters: {
             query?: never;
             header?: never;
@@ -4506,11 +4561,48 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RepairBunchingSummaryDto"];
+                    "application/json": components["schemas"]["RepairBunchingPlanResponseDto"];
                 };
             };
             /** @description Missing or invalid token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    VisitGenerationController_applyBunchingRepair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepairBunchingApplyDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairBunchingApplyResultDto"];
+                };
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT — either the plan is stale, or this idempotency key was already used for a different request. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

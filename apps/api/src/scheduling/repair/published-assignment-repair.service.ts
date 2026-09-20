@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
@@ -14,7 +14,9 @@ import {
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { toDateOnly } from '../../catalog/schedule-preview';
+import { hashCanonical } from '../../common/canonical-hash';
 import { AppException } from '../../common/errors/app.exception';
+import { isUniqueConflict } from '../../common/prisma-errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict, sortConflicts } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
@@ -1117,26 +1119,6 @@ function intersection(left: string[], right: string[]): string[] {
   return [...new Set(left.filter((value) => rightSet.has(value)))].sort();
 }
 
-function hashCanonical(value: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify(canonicalize(value)))
-    .digest('hex');
-}
-
-function canonicalize(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, entry]) => entry !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalize(entry)]),
-    );
-  }
-  return value;
-}
-
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
@@ -1152,10 +1134,6 @@ function sourceChanged(assignmentId: string): AppException {
     HttpStatus.CONFLICT,
     { assignmentId },
   );
-}
-
-function isUniqueConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 }
 
 export function repairTimeScope(visitDate: Date, now: Date = new Date()): RepairTimeScope {
