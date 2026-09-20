@@ -111,6 +111,8 @@ let fillerAgreementId: string;
 const agreementIds: string[] = [];
 /** Cleared in `afterAll`: the leave rows that pin COLOMBO's real capacity. */
 const pinnedAvailabilityIds: string[] = [];
+/** Set in `beforeAll` only when this suite had to create its own PMS-grade employee. */
+let dedicatedEmployeeId: string | undefined;
 
 const auth = () => ({ Authorization: `Bearer ${token}` });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -373,13 +375,28 @@ beforeAll(async () => {
     where: { branchCode: BranchCode.COLOMBO, isActive: true },
     select: { id: true, isPmsGrade: true },
   });
-  const keep = colomboEmployees.find((employee) => employee.isPmsGrade);
-  if (!keep) {
-    throw new Error(
-      'COLOMBO has no active PMS-grade employee on record — this fixture cannot pin a deterministic capacity.',
-    );
+  let keepId = colomboEmployees.find((employee) => employee.isPmsGrade)?.id;
+  if (!keepId) {
+    // A genuinely fresh database — CI's own — carries no workforce at all,
+    // so there is nothing to find a PMS-grade employee among. This suite
+    // needs exactly one deterministic PMS-grade employee to pin COLOMBO's
+    // capacity against, so it creates its own rather than assuming one is
+    // already on record — the same reasoning
+    // visit-generation-view-churn.spec.ts already uses for KANDY.
+    const dedicated = await prisma.employee.create({
+      data: {
+        sourceKey: `day-lock-supervisor-${suffix}`,
+        fullName: `Day Lock Supervisor ${suffix}`,
+        gradeLabel: 'PMS',
+        isPmsGrade: true,
+        branchId,
+        branchCode: BranchCode.COLOMBO,
+      },
+    });
+    dedicatedEmployeeId = dedicated.id;
+    keepId = dedicated.id;
   }
-  const toPin = colomboEmployees.filter((employee) => employee.id !== keep.id);
+  const toPin = colomboEmployees.filter((employee) => employee.id !== keepId);
   if (toPin.length > 0) {
     const pinned = await prisma.employeeAvailability.createManyAndReturn({
       data: toPin.map((employee) => ({
@@ -404,6 +421,9 @@ afterAll(async () => {
     await prisma.employeeAvailability.deleteMany({
       where: { id: { in: pinnedAvailabilityIds } },
     });
+  }
+  if (dedicatedEmployeeId) {
+    await prisma.employee.delete({ where: { id: dedicatedEmployeeId } }).catch(() => undefined);
   }
   // This database is shared with every other integration suite, and a stray
   // visit on one of these days would quietly change another suite's counts.

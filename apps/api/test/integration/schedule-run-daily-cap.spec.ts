@@ -18,6 +18,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import {
+  AvailabilityKind,
   BranchCode,
   DataProvenance,
   DayRuleKind,
@@ -32,7 +33,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
-import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../src/config/constants';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
 import { ScheduleRunProcessor } from '../../src/scheduling/optimizer/schedule-run.processor';
 import { ScheduleRunService } from '../../src/scheduling/optimizer/schedule-run.service';
 
@@ -69,17 +70,29 @@ const DAYS = [
  */
 const AGREEMENTS = 60;
 
-/** Five crews' worth of staff: far more than a day at the cap can use. */
+/**
+ * Five crews' worth of staff, so the optimizer is never crew-constrained —
+ * only two of them are left available (see `beforeAll`'s pinning below), so
+ * the branch's own real, resource-derived capacity stays small and
+ * deterministic; the rest exist purely so a variety of employees, not a
+ * headcount, is what the optimizer has to choose from.
+ */
 const CREWS = 5;
 
 /**
  * One crew-hour: the fixture's own agreements are all this size, so a
  * visit's crew-minutes cost is exactly one unit of it, and the cap reads as a
- * plain visit count again — the same number this suite measured before
- * capacity moved to crew-minutes.
+ * plain visit count.
  */
 const REFERENCE_VISIT_MINUTES = 60;
-const CAP_VISITS = DEFAULT_DAILY_CAPACITY_MINUTES / REFERENCE_VISIT_MINUTES;
+
+/**
+ * The branch-day cap this suite actually measures against — real, per-branch
+ * capacity ({@link BranchDayCapacityService}), not the flat constant it
+ * replaced. Set once real capacity is pinned deterministic, near the top of
+ * `beforeAll` below.
+ */
+let CAP_VISITS: number;
 
 let app: INestApplication;
 let http: string;
@@ -90,6 +103,8 @@ let jobTypeId: string;
 let branchId: string;
 const agreementIds: string[] = [];
 const employeeIds: string[] = [];
+/** Cleared in `afterAll`: leave rows pinning capacity for employees this suite does not own. */
+const pinnedAvailabilityIds: string[] = [];
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -243,9 +258,41 @@ beforeAll(async () => {
     employeeIds.push(supervisor.id, technician.id);
   }
 
-  // One crew-hour each, so twelve of them are exactly
-  // DEFAULT_DAILY_CAPACITY_MINUTES — the cap reads as a visit count of
-  // twelve, same as it did before capacity moved to crew-minutes.
+  // Real, resource-derived capacity now governs this branch-day exactly as
+  // it does in production, so it has to be pinned deterministic the same
+  // way `branch-day-cap-lock.spec.ts` already pins COLOMBO's: every active
+  // COLOMBO employee this shared database has, whoever created it, except
+  // one PMS supervisor and one technician of this suite's own, goes on
+  // leave for the whole window these tests touch. That leaves exactly two
+  // available employees, so `capacityFor` reads a small, known number
+  // instead of whatever headcount this suite's own five crews — or another
+  // suite's leftovers — would otherwise add up to.
+  const colomboEmployees = await prisma.employee.findMany({
+    where: { branchCode: BranchCode.COLOMBO, isActive: true },
+    select: { id: true },
+  });
+  const keepIds = new Set(employeeIds.slice(0, 2));
+  const toPin = colomboEmployees.filter((employee) => !keepIds.has(employee.id));
+  if (toPin.length > 0) {
+    const pinned = await prisma.employeeAvailability.createManyAndReturn({
+      data: toPin.map((employee) => ({
+        employeeId: employee.id,
+        startDate: new Date(`${RANGE.from}T00:00:00.000Z`),
+        endDate: new Date('2028-05-15T00:00:00.000Z'),
+        kind: AvailabilityKind.LEAVE,
+        reason: 'schedule-run-daily-cap.spec.ts: pinned for a deterministic capacity',
+      })),
+      select: { id: true },
+    });
+    pinnedAvailabilityIds.push(...pinned.map((row) => row.id));
+  }
+
+  const capacity = await app
+    .get(BranchDayCapacityService)
+    .capacityFor(BranchCode.COLOMBO, RANGE.from);
+  CAP_VISITS = capacity.capacityMinutes / REFERENCE_VISIT_MINUTES;
+
+  // One crew-hour each, so the cap reads as a plain visit count.
   const jobType = await prisma.jobType.create({
     data: {
       code: `CAP_${suffix}`,
@@ -311,6 +358,11 @@ beforeAll(async () => {
 }, 300_000);
 
 afterAll(async () => {
+  if (pinnedAvailabilityIds.length > 0) {
+    await prisma.employeeAvailability.deleteMany({
+      where: { id: { in: pinnedAvailabilityIds } },
+    });
+  }
   // This database is shared with every other integration suite, and sixty
   // stray agreements would quietly change their counts. Dependants first and
   // by hand: the schema does cascade, but a suite leaning on that has no way
