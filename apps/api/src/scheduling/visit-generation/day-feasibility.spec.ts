@@ -26,8 +26,13 @@ function workforce(overrides: Partial<BranchDayWorkforce> = {}): BranchDayWorkfo
     skillHolderCounts: new Map(),
     activeVehicleCount: 3,
     driverCapableVehicleCount: 3,
-    publicTransportCapableCount: 6,
-    maxTransportableConcurrentCrews: 3,
+    // Distinct driver per vehicle and distinct walkers by default, so the
+    // baseline fixture never exercises the driver/walker overlap the
+    // dedicated tests below are about.
+    vehicleEligibleDriverIds: [['driver-1'], ['driver-2'], ['driver-3']],
+    availablePublicTransportEmployeeIds: [
+      'walker-1', 'walker-2', 'walker-3', 'walker-4', 'walker-5', 'walker-6',
+    ],
     ...overrides,
   };
 }
@@ -161,14 +166,21 @@ describe('checkDayFeasibility', () => {
 
   describe('getting there', () => {
     it('refuses a day with no drivable vehicle and nobody able to travel otherwise', () => {
-      const verdict = check([loose()], workforce({ maxTransportableConcurrentCrews: 0 }));
+      const verdict = check(
+        [loose()],
+        workforce({ activeVehicleCount: 0, vehicleEligibleDriverIds: [], availablePublicTransportEmployeeIds: [] }),
+      );
       expect(verdict?.code).toBe('NO_WAY_TO_REACH_SITE');
     });
 
     it('refuses more crews out at once than transport can cover', () => {
       const verdict = check(
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-        workforce({ maxTransportableConcurrentCrews: 1 }),
+        workforce({
+          activeVehicleCount: 1,
+          vehicleEligibleDriverIds: [['driver-1']],
+          availablePublicTransportEmployeeIds: [],
+        }),
       );
       expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
     });
@@ -177,36 +189,121 @@ describe('checkDayFeasibility', () => {
       expect(
         check(
           [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-          workforce({ maxTransportableConcurrentCrews: 2 }),
+          workforce({
+            activeVehicleCount: 2,
+            vehicleEligibleDriverIds: [['driver-1'], ['driver-2']],
+          }),
         ),
       ).toBeNull();
     });
 
-    // The Technical Director's review: publicTransportCapableCount used to be
-    // read as a boolean that waived the transport check entirely, so one
-    // public-transport employee silently covered any number of concurrent
-    // crews. maxTransportableConcurrentCrews is a real headcount, not a flag,
-    // so one such employee against two forced-concurrent crews still refuses.
+    // The Technical Director's second review: a public-transport employee is
+    // one person, not an entire crew — walking two one-person crews still
+    // needs two distinct walkers, however many public-transport employees
+    // the branch has when that number is only one.
     it('one public-transport-capable employee does not cover two forced-concurrent crews', () => {
       const verdict = check(
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-        workforce({ driverCapableVehicleCount: 0, publicTransportCapableCount: 1, maxTransportableConcurrentCrews: 1 }),
+        workforce({
+          activeVehicleCount: 0,
+          vehicleEligibleDriverIds: [],
+          availablePublicTransportEmployeeIds: ['walker-1'],
+        }),
       );
       expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
     });
 
-    // The matching itself — same person eligible as both a vehicle's driver
-    // and a walker — is branch-day-capacity.spec.ts's job to prove; this only
-    // checks that checkDayFeasibility trusts the combined figure it is given
-    // rather than re-deriving (or re-breaking) it from the two raw counts.
-    it('does not add driverCapableVehicleCount and publicTransportCapableCount back together itself', () => {
+    // The exact driver/walker double-counting bug: one vehicle whose only
+    // authorized driver is also the branch's only public-transport-capable
+    // employee. Naively adding driverCapableVehicleCount (1) and a walker
+    // count (1) reads as transport for two crews; the one real person
+    // behind both can only cover one.
+    it('does not count the same employee as both a vehicle driver and a separate walker', () => {
       const verdict = check(
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-        // A naive sum would read this as 1 + 1 = 2 and pass; the one real
-        // person behind both numbers can only cover one crew at once.
-        workforce({ driverCapableVehicleCount: 1, publicTransportCapableCount: 1, maxTransportableConcurrentCrews: 1 }),
+        workforce({
+          activeVehicleCount: 1,
+          vehicleEligibleDriverIds: [['shared-person']],
+          availablePublicTransportEmployeeIds: ['shared-person'],
+        }),
       );
       expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+    });
+
+    describe('crew size, not just crew count', () => {
+      // Thiva's exact reproduction on 5cd3a03: a walking resource used to
+      // read as "covers one crew," any size. A three-person crew with no
+      // vehicle needs three distinct walkers, not one.
+      it('refuses a three-person crew with no vehicle when only one employee can travel by public transport', () => {
+        const verdict = check(
+          [tight({ requiredCrewSize: 3 })],
+          workforce({
+            availableEmployeeCount: 3,
+            availablePmsCount: 3,
+            activeVehicleCount: 0,
+            vehicleEligibleDriverIds: [],
+            availablePublicTransportEmployeeIds: ['walker-1'],
+          }),
+        );
+        expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+      });
+
+      it('accepts the same three-person crew when three distinct employees can travel by public transport', () => {
+        expect(
+          check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 3,
+              availablePmsCount: 3,
+              activeVehicleCount: 0,
+              vehicleEligibleDriverIds: [],
+              availablePublicTransportEmployeeIds: ['walker-1', 'walker-2', 'walker-3'],
+            }),
+          ),
+        ).toBeNull();
+      });
+
+      // Two forced-concurrent crews of different sizes: proves resources are
+      // not reused across them, and that a vehicle is spent on the crew that
+      // actually needs it most (the larger one) rather than leaving it to
+      // chance which visit "gets" the vehicle.
+      it('does not reuse an employee or a vehicle across two forced-concurrent crews of different sizes', () => {
+        const verdict = check(
+          [
+            tight({ serviceAgreementId: 'big', requiredCrewSize: 3 }),
+            tight({ serviceAgreementId: 'small', requiredCrewSize: 1 }),
+          ],
+          workforce({
+            availableEmployeeCount: 5,
+            availablePmsCount: 2,
+            activeVehicleCount: 1,
+            vehicleEligibleDriverIds: [['driver-1']],
+            // One walker beyond the driver: exactly enough for the vehicle
+            // to take the 3-person crew and the one walker to take the
+            // 1-person crew — but not enough for either crew alone without
+            // the vehicle, so the split has to be found, not assumed.
+            availablePublicTransportEmployeeIds: ['walker-1'],
+          }),
+        );
+        expect(verdict).toBeNull();
+      });
+
+      it('refuses the same two crews when there is one fewer transport resource than the split needs', () => {
+        const verdict = check(
+          [
+            tight({ serviceAgreementId: 'big', requiredCrewSize: 3 }),
+            tight({ serviceAgreementId: 'small', requiredCrewSize: 1 }),
+          ],
+          workforce({
+            availableEmployeeCount: 5,
+            availablePmsCount: 2,
+            activeVehicleCount: 1,
+            vehicleEligibleDriverIds: [['driver-1']],
+            availablePublicTransportEmployeeIds: [],
+          }),
+        );
+        expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+      });
     });
   });
 

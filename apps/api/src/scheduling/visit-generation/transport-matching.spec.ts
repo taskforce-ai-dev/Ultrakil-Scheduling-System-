@@ -1,4 +1,4 @@
-import { maxBipartiteMatching } from './transport-matching';
+import { maxBipartiteMatching, preferredBipartiteMatching } from './transport-matching';
 
 describe('maxBipartiteMatching', () => {
   it('matches nothing when there are no resources', () => {
@@ -38,5 +38,59 @@ describe('maxBipartiteMatching', () => {
 
   it('caps the match at however many distinct people exist, however many resources ask for them', () => {
     expect(maxBipartiteMatching([['a'], ['a'], ['b'], ['b']])).toBe(2);
+  });
+});
+
+describe('preferredBipartiteMatching', () => {
+  it('matches the same maximum size as maxBipartiteMatching, whatever is costly', () => {
+    const resources = [['a', 'b'], ['a']];
+    expect(preferredBipartiteMatching(resources, new Set()).size).toBe(
+      maxBipartiteMatching(resources),
+    );
+    expect(preferredBipartiteMatching(resources, new Set(['a', 'b'])).size).toBe(
+      maxBipartiteMatching(resources),
+    );
+  });
+
+  it('prefers a non-costly person when one is eligible', () => {
+    const matched = preferredBipartiteMatching([['costly-a', 'cheap-b']], new Set(['costly-a']));
+    expect(matched.get(0)).toBe('cheap-b');
+  });
+
+  // The exact case the driver/walker overlap bug turned on: a vehicle's
+  // only driver is also the branch's only walker. Using them as the driver
+  // when a non-costly alternative exists for another vehicle should never
+  // happen — but here there is no alternative, so the costly person must
+  // still be used rather than leaving the vehicle unmatched.
+  it('falls back to a costly person only when nothing else can cover that resource', () => {
+    const matched = preferredBipartiteMatching([['costly-a']], new Set(['costly-a']));
+    expect(matched.get(0)).toBe('costly-a');
+  });
+
+  it('spends the costly person on only one resource even when eligible for several, leaving the other resource to a cheap alternative', () => {
+    // Resource 0 can only use the costly person; resource 1 can use either.
+    // The costly person must go to resource 0 (its only option), leaving
+    // resource 1 to the cheap person — not the other way around, which
+    // would strand resource 0.
+    const matched = preferredBipartiteMatching(
+      [['costly'], ['costly', 'cheap']],
+      new Set(['costly']),
+    );
+    expect(matched.get(0)).toBe('costly');
+    expect(matched.get(1)).toBe('cheap');
+  });
+
+  it('never uses a costly person when a maximum matching exists using only cheap ones', () => {
+    // Every resource has both a cheap and a costly option — the maximum
+    // matching should use zero costly people.
+    const matched = preferredBipartiteMatching(
+      [
+        ['costly-1', 'cheap-1'],
+        ['costly-2', 'cheap-2'],
+      ],
+      new Set(['costly-1', 'costly-2']),
+    );
+    expect([...matched.values()].some((person) => person.startsWith('costly'))).toBe(false);
+    expect(matched.size).toBe(2);
   });
 });

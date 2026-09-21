@@ -74,14 +74,22 @@ export interface BranchDayResourceFacts {
    */
   driverCapableVehicleCount: number;
   /**
-   * How many crews this branch's transport can actually put on the road at
-   * once today — vehicles matched to a distinct available driver, plus
-   * anyone who can travel without one, with nobody counted as covering two
-   * roles at once. `driverCapableVehicleCount` alone undercounts a branch
-   * that also has public-transport-capable staff; this is the bound
-   * `computeBranchDayCapacity` and day-feasibility's transport checks both
-   * use, so the two ask the same question the same way. Only consulted when
-   * `activeVehicleCount > 0`, for the same reason as `driverCapableVehicleCount`.
+   * A maximum matching of vehicles-with-a-driver plus walkers, same as
+   * `driverCapableVehicleCount` but with public-transport-capable staff
+   * folded in — `driverCapableVehicleCount` alone undercounts a branch that
+   * also has such staff, and nobody is counted as covering both roles.
+   *
+   * This function has no visit to ask "how big is this crew" of, so it
+   * cannot tell a one-person crew from a five-person one; treating this
+   * count as "N *crews*" would credit a walker with covering a crew of any
+   * size, which day-feasibility's own transport check (which does see each
+   * visit's `requiredCrewSize`) proved wrong — a walker carries only
+   * themselves. `computeBranchDayCapacity` therefore reads this as *minutes
+   * of transportable labor* (one matched unit is worth one employee's
+   * workday, the same as a person already counts toward `crewMinutes`), a
+   * fungible quantity like `crewMinutes` itself — never as a count of
+   * simultaneous crews. Only consulted when `activeVehicleCount > 0`, for
+   * the same reason as `driverCapableVehicleCount`.
    */
   transportCapableConcurrentCrews: number;
 }
@@ -173,13 +181,6 @@ export function workforceForDate(
   }
 
   const vehicleDriverLists = eligibleDriverListsFor(pool, unavailableIds);
-  // Everyone who can travel without a vehicle is, for matching purposes, a
-  // one-person "resource" only they can crew — folding walking into the
-  // same matching as driving is what stops one person being counted as both
-  // a driver and a walker in the same instant.
-  const walkSlots = available
-    .filter((employee) => employee.canUsePublicTransport)
-    .map((employee) => [employee.id]);
 
   return {
     totalEmployeeCount: pool.employees.length,
@@ -188,10 +189,10 @@ export function workforceForDate(
     skillHolderCounts,
     activeVehicleCount: pool.vehicles.length,
     driverCapableVehicleCount: maxBipartiteMatching(vehicleDriverLists),
-    publicTransportCapableCount: available.filter(
-      (employee) => employee.canUsePublicTransport,
-    ).length,
-    maxTransportableConcurrentCrews: maxBipartiteMatching([...vehicleDriverLists, ...walkSlots]),
+    vehicleEligibleDriverIds: vehicleDriverLists,
+    availablePublicTransportEmployeeIds: available
+      .filter((employee) => employee.canUsePublicTransport)
+      .map((employee) => employee.id),
   };
 }
 

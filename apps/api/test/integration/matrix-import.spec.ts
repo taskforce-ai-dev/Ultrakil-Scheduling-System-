@@ -660,7 +660,7 @@ describe('the Colombo vehicle-branch default', () => {
     // but neither of its two authorized drivers can actually drive it there.
     expect(colombo.activeVehicleCount).toBe(1);
     expect(colombo.driverCapableVehicleCount).toBe(0);
-    expect(colombo.maxTransportableConcurrentCrews).toBe(0);
+    expect(colombo.vehicleEligibleDriverIds).toEqual([[]]);
     // Unaffected by this default either way: the vehicle never carries the
     // Kandy branch, so it was never in Kandy's own pool to begin with.
     expect(kandy.activeVehicleCount).toBe(0);

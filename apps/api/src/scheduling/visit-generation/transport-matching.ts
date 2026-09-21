@@ -17,28 +17,77 @@
  * is fast enough and simple enough to read and verify by hand; there is no
  * need for Hopcroft–Karp here.
  */
-export function maxBipartiteMatching(resourceEligiblePeople: readonly (readonly string[])[]): number {
-  // personId -> index of the resource currently matched to them.
-  const matchedResourceOf = new Map<string, number>();
 
-  function tryAssign(resourceIndex: number, seen: Set<string>): boolean {
-    for (const person of resourceEligiblePeople[resourceIndex]) {
-      if (seen.has(person)) continue;
-      seen.add(person);
-      const holder = matchedResourceOf.get(person);
-      // Free, or the augmenting path can bump whoever holds this person to
-      // a different resource, freeing them up for this one.
-      if (holder === undefined || tryAssign(holder, seen)) {
-        matchedResourceOf.set(person, resourceIndex);
-        return true;
-      }
+/**
+ * Tries to give `resourceIndex` a person from its own eligible list,
+ * displacing whoever currently holds one of them onto a different resource
+ * if that frees the one this call needs — the standard augmenting-path
+ * step. Mutates `matchedResourceOf` (person -> resource index) in place on
+ * success; leaves it untouched on failure.
+ */
+function augmentFrom(
+  resourceEligiblePeople: readonly (readonly string[])[],
+  matchedResourceOf: Map<string, number>,
+  resourceIndex: number,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const person of resourceEligiblePeople[resourceIndex]) {
+    if (seen.has(person)) continue;
+    seen.add(person);
+    const holder = matchedResourceOf.get(person);
+    if (holder === undefined || augmentFrom(resourceEligiblePeople, matchedResourceOf, holder, seen)) {
+      matchedResourceOf.set(person, resourceIndex);
+      return true;
     }
-    return false;
   }
+  return false;
+}
 
+/** How many resources can be simultaneously staffed, each by a distinct person. */
+export function maxBipartiteMatching(resourceEligiblePeople: readonly (readonly string[])[]): number {
+  const matchedResourceOf = new Map<string, number>();
   let matched = 0;
   for (let resourceIndex = 0; resourceIndex < resourceEligiblePeople.length; resourceIndex += 1) {
-    if (tryAssign(resourceIndex, new Set())) matched += 1;
+    if (augmentFrom(resourceEligiblePeople, matchedResourceOf, resourceIndex)) matched += 1;
   }
   return matched;
+}
+
+/**
+ * A maximum matching that also uses as few `costly` people as possible,
+ * among every matching of that maximum size — not a heuristic ordering, an
+ * exact two-phase technique. Phase one finds the largest matching possible
+ * using only non-costly people. Phase two keeps that matching and augments
+ * it, now allowing costly people too, for whichever resources are still
+ * unmatched.
+ *
+ * Every augmenting path phase two adds must use at least one costly edge:
+ * if a path existed using only non-costly edges, phase one's exhaustive
+ * non-costly-only search would already have found it. So a costly person
+ * is only ever drawn on for a resource nothing else could have covered —
+ * which is exactly "prefer a non-walker as a vehicle's driver, so as many
+ * walkers as possible stay free to walk."
+ *
+ * @returns resource index -> the person matched to it. `.size` is the
+ *   matching's total size, same as `maxBipartiteMatching` would report.
+ */
+export function preferredBipartiteMatching(
+  resourceEligiblePeople: readonly (readonly string[])[],
+  costly: ReadonlySet<string>,
+): Map<number, string> {
+  const matchedResourceOf = new Map<string, number>();
+  const nonCostlyOnly = resourceEligiblePeople.map((people) => people.filter((person) => !costly.has(person)));
+
+  const matchedResourceIndexes = new Set<number>();
+  for (let resourceIndex = 0; resourceIndex < nonCostlyOnly.length; resourceIndex += 1) {
+    if (augmentFrom(nonCostlyOnly, matchedResourceOf, resourceIndex)) matchedResourceIndexes.add(resourceIndex);
+  }
+  for (let resourceIndex = 0; resourceIndex < resourceEligiblePeople.length; resourceIndex += 1) {
+    if (matchedResourceIndexes.has(resourceIndex)) continue;
+    if (augmentFrom(resourceEligiblePeople, matchedResourceOf, resourceIndex)) matchedResourceIndexes.add(resourceIndex);
+  }
+
+  const personByResource = new Map<number, string>();
+  for (const [person, resourceIndex] of matchedResourceOf) personByResource.set(resourceIndex, person);
+  return personByResource;
 }

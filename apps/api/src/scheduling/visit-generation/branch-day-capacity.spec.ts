@@ -303,7 +303,10 @@ describe('workforceForDate', () => {
       '2026-09-23',
     );
     expect(result.driverCapableVehicleCount).toBe(0);
-    expect(result.maxTransportableConcurrentCrews).toBe(0);
+    // The raw list day-feasibility matches against is empty for this
+    // vehicle too, not just the summary count — the outsider id never
+    // survives the branch/active filter into either.
+    expect(result.vehicleEligibleDriverIds).toEqual([[]]);
   });
 
   it('mirrors factsForDate: one employee does not cover two vehicles at once', () => {
@@ -319,13 +322,16 @@ describe('workforceForDate', () => {
     expect(result.driverCapableVehicleCount).toBe(1);
   });
 
-  it('mirrors factsForDate: a driver who could also walk is one transport unit, not two', () => {
+  it('exposes the raw driver list and walker set for day-feasibility to match per demand, unresolved here', () => {
     const result = workforceForDate(
       pool({ vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }] }),
       '2026-09-23',
     );
     // e1 and e2 can both use public transport; e2 is also v1's only driver.
-    // Distinct-people transport capacity is 2 (e1 walks, e2 drives), not 3.
-    expect(result.maxTransportableConcurrentCrews).toBe(2);
+    // workforceForDate does not resolve that overlap — it hands both raw
+    // facts to day-feasibility, which is the one that knows the actual
+    // demand and can decide who drives versus who walks.
+    expect(result.vehicleEligibleDriverIds).toEqual([['e2']]);
+    expect(result.availablePublicTransportEmployeeIds.slice().sort()).toEqual(['e1', 'e2']);
   });
 });
