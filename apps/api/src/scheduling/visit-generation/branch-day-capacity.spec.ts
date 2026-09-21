@@ -5,6 +5,7 @@ import {
   BranchResourcePool,
   computeBranchDayCapacity,
   factsForDate,
+  workforceForDate,
 } from './branch-day-capacity';
 
 function facts(overrides: Partial<BranchDayResourceFacts> = {}): BranchDayResourceFacts {
@@ -16,6 +17,7 @@ function facts(overrides: Partial<BranchDayResourceFacts> = {}): BranchDayResour
     hasAvailablePmsSupervisor: true,
     activeVehicleCount: 3,
     driverCapableVehicleCount: 3,
+    transportCapableConcurrentCrews: 3,
     ...overrides,
   };
 }
@@ -33,10 +35,20 @@ describe('computeBranchDayCapacity', () => {
     // Vehicles held generously so employee headcount is the only thing
     // varying between the two branch-days under test.
     const small = computeBranchDayCapacity(
-      facts({ availableEmployeeCount: 2, activeVehicleCount: 20, driverCapableVehicleCount: 20 }),
+      facts({
+        availableEmployeeCount: 2,
+        activeVehicleCount: 20,
+        driverCapableVehicleCount: 20,
+        transportCapableConcurrentCrews: 20,
+      }),
     );
     const large = computeBranchDayCapacity(
-      facts({ availableEmployeeCount: 20, activeVehicleCount: 20, driverCapableVehicleCount: 20 }),
+      facts({
+        availableEmployeeCount: 20,
+        activeVehicleCount: 20,
+        driverCapableVehicleCount: 20,
+        transportCapableConcurrentCrews: 20,
+      }),
     );
     expect(small.capacityMinutes).toBe(2 * 480);
     expect(large.capacityMinutes).toBe(20 * 480);
@@ -53,10 +65,23 @@ describe('computeBranchDayCapacity', () => {
 
   it('is zero when the branch owns vehicles but none has an available authorized driver today', () => {
     const result = computeBranchDayCapacity(
-      facts({ activeVehicleCount: 5, driverCapableVehicleCount: 0 }),
+      facts({ activeVehicleCount: 5, driverCapableVehicleCount: 0, transportCapableConcurrentCrews: 0 }),
     );
     expect(result.capacityMinutes).toBe(0);
     expect(result.reason).toBe('NO_AVAILABLE_DRIVER');
+  });
+
+  it('is not zero-capacity when nobody can drive but staff can still travel by public transport', () => {
+    const result = computeBranchDayCapacity(
+      facts({
+        availableEmployeeCount: 4,
+        activeVehicleCount: 5,
+        driverCapableVehicleCount: 0,
+        transportCapableConcurrentCrews: 2,
+      }),
+    );
+    expect(result.capacityMinutes).toBe(2 * 480);
+    expect(result.reason).toBeNull();
   });
 
   it('does not vehicle-gate a branch that owns no vehicles at all', () => {
@@ -71,7 +96,12 @@ describe('computeBranchDayCapacity', () => {
   it('bounds capacity by whichever real resource runs out first', () => {
     // Plenty of people, but only one vehicle with a driver today.
     const result = computeBranchDayCapacity(
-      facts({ availableEmployeeCount: 20, activeVehicleCount: 4, driverCapableVehicleCount: 1 }),
+      facts({
+        availableEmployeeCount: 20,
+        activeVehicleCount: 4,
+        driverCapableVehicleCount: 1,
+        transportCapableConcurrentCrews: 1,
+      }),
     );
     expect(result.capacityMinutes).toBe(1 * 480);
   });
@@ -152,5 +182,150 @@ describe('factsForDate', () => {
     });
     const result = factsForDate(shared, BranchCode.COLOMBO, '2026-09-23');
     expect(result.driverCapableVehicleCount).toBe(1);
+  });
+
+  // The Technical Director's review, item 1: authorization rows are never
+  // pruned to match branch or active status, so `pool.vehicles` can carry an
+  // id for someone who is not in `pool.employees` at all — the same shape a
+  // Kandy employee or a deactivated Colombo employee's authorization has,
+  // since `BranchDayCapacityService.loadPool` only ever populates
+  // `pool.employees` with this branch's own active roster.
+  it("a vehicle authorized only to someone outside this branch's active roster is not driver-capable", () => {
+    const withOutsider = pool({
+      // No walkers in this branch's own roster, so the only way
+      // transportCapableConcurrentCrews could read nonzero is the outsider's
+      // authorization wrongly counting.
+      employees: [{ id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false }],
+      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['kandy-employee-not-in-pool'] }],
+    });
+    const result = factsForDate(withOutsider, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.activeVehicleCount).toBe(1);
+    expect(result.driverCapableVehicleCount).toBe(0);
+    expect(result.transportCapableConcurrentCrews).toBe(0);
+  });
+
+  it("counts a vehicle authorized to a mix of this branch's employees and an outsider by the branch employee alone", () => {
+    const mixed = pool({
+      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['kandy-employee-not-in-pool', 'e2'] }],
+    });
+    const result = factsForDate(mixed, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.driverCapableVehicleCount).toBe(1);
+  });
+
+  // Item 2: one employee authorized for two vehicles does not make both
+  // vehicles usable at the same time — only one of them can actually be
+  // driven right now.
+  it('one employee authorized for two vehicles is driver-capable for only one of them at once', () => {
+    const oneDriverTwoVehicles = pool({
+      vehicles: [
+        { id: 'v1', authorizedEmployeeIds: ['e2'] },
+        { id: 'v2', authorizedEmployeeIds: ['e2'] },
+      ],
+    });
+    const result = factsForDate(oneDriverTwoVehicles, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.activeVehicleCount).toBe(2);
+    expect(result.driverCapableVehicleCount).toBe(1);
+  });
+
+  // The valid multi-driver case this fix must not break: DAC-2485/DAG-3284
+  // style, several vehicles each with their own distinct available driver
+  // really are all drivable at once.
+  it('several vehicles each with a distinct available driver are all driver-capable at once', () => {
+    const distinctDrivers = pool({
+      employees: [
+        { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false },
+        { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: false },
+        { id: 'e3', isPmsGrade: false, skillCodes: [], canUsePublicTransport: false },
+      ],
+      // DAG-3284/DAC-2485-style: several drivers checked for more than one
+      // vehicle, but there are still enough distinct people to cover all three.
+      vehicles: [
+        { id: 'v1', authorizedEmployeeIds: ['e1', 'e2'] },
+        { id: 'v2', authorizedEmployeeIds: ['e2', 'e3'] },
+        { id: 'v3', authorizedEmployeeIds: ['e3', 'e1'] },
+      ],
+    });
+    const result = factsForDate(distinctDrivers, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.activeVehicleCount).toBe(3);
+    expect(result.driverCapableVehicleCount).toBe(3);
+  });
+
+  // Item 3, at the source: the same person eligible as both a vehicle's only
+  // driver and the branch's only walker is one real transport unit, not two.
+  it('does not count the same employee as both a vehicle driver and a separate public-transport unit', () => {
+    const oneDriverWhoCanAlsoWalk = pool({
+      employees: [
+        { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false },
+        { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
+      ],
+      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+    });
+    const result = factsForDate(oneDriverWhoCanAlsoWalk, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.driverCapableVehicleCount).toBe(1);
+    // Naively adding driverCapableVehicleCount (1) and a public-transport
+    // count (1) would read as 2; there is one real person behind both.
+    expect(result.transportCapableConcurrentCrews).toBe(1);
+  });
+
+  it('a distinct walker on top of a distinct driver really does add a second transportable crew', () => {
+    const driverPlusWalker = pool({
+      employees: [
+        { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false },
+        { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: false },
+        { id: 'e3', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
+      ],
+      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+    });
+    const result = factsForDate(driverPlusWalker, BranchCode.COLOMBO, '2026-09-23');
+    expect(result.transportCapableConcurrentCrews).toBe(2);
+  });
+});
+
+describe('workforceForDate', () => {
+  function pool(overrides: Partial<BranchResourcePool> = {}): BranchResourcePool {
+    return {
+      employees: [
+        { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: true },
+        { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
+      ],
+      unavailability: [],
+      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+      ...overrides,
+    };
+  }
+
+  it('mirrors factsForDate: an outside authorization does not make a vehicle driver-capable', () => {
+    const result = workforceForDate(
+      pool({
+        employees: [{ id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false }],
+        vehicles: [{ id: 'v1', authorizedEmployeeIds: ['not-in-this-branch'] }],
+      }),
+      '2026-09-23',
+    );
+    expect(result.driverCapableVehicleCount).toBe(0);
+    expect(result.maxTransportableConcurrentCrews).toBe(0);
+  });
+
+  it('mirrors factsForDate: one employee does not cover two vehicles at once', () => {
+    const result = workforceForDate(
+      pool({
+        vehicles: [
+          { id: 'v1', authorizedEmployeeIds: ['e2'] },
+          { id: 'v2', authorizedEmployeeIds: ['e2'] },
+        ],
+      }),
+      '2026-09-23',
+    );
+    expect(result.driverCapableVehicleCount).toBe(1);
+  });
+
+  it('mirrors factsForDate: a driver who could also walk is one transport unit, not two', () => {
+    const result = workforceForDate(
+      pool({ vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }] }),
+      '2026-09-23',
+    );
+    // e1 and e2 can both use public transport; e2 is also v1's only driver.
+    // Distinct-people transport capacity is 2 (e1 walks, e2 drives), not 3.
+    expect(result.maxTransportableConcurrentCrews).toBe(2);
   });
 });

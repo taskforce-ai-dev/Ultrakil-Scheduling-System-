@@ -27,6 +27,7 @@ function workforce(overrides: Partial<BranchDayWorkforce> = {}): BranchDayWorkfo
     activeVehicleCount: 3,
     driverCapableVehicleCount: 3,
     publicTransportCapableCount: 6,
+    maxTransportableConcurrentCrews: 3,
     ...overrides,
   };
 }
@@ -160,28 +161,52 @@ describe('checkDayFeasibility', () => {
 
   describe('getting there', () => {
     it('refuses a day with no drivable vehicle and nobody able to travel otherwise', () => {
-      const verdict = check(
-        [loose()],
-        workforce({ driverCapableVehicleCount: 0, publicTransportCapableCount: 0 }),
-      );
+      const verdict = check([loose()], workforce({ maxTransportableConcurrentCrews: 0 }));
       expect(verdict?.code).toBe('NO_WAY_TO_REACH_SITE');
     });
 
-    it('refuses more crews out at once than there are drivable vehicles for them', () => {
+    it('refuses more crews out at once than transport can cover', () => {
       const verdict = check(
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-        workforce({ driverCapableVehicleCount: 1, publicTransportCapableCount: 0 }),
+        workforce({ maxTransportableConcurrentCrews: 1 }),
       );
       expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
     });
 
-    it('does not count vehicles against a branch whose crews can travel by public transport', () => {
+    it('accepts crews out at once when transport can actually cover all of them', () => {
       expect(
         check(
           [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
-          workforce({ driverCapableVehicleCount: 1, publicTransportCapableCount: 6 }),
+          workforce({ maxTransportableConcurrentCrews: 2 }),
         ),
       ).toBeNull();
+    });
+
+    // The Technical Director's review: publicTransportCapableCount used to be
+    // read as a boolean that waived the transport check entirely, so one
+    // public-transport employee silently covered any number of concurrent
+    // crews. maxTransportableConcurrentCrews is a real headcount, not a flag,
+    // so one such employee against two forced-concurrent crews still refuses.
+    it('one public-transport-capable employee does not cover two forced-concurrent crews', () => {
+      const verdict = check(
+        [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
+        workforce({ driverCapableVehicleCount: 0, publicTransportCapableCount: 1, maxTransportableConcurrentCrews: 1 }),
+      );
+      expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+    });
+
+    // The matching itself — same person eligible as both a vehicle's driver
+    // and a walker — is branch-day-capacity.spec.ts's job to prove; this only
+    // checks that checkDayFeasibility trusts the combined figure it is given
+    // rather than re-deriving (or re-breaking) it from the two raw counts.
+    it('does not add driverCapableVehicleCount and publicTransportCapableCount back together itself', () => {
+      const verdict = check(
+        [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
+        // A naive sum would read this as 1 + 1 = 2 and pass; the one real
+        // person behind both numbers can only cover one crew at once.
+        workforce({ driverCapableVehicleCount: 1, publicTransportCapableCount: 1, maxTransportableConcurrentCrews: 1 }),
+      );
+      expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
     });
   });
 

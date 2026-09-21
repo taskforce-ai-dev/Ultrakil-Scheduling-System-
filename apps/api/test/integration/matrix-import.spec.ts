@@ -540,11 +540,15 @@ describe('the Colombo vehicle-branch default', () => {
     const { grid } = await readMatrixFile(fixturePath, null);
     const parsed = parseMatrix(grid);
 
-    const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
-
+    // Looked up after the import, not before: a clean migrated database has
+    // no Branch row at all until something upserts one, and importMatrix is
+    // that something here. Looking this up first only ever passed because an
+    // earlier test in this file had already created it — run this test
+    // alone against a fresh database and that assumption breaks.
     const first = await importMatrix(prisma, parsed);
     expect(first.vehiclesCreated).toBe(0);
     expect(first.vehiclesUpdated).toBe(1);
+    const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
     const repaired = await prisma.vehicle.findUniqueOrThrow({ where: { id: legacy.id } });
     expect(repaired.branchId).toBe(colomboBranch.id);
     expect(await prisma.vehicle.count({ where: { code: 'DAC-2485' } })).toBe(1);
@@ -617,5 +621,102 @@ describe('the Colombo vehicle-branch default', () => {
     expect(checkDayFeasibility(BranchCode.COLOMBO, today, demand(3), colombo)).toMatchObject({
       code: 'NOT_ENOUGH_TRANSPORT_AT_ONCE',
     });
+  });
+
+  it('does not count a Kandy employee or an inactive Colombo employee as an available Colombo driver', async () => {
+    // One vehicle, checked for two people who must not count: a Kandy
+    // employee (wrong branch) and a Colombo employee who has since left
+    // (isActive: false). Authorization rows are never pruned to match, so
+    // both checkmarks survive on the vehicle even though neither person can
+    // actually turn up and drive it for Colombo.
+    const fixturePath = join(workDir, 'cross-branch-and-inactive-driver.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Bolero Truck DAC- 2485'],
+      ['Colombo Branch', 1, 'Fixture Departed Driver', '', 'SPMS', '✓'],
+      ['Kandy Branch', 2, 'Fixture Kandy Driver', '', 'SPMS', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+    await importMatrix(prisma, parsed);
+
+    const departed = await prisma.employee.findFirstOrThrow({
+      where: { fullName: 'Fixture Departed Driver' },
+    });
+    await prisma.employee.update({ where: { id: departed.id }, data: { isActive: false } });
+
+    const today = '2026-10-06';
+    const workforces = await capacityService.workforcesFor([
+      { branchCode: BranchCode.COLOMBO, date: today },
+      { branchCode: BranchCode.KANDY, date: today },
+    ]);
+    const colombo = workforces.get(`${BranchCode.COLOMBO}|${today}`)!;
+    const kandy = workforces.get(`${BranchCode.KANDY}|${today}`)!;
+
+    // The vehicle itself is visible to Colombo (this fix's whole point) —
+    // but neither of its two authorized drivers can actually drive it there.
+    expect(colombo.activeVehicleCount).toBe(1);
+    expect(colombo.driverCapableVehicleCount).toBe(0);
+    expect(colombo.maxTransportableConcurrentCrews).toBe(0);
+    // Unaffected by this default either way: the vehicle never carries the
+    // Kandy branch, so it was never in Kandy's own pool to begin with.
+    expect(kandy.activeVehicleCount).toBe(0);
+  });
+
+  it('does not let one employee authorized for two vehicles make both driver-capable at once', async () => {
+    const fixturePath = join(workDir, 'one-driver-two-vehicles.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Van( 04 People) CAB-1042', 'Van( 04 People) CAB-2288'],
+      ['Colombo Branch', 1, 'Fixture Sole Driver', '', 'SPMS', '✓', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+    await importMatrix(prisma, parsed);
+
+    const today = '2026-10-07';
+    const colombo = (
+      await capacityService.workforcesFor([{ branchCode: BranchCode.COLOMBO, date: today }])
+    ).get(`${BranchCode.COLOMBO}|${today}`)!;
+
+    expect(colombo.activeVehicleCount).toBe(2);
+    // Filtering each vehicle independently for "has any authorized driver at
+    // all" would read this as 2; only one person exists to drive either one.
+    expect(colombo.driverCapableVehicleCount).toBe(1);
+  });
+
+  it('keeps several vehicles driver-capable at once when they really do have distinct available drivers, DAG-3284/DAC-2485-style', async () => {
+    // Overlapping authorizations, same as the real matrix's shared vehicles,
+    // but with enough distinct people that all three really are drivable
+    // simultaneously — the case the matching must not break while fixing
+    // the one above.
+    const fixturePath = join(workDir, 'distinct-multi-driver-vehicles.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Van( 04 People) CAB-1042', 'Van( 04 People) CAB-2288', 'Bolero Truck DAC- 2485'],
+      ['Colombo Branch', 1, 'Fixture Driver One', '', 'SPMS', '✓', '✓', ''],
+      ['', 2, 'Fixture Driver Two', '', 'Junior PMT', '', '✓', '✓'],
+      ['', 3, 'Fixture Driver Three', '', 'Junior PMT', '✓', '', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+    await importMatrix(prisma, parsed);
+
+    const today = '2026-10-08';
+    const colombo = (
+      await capacityService.workforcesFor([{ branchCode: BranchCode.COLOMBO, date: today }])
+    ).get(`${BranchCode.COLOMBO}|${today}`)!;
+
+    expect(colombo.activeVehicleCount).toBe(3);
+    expect(colombo.driverCapableVehicleCount).toBe(3);
   });
 });

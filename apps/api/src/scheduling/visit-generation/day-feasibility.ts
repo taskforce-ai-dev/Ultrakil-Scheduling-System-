@@ -64,10 +64,27 @@ export interface BranchDayWorkforce {
   skillHolderCounts: Map<string, number>;
   /** Active vehicles the branch owns at all. Zero means it is not vehicle-gated. */
   activeVehicleCount: number;
-  /** Of those, how many have an available, authorized driver that date. */
+  /**
+   * Of those, how many can be driven at once by a distinct available,
+   * authorized employee of this branch — a maximum matching, so one person
+   * authorized for several vehicles only ever counts toward one of them,
+   * and a Kandy or inactive employee's authorization never counts at all.
+   * Informational here; `maxTransportableConcurrentCrews` below is what the
+   * transport checks actually gate on.
+   */
   driverCapableVehicleCount: number;
   /** Available employees check-marked as able to travel by public transport. */
   publicTransportCapableCount: number;
+  /**
+   * How many crews this branch can actually put on the road at once today —
+   * vehicles matched to a distinct available driver, plus anyone who can
+   * travel without one, with nobody counted as covering two roles (or two
+   * vehicles) simultaneously. This is the bound the transport checks below
+   * use; `driverCapableVehicleCount` and `publicTransportCapableCount` alone
+   * cannot be safely added together, since the same person can appear in
+   * both and adding them would count that person twice.
+   */
+  maxTransportableConcurrentCrews: number;
 }
 
 export type DayInfeasibilityCode =
@@ -206,19 +223,20 @@ export function checkDayFeasibility(
   }
 
   // Getting there. A crew reaches a site in a vehicle or by public transport;
-  // a branch with neither cannot perform the work at all, and one with only
-  // vehicles cannot run more crews at once than it has drivable vehicles.
-  const canWalk = workforce.publicTransportCapableCount > 0;
-  if (workforce.driverCapableVehicleCount === 0 && !canWalk) {
+  // a branch with neither cannot perform the work at all, and no branch can
+  // run more crews at once than it can actually transport — vehicles with a
+  // distinct available driver, plus anyone who can travel without one,
+  // nobody double-counted as covering two of those at the same time.
+  if (workforce.maxTransportableConcurrentCrews === 0) {
     return fail(
       'NO_WAY_TO_REACH_SITE',
       `${branchCode} has no drivable vehicle and nobody able to travel by public transport on ${date}, so no crew can reach a site.`,
     );
   }
-  if (!canWalk && concurrentVisits > workforce.driverCapableVehicleCount) {
+  if (concurrentVisits > workforce.maxTransportableConcurrentCrews) {
     return fail(
       'NOT_ENOUGH_TRANSPORT_AT_ONCE',
-      `${date} forces ${concurrentVisits} crew(s) to be out at the same time and nobody at ${branchCode} can travel by public transport, but only ${workforce.driverCapableVehicleCount} vehicle(s) have an available authorized driver.`,
+      `${date} forces ${concurrentVisits} crew(s) to be out at the same time, but ${branchCode} can transport only ${workforce.maxTransportableConcurrentCrews} at once — counting each available driver or public-transport-capable employee once, however many vehicles or crews they could otherwise cover.`,
     );
   }
 
