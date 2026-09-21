@@ -36,22 +36,19 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiError,
   changeAgreementStatus,
-  confirmVisitGeneration,
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
   fetchServiceAgreements,
   fetchSkills,
-  previewVisitGeneration,
   type Customer,
-  type GenerationImpact,
   type JobType,
   type ServiceAgreement,
   type ServiceSite,
   type SkillListItem,
 } from "@/lib/api-client";
 import { describeFrequency } from "@/lib/cadence";
-import { formatDurationMinutes, formatLongDate, rangeForGeneration, todayIso } from "@/lib/calendar";
+import { formatDurationMinutes, formatLongDate } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -83,18 +80,6 @@ function formatMinutes(minutes: number): string {
   return `${hour12}:${mins.toString().padStart(2, "0")} ${period}`;
 }
 
-/**
- * The range the post-save schedule preview asks about: from today (or the
- * agreement's own start date, if that's later) through the first month grid
- * that reaches — the same one-month-out horizon a manager gets generating
- * from the Calendar page, so a brand-new agreement's first look matches what
- * every other Generate Visits action already shows.
- */
-function schedulingWindow(startDate: string): { from: string; to: string } {
-  const from = startDate > todayIso() ? startDate : todayIso();
-  return { from, to: rangeForGeneration(from, "month").to };
-}
-
 const WEEKDAY_SHORT: Record<Weekday, string> = {
   MONDAY: "Mon",
   TUESDAY: "Tue",
@@ -105,22 +90,19 @@ const WEEKDAY_SHORT: Record<Weekday, string> = {
   SUNDAY: "Sun",
 };
 
+type OnboardingPlan = NonNullable<ServiceAgreement["onboardingPlan"]>;
+
 /**
- * The scheduling pipeline's shortfall reason codes, in words a manager
- * reads rather than an enum. `shortfall.message` already narrates every
- * cause for a period in prose (the API joins each one's sentence); these
- * short tags let a manager scan a long conflict list for the same cause
- * without re-reading every paragraph. `shortfall.reasons` can hold more
- * than one of these at once — a period can run out of allowed days and
- * then land on a day already at capacity — and all of them are shown.
+ * The automatic onboarding plan's own outcome, in words rather than an enum.
+ * `AgreementsService.create()` already scheduled the agreement for its
+ * rolling twelve-month horizon by the time the create response comes back —
+ * this heading says what that run actually did, not what a manager might do
+ * next.
  */
-const SHORTFALL_REASON_LABEL: Record<string, string> = {
-  NOT_ENOUGH_ALLOWED_DAYS: "Not enough allowed days",
-  SITE_CLOSED_ON_ALLOWED_DAYS: "Site closed on allowed days",
-  WINDOW_TOO_SHORT_FOR_VISIT: "Service window too short",
-  BOOKED_BELOW_FREQUENCY: "Fewer bookings than the frequency asks for",
-  PERIOD_HELD_BY_A_CANCELLED_VISIT: "Period held by a cancelled visit",
-  BRANCH_DAY_AT_CAPACITY: "Branch day at capacity",
+const ONBOARDING_STATUS_LABEL: Record<OnboardingPlan["status"], string> = {
+  PLANNED: "Scheduled",
+  PLANNED_WITH_SHORTFALLS: "Scheduled, with shortfalls",
+  FAILED: "Scheduling failed",
 };
 
 const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
@@ -213,17 +195,13 @@ const defaultValues: ServiceAgreementFormValues = {
  * enforced by the API, which rejects a genuinely-impossible agreement outright
  * (400/422 with a stable code) rather than the UI second-guessing it.
  *
- * `/visit-generation/preview` and `/confirm` only work on an *existing*
- * agreement's own id — there is no dry-run endpoint — so "preview before
- * saving" becomes "save, then immediately preview the real schedule before
- * the drawer closes" rather than a preview on unsaved draft values.
- *
- * The preview is scoped to `serviceAgreementIds: [agreement.id]`, which the
- * backend guarantees can only place or move *this* agreement's own visits —
- * another agreement's visit enters only as standing load, counted but never
- * moved (see the scoped-generation regression test on the API side). That
- * guarantee is what the "existing work was not moved" line below states
- * outright rather than leaving a manager to assume it.
+ * Saving an agreement is the whole scheduling operation: `POST
+ * /service-agreements` already runs the agreement's automatic onboarding —
+ * a scoped, rolling twelve-month plan — before the response comes back, and
+ * returns its outcome as `onboardingPlan`. There is no separate preview or
+ * confirm step here to run afterwards, and no second "Schedule now" action
+ * that could trigger a duplicate planning run: the create response is read
+ * straight into the drawer.
  */
 export default function ServiceAgreementsPage() {
   const [agreements, setAgreements] = React.useState<ServiceAgreement[]>([]);
@@ -250,22 +228,6 @@ export default function ServiceAgreementsPage() {
   const busyAgreementIdRef = React.useRef<string | null>(null);
 
   const [createdAgreement, setCreatedAgreement] = React.useState<ServiceAgreement | null>(null);
-  const [impact, setImpact] = React.useState<GenerationImpact | null>(null);
-  const [previewError, setPreviewError] = React.useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = React.useState(false);
-  const [isScheduling, setIsScheduling] = React.useState(false);
-  // A ref alongside the state: two clicks fired in the same tick (a fast
-  // double-click) both close over the same pre-update `isScheduling`, so the
-  // state check alone can't stop the second one.
-  const isSchedulingRef = React.useRef(false);
-  // Fences the post-save preview and confirm requests against the drawer
-  // being closed (including via Done, while a request is still in flight)
-  // and reopened for a different agreement. Bumped on every open, on every
-  // close, and again once an agreement is created, so a preview or confirm
-  // response belonging to an earlier agreement can never land on whichever
-  // one is now on screen — the same requestGeneration fencing pattern used
-  // for the agreements list above and for Dispatch Board/Calendar.
-  const scheduleGeneration = React.useRef(0);
 
   const {
     register,
@@ -403,17 +365,7 @@ export default function ServiceAgreementsPage() {
   }
 
   function openDrawer() {
-    // Invalidates any preview/confirm still in flight from whatever was
-    // open before, and clears the double-click guard those left behind —
-    // without this, a stale finally from the last agreement could disable
-    // this one's own Schedule now before it's ever been clicked.
-    scheduleGeneration.current += 1;
-    isSchedulingRef.current = false;
     setCreatedAgreement(null);
-    setImpact(null);
-    setPreviewError(null);
-    setIsPreviewLoading(false);
-    setIsScheduling(false);
     setSubmitError(null);
     const firstCustomer = customers[0];
     const firstActiveSite = firstCustomer?.sites.find((site) => site.isActive);
@@ -425,33 +377,17 @@ export default function ServiceAgreementsPage() {
     setDrawerOpen(true);
   }
 
-  // Escape, backdrop click or the drawer's own close control — every path
-  // that closes the drawer other than Done, which has its own handler below.
-  // Closing has to invalidate in-flight requests the same way reopening
-  // does: Done stays enabled while a preview or confirm is still running, so
-  // a manager can close mid-request and a late response must not write into
-  // a drawer nobody is looking at.
-  function handleDrawerOpenChange(open: boolean) {
-    if (!open) scheduleGeneration.current += 1;
-    setDrawerOpen(open);
-  }
-
   async function onSubmit(values: ServiceAgreementFormValues) {
     if (isSubmittingRef.current) return; // Collapses a double-click into one request.
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
 
-    // The guard and "Saving…" state cover only the request that creates the
-    // agreement — the request the still-visible Save button is guarding
-    // against a double-click on. Once it settles, the form is gone (the
-    // drawer has moved to the created-agreement view, whatever it now shows),
-    // so nothing is left for either to protect; leaving them tied up through
-    // the scheduling preview below as well left a slow preview blocking a
-    // manager from saving their next agreement even after closing this one.
-    let agreement: ServiceAgreement;
+    // Creating the agreement is the whole operation: the response already
+    // carries `onboardingPlan`, the outcome of the automatic scoped plan the
+    // API ran before answering. Nothing further to request or confirm.
     try {
-      agreement = await createServiceAgreement({
+      const agreement = await createServiceAgreement({
         serviceSiteId: values.serviceSiteId,
         jobTypeId: values.jobTypeId,
         frequencyCount: Number(values.frequencyCount),
@@ -472,84 +408,17 @@ export default function ServiceAgreementsPage() {
         requiredSkillCodes: values.requiredSkillCodes,
         notes: values.notes || null,
       });
+      setCreatedAgreement(agreement);
+      notify.success(`Service agreement for ${agreement.customerName} created.`);
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
-      return;
     } finally {
       isSubmittingRef.current = false;
       setIsSubmitting(false);
     }
-
-    // A fresh session for this specific agreement: any response tagged
-    // with an earlier generation (a stale confirm from whatever was open
-    // before, still resolving) is discarded below rather than applied here.
-    const generation = ++scheduleGeneration.current;
-    setCreatedAgreement(agreement);
-    notify.success(`Service agreement for ${agreement.customerName} created.`);
-
-    setIsPreviewLoading(true);
-    try {
-      const { from, to } = schedulingWindow(agreement.startDate);
-      const result = await previewVisitGeneration({
-        from,
-        to,
-        branchCode: agreement.branchCode,
-        serviceAgreementIds: [agreement.id],
-      });
-      if (generation === scheduleGeneration.current) setImpact(result);
-    } catch (caught) {
-      if (generation === scheduleGeneration.current) {
-        setPreviewError(
-          caught instanceof ApiError ? caught.message : "Could not calculate the schedule."
-        );
-      }
-    } finally {
-      if (generation === scheduleGeneration.current) setIsPreviewLoading(false);
-    }
-  }
-
-  async function handleScheduleNow() {
-    if (!createdAgreement || isSchedulingRef.current) return; // Collapses a double-click into one request.
-    // Captured, not bumped: this confirms the same agreement onSubmit
-    // already opened a session for, so it must match that session, not
-    // start a new one.
-    const generation = scheduleGeneration.current;
-    isSchedulingRef.current = true;
-    setIsScheduling(true);
-    try {
-      const { from, to } = schedulingWindow(createdAgreement.startDate);
-      const result = await confirmVisitGeneration({
-        from,
-        to,
-        branchCode: createdAgreement.branchCode,
-        serviceAgreementIds: [createdAgreement.id],
-      });
-      // The drawer was closed (or closed and reopened for another
-      // agreement) while this was in flight — its result belongs to a
-      // screen nobody is looking at anymore.
-      if (generation !== scheduleGeneration.current) return;
-      setImpact(result);
-      notify.success(
-        result.additions.length === 0
-          ? "Nothing to schedule yet — check the conflicts below."
-          : `${result.additions.length} ${result.additions.length === 1 ? "visit" : "visits"} scheduled for ${createdAgreement.customerName}.`
-      );
-    } catch (caught) {
-      if (generation !== scheduleGeneration.current) return;
-      notify.error(
-        caught instanceof ApiError ? caught.message : "Could not schedule the visits."
-      );
-    } finally {
-      // The double-click guard is reset unconditionally: it belongs to
-      // whichever button is on screen right now, not to this specific
-      // (possibly stale) request.
-      isSchedulingRef.current = false;
-      if (generation === scheduleGeneration.current) setIsScheduling(false);
-    }
   }
 
   function handleDone() {
-    scheduleGeneration.current += 1;
     setDrawerOpen(false);
     reload();
   }
@@ -736,36 +605,23 @@ export default function ServiceAgreementsPage() {
 
       <AppDrawer
         open={drawerOpen}
-        onOpenChange={handleDrawerOpenChange}
+        onOpenChange={setDrawerOpen}
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? impact && !impact.isPreview
-              ? "Here's what was scheduled for it."
-              : "Here's a preview of what would be scheduled for it — nothing is written until Schedule now is pressed."
+            ? "Automatic onboarding has already scheduled it — here's what that run did."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
-        // The created-agreement view is a read-only schedule preview (no
+        // The created-agreement view is a read-only onboarding summary (no
         // form fields) — same scrollable-region-focusable case as the
         // visit-generation drawer. The form view keeps the default so the
         // Sheet's autofocus still lands on the first real field.
         contentTabIndex={Boolean(createdAgreement)}
         footer={
           createdAgreement ? (
-            <div className="flex w-full gap-2">
-              {impact?.isPreview && impact.additions.length > 0 && (
-                <Button className="flex-1" onClick={handleScheduleNow} disabled={isScheduling}>
-                  {isScheduling ? "Scheduling…" : "Schedule now"}
-                </Button>
-              )}
-              <Button
-                variant={impact?.isPreview && impact.additions.length > 0 ? "outline" : "default"}
-                className="flex-1"
-                onClick={handleDone}
-              >
-                Done
-              </Button>
-            </div>
+            <Button className="w-full" onClick={handleDone}>
+              Done
+            </Button>
           ) : (
             <Button
               type="submit"
@@ -788,108 +644,60 @@ export default function ServiceAgreementsPage() {
               </p>
             </div>
 
-            <div className="space-y-3 rounded-xl border p-4">
-              <h3 className="flex items-center gap-1.5 text-sm font-medium">
-                <CalendarClock className="h-4 w-4" aria-hidden="true" />
-                {impact && !impact.isPreview ? "Scheduled" : "Schedule preview"}
-              </h3>
+            {createdAgreement.onboardingPlan && (
+              <div className="space-y-3 rounded-xl border p-4">
+                <h3 className="flex items-center gap-1.5 text-sm font-medium">
+                  <CalendarClock className="h-4 w-4" aria-hidden="true" />
+                  {ONBOARDING_STATUS_LABEL[createdAgreement.onboardingPlan.status]}
+                </h3>
 
-              {/*
-                Stated unconditionally, not only once visits exist: the
-                guarantee holds whether this run finds zero visits, a
-                shortfall, or a full month, and a manager reading a conflict
-                below still needs to know nobody else's calendar moved.
-              */}
-              <p className="text-xs text-muted-foreground">
-                This only plans {createdAgreement.customerName}&apos;s own visits — every
-                other customer&apos;s existing schedule is untouched.
-              </p>
+                {/*
+                  Stated unconditionally, not only when planning succeeded:
+                  the guarantee holds whether this run planned everything,
+                  part of it, or nothing at all, and a manager reading a
+                  shortfall or a failure below still needs to know nobody
+                  else's calendar moved.
+                */}
+                <p className="text-xs text-muted-foreground">
+                  This only plans {createdAgreement.customerName}&apos;s own visits — every
+                  other customer&apos;s existing schedule is untouched.
+                </p>
 
-              {isPreviewLoading ? (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Calculating schedule preview…
-                </p>
-              ) : previewError ? (
-                <p role="alert" className="text-sm text-destructive">
-                  {previewError}
-                </p>
-              ) : impact ? (
-                <>
-                  <p className="text-sm">
-                    {impact.additions.length === 0
-                      ? "No visits could be placed in the next month — see the conflicts below."
-                      : `${impact.additions.length} ${
-                          impact.additions.length === 1 ? "visit" : "visits"
-                        } ${impact.isPreview ? "ready to schedule" : "scheduled"} between ${formatLongDate(
-                          impact.from
-                        )} and ${formatLongDate(impact.to)}.`}
+                {createdAgreement.onboardingPlan.status === "FAILED" ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {createdAgreement.onboardingPlan.message}
                   </p>
-
-                  {impact.additions.length > 0 && (
-                    <ul className="space-y-1.5 text-sm">
-                      {impact.additions.map((visit, index) => (
-                        <li
-                          key={`${visit.visitDate}-${index}`}
-                          className="flex items-center justify-between gap-2"
-                        >
-                          <span>
-                            {formatLongDate(visit.visitDate)}
-                            {visit.isPreferredDay && (
-                              <Badge variant="success" className="ml-2">
-                                Preferred
-                              </Badge>
-                            )}
-                          </span>
-                          <span className="text-right text-muted-foreground">
-                            {formatWindowMinute(visit.windowStartMinute)}–
-                            {formatWindowMinute(visit.windowEndMinute)} · crew of{" "}
-                            {visit.requiredCrewSize}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-
-                  {(impact.shortfalls.length > 0 || impact.loadWarnings.length > 0) && (
-                    <div className="space-y-2">
-                      <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                        Unresolved conflicts
-                      </h4>
-                      {impact.shortfalls.map((shortfall, index) => (
-                        <div
-                          key={`shortfall-${index}`}
-                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          <div className="space-y-1.5">
-                            <p>{shortfall.message}</p>
-                            {shortfall.reasons.length > 0 && (
-                              <div className="flex flex-wrap gap-1">
-                                {shortfall.reasons.map((reason) => (
-                                  <Badge key={reason} variant="outline">
-                                    {SHORTFALL_REASON_LABEL[reason] ?? reason}
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                      {impact.loadWarnings.map((warning, index) => (
-                        <p
-                          key={`load-${index}`}
-                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          {warning.message}
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </>
-              ) : null}
-            </div>
+                ) : (
+                  <>
+                    <p className="text-sm">
+                      {createdAgreement.onboardingPlan.visitsPlanned}{" "}
+                      {createdAgreement.onboardingPlan.visitsPlanned === 1 ? "visit" : "visits"}{" "}
+                      scheduled between{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.from)} and{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.to)}.
+                    </p>
+                    {createdAgreement.onboardingPlan.status === "PLANNED_WITH_SHORTFALLS" && (
+                      <p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span>
+                          {createdAgreement.onboardingPlan.shortfallPeriods}{" "}
+                          {createdAgreement.onboardingPlan.shortfallPeriods === 1
+                            ? "period"
+                            : "periods"}{" "}
+                          could not hold everything requested.
+                          {createdAgreement.onboardingPlan.overCapacityDays > 0 &&
+                            ` ${createdAgreement.onboardingPlan.overCapacityDays} ${
+                              createdAgreement.onboardingPlan.overCapacityDays === 1
+                                ? "day is"
+                                : "days are"
+                            } already carrying more than the branch plans for.`}
+                        </span>
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <form

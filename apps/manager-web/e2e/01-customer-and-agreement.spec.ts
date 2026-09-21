@@ -68,26 +68,15 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   await expect(page.getByRole("heading", { name: "Service agreement created" })).toBeVisible({
     timeout: 10_000,
   });
-  // Stated unconditionally, before the scoped preview even answers.
+  // Stated unconditionally, whatever the automatic onboarding run below did.
   await expect(
     page.getByText("every other customer's existing schedule is untouched")
   ).toBeVisible();
-  // A generated visit's own row leads with formatLongDate (e.g. "Tuesday
-  // 7 September 2026"), not a raw ISO date.
-  const visitDatePattern = /^[A-Za-z]+ \d{1,2} [A-Za-z]+ \d{4}/;
-  if (process.env.E2E_STRICT === '1') {
-    await expect(page.locator("li", { hasText: visitDatePattern }).first()).toBeVisible({
-      timeout: 10_000,
-    });
-  }
-  // A populated schedule lists each visit as a date/window/crew row. Either
-  // that, the "nothing could be placed" message, or a real load error —
-  // never a blank panel.
+  // Saving the agreement already ran its automatic scoped plan — there is no
+  // separate preview/confirm step, and no "Schedule now" left to press.
+  // Exactly one of the three onboarding outcomes is shown for it.
   await expect(
-    page
-      .locator("li", { hasText: visitDatePattern })
-      .first()
-      .or(page.getByText("No visits could be placed in the next month", { exact: false }))
-      .or(page.getByText("Could not calculate the schedule."))
+    page.getByRole("heading", { name: /^(Scheduled|Scheduled, with shortfalls|Scheduling failed)$/ })
   ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Schedule now" })).toHaveCount(0);
 });

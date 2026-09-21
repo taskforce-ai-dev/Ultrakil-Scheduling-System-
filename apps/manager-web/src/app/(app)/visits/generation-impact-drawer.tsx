@@ -95,6 +95,24 @@ const REMOVAL_REASON: Record<string, string> = {
 };
 
 /**
+ * The scheduling pipeline's shortfall reason codes, in words a manager
+ * reads rather than an enum. `shortfall.message` already narrates every
+ * cause for a period in prose (the API joins each one's sentence); these
+ * short tags let a manager scan a long conflict list for the same cause
+ * without re-reading every paragraph. `shortfall.reasons` can hold more
+ * than one of these at once — a period can run out of allowed days and
+ * then land on a day already at capacity — and all of them are shown.
+ */
+const SHORTFALL_REASON_LABEL: Record<string, string> = {
+  NOT_ENOUGH_ALLOWED_DAYS: "Not enough allowed days",
+  SITE_CLOSED_ON_ALLOWED_DAYS: "Site closed on allowed days",
+  WINDOW_TOO_SHORT_FOR_VISIT: "Service window too short",
+  BOOKED_BELOW_FREQUENCY: "Fewer bookings than the frequency asks for",
+  PERIOD_HELD_BY_A_CANCELLED_VISIT: "Period held by a cancelled visit",
+  BRANCH_DAY_AT_CAPACITY: "Branch day at capacity",
+};
+
+/**
  * A booked date the site's own hours contradict, headlined in a few words.
  *
  * The visit is still planned — the booking is a commitment to the customer —
@@ -397,6 +415,15 @@ export function GenerationImpactDrawer({
                   {shortfall.periodStart} to {shortfall.periodEnd}: asked for{" "}
                   {shortfall.requested}, can place {shortfall.scheduled}. {shortfall.message}
                 </span>
+                {shortfall.reasons.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {shortfall.reasons.map((reason) => (
+                      <Badge key={reason} variant="outline">
+                        {SHORTFALL_REASON_LABEL[reason] ?? reason}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
             {capped(impact.shortfalls).hidden > 0 && (
