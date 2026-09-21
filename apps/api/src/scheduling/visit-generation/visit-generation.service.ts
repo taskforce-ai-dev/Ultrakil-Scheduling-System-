@@ -179,6 +179,14 @@ interface Shortfall {
   requested: number;
   scheduled: number;
   reason: string;
+  /**
+   * Every cause that kept this period short, in the order the pipeline met
+   * them; `reason` is the first of them. A period can fail for more than one
+   * reason at once — too few allowed days to hold the promise, and then the
+   * one allowed day full — and a manager needs both without being handed two
+   * rows that disagree about the denominator.
+   */
+  reasons: string[];
   message: string;
 }
 
@@ -928,6 +936,50 @@ export class VisitGenerationService {
   }
 
   /**
+   * One authoritative outcome per agreement-period.
+   *
+   * A period can come up short more than once on the way through: planning
+   * cannot fit three visits into the one weekday the agreement allows, and
+   * then the capacity guard finds that weekday full and leaves the one it did
+   * fit unplanned too. Reported as they arise, those are two rows measuring
+   * the same promise against different denominators — "1 of 3 scheduled"
+   * beside "0 of 1" — and the number a manager actually needs, nought of
+   * three, appears in neither.
+   *
+   * So they are reconciled here. `requested` is the promise, which is
+   * whichever stage saw the most of it; `scheduled` is what survived every
+   * stage, which is whichever saw the least, because each stage can only take
+   * work away from the one before it. Every cause is kept, in the order the
+   * pipeline met them, rather than being collapsed into whichever spoke last.
+   */
+  private reconcileShortfalls(shortfalls: Shortfall[]): Shortfall[] {
+    const byPeriod = new Map<string, Shortfall>();
+
+    for (const shortfall of shortfalls) {
+      const key = `${shortfall.serviceAgreementId}|${shortfall.periodStart}`;
+      const seen = byPeriod.get(key);
+      if (!seen) {
+        byPeriod.set(key, { ...shortfall, reasons: [...shortfall.reasons] });
+        continue;
+      }
+
+      const reasons = [...new Set([...seen.reasons, ...shortfall.reasons])];
+      byPeriod.set(key, {
+        ...seen,
+        requested: Math.max(seen.requested, shortfall.requested),
+        scheduled: Math.min(seen.scheduled, shortfall.scheduled),
+        reason: reasons[0],
+        reasons,
+        // Both explanations, in the order they happened. A manager reading
+        // only the second would not know why there was one visit to lose.
+        message: [seen.message, shortfall.message].join(' '),
+      });
+    }
+
+    return [...byPeriod.values()];
+  }
+
+  /**
    * Turns the guard's unplaceable visits into shortfalls a manager can read.
    *
    * One shortfall per agreement-period, not one per visit: a period is where
@@ -988,6 +1040,7 @@ export class VisitGenerationService {
         requested,
         scheduled: requested - entries.length,
         reason: entries[0].reason,
+        reasons: [entries[0].reason],
         message: `${entries.length} of ${requested} visit(s) planned for ${bounds.start} to ${bounds.end} could not be placed. ${entries[0].message} Wanted on ${dates.join(', ')}.`,
       });
     }
@@ -1051,14 +1104,31 @@ export class VisitGenerationService {
       capacityByDay,
       range.standing,
       await this.feasibilityFor(honoured, range.standing),
-      // Which requirements already have a visit standing on their own date.
-      // The guard may leave new work unplanned when a day is full; it may
-      // never shed a date the customer already has, which would be a removal
-      // wearing a shortfall's clothes. Cancelled rows do not count: the slot
-      // they hold is not work anybody is doing.
+      // Which requirements already stand on their own date as something
+      // nobody may move. The guard may leave new work unplanned when a day is
+      // full; it may never shed a commitment, which would be a removal
+      // wearing a shortfall's clothes.
+      //
+      // The boundary is `protectionReasonFor`, the same one `planGeneration`
+      // uses, and not mere existence. A PENDING or UNASSIGNED visit nobody
+      // has touched is the generator's own output — free to be updated, moved
+      // or removed — and protecting it here reopened the over-cap path from
+      // the other side: grow an agreement's duration or crew, and the guard
+      // would preserve the heavier requirement because a row existed, the
+      // plan would become an *update*, and `assertTheDaysStillHaveRoom` does
+      // not weigh updates. The day committed over its cap without a single
+      // addition.
+      //
+      // Cancelled rows are excluded even though they carry a protection
+      // reason of their own: the slot one holds is not work anybody is doing,
+      // and `cancelledSlotsBy` already keeps the period from being replanned
+      // into it.
       new Set(
         around
-          .filter((visit) => visit.status !== VisitStatus.CANCELLED)
+          .filter(
+            (visit) =>
+              visit.status !== VisitStatus.CANCELLED && protectionReasonFor(visit) !== null,
+          )
           .map((visit) => agreementDayKey(visit.serviceAgreementId, visit.visitDate)),
       ),
     );
@@ -1079,10 +1149,10 @@ export class VisitGenerationService {
     // in the same vocabulary as every other period that cannot hold what its
     // agreement promises — a shortfall carrying a stable reason — rather than
     // a second, parallel list every caller would have to learn.
-    const shortfalls = [
+    const shortfalls = this.reconcileShortfalls([
       ...planned.shortfalls,
       ...this.shortfallsForUnplaceable(guarded.unplaceable, honoured, agreements, dto),
-    ];
+    ]);
 
     const plan = planGeneration(required, existing);
 
@@ -1329,6 +1399,7 @@ export class VisitGenerationService {
           customerName: agreement.customer.name,
           siteName: agreement.serviceSite.name,
           ...shortfall,
+          reasons: [shortfall.reason],
         });
       }
 

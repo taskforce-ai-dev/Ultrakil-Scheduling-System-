@@ -422,15 +422,39 @@ async function expectNoBranchDayOverItsCapacity(): Promise<void> {
     const [branchCode, date] = key.split('|') as [BranchCode, string];
     const standing = await prisma.generatedVisit.findMany({
       where: { branchCode, visitDate: at(date), status: { not: VisitStatus.CANCELLED } },
-      select: { durationMinutes: true, requiredCrewSize: true },
+      select: {
+        durationMinutes: true,
+        requiredCrewSize: true,
+        status: true,
+        isManuallyAdjusted: true,
+        lockedAt: true,
+        assignments: { select: { id: true }, take: 1 },
+      },
     });
     const crewMinutes = standing.reduce(
       (total, visit) => total + visit.durationMinutes * visit.requiredCrewSize,
       0,
     );
     const calculated = await capacity.capacityFor(branchCode, date);
-    if (calculated.capacityMinutes > 0 && crewMinutes > calculated.capacityMinutes) {
-      over.push(`${key}: ${crewMinutes} crew-minutes against a calculated cap of ${calculated.capacityMinutes}`);
+    if (calculated.capacityMinutes === 0 || crewMinutes <= calculated.capacityMinutes) continue;
+
+    // Over its cap — but a day can be over it for a reason nothing is allowed
+    // to fix. A booked date, a locked visit, one a manager moved by hand, one
+    // already staffed: generation may not touch any of them, and the honest
+    // answer there is the warning it already gives. What must never happen is
+    // a day over its cap while work generation *could* have left unplanned is
+    // standing on it — so that, and only that, is what fails here.
+    const movable = standing.filter(
+      (visit) =>
+        visit.lockedAt === null &&
+        !visit.isManuallyAdjusted &&
+        visit.assignments.length === 0 &&
+        (visit.status === VisitStatus.PENDING || visit.status === VisitStatus.UNASSIGNED),
+    );
+    if (movable.length > 0) {
+      over.push(
+        `${key}: ${crewMinutes} crew-minutes against a calculated cap of ${calculated.capacityMinutes}, with ${movable.length} visit(s) generation could have left unplanned`,
+      );
     }
   }
   expect(over).toEqual([]);
@@ -613,6 +637,7 @@ async function makeSingleDayAgreement(
   label: string,
   startDate: string,
   weekday: Weekday,
+  options: { frequencyCount?: number; durationMinutes?: number } = {},
 ): Promise<string> {
   const site = await prisma.serviceSite.create({
     data: {
@@ -637,11 +662,11 @@ async function makeSingleDayAgreement(
       jobTypeId,
       branchId,
       branchCode: BranchCode.COLOMBO,
-      frequencyCount: 1,
+      frequencyCount: options.frequencyCount ?? 1,
       frequencyUnit: FrequencyUnit.WEEK,
       frequencyInterval: 1,
       crewSize: 1,
-      durationMinutes: REFERENCE_VISIT_MINUTES,
+      durationMinutes: options.durationMinutes ?? REFERENCE_VISIT_MINUTES,
       startDate: at(startDate),
       dayRules: { create: [{ weekday, kind: DayRuleKind.ALLOWED }] },
     },
@@ -941,4 +966,163 @@ it('never sheds a locked, hand-adjusted visit off a day that is over its cap', a
       (warning) => warning.date === PROTECTED_DAY,
     ),
   ).toBe(true);
+}, 180_000);
+
+const HEAVIER_WEEK = { from: '2029-05-14', to: '2029-05-20' };
+const HEAVIER_DAY = HEAVIER_WEEK.from;
+
+it('will not grow an existing unprotected visit past the day it stands on', async () => {
+  // The guard may not shed work the calendar already holds — but "already
+  // holds" has to mean a real commitment, not merely a row. A PENDING visit
+  // nobody has touched is the generator's own output; `planGeneration` is
+  // free to update, move or remove it. Treating it as untouchable reopened
+  // the over-cap path from the other side: the requirement grows, the guard
+  // preserves it because a row exists, the plan becomes an *update*, and
+  // `assertTheDaysStillHaveRoom` deliberately does not weigh updates.
+  const agreementGen = await makeSingleDayAgreement(
+    'heavier-generation',
+    HEAVIER_WEEK.from,
+    Weekday.MONDAY,
+  );
+
+  const first = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({ ...HEAVIER_WEEK, branchCode: BranchCode.COLOMBO, serviceAgreementIds: [agreementGen] });
+  expect(first.status).toBe(200);
+  const planted = await prisma.generatedVisit.findFirstOrThrow({
+    where: { serviceAgreementId: agreementGen },
+  });
+  expect(planted.visitDate.toISOString().slice(0, 10)).toBe(HEAVIER_DAY);
+  // Untouched by anyone: the generator's own work, not a commitment.
+  expect(planted.status).toBe(VisitStatus.PENDING);
+  expect(planted.isManuallyAdjusted).toBe(false);
+  expect(planted.lockedAt).toBeNull();
+
+  // Fill the rest of the day, so it sits exactly on its cap with this visit.
+  const capVisits = await capVisitsOn(HEAVIER_DAY);
+  const filler = await makeAgreement('heavier-filler', HEAVIER_WEEK.from);
+  await fillDay(filler, HEAVIER_DAY, capVisits - 1);
+  expect(await loadOn(HEAVIER_DAY)).toBe(capVisits);
+
+  // The agreement now wants three times the work on that same day.
+  await prisma.serviceAgreement.update({
+    where: { id: agreementGen },
+    data: { durationMinutes: REFERENCE_VISIT_MINUTES * 3 },
+  });
+
+  const again = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({ ...HEAVIER_WEEK, branchCode: BranchCode.COLOMBO, serviceAgreementIds: [agreementGen] });
+  expect([200, 409]).toContain(again.status);
+
+  // Whatever it decided, it may not have left the day carrying more than the
+  // branch can do. Growing a visit in place is as much a way over the cap as
+  // adding one.
+  await expectNoBranchDayOverItsCapacity();
+
+  if (again.status === 200) {
+    const onTheDay = (
+      await prisma.generatedVisit.findMany({
+        where: { serviceAgreementId: agreementGen },
+        select: { durationMinutes: true, visitDate: true },
+      })
+    ).filter((visit) => visit.visitDate.toISOString().slice(0, 10) === HEAVIER_DAY);
+
+    // Exactly two outcomes are acceptable, and "grew it anyway" is neither.
+    if (onTheDay.length === 0) {
+      // Left unplanned, and named rather than dropped in silence.
+      expect(again.body.removals).toHaveLength(1);
+      expect(
+        (again.body.shortfalls as { serviceAgreementId: string; reason: string }[]).some(
+          (entry) =>
+            entry.serviceAgreementId === agreementGen &&
+            entry.reason === 'BRANCH_DAY_AT_CAPACITY',
+        ),
+      ).toBe(true);
+    } else {
+      // Or kept at the size the day can carry — never grown past it.
+      expect(onTheDay).toHaveLength(1);
+      expect(onTheDay[0].durationMinutes).toBe(REFERENCE_VISIT_MINUTES);
+    }
+
+    // And it settles there. Leaving work unplanned can mean removing a row
+    // the generator owns, so the run after it must not put the same visit
+    // back and start the calendar oscillating.
+    const third = await request(http)
+      .post('/api/visit-generation/confirm')
+      .set(auth())
+      .send({
+        ...HEAVIER_WEEK,
+        branchCode: BranchCode.COLOMBO,
+        serviceAgreementIds: [agreementGen],
+      });
+    expect(third.status).toBe(200);
+    expect(third.body.additions).toHaveLength(0);
+    expect(third.body.removals).toHaveLength(0);
+    expect(third.body.updates).toHaveLength(0);
+    await expectNoBranchDayOverItsCapacity();
+  }
+}, 180_000);
+
+const RECONCILE_WEEK = { from: '2029-05-21', to: '2029-05-27' };
+const RECONCILE_DAY = RECONCILE_WEEK.from;
+
+it('publishes one authoritative outcome for a period two different things went wrong in', async () => {
+  // Three visits a week promised, and exactly one weekday allowed to hold
+  // them: planning alone can only place one, and reports the other two. Then
+  // the one day it could use turns out to be full, so that one is left
+  // unplanned too. The honest total is nought of three.
+  //
+  // Reported as two rows it is worse than useless: "3 requested, 1 scheduled"
+  // beside "1 requested, 0 scheduled", two different denominators for one
+  // promise, and neither of them saying nought of three.
+  const capVisits = await capVisitsOn(RECONCILE_DAY);
+  const filler = await makeAgreement('reconcile-filler', RECONCILE_WEEK.from);
+  await fillDay(filler, RECONCILE_DAY, capVisits);
+  expect(await loadOn(RECONCILE_DAY)).toBe(capVisits);
+
+  const agreementGen = await makeSingleDayAgreement(
+    'reconcile-generation',
+    RECONCILE_WEEK.from,
+    Weekday.MONDAY,
+    { frequencyCount: 3 },
+  );
+
+  const confirmed = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({
+      ...RECONCILE_WEEK,
+      branchCode: BranchCode.COLOMBO,
+      serviceAgreementIds: [agreementGen],
+    });
+  expect(confirmed.status).toBe(200);
+  expect(confirmed.body.additions).toHaveLength(0);
+
+  const mine = (
+    confirmed.body.shortfalls as {
+      serviceAgreementId: string;
+      periodStart: string;
+      requested: number;
+      scheduled: number;
+      reason: string;
+      reasons: string[];
+      message: string;
+    }[]
+  ).filter((entry) => entry.serviceAgreementId === agreementGen);
+
+  // One row for the period, not one per thing that went wrong.
+  expect(mine).toHaveLength(1);
+  // The denominator is the agreement's promise, and the numerator is what
+  // survived every stage — not what survived one of them.
+  expect(mine[0].requested).toBe(3);
+  expect(mine[0].scheduled).toBe(0);
+  // Both causes are still on the record, modelled rather than duplicated.
+  expect(mine[0].reasons).toContain('NOT_ENOUGH_ALLOWED_DAYS');
+  expect(mine[0].reasons).toContain('BRANCH_DAY_AT_CAPACITY');
+  expect(mine[0].reason).toBe(mine[0].reasons[0]);
+
+  await expectNoBranchDayOverItsCapacity();
 }, 180_000);

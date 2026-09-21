@@ -768,6 +768,7 @@ describe("regeneration impact review", () => {
             requested: 2,
             scheduled: 0,
             reason: "SITE_CLOSED_ON_ALLOWED_DAYS",
+            reasons: ["SITE_CLOSED_ON_ALLOWED_DAYS"],
             message: "The site is closed on every allowed weekday.",
           },
         ],

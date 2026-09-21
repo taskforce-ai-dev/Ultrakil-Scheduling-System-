@@ -196,6 +196,12 @@ class GenerationShortfallDto {
   @ApiProperty({ type: Number }) requested!: number;
   @ApiProperty({ type: Number }) scheduled!: number;
   @ApiProperty({ type: String }) reason!: string;
+  @ApiProperty({
+    type: [String],
+    description:
+      'Every cause that kept this period short, in the order the pipeline met them; `reason` is the first of them. A period can fail for more than one reason at once — too few allowed days to hold the promise, and then the one allowed day already full — and both are kept here rather than published as two rows disagreeing about the denominator.',
+  })
+  reasons!: string[];
   @ApiProperty({ type: String }) message!: string;
 }
 
