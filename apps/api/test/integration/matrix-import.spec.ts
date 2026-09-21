@@ -26,8 +26,16 @@ import { DEFAULT_MAPPING } from '../../src/workforce/matrix-import/mapping';
 import { importMatrix } from '../../src/workforce/matrix-import/importer';
 import { parseMatrix } from '../../src/workforce/matrix-import/parser';
 import { readMatrixFile } from '../../src/workforce/matrix-import/reader';
+import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
+import { checkDayFeasibility, DayVisitDemand } from '../../src/scheduling/visit-generation/day-feasibility';
+import type { PrismaService } from '../../src/prisma/prisma.service';
+import type { ConfigService } from '@nestjs/config';
 
 const prisma = new PrismaClient();
+const capacityService = new BranchDayCapacityService(
+  prisma as unknown as PrismaService,
+  { get: () => undefined } as unknown as ConfigService,
+);
 
 const mapping = {
   ...DEFAULT_MAPPING,
@@ -121,11 +129,12 @@ describe('importing the workforce matrix', () => {
       expect(first.authorizationsLinked).toBe(4);
       const vehicles = await prisma.vehicle.findMany({ orderBy: { code: 'asc' } });
       expect(vehicles.map(({ code }) => code)).toEqual(['CP CAB-1234', 'DAC-2485', 'WP CAB-1234']);
+      const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
       // The matrix says which transport group owns the column, but never the
-      // vehicle's branch. Preserve the former and leave the latter unknown.
+      // vehicle's branch — every vehicle it imports defaults to Colombo instead.
       expect(vehicles.find(({ code }) => code === 'DAC-2485')).toMatchObject({
         ownershipGroup: context === 'group' ? 'Transport' : null,
-        branchId: null,
+        branchId: colomboBranch.id,
       });
       const employees = await prisma.employee.findMany({
         orderBy: { fullName: 'asc' }, include: {
@@ -169,10 +178,11 @@ describe('importing the workforce matrix', () => {
     expect(first.vehiclesCreated).toBe(1);
     expect(first.authorizationsLinked).toBe(3);
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { code: 'DAC-2485' } });
+    const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
     expect(vehicle.label).toBe('Bolero Truck DAC-2485');
     expect(vehicle.seatCapacity).toBeNull();
     expect(vehicle.ownershipGroup).toBeNull();
-    expect(vehicle.branchId).toBeNull();
+    expect(vehicle.branchId).toBe(colomboBranch.id);
     const employees = await prisma.employee.findMany({ orderBy: { fullName: 'asc' } });
     expect(employees.map(({ fullName }) => fullName)).toEqual([
       'Fixture Aspen', 'Fixture Birch', 'Fixture Cedar', 'Fixture Elm',
@@ -484,5 +494,118 @@ describe('re-importing the same workbook', () => {
       include: { skills: true },
     });
     expect(perera.skills.map((s) => s.skillCode)).toEqual(['MBR_FUMIGATION']);
+  });
+});
+
+/**
+ * The Colombo-default fix (Technical Director decision, 2026-09-21, PR #59):
+ * every vehicle the Technician Matrix importer writes gets branchId set to
+ * Colombo on both create and update, because before this the importer never
+ * set a branch at all and BranchDayCapacityService.loadPool — which scopes
+ * its vehicle query to `branch: { code: branchCode }` — could therefore never
+ * see an imported vehicle for any branch. Chanya's real-workbook rehearsal
+ * measured this directly: 17 vehicles, 0 with a branch, so
+ * activeVehicleCount was 0 for every branch-day and no transport
+ * infeasibility code could ever fire.
+ */
+describe('the Colombo vehicle-branch default', () => {
+  it('repairs a legacy vehicle left with a null branchId, and stays idempotent', async () => {
+    // A vehicle as the pre-fix importer would have left it: created with no
+    // branch at all. This is exactly Chanya's measured state (17 vehicles,
+    // 0 with a branch) reproduced for one vehicle.
+    const legacy = await prisma.vehicle.create({
+      data: { code: 'DAC-2485', label: 'Bolero Truck DAC-2485', seatCapacity: 2 },
+    });
+    expect(legacy.branchId).toBeNull();
+
+    const fixturePath = join(workDir, 'legacy-null-branch-repair.xlsx');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Matrix');
+    sheet.addRows([
+      ['', 'No.', 'Name Of Technician', 'Station Location', 'Designation',
+        'Bolero Truck DAC- 2485'],
+      ['Colombo Branch', 1, 'Fixture Repair Driver', '', 'SPMS', '✓'],
+    ]);
+    await workbook.xlsx.writeFile(fixturePath);
+    const { grid } = await readMatrixFile(fixturePath, null);
+    const parsed = parseMatrix(grid);
+
+    const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
+
+    const first = await importMatrix(prisma, parsed);
+    expect(first.vehiclesCreated).toBe(0);
+    expect(first.vehiclesUpdated).toBe(1);
+    const repaired = await prisma.vehicle.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(repaired.branchId).toBe(colomboBranch.id);
+    expect(await prisma.vehicle.count({ where: { code: 'DAC-2485' } })).toBe(1);
+
+    // Re-import: no duplicate, still exactly one Colombo vehicle, same id.
+    const second = await importMatrix(prisma, parsed);
+    expect(second.vehiclesCreated).toBe(0);
+    expect(second.vehiclesUpdated).toBe(1);
+    const stillRepaired = await prisma.vehicle.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(stillRepaired.branchId).toBe(colomboBranch.id);
+    expect(await prisma.vehicle.count({ where: { code: 'DAC-2485' } })).toBe(1);
+  });
+
+  it('every vehicle a fresh import creates already carries the Colombo branch', async () => {
+    const first = await importFixture();
+    expect(first.summary.vehiclesCreated).toBe(2);
+
+    const colomboBranch = await prisma.branch.findUniqueOrThrow({ where: { code: BranchCode.COLOMBO } });
+    const vehicles = await prisma.vehicle.findMany({ orderBy: { code: 'asc' } });
+    expect(vehicles.map((v) => v.branchId)).toEqual([colomboBranch.id, colomboBranch.id]);
+
+    const authorizations = await prisma.vehicleAuthorization.count();
+    // A Perera + C Fernando on 253-4289, B Silva on BJG 4419.
+    expect(authorizations).toBe(3);
+  });
+
+  it('makes imported vehicles and their authorized drivers visible to BranchDayCapacityService, for Colombo only', async () => {
+    await importFixture();
+    const today = '2026-10-05';
+
+    const workforces = await capacityService.workforcesFor([
+      { branchCode: BranchCode.COLOMBO, date: today },
+      { branchCode: BranchCode.KANDY, date: today },
+    ]);
+    const colombo = workforces.get(`${BranchCode.COLOMBO}|${today}`)!;
+    const kandy = workforces.get(`${BranchCode.KANDY}|${today}`)!;
+
+    // Kandy still gets no vehicle pool from this default — F Kumara (the
+    // only Kandy employee in the fixture) holds no authorization.
+    expect(kandy.activeVehicleCount).toBe(0);
+    expect(kandy.driverCapableVehicleCount).toBe(0);
+
+    // Colombo: 253-4289 (A Perera, C Fernando) and BJG 4419 (B Silva) — both
+    // now visible, both have an available authorized driver.
+    expect(colombo.activeVehicleCount).toBe(2);
+    expect(colombo.driverCapableVehicleCount).toBe(2);
+
+    const demand = (count: number): DayVisitDemand[] =>
+      Array.from({ length: count }, (_, index) => ({
+        serviceAgreementId: `demand-${index}`,
+        // Identical window/duration on every visit forces them to overlap:
+        // the forced interval [end-duration, start+duration) is the same
+        // [510, 570) for all of them, so this is a genuine simultaneous
+        // demand, not an artifact of how the check counts them.
+        windowStartMinute: 480,
+        windowEndMinute: 600,
+        durationMinutes: 90,
+        requiredCrewSize: 1,
+        requiredSkillCodes: [],
+      }));
+
+    // One visit: the two-vehicle pool this fix now exposes is enough —
+    // proving the vehicles actually count, not just that they are queried.
+    expect(checkDayFeasibility(BranchCode.COLOMBO, today, demand(1), colombo)).toBeNull();
+
+    // Three forced-concurrent visits against two driver-capable vehicles and
+    // nobody able to travel by public transport in this fixture: transport
+    // infeasibility can now actually fire, which is exactly what Chanya's
+    // rehearsal found could never happen while every vehicle sat unbranched.
+    expect(checkDayFeasibility(BranchCode.COLOMBO, today, demand(3), colombo)).toMatchObject({
+      code: 'NOT_ENOUGH_TRANSPORT_AT_ONCE',
+    });
   });
 });

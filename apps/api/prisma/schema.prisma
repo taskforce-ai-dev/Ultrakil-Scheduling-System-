@@ -425,8 +425,10 @@ model Vehicle {
   seatCapacity Int?
 
   /// Workbook column group, e.g. Personal or Transport Company. The matrix
-  /// states this ownership grouping but does not state a branch, so branchId
-  /// intentionally remains nullable and is never inferred by its importer.
+  /// states this ownership grouping but never a branch; the Technician Matrix
+  /// importer defaults every vehicle it writes to Colombo on both create and
+  /// update (Technical Director decision, 2026-09-21). branchId stays
+  /// nullable for a vehicle created outside that importer.
   ownershipGroup String?
 
   isActive Boolean @default(true)
