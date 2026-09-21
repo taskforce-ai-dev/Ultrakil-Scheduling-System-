@@ -395,6 +395,58 @@ describe("filters", () => {
   });
 });
 
+describe("request races", () => {
+  it("keeps the newer branch's visits even when the older branch's request answers last", async () => {
+    const user = await renderCalendar();
+    // Let the mount-time load settle before taking over fetchVisits — this
+    // test is only about the race between the two branch switches below.
+    await within(grid()).findAllByText("Cinnamon Grand Colombo");
+
+    let resolveOlder: ((page: Awaited<ReturnType<typeof fetchVisits>>) => void) | undefined;
+    let resolveNewer: ((page: Awaited<ReturnType<typeof fetchVisits>>) => void) | undefined;
+    vi.mocked(fetchVisits).mockClear();
+    vi.mocked(fetchVisits).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (resolveOlder) resolveNewer = resolve;
+          else resolveOlder = resolve;
+        })
+    );
+
+    // Two branch switches in a row — Colombo's request is the older one,
+    // Kandy's is the newer one that reflects what is now on screen.
+    await chooseOption(user, "Branch", "Colombo");
+    await chooseOption(user, "Branch", "Kandy");
+    expect(fetchVisits).toHaveBeenCalledTimes(2);
+
+    const kandyVisit = buildVisit({
+      id: "visit-kandy-only",
+      visitDate: "2026-09-10",
+      customerName: "Kandy Only Co",
+    });
+    const colomboVisit = buildVisit({
+      id: "visit-colombo-only",
+      visitDate: "2026-09-11",
+      customerName: "Colombo Only Co",
+    });
+
+    // The newer (Kandy) request answers first — realistic under any real
+    // network, where request order and response order are not the same.
+    // The grid is replaced by a loading skeleton while a request is in
+    // flight, so it has to be re-found rather than queried synchronously.
+    resolveNewer?.({ items: [kandyVisit], total: 1, page: 1, pageSize: 500 });
+    const loadedGrid = await screen.findByRole("grid");
+    expect(await within(loadedGrid).findByText("Kandy Only Co")).toBeInTheDocument();
+
+    // The older, stale (Colombo) request finally answers. It must not
+    // overwrite the newer Kandy result already on screen.
+    resolveOlder?.({ items: [colomboVisit], total: 1, page: 1, pageSize: 500 });
+    await Promise.resolve();
+    expect(within(loadedGrid).queryByText("Colombo Only Co")).not.toBeInTheDocument();
+    expect(within(loadedGrid).getByText("Kandy Only Co")).toBeInTheDocument();
+  });
+});
+
 describe("an empty month", () => {
   it("points at the month that actually holds the work", async () => {
     // The calendar opens on today's month. If the generated work starts next
@@ -707,7 +759,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -776,7 +828,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText(/Nothing has been written yet/)).toBeInTheDocument();
@@ -820,7 +872,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -849,7 +901,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
 
     const drawer = await screen.findByRole("dialog");
     expect(
@@ -892,7 +944,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
     await user.click(screen.getByRole("button", { name: "Generate" }));
 
@@ -914,7 +966,7 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -927,7 +979,7 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -970,7 +1022,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(
@@ -1005,7 +1057,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(
@@ -1044,7 +1096,7 @@ describe("regeneration impact review", () => {
     // The calendar opens in the month view, which is where the advice was wrong.
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).queryByText(/Switch to the month view/)).not.toBeInTheDocument();
@@ -1075,7 +1127,7 @@ describe("regeneration impact review", () => {
     const user = await renderCalendar();
     await user.click(screen.getByRole("button", { name: "Week" }));
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getByText(/Switch to the month view/)).toBeInTheDocument();
@@ -1109,7 +1161,7 @@ describe("regeneration impact review", () => {
     );
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     const drawer = await screen.findByRole("dialog");
 
     expect(within(drawer).getByText(/2 three weeks run past an edge/)).toBeInTheDocument();
@@ -1121,7 +1173,7 @@ describe("regeneration impact review", () => {
     const user = await renderCalendar();
 
     await user.click(screen.getByRole("button", { name: "Week" }));
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
 
     const args = vi.mocked(previewVisitGeneration).mock.calls[0][0];
@@ -1133,11 +1185,69 @@ describe("regeneration impact review", () => {
     vi.mocked(previewVisitGeneration).mockResolvedValue(buildGenerationImpact());
     const user = await renderCalendar();
 
-    await user.click(screen.getByRole("button", { name: "Generate visits" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
     await screen.findByText("Visits to create");
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+
+  it("discards a stale preview that answers after a newer one, even though it was asked first", async () => {
+    const addition = (customerName: string) => ({
+      serviceAgreementId: "agreement-1",
+      customerName,
+      siteName: "Main Kitchen",
+      visitDate: "2026-09-30",
+      windowStartMinute: 540,
+      windowEndMinute: 1020,
+      durationMinutes: 90,
+      requiredCrewSize: 2,
+      branchCode: "COLOMBO" as const,
+      isPreferredDay: true,
+      placement: "ANCHORED" as const,
+    });
+    let resolveOlder: ((impact: ReturnType<typeof buildGenerationImpact>) => void) | undefined;
+    let resolveNewer: ((impact: ReturnType<typeof buildGenerationImpact>) => void) | undefined;
+    vi.mocked(previewVisitGeneration).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          if (resolveOlder) resolveNewer = resolve;
+          else resolveOlder = resolve;
+        })
+    );
+    const user = await renderCalendar();
+
+    // First request: opening the drawer previews the current month.
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
+    let drawer = await screen.findByRole("dialog");
+    expect(previewVisitGeneration).toHaveBeenCalledTimes(1);
+
+    // Closing and immediately reopening (a manager clicking Cancel, then
+    // Generate again before the first preview has landed) fires a second,
+    // newer request — the background stays inert while this Sheet is open,
+    // so this is the reachable way to trigger a second request, not
+    // navigating the calendar behind it.
+    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Generate Schedule" }));
+    // The closed drawer unmounts, so re-find it rather than reuse the first
+    // (by now detached) node.
+    drawer = await screen.findByRole("dialog");
+    expect(previewVisitGeneration).toHaveBeenCalledTimes(2);
+
+    // The newer request answers first — realistic under any real network.
+    resolveNewer?.(buildGenerationImpact({ additions: [addition("Fresh Preview Co")] }));
+    expect(await within(drawer).findByText(/Fresh Preview Co/)).toBeInTheDocument();
+
+    // The older, stale request finally answers. It must not overwrite the
+    // newer preview that is already on screen — nor may Generate ever be
+    // left pointed at what the older request described.
+    resolveOlder?.(buildGenerationImpact({ additions: [addition("Stale Preview Co")] }));
+    // Nothing to await: a real overwrite would already have happened
+    // synchronously off this microtask, so asserting immediately after is
+    // the whole point — there is no later "settled" state to wait for.
+    await Promise.resolve();
+    expect(within(drawer).queryByText(/Stale Preview Co/)).not.toBeInTheDocument();
+    expect(within(drawer).getByText(/Fresh Preview Co/)).toBeInTheDocument();
   });
 });
 

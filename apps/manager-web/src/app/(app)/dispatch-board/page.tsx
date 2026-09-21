@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardList,
   Footprints,
+  Share2,
   ShieldAlert,
   UserCog,
   UserX,
@@ -47,6 +48,7 @@ import {
 } from "@/lib/api-client";
 import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { addDays, formatLongDate, formatMinuteOfDay, todayIso } from "@/lib/calendar";
+import { notify } from "@/lib/notify";
 import { CalendarBoard } from "../calendar/calendar-board";
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
@@ -72,10 +74,24 @@ export default function DispatchBoardPage() {
   const [selectedVisitId, setSelectedVisitId] = React.useState<string | null>(null);
   const [editVisitId, setEditVisitId] = React.useState<string | null>(null);
   const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
+  // Stepping the date or switching branch fires a new load before an older
+  // one has answered — for both fetches below, independently, since they run
+  // in parallel rather than one after the other. Without a fence, whichever
+  // response lands last wins, which is not necessarily the one for what is
+  // now on screen. One counter fences both, since they always start together
+  // from the same load() call.
+  const requestGeneration = React.useRef(0);
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
+    // The visits/assignments side already hides behind the loading skeleton
+    // while isLoading is true, but this panel has no such gate — it renders
+    // whenever `operations` is non-null. Left alone, the previous date or
+    // branch's totals would stay on screen, now mislabeled under whatever is
+    // newly selected, until the new response lands.
+    setOperations(null);
     fetchVisits({
       from: date,
       to: date,
@@ -83,6 +99,7 @@ export default function DispatchBoardPage() {
       ...(branch === "ALL" ? {} : { branchCode: branch }),
     })
       .then(async (page) => {
+        if (generation !== requestGeneration.current) return;
         setVisits(page.items);
         // Only visits the API already says have a live assignment are worth a
         // round trip — assignmentCount === 0 already tells us the answer.
@@ -90,23 +107,31 @@ export default function DispatchBoardPage() {
         const pairs = await Promise.all(
           toFetch.map(async (visit) => [visit.id, await fetchVisitAssignment(visit.id)] as const)
         );
+        if (generation !== requestGeneration.current) return;
         setAssignments(Object.fromEntries(pairs));
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
 
     fetchOperationsDay({
       date,
       ...(branch === "ALL" ? {} : { branchCode: branch }),
     })
-      .then(setOperations)
-      .catch(() => setOperations(null));
+      .then((response) => {
+        if (generation === requestGeneration.current) setOperations(response);
+      })
+      .catch(() => {
+        if (generation === requestGeneration.current) setOperations(null);
+      });
   }, [date, branch]);
 
   React.useEffect(() => {
@@ -131,6 +156,38 @@ export default function DispatchBoardPage() {
     [visits, assignments]
   );
 
+  // Plain text so it pastes cleanly into WhatsApp/email/SMS — the channels a
+  // manager actually shares a day's dispatch with, none of which render HTML.
+  function shareBoardText(): string {
+    const lines = sorted.map((visit) => {
+      const assignment = assignments[visit.id];
+      const time = assignment
+        ? `${formatMinuteOfDay(assignment.plannedStartMinute)}–${formatMinuteOfDay(assignment.plannedEndMinute)}`
+        : "Not booked yet";
+      const supervisor = assignment?.crew.find((member) => member.isPmsSupervisor);
+      const crew = assignment?.crew.map((member) => member.fullName).join(", ") || "No crew yet";
+      const vehicle =
+        assignment && assignment.vehicles.length > 0
+          ? assignment.vehicles
+              .map((v) => (v.driverName ? `${v.label} (${v.driverName})` : v.label))
+              .join(", ")
+          : assignment
+            ? "Public transport"
+            : "No vehicle";
+      return `${time} — ${visit.customerName} (${visit.siteName})\n  Supervisor: ${supervisor?.fullName ?? "None"} | Crew: ${crew} | Vehicle: ${vehicle}`;
+    });
+    return `Dispatch Board — ${formatLongDate(date)}${branch !== "ALL" ? ` (${BRANCH_FILTER_LABELS[branch]})` : ""}\n\n${lines.join("\n\n")}`;
+  }
+
+  async function shareBoard() {
+    try {
+      await navigator.clipboard.writeText(shareBoardText());
+      notify.success("Dispatch board copied to clipboard.");
+    } catch {
+      notify.error("Could not copy the dispatch board — your browser may be blocking clipboard access.");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -149,25 +206,45 @@ export default function DispatchBoardPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-1" role="group" aria-label="View">
-          <Button
-            type="button"
-            variant={view === "list" ? "default" : "outline"}
-            aria-pressed={view === "list"}
-            onClick={() => setView("list")}
-          >
-            <ClipboardList className="h-4 w-4" aria-hidden="true" />
-            List
-          </Button>
-          <Button
-            type="button"
-            variant={view === "calendar" ? "default" : "outline"}
-            aria-pressed={view === "calendar"}
-            onClick={() => setView("calendar")}
-          >
-            <CalendarDays className="h-4 w-4" aria-hidden="true" />
-            Calendar
-          </Button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1" role="group" aria-label="View">
+            <Button
+              type="button"
+              variant={view === "list" ? "default" : "outline"}
+              aria-pressed={view === "list"}
+              onClick={() => setView("list")}
+            >
+              <ClipboardList className="h-4 w-4" aria-hidden="true" />
+              List
+            </Button>
+            <Button
+              type="button"
+              variant={view === "calendar" ? "default" : "outline"}
+              aria-pressed={view === "calendar"}
+              onClick={() => setView("calendar")}
+            >
+              <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              Calendar
+            </Button>
+          </div>
+          {view === "list" && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={shareBoard}
+              // The list and its crew/vehicle assignments load in two steps
+              // (see load() above) — Share must wait for both to finish for
+              // the current date/branch, and for stale data left over from
+              // the previous selection, or it can copy an old day's visits
+              // under the newly picked date, or say "No crew yet" for a
+              // visit whose assignment just hasn't arrived yet. It also has
+              // no calendar-view equivalent, so it never appears there.
+              disabled={isLoading || Boolean(error) || sorted.length === 0}
+            >
+              <Share2 className="h-4 w-4" aria-hidden="true" />
+              Share
+            </Button>
+          )}
         </div>
       </div>
 
