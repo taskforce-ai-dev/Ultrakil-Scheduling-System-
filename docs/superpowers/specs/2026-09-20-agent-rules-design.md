@@ -45,7 +45,8 @@ The agent rules will cover:
   generated API contracts;
 - Oshadi's default ownership of manager-web, manager documentation, UAT,
   screenshots, and demo preparation;
-- no human-task delegation or reassignment without Thivarrakesh's approval;
+- each owner completing the assigned human task, with ownership changes taking
+  effect through Thivarrakesh's recorded approval;
 - the UltraKIL-specific GPT-subagent exception and Sol's final-review role;
 - mandatory repository, ClickUp, GitHub, and dirty-worktree checks before work;
 - architecture and generated-contract boundaries;
@@ -60,7 +61,8 @@ The agent rules will cover:
 
 ## Explicitly excluded
 
-The rules files will not contain:
+Keep these volatile or sensitive facts in their authoritative systems rather
+than the rules files:
 
 - current PR numbers or head SHAs;
 - temporary blockers or CI run links;

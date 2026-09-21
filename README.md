@@ -36,8 +36,8 @@ ultrakil-scheduling-system/
 | `apps/api`, `services/scheduler`, `packages/api-contracts`, migrations | **Chanya** (@cha-she)    | Backend rules, scheduling, audit history, deployment, Phase 2-compatible APIs            |
 | `apps/manager-web`, `docs/manager`                                     | **Oshadi** (@Oshadi2005) | Manager portal, customer/service agreement workflow, calendar, dispatch board, overrides |
 
-Do not modify another developer's owned paths without the Project Lead recording
-the reason in the ClickUp task and approving the change. See
+Record the reason and obtain the Technical Director's approval before modifying
+another developer's owned paths. See
 [`.github/CODEOWNERS`](.github/CODEOWNERS) and [`docs/OWNERSHIP.md`](docs/OWNERSHIP.md).
 
 ---
@@ -142,13 +142,13 @@ to the **Unassigned queue with a clear reason**.
 
 ## Team
 
-| Person                                | Role                                                 |
-| ------------------------------------- | ---------------------------------------------------- |
-| **Chanya Shehani** (@cha-she)         | Project Lead — repository owner, reviewer and merger |
-| **Oshadi Kumaravel** (@Oshadi2005)    | Manager portal developer                             |
-| **Thivarrakesh Parthipan** (@thiva2k) | Project Supervisor                                   |
+| Person                                | Role                                                          |
+| ------------------------------------- | ------------------------------------------------------------- |
+| **Chanya Shehani** (@cha-she)         | Project Lead — backend, database, scheduler and API contracts |
+| **Oshadi Kumaravel** (@Oshadi2005)    | Manager portal, manager documentation and UAT                 |
+| **Thivarrakesh Parthipan** (@thiva2k) | Technical Director — final release and ownership authority    |
 
-Chanya reviews and merges Oshadi's pull requests. As Project Lead and
-repository owner, Chanya merges her own pull requests without a second
-approval — but they still go through a pull request and still need green CI.
-Nobody pushes to `main` directly.
+Every pull request receives independent exact-head review and required green
+checks. Thivarrakesh, or a release agent he explicitly authorizes, performs the
+merge after the release gates are satisfied. All changes reach `main` through a
+pull request.
