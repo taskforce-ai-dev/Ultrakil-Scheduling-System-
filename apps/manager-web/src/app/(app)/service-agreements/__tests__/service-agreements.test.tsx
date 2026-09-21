@@ -327,6 +327,7 @@ describe("ServiceAgreementsPage", () => {
             requested: 2,
             scheduled: 1,
             reason: "NOT_ENOUGH_ALLOWED_DAYS",
+            reasons: ["NOT_ENOUGH_ALLOWED_DAYS"],
             message: "Only 1 of the 2 requested visits could be placed this week.",
           },
         ],
@@ -342,10 +343,50 @@ describe("ServiceAgreementsPage", () => {
     expect(
       screen.getByText("Only 1 of the 2 requested visits could be placed this week.")
     ).toBeInTheDocument();
+    // The stable reason code is read too, translated to words — never shown raw.
+    expect(screen.getByText("Not enough allowed days")).toBeInTheDocument();
+    expect(screen.queryByText("NOT_ENOUGH_ALLOWED_DAYS")).not.toBeInTheDocument();
 
     // A preview writes nothing, so an explicit action is offered rather than
     // treating the drawer as already done.
     expect(screen.getByRole("button", { name: "Schedule now" })).toBeInTheDocument();
+  });
+
+  it("shows every reason a shortfall failed for, not just the first", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-multi-reason",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+    vi.mocked(previewVisitGeneration).mockResolvedValue(
+      buildGenerationImpact({
+        from: FAR_FUTURE_START,
+        to: expectedWindow.to,
+        shortfalls: [
+          {
+            serviceAgreementId: "agreement-multi-reason",
+            customerName: created.customerName,
+            siteName: created.siteName,
+            periodStart: FAR_FUTURE_START,
+            periodEnd: "2099-01-12",
+            requested: 2,
+            scheduled: 0,
+            reason: "NOT_ENOUGH_ALLOWED_DAYS",
+            reasons: ["NOT_ENOUGH_ALLOWED_DAYS", "BRANCH_DAY_AT_CAPACITY"],
+            message: "Only 0 of the 2 requested visits could be placed this week. The one allowed day is already full.",
+          },
+        ],
+      })
+    );
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(await screen.findByText("Not enough allowed days")).toBeInTheDocument();
+    expect(screen.getByText("Branch day at capacity")).toBeInTheDocument();
   });
 
   it("writes the previewed visits when a manager explicitly schedules them", async () => {
@@ -486,6 +527,7 @@ describe("ServiceAgreementsPage", () => {
               requested: 2,
               scheduled: 1,
               reason: "NOT_ENOUGH_ALLOWED_DAYS",
+              reasons: ["NOT_ENOUGH_ALLOWED_DAYS"],
               message: "Stale message that belongs to agreement A.",
             },
           ],

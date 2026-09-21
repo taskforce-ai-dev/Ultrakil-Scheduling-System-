@@ -105,6 +105,24 @@ const WEEKDAY_SHORT: Record<Weekday, string> = {
   SUNDAY: "Sun",
 };
 
+/**
+ * The scheduling pipeline's shortfall reason codes, in words a manager
+ * reads rather than an enum. `shortfall.message` already narrates every
+ * cause for a period in prose (the API joins each one's sentence); these
+ * short tags let a manager scan a long conflict list for the same cause
+ * without re-reading every paragraph. `shortfall.reasons` can hold more
+ * than one of these at once — a period can run out of allowed days and
+ * then land on a day already at capacity — and all of them are shown.
+ */
+const SHORTFALL_REASON_LABEL: Record<string, string> = {
+  NOT_ENOUGH_ALLOWED_DAYS: "Not enough allowed days",
+  SITE_CLOSED_ON_ALLOWED_DAYS: "Site closed on allowed days",
+  WINDOW_TOO_SHORT_FOR_VISIT: "Service window too short",
+  BOOKED_BELOW_FREQUENCY: "Fewer bookings than the frequency asks for",
+  PERIOD_HELD_BY_A_CANCELLED_VISIT: "Period held by a cancelled visit",
+  BRANCH_DAY_AT_CAPACITY: "Branch day at capacity",
+};
+
 const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
   ACTIVE: "Active",
   PAUSED: "Paused",
@@ -839,13 +857,24 @@ export default function ServiceAgreementsPage() {
                         Unresolved conflicts
                       </h4>
                       {impact.shortfalls.map((shortfall, index) => (
-                        <p
+                        <div
                           key={`shortfall-${index}`}
                           className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
                         >
                           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          {shortfall.message}
-                        </p>
+                          <div className="space-y-1.5">
+                            <p>{shortfall.message}</p>
+                            {shortfall.reasons.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {shortfall.reasons.map((reason) => (
+                                  <Badge key={reason} variant="outline">
+                                    {SHORTFALL_REASON_LABEL[reason] ?? reason}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       ))}
                       {impact.loadWarnings.map((warning, index) => (
                         <p
