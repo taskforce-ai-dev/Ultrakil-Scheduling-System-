@@ -18,6 +18,15 @@ import {
 
 const DATE = '2026-09-09';
 
+/** Builds `vehicleResources`, unlimited-seat by default, from driver lists alone. */
+function vehicles(...eligibleDriverIds: string[][]): BranchDayWorkforce['vehicleResources'] {
+  return eligibleDriverIds.map((drivers, index) => ({
+    id: `vehicle-${index + 1}`,
+    seatCapacity: null,
+    eligibleDriverIds: drivers,
+  }));
+}
+
 function workforce(overrides: Partial<BranchDayWorkforce> = {}): BranchDayWorkforce {
   return {
     totalEmployeeCount: 6,
@@ -29,7 +38,7 @@ function workforce(overrides: Partial<BranchDayWorkforce> = {}): BranchDayWorkfo
     // Distinct driver per vehicle and distinct walkers by default, so the
     // baseline fixture never exercises the driver/walker overlap the
     // dedicated tests below are about.
-    vehicleEligibleDriverIds: [['driver-1'], ['driver-2'], ['driver-3']],
+    vehicleResources: vehicles(['driver-1'], ['driver-2'], ['driver-3']),
     availablePublicTransportEmployeeIds: [
       'walker-1', 'walker-2', 'walker-3', 'walker-4', 'walker-5', 'walker-6',
     ],
@@ -168,7 +177,7 @@ describe('checkDayFeasibility', () => {
     it('refuses a day with no drivable vehicle and nobody able to travel otherwise', () => {
       const verdict = check(
         [loose()],
-        workforce({ activeVehicleCount: 0, vehicleEligibleDriverIds: [], availablePublicTransportEmployeeIds: [] }),
+        workforce({ activeVehicleCount: 0, vehicleResources: [], availablePublicTransportEmployeeIds: [] }),
       );
       expect(verdict?.code).toBe('NO_WAY_TO_REACH_SITE');
     });
@@ -178,7 +187,7 @@ describe('checkDayFeasibility', () => {
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
         workforce({
           activeVehicleCount: 1,
-          vehicleEligibleDriverIds: [['driver-1']],
+          vehicleResources: vehicles(['driver-1']),
           availablePublicTransportEmployeeIds: [],
         }),
       );
@@ -191,7 +200,7 @@ describe('checkDayFeasibility', () => {
           [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
           workforce({
             activeVehicleCount: 2,
-            vehicleEligibleDriverIds: [['driver-1'], ['driver-2']],
+            vehicleResources: vehicles(['driver-1'], ['driver-2']),
           }),
         ),
       ).toBeNull();
@@ -206,7 +215,7 @@ describe('checkDayFeasibility', () => {
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
         workforce({
           activeVehicleCount: 0,
-          vehicleEligibleDriverIds: [],
+          vehicleResources: [],
           availablePublicTransportEmployeeIds: ['walker-1'],
         }),
       );
@@ -223,7 +232,7 @@ describe('checkDayFeasibility', () => {
         [tight({ serviceAgreementId: 'a' }), tight({ serviceAgreementId: 'b' })],
         workforce({
           activeVehicleCount: 1,
-          vehicleEligibleDriverIds: [['shared-person']],
+          vehicleResources: vehicles(['shared-person']),
           availablePublicTransportEmployeeIds: ['shared-person'],
         }),
       );
@@ -241,7 +250,7 @@ describe('checkDayFeasibility', () => {
             availableEmployeeCount: 3,
             availablePmsCount: 3,
             activeVehicleCount: 0,
-            vehicleEligibleDriverIds: [],
+            vehicleResources: [],
             availablePublicTransportEmployeeIds: ['walker-1'],
           }),
         );
@@ -256,7 +265,7 @@ describe('checkDayFeasibility', () => {
               availableEmployeeCount: 3,
               availablePmsCount: 3,
               activeVehicleCount: 0,
-              vehicleEligibleDriverIds: [],
+              vehicleResources: [],
               availablePublicTransportEmployeeIds: ['walker-1', 'walker-2', 'walker-3'],
             }),
           ),
@@ -277,7 +286,7 @@ describe('checkDayFeasibility', () => {
             availableEmployeeCount: 5,
             availablePmsCount: 2,
             activeVehicleCount: 1,
-            vehicleEligibleDriverIds: [['driver-1']],
+            vehicleResources: vehicles(['driver-1']),
             // One walker beyond the driver: exactly enough for the vehicle
             // to take the 3-person crew and the one walker to take the
             // 1-person crew — but not enough for either crew alone without
@@ -298,11 +307,132 @@ describe('checkDayFeasibility', () => {
             availableEmployeeCount: 5,
             availablePmsCount: 2,
             activeVehicleCount: 1,
-            vehicleEligibleDriverIds: [['driver-1']],
+            vehicleResources: vehicles(['driver-1']),
             availablePublicTransportEmployeeIds: [],
           }),
         );
         expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+      });
+    });
+
+    // The Technical Director's fourth review, item 1: a loose-window visit
+    // never appears in any `forcedConcurrentSets` grouping, since nothing
+    // forces it to overlap another visit — but it still has to reach the
+    // site at some point, so it must be checked on its own too.
+    describe('loose-window visits are still checked', () => {
+      it('refuses a loose one-person visit when the only vehicle has no available driver and nobody can walk', () => {
+        const verdict = check(
+          [loose()],
+          workforce({
+            activeVehicleCount: 1,
+            vehicleResources: vehicles([]),
+            availablePublicTransportEmployeeIds: [],
+          }),
+        );
+        expect(verdict?.code).toBe('NO_WAY_TO_REACH_SITE');
+      });
+
+      it('refuses a loose three-person visit when there is no vehicle and only one walker', () => {
+        const verdict = check(
+          [loose({ requiredCrewSize: 3 })],
+          workforce({
+            availableEmployeeCount: 3,
+            availablePmsCount: 3,
+            activeVehicleCount: 0,
+            vehicleResources: [],
+            availablePublicTransportEmployeeIds: ['walker-1'],
+          }),
+        );
+        expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+      });
+
+      it('accepts the same loose visit once a second walker is available', () => {
+        expect(
+          check(
+            [loose({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 3,
+              availablePmsCount: 3,
+              activeVehicleCount: 0,
+              vehicleResources: [],
+              availablePublicTransportEmployeeIds: ['walker-1', 'walker-2', 'walker-3'],
+            }),
+          ),
+        ).toBeNull();
+      });
+    });
+
+    // The Technical Director's fourth review, item 2: a vehicle only ever
+    // covers a crew its own seats can hold. The production eligibility
+    // engine already enforces this (`VEHICLE_CAPACITY_EXCEEDED`); this check
+    // has to agree, or it accepts a day the eligibility engine will later
+    // reject.
+    describe('vehicle seat capacity', () => {
+      it('refuses a three-person crew when the only drivable vehicle seats one and walkers are short', () => {
+        const verdict = check(
+          [tight({ requiredCrewSize: 3 })],
+          workforce({
+            availableEmployeeCount: 4,
+            availablePmsCount: 3,
+            activeVehicleCount: 1,
+            vehicleResources: [{ id: 'v1', seatCapacity: 1, eligibleDriverIds: ['driver-1'] }],
+            // One walker beyond the driver — not enough for the remaining
+            // two seats a properly-sized vehicle would have freed up.
+            availablePublicTransportEmployeeIds: ['walker-1'],
+          }),
+        );
+        expect(verdict?.code).toBe('NOT_ENOUGH_TRANSPORT_AT_ONCE');
+      });
+
+      it('accepts the same crew once the drivable vehicle can actually seat it', () => {
+        expect(
+          check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 4,
+              availablePmsCount: 3,
+              activeVehicleCount: 1,
+              vehicleResources: [{ id: 'v1', seatCapacity: 4, eligibleDriverIds: ['driver-1'] }],
+              availablePublicTransportEmployeeIds: ['walker-1'],
+            }),
+          ),
+        ).toBeNull();
+      });
+
+      it('a vehicle with unknown (null) seat capacity still covers a crew of any size, as before', () => {
+        expect(
+          check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 4,
+              availablePmsCount: 3,
+              activeVehicleCount: 1,
+              vehicleResources: [{ id: 'v1', seatCapacity: null, eligibleDriverIds: ['driver-1'] }],
+              availablePublicTransportEmployeeIds: [],
+            }),
+          ),
+        ).toBeNull();
+      });
+
+      it('a too-small vehicle still frees its driver to count as a walker for a different crew', () => {
+        // A 3-person crew and a 1-person crew forced concurrent; the
+        // 1-seat vehicle cannot help the 3-person crew, but its driver is a
+        // real person who could instead walk the 1-person crew, leaving the
+        // 3-person crew to be covered entirely by walkers.
+        const verdict = check(
+          [
+            tight({ serviceAgreementId: 'big', requiredCrewSize: 3 }),
+            tight({ serviceAgreementId: 'small', requiredCrewSize: 1 }),
+          ],
+          workforce({
+            availableEmployeeCount: 5,
+            availablePmsCount: 2,
+            activeVehicleCount: 1,
+            vehicleResources: [{ id: 'v1', seatCapacity: 1, eligibleDriverIds: ['driver-1'] }],
+            availablePublicTransportEmployeeIds: ['walker-1', 'walker-2', 'walker-3'],
+          }),
+        );
+        expect(verdict).toBeNull();
       });
     });
   });

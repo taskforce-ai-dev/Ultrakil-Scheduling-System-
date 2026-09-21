@@ -141,7 +141,7 @@ describe('factsForDate', () => {
         { id: 'e3', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
       ],
       unavailability: [],
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] }],
       ...overrides,
     };
   }
@@ -177,7 +177,7 @@ describe('factsForDate', () => {
 
   it('a vehicle authorized to several employees stays driver-capable if any one of them is available', () => {
     const shared = pool({
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2', 'e3'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2', 'e3'] }],
       unavailability: [{ employeeId: 'e2', startDate: '2026-09-23', endDate: '2026-09-23' }],
     });
     const result = factsForDate(shared, BranchCode.COLOMBO, '2026-09-23');
@@ -196,7 +196,7 @@ describe('factsForDate', () => {
       // transportCapableConcurrentCrews could read nonzero is the outsider's
       // authorization wrongly counting.
       employees: [{ id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false }],
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['kandy-employee-not-in-pool'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['kandy-employee-not-in-pool'] }],
     });
     const result = factsForDate(withOutsider, BranchCode.COLOMBO, '2026-09-23');
     expect(result.activeVehicleCount).toBe(1);
@@ -206,7 +206,7 @@ describe('factsForDate', () => {
 
   it("counts a vehicle authorized to a mix of this branch's employees and an outsider by the branch employee alone", () => {
     const mixed = pool({
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['kandy-employee-not-in-pool', 'e2'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['kandy-employee-not-in-pool', 'e2'] }],
     });
     const result = factsForDate(mixed, BranchCode.COLOMBO, '2026-09-23');
     expect(result.driverCapableVehicleCount).toBe(1);
@@ -218,8 +218,8 @@ describe('factsForDate', () => {
   it('one employee authorized for two vehicles is driver-capable for only one of them at once', () => {
     const oneDriverTwoVehicles = pool({
       vehicles: [
-        { id: 'v1', authorizedEmployeeIds: ['e2'] },
-        { id: 'v2', authorizedEmployeeIds: ['e2'] },
+        { id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] },
+        { id: 'v2', seatCapacity: null, authorizedEmployeeIds: ['e2'] },
       ],
     });
     const result = factsForDate(oneDriverTwoVehicles, BranchCode.COLOMBO, '2026-09-23');
@@ -240,9 +240,9 @@ describe('factsForDate', () => {
       // DAG-3284/DAC-2485-style: several drivers checked for more than one
       // vehicle, but there are still enough distinct people to cover all three.
       vehicles: [
-        { id: 'v1', authorizedEmployeeIds: ['e1', 'e2'] },
-        { id: 'v2', authorizedEmployeeIds: ['e2', 'e3'] },
-        { id: 'v3', authorizedEmployeeIds: ['e3', 'e1'] },
+        { id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e1', 'e2'] },
+        { id: 'v2', seatCapacity: null, authorizedEmployeeIds: ['e2', 'e3'] },
+        { id: 'v3', seatCapacity: null, authorizedEmployeeIds: ['e3', 'e1'] },
       ],
     });
     const result = factsForDate(distinctDrivers, BranchCode.COLOMBO, '2026-09-23');
@@ -258,7 +258,7 @@ describe('factsForDate', () => {
         { id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false },
         { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
       ],
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] }],
     });
     const result = factsForDate(oneDriverWhoCanAlsoWalk, BranchCode.COLOMBO, '2026-09-23');
     expect(result.driverCapableVehicleCount).toBe(1);
@@ -274,7 +274,7 @@ describe('factsForDate', () => {
         { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: false },
         { id: 'e3', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
       ],
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] }],
     });
     const result = factsForDate(driverPlusWalker, BranchCode.COLOMBO, '2026-09-23');
     expect(result.transportCapableConcurrentCrews).toBe(2);
@@ -289,7 +289,7 @@ describe('workforceForDate', () => {
         { id: 'e2', isPmsGrade: false, skillCodes: [], canUsePublicTransport: true },
       ],
       unavailability: [],
-      vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }],
+      vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] }],
       ...overrides,
     };
   }
@@ -298,23 +298,23 @@ describe('workforceForDate', () => {
     const result = workforceForDate(
       pool({
         employees: [{ id: 'e1', isPmsGrade: true, skillCodes: [], canUsePublicTransport: false }],
-        vehicles: [{ id: 'v1', authorizedEmployeeIds: ['not-in-this-branch'] }],
+        vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['not-in-this-branch'] }],
       }),
       '2026-09-23',
     );
     expect(result.driverCapableVehicleCount).toBe(0);
-    // The raw list day-feasibility matches against is empty for this
-    // vehicle too, not just the summary count — the outsider id never
-    // survives the branch/active filter into either.
-    expect(result.vehicleEligibleDriverIds).toEqual([[]]);
+    // The raw resource list day-feasibility matches against carries an
+    // empty driver list for this vehicle too, not just the summary count —
+    // the outsider id never survives the branch/active filter into either.
+    expect(result.vehicleResources).toEqual([{ id: 'v1', seatCapacity: null, eligibleDriverIds: [] }]);
   });
 
   it('mirrors factsForDate: one employee does not cover two vehicles at once', () => {
     const result = workforceForDate(
       pool({
         vehicles: [
-          { id: 'v1', authorizedEmployeeIds: ['e2'] },
-          { id: 'v2', authorizedEmployeeIds: ['e2'] },
+          { id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] },
+          { id: 'v2', seatCapacity: null, authorizedEmployeeIds: ['e2'] },
         ],
       }),
       '2026-09-23',
@@ -324,14 +324,22 @@ describe('workforceForDate', () => {
 
   it('exposes the raw driver list and walker set for day-feasibility to match per demand, unresolved here', () => {
     const result = workforceForDate(
-      pool({ vehicles: [{ id: 'v1', authorizedEmployeeIds: ['e2'] }] }),
+      pool({ vehicles: [{ id: 'v1', seatCapacity: null, authorizedEmployeeIds: ['e2'] }] }),
       '2026-09-23',
     );
     // e1 and e2 can both use public transport; e2 is also v1's only driver.
     // workforceForDate does not resolve that overlap — it hands both raw
     // facts to day-feasibility, which is the one that knows the actual
     // demand and can decide who drives versus who walks.
-    expect(result.vehicleEligibleDriverIds).toEqual([['e2']]);
+    expect(result.vehicleResources).toEqual([{ id: 'v1', seatCapacity: null, eligibleDriverIds: ['e2'] }]);
     expect(result.availablePublicTransportEmployeeIds.slice().sort()).toEqual(['e1', 'e2']);
+  });
+
+  it('carries each vehicle its imported seat capacity, for day-feasibility to match crew size against', () => {
+    const result = workforceForDate(
+      pool({ vehicles: [{ id: 'v1', seatCapacity: 4, authorizedEmployeeIds: ['e2'] }] }),
+      '2026-09-23',
+    );
+    expect(result.vehicleResources).toEqual([{ id: 'v1', seatCapacity: 4, eligibleDriverIds: ['e2'] }]);
   });
 });

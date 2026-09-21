@@ -141,6 +141,7 @@ export class BranchDayCapacityService {
         where: { branch: { code: branchCode }, isActive: true },
         select: {
           id: true,
+          seatCapacity: true,
           authorizations: { select: { employeeId: true } },
         },
         orderBy: { id: 'asc' },
@@ -163,6 +164,7 @@ export class BranchDayCapacityService {
       ),
       vehicles: vehicles.map((vehicle) => ({
         id: vehicle.id,
+        seatCapacity: vehicle.seatCapacity,
         authorizedEmployeeIds: vehicle.authorizations.map((entry) => entry.employeeId),
       })),
     };

@@ -72,19 +72,21 @@ export interface BranchDayWorkforce {
    * authorized for several vehicles only ever counts toward one of them,
    * and a Kandy or inactive employee's authorization never counts at all.
    * Informational only; the transport checks below re-derive this from
-   * `vehicleEligibleDriverIds` for each specific set of visits, since how
-   * many vehicles are usable interacts with how many walkers a concrete
-   * demand also needs — a single precomputed count cannot answer that for
-   * every possible mix of crew sizes.
+   * `vehicleResources` for each specific set of visits, since how many
+   * vehicles are usable interacts with how many walkers a concrete demand
+   * also needs, and with how many seats each vehicle actually has — a
+   * single precomputed count cannot answer that for every possible mix of
+   * crew sizes.
    */
   driverCapableVehicleCount: number;
   /**
-   * One entry per active vehicle: the ids of employees who could actually
-   * drive it right now — this branch's own active roster, available today.
-   * A vehicle, once given a driver, can carry a crew of any size; this is
-   * the raw structure the transport checks match against per demand.
+   * One entry per active vehicle: its seat capacity (null when the workbook
+   * did not state one, treated as unlimited) and the ids of employees who
+   * could actually drive it right now — this branch's own active roster,
+   * available today. This is the raw structure the transport checks match
+   * against per demand; a vehicle only covers a crew its seats can hold.
    */
-  vehicleEligibleDriverIds: readonly (readonly string[])[];
+  vehicleResources: readonly { id: string; seatCapacity: number | null; eligibleDriverIds: readonly string[] }[];
   /**
    * Ids of available employees check-marked as able to travel by public
    * transport. Unlike a vehicle, a walker can only carry themselves — a
@@ -173,25 +175,44 @@ function forcedConcurrentSets(visits: readonly DayVisitDemand[]): DayVisitDemand
 }
 
 /**
+ * Every set of visits transport has to be checked against: every visit on
+ * its own — a loose window still has to reach the site *at some point*, and
+ * `forcedConcurrentSets` alone never mentions a visit that is never forced
+ * to overlap anything — plus every forced-overlap set, for the genuinely
+ * concurrent demand. Duplicates (a visit appears both alone and inside a
+ * forced set) cost nothing beyond a redundant check.
+ */
+function transportDemandSets(visits: readonly DayVisitDemand[]): DayVisitDemand[][] {
+  return [visits.map((visit) => [visit]), forcedConcurrentSets(visits)].flat();
+}
+
+/**
  * Whether this branch's transport can carry every visit in `activeVisits`
- * at once. A vehicle, once matched to a driver, carries a crew of any
- * size; a crew with no vehicle needs `requiredCrewSize` distinct available
- * public-transport-capable employees, since a walker can only carry
- * themselves. Nobody covers two roles — driving two vehicles, driving and
- * walking, or walking for two crews — at the same time.
+ * at once. A vehicle, once matched to a driver, carries a crew up to its
+ * own seat capacity (unlimited when the workbook never stated one); a crew
+ * with no vehicle — or too big for any available one — needs
+ * `requiredCrewSize` distinct available public-transport-capable
+ * employees, since a walker can only carry themselves. Nobody covers two
+ * roles — driving two vehicles, driving and walking, or walking for two
+ * crews — at the same time.
  *
- * Vehicles go to the largest crews first. A vehicle costs the same to use
- * whichever visit it covers, but walking costs one distinct person per
- * crew member, so spending a scarce vehicle on the biggest crew always
- * saves at least as many walkers as spending it anywhere else — an
- * exchange argument: swapping a vehicle from a smaller crew to a larger
- * one, and walking the smaller one instead, never increases how many
- * walkers the remaining crews need in total.
+ * Two matchings, each processing its "resources" in the order that
+ * matters most first — the exact technique for "maximum matching that also
+ * prioritises the right side when there is a choice" (a transversal
+ * matroid's greedy optimality, the same guarantee `preferredBipartiteMatching`
+ * already relies on for preferring non-walkers as drivers):
  *
- * Small inputs by construction (a branch's own vehicles and workforce,
- * and however many visits are genuinely forced together at one instant),
- * so trying every split of "how many of these get a vehicle" is cheap and
- * exact — there is no need to guess the right one.
+ * 1. Vehicles matched to distinct available drivers, non-walkers preferred,
+ *    so a walker is only ever spent as a driver when nothing else could
+ *    cover that vehicle.
+ * 2. Visits matched to distinct drivable vehicles with enough seats,
+ *    largest crews first — a vehicle costs the same wherever it goes, so
+ *    covering the biggest crew with it always saves at least as many
+ *    walkers as covering a smaller one instead.
+ *
+ * Whatever visits phase 2 leaves unmatched still need `requiredCrewSize`
+ * walkers each; the total of those, against what phase 1 left free, is the
+ * exact answer.
  */
 function transportFeasible(
   activeVisits: readonly DayVisitDemand[],
@@ -200,23 +221,27 @@ function transportFeasible(
   if (activeVisits.length === 0) return true;
 
   const walkerIds = new Set(workforce.availablePublicTransportEmployeeIds);
-  // Fills vehicles from non-walkers first, so a walker is only ever spent
-  // as a driver when a vehicle has no other eligible one — leaving as many
-  // walkers free as any maximum matching of vehicles to drivers can.
-  const matchedDrivers = preferredBipartiteMatching(workforce.vehicleEligibleDriverIds, walkerIds);
+  const matchedDrivers = preferredBipartiteMatching(
+    workforce.vehicleResources.map((vehicle) => vehicle.eligibleDriverIds),
+    walkerIds,
+  );
   const driversWhoAreAlsoWalkers = [...matchedDrivers.values()].filter((id) => walkerIds.has(id));
   const walkersAvailable = walkerIds.size - driversWhoAreAlsoWalkers.length;
 
+  const drivableVehicles = [...matchedDrivers.keys()].map((index) => workforce.vehicleResources[index]);
   const bySizeDescending = [...activeVisits].sort((a, b) => b.requiredCrewSize - a.requiredCrewSize);
-  const maxVehiclesUsable = Math.min(matchedDrivers.size, activeVisits.length);
+  const visitEligibleVehicleIds = bySizeDescending.map((visit) =>
+    drivableVehicles
+      .filter((vehicle) => vehicle.seatCapacity === null || vehicle.seatCapacity >= visit.requiredCrewSize)
+      .map((vehicle) => vehicle.id),
+  );
+  const visitVehicleMatch = preferredBipartiteMatching(visitEligibleVehicleIds, new Set());
 
-  for (let vehicleCoveredCount = maxVehiclesUsable; vehicleCoveredCount >= 0; vehicleCoveredCount -= 1) {
-    const walkSeatsNeeded = bySizeDescending
-      .slice(vehicleCoveredCount)
-      .reduce((sum, visit) => sum + visit.requiredCrewSize, 0);
-    if (walkersAvailable >= walkSeatsNeeded) return true;
-  }
-  return false;
+  const walkSeatsNeeded = bySizeDescending
+    .filter((_, index) => !visitVehicleMatch.has(index))
+    .reduce((sum, visit) => sum + visit.requiredCrewSize, 0);
+
+  return walkersAvailable >= walkSeatsNeeded;
 }
 
 /**
@@ -300,19 +325,24 @@ export function checkDayFeasibility(
   // instant, not as one day-wide count, because a walker carries only
   // themselves — whether transport suffices depends on which visits are
   // forced together and how big each of their crews is, not just how many
-  // there are.
-  if (workforce.activeVehicleCount === 0 && workforce.availablePublicTransportEmployeeIds.length === 0) {
+  // there are. Every visit is also checked on its own, not only inside a
+  // forced-overlap set, because a loose window still has to reach the site
+  // at some point even when nothing forces it to coincide with another visit.
+  const hasDrivableVehicle = workforce.vehicleResources.some(
+    (vehicle) => vehicle.eligibleDriverIds.length > 0,
+  );
+  if (!hasDrivableVehicle && workforce.availablePublicTransportEmployeeIds.length === 0) {
     return fail(
       'NO_WAY_TO_REACH_SITE',
       `${branchCode} has no drivable vehicle and nobody able to travel by public transport on ${date}, so no crew can reach a site.`,
     );
   }
-  for (const activeVisits of forcedConcurrentSets(visits)) {
+  for (const activeVisits of transportDemandSets(visits)) {
     if (transportFeasible(activeVisits, workforce)) continue;
     const crewSizes = activeVisits.map((visit) => visit.requiredCrewSize).join('+');
     return fail(
       'NOT_ENOUGH_TRANSPORT_AT_ONCE',
-      `${date} forces ${activeVisits.length} crew(s) (sizes ${crewSizes}) to be out at the same time, but ${branchCode} cannot get all of them there at once — a vehicle carries any one crew, but a crew with no vehicle needs one distinct public-transport-capable employee per person, and nobody covers two roles at once.`,
+      `${date} forces ${activeVisits.length} crew(s) (sizes ${crewSizes}) to be out at the same time, but ${branchCode} cannot get all of them there at once — a vehicle carries a crew up to its own seat capacity, but a crew with no vehicle (or too big for any available one) needs one distinct public-transport-capable employee per person, and nobody covers two roles at once.`,
     );
   }
 

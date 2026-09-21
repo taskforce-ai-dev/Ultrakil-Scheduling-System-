@@ -134,7 +134,12 @@ export interface BranchResourcePool {
    * not pre-filtered here so that every caller goes through the same filter
    * rather than each doing its own version of it.
    */
-  vehicles: { id: string; authorizedEmployeeIds: string[] }[];
+  vehicles: {
+    id: string;
+    /** Null when the workbook did not state a capacity — treated as unlimited. */
+    seatCapacity: number | null;
+    authorizedEmployeeIds: string[];
+  }[];
 }
 
 /**
@@ -145,16 +150,24 @@ export interface BranchResourcePool {
  * every place that needs "who could drive this vehicle right now" so the
  * filter is applied exactly once, the same way, everywhere.
  */
-function eligibleDriverListsFor(
+interface VehicleResource {
+  id: string;
+  seatCapacity: number | null;
+  eligibleDriverIds: string[];
+}
+
+function vehicleResourcesFor(
   pool: BranchResourcePool,
   unavailableIds: ReadonlySet<string>,
-): string[][] {
+): VehicleResource[] {
   const branchEmployeeIds = new Set(pool.employees.map((employee) => employee.id));
-  return pool.vehicles.map((vehicle) =>
-    vehicle.authorizedEmployeeIds.filter(
+  return pool.vehicles.map((vehicle) => ({
+    id: vehicle.id,
+    seatCapacity: vehicle.seatCapacity,
+    eligibleDriverIds: vehicle.authorizedEmployeeIds.filter(
       (employeeId) => branchEmployeeIds.has(employeeId) && !unavailableIds.has(employeeId),
     ),
-  );
+  }));
 }
 
 /**
@@ -180,7 +193,7 @@ export function workforceForDate(
     }
   }
 
-  const vehicleDriverLists = eligibleDriverListsFor(pool, unavailableIds);
+  const vehicleResources = vehicleResourcesFor(pool, unavailableIds);
 
   return {
     totalEmployeeCount: pool.employees.length,
@@ -188,8 +201,10 @@ export function workforceForDate(
     availablePmsCount: available.filter((employee) => employee.isPmsGrade).length,
     skillHolderCounts,
     activeVehicleCount: pool.vehicles.length,
-    driverCapableVehicleCount: maxBipartiteMatching(vehicleDriverLists),
-    vehicleEligibleDriverIds: vehicleDriverLists,
+    driverCapableVehicleCount: maxBipartiteMatching(
+      vehicleResources.map((vehicle) => vehicle.eligibleDriverIds),
+    ),
+    vehicleResources,
     availablePublicTransportEmployeeIds: available
       .filter((employee) => employee.canUsePublicTransport)
       .map((employee) => employee.id),
@@ -208,7 +223,9 @@ export function factsForDate(
       .map((entry) => entry.employeeId),
   );
   const available = pool.employees.filter((employee) => !unavailableIds.has(employee.id));
-  const vehicleDriverLists = eligibleDriverListsFor(pool, unavailableIds);
+  const vehicleDriverLists = vehicleResourcesFor(pool, unavailableIds).map(
+    (vehicle) => vehicle.eligibleDriverIds,
+  );
   const walkSlots = available
     .filter((employee) => employee.canUsePublicTransport)
     .map((employee) => [employee.id]);
