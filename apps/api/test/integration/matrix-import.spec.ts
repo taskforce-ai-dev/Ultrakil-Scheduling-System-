@@ -80,6 +80,17 @@ async function importFixture() {
   return { parsed, summary };
 }
 
+// Order matters: dependants first. Assignments lead the list because a crew
+// row restricts deletion of its employee — before ULK-C05 nothing created
+// assignments, so this wiped cleanly and the dependency was invisible.
+async function clearImportedRows(): Promise<void> {
+  await prisma.assignment.deleteMany();
+  await prisma.vehicleAuthorization.deleteMany();
+  await prisma.employeeSkill.deleteMany();
+  await prisma.employee.deleteMany();
+  await prisma.vehicle.deleteMany();
+}
+
 beforeAll(async () => {
   workDir = mkdtempSync(join(tmpdir(), 'ultrakil-matrix-'));
   workbookPath = join(workDir, 'technician-matrix.xlsx');
@@ -88,19 +99,18 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Every vehicle this file imports now carries a real branchId (the
+  // Colombo default), so leaving one behind after the file's last test is no
+  // longer harmless the way an unbranched leftover was: BranchDayCapacityService
+  // would see it, and skew capacity for whatever spec runs next against this
+  // shared database. Same cleanup as beforeEach, run once more on the way out.
+  await clearImportedRows();
   await prisma.$disconnect();
   rmSync(workDir, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
-  // Order matters: dependants first. Assignments lead the list because a crew
-  // row restricts deletion of its employee — before ULK-C05 nothing created
-  // assignments, so this wiped cleanly and the dependency was invisible.
-  await prisma.assignment.deleteMany();
-  await prisma.vehicleAuthorization.deleteMany();
-  await prisma.employeeSkill.deleteMany();
-  await prisma.employee.deleteMany();
-  await prisma.vehicle.deleteMany();
+  await clearImportedRows();
 });
 
 describe('importing the workforce matrix', () => {
