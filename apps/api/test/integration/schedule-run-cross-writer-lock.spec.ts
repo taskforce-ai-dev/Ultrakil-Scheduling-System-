@@ -862,3 +862,83 @@ it('plans the visit on the alternative day rather than leaving it unplanned, whe
   // The cap held, and not only on the day these two writers were fighting over.
   await expectNoBranchDayOverItsCapacity();
 }, 180_000);
+
+const PROTECTED_WEEK = { from: '2029-05-07', to: '2029-05-13' };
+const PROTECTED_DAY = PROTECTED_WEEK.from;
+
+it('never sheds a locked, hand-adjusted visit off a day that is over its cap', async () => {
+  // The other half of the rule. Leaving new work unplanned when a day is full
+  // is only safe if it can never reach for work the day already has: a
+  // requirement whose visit is already in the calendar is existing work, and
+  // dropping it would not leave something unplanned, it would delete
+  // something a customer already has.
+  const agreementGen = await makeSingleDayAgreement(
+    'protected-generation',
+    PROTECTED_WEEK.from,
+    Weekday.MONDAY,
+  );
+
+  const first = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({
+      ...PROTECTED_WEEK,
+      branchCode: BranchCode.COLOMBO,
+      serviceAgreementIds: [agreementGen],
+    });
+  expect(first.status).toBe(200);
+  const planted = await prisma.generatedVisit.findFirstOrThrow({
+    where: { serviceAgreementId: agreementGen },
+  });
+  expect(planted.visitDate.toISOString().slice(0, 10)).toBe(PROTECTED_DAY);
+
+  // A manager then locks it and moves it by hand — the strongest protection
+  // a visit carries short of publication.
+  await prisma.generatedVisit.update({
+    where: { id: planted.id },
+    data: {
+      isManuallyAdjusted: true,
+      manuallyAdjustedAt: new Date(),
+      lockedAt: new Date(),
+      lockReason: 'Customer asked for this crew on this day',
+    },
+  });
+
+  // And the day is then pushed well past its cap by work from elsewhere, so
+  // the guard has every reason to want something off it.
+  const capVisits = await capVisitsOn(PROTECTED_DAY);
+  const filler = await makeAgreement('protected-filler', PROTECTED_WEEK.from);
+  await fillDay(filler, PROTECTED_DAY, capVisits + 1);
+  expect(await loadOn(PROTECTED_DAY)).toBeGreaterThan(capVisits);
+
+  const again = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({
+      ...PROTECTED_WEEK,
+      branchCode: BranchCode.COLOMBO,
+      serviceAgreementIds: [agreementGen],
+    });
+  expect(again.status).toBe(200);
+
+  // Untouched: same row, same day, still locked. Not removed, and not turned
+  // into a shortfall claiming it could not be placed.
+  const after = await prisma.generatedVisit.findUniqueOrThrow({ where: { id: planted.id } });
+  expect(after.visitDate.toISOString().slice(0, 10)).toBe(PROTECTED_DAY);
+  expect(after.lockedAt).not.toBeNull();
+  expect(after.isManuallyAdjusted).toBe(true);
+  expect(again.body.removals).toHaveLength(0);
+  expect(
+    (again.body.shortfalls as { serviceAgreementId: string }[]).some(
+      (entry) => entry.serviceAgreementId === agreementGen,
+    ),
+  ).toBe(false);
+
+  // The day is over its cap and says so, which is the honest answer when
+  // everything on it is work nobody may move.
+  expect(
+    (again.body.loadWarnings as { date: string }[]).some(
+      (warning) => warning.date === PROTECTED_DAY,
+    ),
+  ).toBe(true);
+}, 180_000);
