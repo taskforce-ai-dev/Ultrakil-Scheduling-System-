@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -49,6 +50,7 @@ import {
   type SkillListItem,
 } from "@/lib/api-client";
 import { describeFrequency } from "@/lib/cadence";
+import { formatDurationMinutes } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -235,6 +237,15 @@ export default function ServiceAgreementsPage() {
   const frequencyCount = useWatch({ control, name: "frequencyCount" });
   const frequencyInterval = useWatch({ control, name: "frequencyInterval" });
   const frequencyUnit = useWatch({ control, name: "frequencyUnit" });
+  const durationMinutes = useWatch({ control, name: "durationMinutes" });
+  // The slider's own displayed position only — never what's actually saved.
+  // A manager who types 47 keeps exactly 47 in the field and on submission;
+  // this just gives the thumb a valid, in-range spot to sit at meanwhile.
+  // Floored at 15, not 1: the slider's own min is 15 (see below) so its grid
+  // lands on real quarter-hours — 15, 30, 45… — instead of 1, 16, 31…
+  const sliderDurationMinutes = Number.isFinite(durationMinutes)
+    ? Math.min(Math.max(durationMinutes, 15), 1440)
+    : 15;
   // A half-typed number field reads back NaN; say nothing rather than
   // "NaN times a week".
   const cadencePreview =
@@ -696,6 +707,14 @@ export default function ServiceAgreementsPage() {
             id="agreement-form"
             onSubmit={(event) => handleSubmit(onSubmit)(event)}
             className="space-y-6 py-4"
+            // react-hook-form owns every validation message here, shown
+            // through FormField's own error text. Without this, the
+            // browser's native constraint validation also runs — and the
+            // duration slider's hidden range input (min 1, step 15) reports
+            // a step mismatch for any value not on that exact grid, which
+            // silently blocks the whole form's submission before RHF or its
+            // onSubmit handler ever runs, for every field, not only duration.
+            noValidate
           >
             {submitError && (
               <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -857,16 +876,50 @@ export default function ServiceAgreementsPage() {
                 />
               </FormField>
               <FormField id="durationMinutes" label="Duration (minutes)" error={errors.durationMinutes?.message}>
-                <Input
-                  id="durationMinutes"
-                  type="number"
-                  min={1}
-                  {...register("durationMinutes", {
-                    required: "Required",
-                    valueAsNumber: true,
-                    min: { value: 1, message: "Must be at least 1" },
-                  })}
-                />
+                <div className="space-y-2">
+                  <Input
+                    id="durationMinutes"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    {...register("durationMinutes", {
+                      required: "Required",
+                      valueAsNumber: true,
+                      min: { value: 1, message: "Must be at least 1 minute" },
+                      // The API rejects anything past 1440 (a full day) —
+                      // CreateServiceAgreementDto's own durationMinutes bound.
+                      max: {
+                        value: 1440,
+                        message: "1440 minutes (24 hours) is the longest a single visit can run",
+                      },
+                    })}
+                  />
+                  <Slider
+                    aria-label="Job duration"
+                    // A quarter-hour grid has to start on a quarter-hour: with
+                    // min={1} the grid was 1, 16, 31… — a step off true 15s,
+                    // so Arrow Right from the 60-minute default landed on 76,
+                    // not 75. min=15 makes every step a real 15/30/45/60…
+                    // The field itself still keeps the API's real 1-1440
+                    // bound — this only changes where the slider's own steps
+                    // fall.
+                    min={15}
+                    max={1440}
+                    step={15}
+                    value={sliderDurationMinutes}
+                    onValueChange={(value) =>
+                      setValue("durationMinutes", value as number, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {Number.isFinite(durationMinutes)
+                      ? formatDurationMinutes(durationMinutes)
+                      : "Enter a duration"}
+                  </p>
+                </div>
               </FormField>
             </div>
 

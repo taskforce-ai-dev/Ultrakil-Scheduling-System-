@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addDays, formatDayRange, rangeForGeneration } from "@/lib/calendar";
+import { addDays, formatDayRange, formatDurationMinutes, rangeForGeneration } from "@/lib/calendar";
 
 /**
  * Consecutive month grids have to overlap, or a fortnight can fall between them.
@@ -55,5 +55,18 @@ describe("formatDayRange", () => {
     expect(formatDayRange("2026-09-15", "2026-09-21")).toBe("15–21 Sep");
     expect(formatDayRange("2026-09-28", "2026-10-04")).toBe("28 Sep – 4 Oct");
     expect(formatDayRange("2026-12-28", "2027-01-03")).toBe("28 Dec 2026 – 3 Jan 2027");
+  });
+});
+
+describe("formatDurationMinutes", () => {
+  it("spells out hours and minutes, singular where exactly one, and never rounds", () => {
+    expect(formatDurationMinutes(150)).toBe("2 hours 30 minutes");
+    expect(formatDurationMinutes(60)).toBe("1 hour");
+    expect(formatDurationMinutes(1)).toBe("1 minute");
+    expect(formatDurationMinutes(45)).toBe("45 minutes");
+    expect(formatDurationMinutes(61)).toBe("1 hour 1 minute");
+    // An off-grid value a manager typed by hand, not a multiple of any
+    // slider step — said exactly, not rounded to the nearest quarter hour.
+    expect(formatDurationMinutes(47)).toBe("47 minutes");
   });
 });
