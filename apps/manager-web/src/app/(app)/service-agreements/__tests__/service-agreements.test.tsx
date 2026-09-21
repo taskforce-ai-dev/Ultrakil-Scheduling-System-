@@ -11,7 +11,8 @@ vi.mock("@/lib/api-client", async () => {
     fetchJobTypes: vi.fn(),
     fetchSkills: vi.fn(),
     createServiceAgreement: vi.fn(),
-    fetchSchedulePreview: vi.fn(),
+    previewVisitGeneration: vi.fn(),
+    confirmVisitGeneration: vi.fn(),
     changeAgreementStatus: vi.fn(),
   };
 });
@@ -20,20 +21,15 @@ import ServiceAgreementsPage from "../page";
 import {
   ApiError,
   changeAgreementStatus,
+  confirmVisitGeneration,
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
-  fetchSchedulePreview,
   fetchServiceAgreements,
   fetchSkills,
+  previewVisitGeneration,
 } from "@/lib/api-client";
-import {
-  buildCustomer,
-  buildJobType,
-  buildSchedulePreview,
-  buildServiceAgreement,
-  buildServiceSite,
-} from "@/test/fixtures";
+import { buildCustomer, buildJobType, buildServiceAgreement, buildServiceSite } from "@/test/fixtures";
 
 // The site is open Mon 06:00-22:00 and Wed 08:00-18:00 — deliberately
 // different hours, so the read-only summary can prove it shows each
@@ -59,7 +55,8 @@ beforeEach(() => {
   vi.mocked(fetchJobTypes).mockResolvedValue([jobType]);
   vi.mocked(fetchSkills).mockResolvedValue([]);
   vi.mocked(createServiceAgreement).mockReset();
-  vi.mocked(fetchSchedulePreview).mockReset();
+  vi.mocked(previewVisitGeneration).mockReset();
+  vi.mocked(confirmVisitGeneration).mockReset();
   vi.mocked(changeAgreementStatus).mockReset();
 });
 
@@ -133,7 +130,6 @@ describe("ServiceAgreementsPage", () => {
     vi.mocked(createServiceAgreement).mockResolvedValue(
       buildServiceAgreement({ frequencyInterval: 2, frequencyLabel: "Fortnightly" }),
     );
-    vi.mocked(fetchSchedulePreview).mockResolvedValue(buildSchedulePreview());
 
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
@@ -251,60 +247,110 @@ describe("ServiceAgreementsPage", () => {
     expect(list?.textContent).toContain("Tue: Closed");
   });
 
-  it("saves the agreement, then shows a loading state and the real preview, including shortfalls", async () => {
-    const created = buildServiceAgreement({ id: "agreement-2" });
-    vi.mocked(createServiceAgreement).mockResolvedValue(created);
-    // Hold the preview response until after the loading state has been
-    // asserted. A wall-clock timeout races with the user interactions above
-    // on slower CI runners and can resolve before this assertion runs.
-    let resolvePreview!: (preview: ReturnType<typeof buildSchedulePreview>) => void;
-    const previewPromise = new Promise<ReturnType<typeof buildSchedulePreview>>((resolve) => {
-      resolvePreview = resolve;
+  // Far enough out that a fixed future date reads clearly in assertions,
+  // regardless of which day the suite actually runs on.
+  const FAR_FUTURE_START = "2099-01-06";
+
+  it("shows the automatic onboarding result when planning succeeds, with no second scheduling request", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-2",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 24,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message: null,
+      },
     });
-    vi.mocked(fetchSchedulePreview).mockReturnValue(previewPromise);
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
 
     const user = await openForm();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Calculating preview…");
-
-    resolvePreview(
-      buildSchedulePreview({
-        shortfalls: [
-          {
-            periodStart: "2026-09-07",
-            periodEnd: "2026-09-13",
-            requested: 2,
-            scheduled: 1,
-            reason: "NOT_ENOUGH_ALLOWED_DAYS",
-            message: "Only 1 of the 2 requested visits could be placed this week.",
-          },
-        ],
-      })
-    );
-
+    expect(screen.getByRole("heading", { name: "Scheduled" })).toBeInTheDocument();
+    expect(screen.getByText(/24 visits scheduled between/)).toBeInTheDocument();
+    // The "existing work" guarantee is stated unconditionally.
     expect(
-      await screen.findByText("Only 1 of the 2 requested visits could be placed this week.")
+      screen.getByText(/every other customer's existing schedule is untouched/)
     ).toBeInTheDocument();
-    expect(screen.getByText(/2026-09-07/)).toBeInTheDocument();
+
+    // The agreement was already fully scheduled by the create response
+    // itself — there is no second manual step, and none was requested.
+    expect(screen.queryByRole("button", { name: "Schedule now" })).not.toBeInTheDocument();
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
-  it("shows an error if the preview fails to load, without losing the created agreement", async () => {
-    vi.mocked(createServiceAgreement).mockResolvedValue(buildServiceAgreement());
-    vi.mocked(fetchSchedulePreview).mockRejectedValue(
-      new ApiError({ code: "UNKNOWN_ERROR", message: "Could not load the preview." })
-    );
+  it("shows shortfalls from automatic onboarding without hiding what was still scheduled", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-shortfall",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED_WITH_SHORTFALLS",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 20,
+        shortfallPeriods: 3,
+        overCapacityDays: 2,
+        message: null,
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
 
     const user = await openForm();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
+    expect(await screen.findByRole("heading", { name: "Scheduled, with shortfalls" })).toBeInTheDocument();
+    expect(screen.getByText(/20 visits scheduled between/)).toBeInTheDocument();
+    expect(screen.getByText(/3 periods could not hold everything requested/)).toBeInTheDocument();
+    expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+
+  it("shows why automatic onboarding failed, without losing the created agreement", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-failed",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "FAILED",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 0,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message: "Every allowed day is already at branch capacity for the next twelve months.",
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    // The agreement itself was still created — only planning failed.
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(await screen.findByText("Could not load the preview.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Scheduling failed" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Every allowed day is already at branch capacity for the next twelve months.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/visits scheduled between/)).not.toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
   it("surfaces a backend rejection (e.g. an unsatisfiable agreement) without closing the form", async () => {

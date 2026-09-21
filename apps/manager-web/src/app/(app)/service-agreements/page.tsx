@@ -39,18 +39,16 @@ import {
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
-  fetchSchedulePreview,
   fetchServiceAgreements,
   fetchSkills,
   type Customer,
   type JobType,
   type ServiceAgreement,
   type ServiceSite,
-  type SchedulePreview,
   type SkillListItem,
 } from "@/lib/api-client";
 import { describeFrequency } from "@/lib/cadence";
-import { formatDurationMinutes } from "@/lib/calendar";
+import { formatDurationMinutes, formatLongDate } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -90,6 +88,21 @@ const WEEKDAY_SHORT: Record<Weekday, string> = {
   FRIDAY: "Fri",
   SATURDAY: "Sat",
   SUNDAY: "Sun",
+};
+
+type OnboardingPlan = NonNullable<ServiceAgreement["onboardingPlan"]>;
+
+/**
+ * The automatic onboarding plan's own outcome, in words rather than an enum.
+ * `AgreementsService.create()` already scheduled the agreement for its
+ * rolling twelve-month horizon by the time the create response comes back —
+ * this heading says what that run actually did, not what a manager might do
+ * next.
+ */
+const ONBOARDING_STATUS_LABEL: Record<OnboardingPlan["status"], string> = {
+  PLANNED: "Scheduled",
+  PLANNED_WITH_SHORTFALLS: "Scheduled, with shortfalls",
+  FAILED: "Scheduling failed",
 };
 
 const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
@@ -182,13 +195,13 @@ const defaultValues: ServiceAgreementFormValues = {
  * enforced by the API, which rejects a genuinely-impossible agreement outright
  * (400/422 with a stable code) rather than the UI second-guessing it.
  *
- * The one API-shape consequence worth calling out: `GET .../schedule-preview`
- * only works on an *existing* agreement — there is no dry-run endpoint. So
- * "preview before saving" becomes "save, then immediately show the real
- * preview before the drawer closes" rather than a preview on unsaved draft
- * values. Flagged to Chanya; a dry-run preview endpoint would be a nice
- * follow-up but isn't required for this to be correct and honest about what
- * it shows.
+ * Saving an agreement is the whole scheduling operation: `POST
+ * /service-agreements` already runs the agreement's automatic onboarding —
+ * a scoped, rolling twelve-month plan — before the response comes back, and
+ * returns its outcome as `onboardingPlan`. There is no separate preview or
+ * confirm step here to run afterwards, and no second "Schedule now" action
+ * that could trigger a duplicate planning run: the create response is read
+ * straight into the drawer.
  */
 export default function ServiceAgreementsPage() {
   const [agreements, setAgreements] = React.useState<ServiceAgreement[]>([]);
@@ -215,9 +228,6 @@ export default function ServiceAgreementsPage() {
   const busyAgreementIdRef = React.useRef<string | null>(null);
 
   const [createdAgreement, setCreatedAgreement] = React.useState<ServiceAgreement | null>(null);
-  const [preview, setPreview] = React.useState<SchedulePreview | null>(null);
-  const [previewError, setPreviewError] = React.useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = React.useState(false);
 
   const {
     register,
@@ -356,8 +366,6 @@ export default function ServiceAgreementsPage() {
 
   function openDrawer() {
     setCreatedAgreement(null);
-    setPreview(null);
-    setPreviewError(null);
     setSubmitError(null);
     const firstCustomer = customers[0];
     const firstActiveSite = firstCustomer?.sites.find((site) => site.isActive);
@@ -374,6 +382,10 @@ export default function ServiceAgreementsPage() {
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
+
+    // Creating the agreement is the whole operation: the response already
+    // carries `onboardingPlan`, the outcome of the automatic scoped plan the
+    // API ran before answering. Nothing further to request or confirm.
     try {
       const agreement = await createServiceAgreement({
         serviceSiteId: values.serviceSiteId,
@@ -396,21 +408,8 @@ export default function ServiceAgreementsPage() {
         requiredSkillCodes: values.requiredSkillCodes,
         notes: values.notes || null,
       });
-
       setCreatedAgreement(agreement);
       notify.success(`Service agreement for ${agreement.customerName} created.`);
-
-      setIsPreviewLoading(true);
-      try {
-        const result = await fetchSchedulePreview(agreement.id);
-        setPreview(result);
-      } catch (caught) {
-        setPreviewError(
-          caught instanceof ApiError ? caught.message : "Could not load the schedule preview."
-        );
-      } finally {
-        setIsPreviewLoading(false);
-      }
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
     } finally {
@@ -610,10 +609,10 @@ export default function ServiceAgreementsPage() {
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? "Here's what the system will schedule for it."
+            ? "Automatic onboarding has already scheduled it — here's what that run did."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
-        // The created-agreement view is a read-only schedule preview (no
+        // The created-agreement view is a read-only onboarding summary (no
         // form fields) — same scrollable-region-focusable case as the
         // visit-generation drawer. The form view keeps the default so the
         // Sheet's autofocus still lands on the first real field.
@@ -645,62 +644,60 @@ export default function ServiceAgreementsPage() {
               </p>
             </div>
 
-            <div className="space-y-3 rounded-xl border p-4">
-              <h3 className="flex items-center gap-1.5 text-sm font-medium">
-                <CalendarClock className="h-4 w-4" aria-hidden="true" />
-                Schedule preview
-              </h3>
+            {createdAgreement.onboardingPlan && (
+              <div className="space-y-3 rounded-xl border p-4">
+                <h3 className="flex items-center gap-1.5 text-sm font-medium">
+                  <CalendarClock className="h-4 w-4" aria-hidden="true" />
+                  {ONBOARDING_STATUS_LABEL[createdAgreement.onboardingPlan.status]}
+                </h3>
 
-              {isPreviewLoading ? (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Calculating preview…
+                {/*
+                  Stated unconditionally, not only when planning succeeded:
+                  the guarantee holds whether this run planned everything,
+                  part of it, or nothing at all, and a manager reading a
+                  shortfall or a failure below still needs to know nobody
+                  else's calendar moved.
+                */}
+                <p className="text-xs text-muted-foreground">
+                  This only plans {createdAgreement.customerName}&apos;s own visits — every
+                  other customer&apos;s existing schedule is untouched.
                 </p>
-              ) : previewError ? (
-                <p role="alert" className="text-sm text-destructive">
-                  {previewError}
-                </p>
-              ) : preview ? (
-                <>
-                  {preview.shortfalls.length > 0 && (
-                    <div className="space-y-2">
-                      {preview.shortfalls.map((shortfall, index) => (
-                        <p
-                          key={index}
-                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          {shortfall.message}
-                        </p>
-                      ))}
-                    </div>
-                  )}
 
-                  {preview.visits.length > 0 ? (
-                    <ul className="space-y-1 text-sm">
-                      {preview.visits.map((visit) => (
-                        <li key={visit.date} className="flex items-center justify-between">
-                          <span>
-                            {visit.date} ({WEEKDAY_SHORT[visit.weekday]})
-                            {visit.isPreferredDay && (
-                              <Badge variant="success" className="ml-2">
-                                Preferred
-                              </Badge>
-                            )}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {formatMinutes(visit.windowStartMinute)}–{formatMinutes(visit.windowEndMinute)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      No visits fall in the preview window.
+                {createdAgreement.onboardingPlan.status === "FAILED" ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {createdAgreement.onboardingPlan.message}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm">
+                      {createdAgreement.onboardingPlan.visitsPlanned}{" "}
+                      {createdAgreement.onboardingPlan.visitsPlanned === 1 ? "visit" : "visits"}{" "}
+                      scheduled between{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.from)} and{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.to)}.
                     </p>
-                  )}
-                </>
-              ) : null}
-            </div>
+                    {createdAgreement.onboardingPlan.status === "PLANNED_WITH_SHORTFALLS" && (
+                      <p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span>
+                          {createdAgreement.onboardingPlan.shortfallPeriods}{" "}
+                          {createdAgreement.onboardingPlan.shortfallPeriods === 1
+                            ? "period"
+                            : "periods"}{" "}
+                          could not hold everything requested.
+                          {createdAgreement.onboardingPlan.overCapacityDays > 0 &&
+                            ` ${createdAgreement.onboardingPlan.overCapacityDays} ${
+                              createdAgreement.onboardingPlan.overCapacityDays === 1
+                                ? "day is"
+                                : "days are"
+                            } already carrying more than the branch plans for.`}
+                        </span>
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <form

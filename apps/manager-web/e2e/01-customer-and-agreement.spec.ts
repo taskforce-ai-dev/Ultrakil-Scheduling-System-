@@ -68,19 +68,15 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   await expect(page.getByRole("heading", { name: "Service agreement created" })).toBeVisible({
     timeout: 10_000,
   });
-  await expect(page.getByText("Schedule preview")).toBeVisible();
-  if (process.env.E2E_STRICT === '1') {
-    await expect(page.locator('li', { hasText: /^\d{4}-\d{2}-\d{2}/ }).first()).toBeVisible({ timeout: 10_000 });
-  }
-  // A populated preview lists each visit as a plain date/time row (no
-  // summary sentence), so this checks for that structure directly rather
-  // than guessing wording. Either that, the "nothing in range" message, or
-  // a real load error — never a blank panel.
+  // Stated unconditionally, whatever the automatic onboarding run below did.
   await expect(
-    page
-      .locator("li", { hasText: /^\d{4}-\d{2}-\d{2}/ })
-      .first()
-      .or(page.getByText("No visits fall in the preview window."))
-      .or(page.getByText("Could not load the schedule preview."))
+    page.getByText("every other customer's existing schedule is untouched")
+  ).toBeVisible();
+  // Saving the agreement already ran its automatic scoped plan — there is no
+  // separate preview/confirm step, and no "Schedule now" left to press.
+  // Exactly one of the three onboarding outcomes is shown for it.
+  await expect(
+    page.getByRole("heading", { name: /^(Scheduled|Scheduled, with shortfalls|Scheduling failed)$/ })
   ).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Schedule now" })).toHaveCount(0);
 });
