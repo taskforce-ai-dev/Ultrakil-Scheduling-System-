@@ -2,14 +2,13 @@
 
 ## The short version
 
-- `main` is protected. Nobody pushes to it directly, ever.
-- One ClickUp task = one branch = one pull request.
-- Chanya reviews and merges Oshadi's pull requests.
-- Chanya merges her own pull requests herself — no second approval needed.
-- No merge with failing checks, unresolved review comments, or undocumented
-  schema/API changes.
-
----
+- Route every change to `main` through a pull request.
+- Use one ClickUp task or tightly coupled release unit per branch and pull request.
+- Keep commits focused and preserve an understandable handover.
+- Require independent review of the exact head, successful required checks, and
+  resolved review conversations.
+- Merge after Thivarrakesh authorizes the release or explicitly delegates that
+  merge to a release agent.
 
 ## Branch naming
 
@@ -17,12 +16,12 @@
 <type>/<task-id>-<short-description>
 ```
 
-| Type | Use for |
-| --- | --- |
-| `feat` | New functionality |
-| `fix` | Bug fix |
-| `chore` | Tooling, CI, dependencies, repo housekeeping |
-| `docs` | Documentation only |
+| Type    | Use for                                            |
+| ------- | -------------------------------------------------- |
+| `feat`  | New functionality                                  |
+| `fix`   | Bug fix                                            |
+| `chore` | Tooling, CI, dependencies, repository housekeeping |
+| `docs`  | Documentation only                                 |
 
 Examples:
 
@@ -32,216 +31,98 @@ feat/ULK-O01-manager-portal-foundation
 fix/ULK-C05-pms-supervisor-check
 ```
 
-The repository also has personal branches (`Chanya`, `Oshadi`, `Rakesh`). Those
-are scratch space only. **Task work goes on a task branch**, because a reviewer
-needs to see one task's change in one pull request.
-
----
+Personal branches are scratch space. Put task work on a task branch so reviewers
+can assess one coherent change and its evidence.
 
 ## The flow for one task
 
 ```bash
-# 1. Always start from the latest main
-git checkout main
-git pull origin main
+# 1. Start from the current remote baseline
+git fetch origin
+git switch main
+git pull --ff-only origin main
 
 # 2. Create the task branch
-git checkout -b feat/ULK-C01-backend-foundation
+git switch -c feat/ULK-C01-backend-foundation
 
-# 3. Work, committing in meaningful steps
-git add .
-git commit -m "feat(api): add health checks for database, queue and scheduler"
+# 3. Commit meaningful increments
+git add apps/api/src/health
+git commit -m "feat(api): add dependency health checks"
 
-# 4. Push
+# 4. Publish the feature branch
 git push -u origin feat/ULK-C01-backend-foundation
 ```
 
-Then open a pull request on GitHub. The template loads automatically — fill in
-every section.
-
-Before you ask for review, run what CI runs:
-
-```bash
-pnpm lint && pnpm typecheck && pnpm test && pnpm contracts:generate
-```
-
-A pull request that fails CI costs the reviewer a round trip. Catch it locally.
-
----
+Open a pull request with the repository template and complete every applicable
+section. Before requesting review, run the checks relevant to the changed paths,
+including contract generation for API changes.
 
 ## Commit messages
+
+Use this form:
 
 ```
 <type>(<scope>): <what changed>
 ```
 
+Examples:
+
 ```
-feat(api): add ServiceAgreement day rules
-fix(scheduler): keep permanently stationed staff out of mobile crews
-chore(ci): run integration tests against a real PostgreSQL service
-docs(readme): document the hard scheduling rules
+feat(api): add service agreement day rules
+fix(scheduler): keep stationed staff out of mobile crews
+chore(ci): run integration tests against PostgreSQL
+docs(readme): document hard scheduling rules
 ```
 
-Write what changed, not what you did. Never put credentials, customer names or
-staff names in a commit message.
+Describe the change and its intent. Keep credentials, customer identities,
+staff identities, and other sensitive data in approved protected systems.
 
----
+## Review and acceptance
 
-## Review rules
+The pull-request author supplies a complete handover. The independent reviewer
+checks the exact current head rather than relying on an earlier review or a green
+badge alone.
 
-| Author | Reviewer | Merged by |
-| --- | --- | --- |
-| Oshadi | **Chanya** — approval required before merge | Chanya |
-| Chanya | None required | Chanya |
+A pull request becomes mergeable when all applicable conditions hold:
 
-Chanya still opens a pull request for her own work and still waits for green
-CI. What she skips is the second pair of eyes, not the process.
+- [ ] Every required CI and deployment-preview check succeeds on the exact head.
+- [ ] Every review conversation is resolved with a fixing commit or an accepted
+      technical explanation.
+- [ ] Schema, migration, scheduling, and API changes are documented.
+- [ ] OpenAPI and the generated client match the backend.
+- [ ] Cross-owner edits reference Thivarrakesh's recorded approval.
+- [ ] The diff contains no secrets, environment files, real workbooks, dumps, or
+      personal-data exports.
+- [ ] Hard scheduling and vehicle-driver rules remain enforced.
+- [ ] PostgreSQL migrations and concurrency behavior have appropriate evidence.
+- [ ] Real-data and browser evidence required by the task has been completed.
+- [ ] Thivarrakesh has authorized the merge or named the release agent who may
+      perform it.
 
-A pull request may only be merged when **all** of these hold:
+Use squash merge when one pull request represents one task. Preserve multiple
+commits when their separation is required for an understandable audited release.
+Delete merged feature branches after any required release or rollback references
+have been recorded.
 
-- [ ] Every CI check is green
-- [ ] Every review comment is resolved
-- [ ] Any schema, migration or API change is documented in the pull request
-- [ ] The OpenAPI contract was regenerated if endpoints changed
-- [ ] Only the author's owned paths are modified, or the Project Lead recorded
-      an approved reason for touching another owner's path
-- [ ] No secrets, `.env` file or real workforce data is included
-- [ ] No hard scheduling rule was weakened to make something pass
+## Branch protection outcome
 
-Merge with **Squash and merge**, so `main` keeps one clean commit per task.
-Delete the branch afterwards.
+Configure protection for `main` so the repository enforces these outcomes:
 
----
+- updates arrive through pull requests;
+- force pushes and branch deletion are blocked;
+- required checks pass before merge;
+- review conversations are resolved;
+- stale approvals are dismissed after reviewable changes;
+- the most recent reviewable push receives independent review;
+- administrative access follows the same pull-request path.
 
-## Branch protection settings for `main`
+Verify the effective rules with a harmless throwaway pull request and the GitHub
+ruleset view. Record changes to repository protection in ClickUp and obtain
+Thivarrakesh's approval before applying them.
 
-Configured under **Settings → Rules → Rulesets → New branch ruleset**.
+## Release handover
 
-We use **two rulesets**, not one. GitHub applies "Required approvals" to a
-*branch*, not to a particular author, so a single ruleset cannot say "one
-approval for Oshadi's pull requests, none for Chanya's". But a bypass list is
-evaluated **per ruleset**, and where several rulesets target the same branch
-GitHub applies the strictest combination of what is left. Splitting the rules
-across two rulesets is what lets Chanya skip the review requirement while
-staying bound by everything else.
-
-| | `main-baseline` | `main-review` |
-| --- | --- | --- |
-| Applies to | **everyone** | Oshadi (and anyone not bypassed) |
-| Bypass list | **empty** | `cha-she` |
-| Effect | Pull request required, CI must pass, no direct or force pushes | One approving review required |
-
-The result:
-
-| | Direct push to `main` | Green CI | Approval needed | Can merge own work |
-| --- | --- | --- | --- | --- |
-| Oshadi | blocked | required | **1 — from Chanya** | no |
-| Chanya | blocked | required | none | yes |
-
-### Ruleset 1 — `main-baseline`
-
-| Field | Value |
-| --- | --- |
-| Ruleset Name | `main-baseline` |
-| Enforcement status | **Active** |
-| Bypass list | **leave empty** |
-| Target branches | Add target → **Include default branch** |
-
-Branch rules:
-
-| Rule | Setting |
-| --- | --- |
-| Restrict deletions | ✅ *(on by default)* |
-| Block force pushes | ✅ *(on by default)* |
-| Require a pull request before merging | ✅ |
-| — Required approvals | **0** |
-| — Require conversation resolution before merging | ✅ |
-| — Require review from Code Owners | ❌ **leave off** — see below |
-| Require status checks to pass | ✅ |
-| — Required checks | `API (build, test, contract)`, `Scheduler service (Python)`, `Secret scan` |
-| — Require branches to be up to date before merging | ✅ |
-
-Required approvals is **0** here on purpose. This ruleset's job is "a pull
-request, with green checks, and no direct pushes" — the part that binds
-everybody including the Project Lead. Review is ruleset 2's job.
-
-> **The empty bypass list is the point.** Every collaborator on this repository
-> has *admin* permission. An empty bypass list is the only thing that makes
-> these rules apply to admins as well — put anyone in it and they can push
-> straight to `main`, which makes the whole ruleset decorative.
->
-> **Enforcement status is the one people forget.** A ruleset left *Disabled*
-> looks fully configured and enforces nothing.
-
-### Ruleset 2 — `main-review`
-
-| Field | Value |
-| --- | --- |
-| Ruleset Name | `main-review` |
-| Enforcement status | **Active** |
-| Bypass list | **add `cha-she`** (Role/User → Chanya) |
-| Target branches | Add target → **Include default branch** |
-
-Branch rules — tick **only** this one:
-
-| Rule | Setting |
-| --- | --- |
-| Require a pull request before merging | ✅ |
-| — Required approvals | **1** |
-| — Dismiss stale pull request approvals when new commits are pushed | ✅ |
-| — Require approval of the most recent reviewable push | ✅ |
-
-Leave every other rule in this ruleset unticked. Anything ticked here is
-something Chanya would bypass, and the only thing she should bypass is the
-review requirement.
-
-### Why "Require review from Code Owners" stays off
-
-It sounds like exactly what we want, and it would deadlock Chanya's own pull
-requests.
-
-`CODEOWNERS` makes `@cha-she` the owner of `apps/api`, `services/scheduler`,
-`packages/api-contracts` and the repository root. GitHub does not accept a pull
-request's author as a valid code-owner reviewer. So on any pull request Chanya
-authors touching her own folders — which is most of them — the requirement
-could never be satisfied.
-
-Nothing is lost by leaving it off. `CODEOWNERS` still requests the right
-reviewer automatically, and on Oshadi's pull requests **Required approvals: 1**
-combined with **Require approval of the most recent reviewable push** already
-guarantees somebody other than the author approved the work.
-
-### Rules to leave off, and why
-
-| Rule | Reason |
-| --- | --- |
-| Restrict creations | Would block creating new branches |
-| **Restrict updates** | Does not mean what it sounds like — it would block merging pull requests too |
-| Require linear history | Unnecessary friction; squash-merge already keeps `main` clean |
-| Require signed commits | Needs GPG keys configured for everyone first |
-| Require merge queue / Require deployments to succeed | Overkill for a two-developer team |
-| Code scanning / code quality / code coverage / Copilot review | Not configured on this repository |
-
-### Checking it actually works
-
-After creating both rulesets, confirm the arrangement rather than assuming it:
-
-1. Open a throwaway pull request into `main` from any branch. It should show
-   **"Review required"** and a blocked merge button.
-2. On one of Chanya's own pull requests, the merge button should be enabled once
-   CI is green, with no reviewer needed.
-3. `git push origin main` from any account should be **rejected**. If it
-   succeeds, the bypass list on `main-baseline` is not empty, or a ruleset is
-   still *Disabled*.
-
-Step 3 is the one worth actually running. It is the difference between
-protection that works and protection that only looks configured.
-
-### If the review rule stops being followed
-
-The single-approval requirement on Oshadi's pull requests is enforced by
-GitHub. Chanya's self-merge is enforced by nothing but judgement — there is no
-second reviewer to catch a mistake in backend or scheduling code. If a change
-is large, touches a hard scheduling rule, or changes the database schema, ask
-Thivarrakesh for a review anyway. The ruleset permits self-merge; it does not
-require it.
+After merge, record the merge commit, source PR, CI runs, migrations, deployment
+identity, health checks, UAT, backup/restore evidence, rollback state, and any
+remaining limitations. Mark the task complete when its Definition of Done and
+evidence are satisfied.

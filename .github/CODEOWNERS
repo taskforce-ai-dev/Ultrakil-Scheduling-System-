@@ -1,12 +1,12 @@
 # UltraKIL Phase 1 — code ownership
 #
 # A pull request touching a path below automatically requests a review from its
-# owner. Do not modify another developer's owned paths without the Project Lead
-# recording the reason in the ClickUp task and approving the change.
+# owner. Cross-owner work proceeds after the reason and the Technical Director's
+# approval are recorded in the ClickUp task.
 #
 #   Chanya Shehani      @cha-she     Project Lead, backend, scheduler, contract
 #   Oshadi Kumaravel    @Oshadi2005  Manager portal
-#   Thivarrakesh        @thiva2k     Project Supervisor
+#   Thivarrakesh        @thiva2k     Technical Director, final authority
 
 # Default owner: Project Lead
 *                           @cha-she
