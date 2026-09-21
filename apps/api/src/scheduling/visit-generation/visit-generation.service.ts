@@ -53,6 +53,8 @@ import {
 import {
   DailyLoadWarning,
   StandingVisit,
+  UnplaceableVisit,
+  agreementDayKey,
   applyDailyLoadGuard,
   DayFeasibilityCheck,
 } from './load-guard';
@@ -925,6 +927,74 @@ export class VisitGenerationService {
     );
   }
 
+  /**
+   * Turns the guard's unplaceable visits into shortfalls a manager can read.
+   *
+   * One shortfall per agreement-period, not one per visit: a period is where
+   * a promise lives ("four visits a month"), and a manager needs to know that
+   * three of the four landed, not to read three identical lines about the
+   * same month. `requested` is what this run planned for the period before
+   * the guard looked at capacity, `scheduled` what survived it — so the two
+   * always describe the same period and their difference is exactly what was
+   * left unplanned.
+   *
+   * The reason is the guard's own stable code, not prose reconstructed here,
+   * so the portal and this service cannot drift apart on what it means.
+   */
+  private shortfallsForUnplaceable(
+    unplaceable: UnplaceableVisit[],
+    planned: RequiredVisit[],
+    agreements: AgreementForGeneration[],
+    dto: GenerateVisitsDto,
+  ): Shortfall[] {
+    if (unplaceable.length === 0) return [];
+
+    const byAgreement = new Map(agreements.map((agreement) => [agreement.id, agreement]));
+    const plannedPerPeriod = new Map<string, number>();
+    for (const visit of planned) {
+      const key = `${visit.serviceAgreementId}|${visit.periodIndex}`;
+      plannedPerPeriod.set(key, (plannedPerPeriod.get(key) ?? 0) + 1);
+    }
+
+    const dropped = new Map<string, UnplaceableVisit[]>();
+    for (const entry of unplaceable) {
+      // A day the run was never asked about is not its to report on, the same
+      // rule its load warnings follow.
+      if (entry.visit.visitDate < dto.from || entry.visit.visitDate > dto.to) continue;
+      const key = `${entry.visit.serviceAgreementId}|${entry.visit.periodIndex}`;
+      dropped.set(key, [...(dropped.get(key) ?? []), entry]);
+    }
+
+    const shortfalls: Shortfall[] = [];
+    for (const [key, entries] of [...dropped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      const agreement = byAgreement.get(entries[0].visit.serviceAgreementId);
+      if (!agreement) continue;
+
+      const requested = plannedPerPeriod.get(key) ?? entries.length;
+      const bounds = periodBoundsOf(
+        entries[0].visit.periodIndex,
+        parseDateOnly(toDateOnly(agreement.startDate)),
+        agreement.frequencyUnit,
+        agreement.frequencyInterval,
+      );
+      const dates = [...new Set(entries.map((entry) => entry.visit.visitDate))].sort();
+
+      shortfalls.push({
+        serviceAgreementId: agreement.id,
+        customerName: agreement.customer.name,
+        siteName: agreement.serviceSite.name,
+        periodStart: bounds.start,
+        periodEnd: bounds.end,
+        requested,
+        scheduled: requested - entries.length,
+        reason: entries[0].reason,
+        message: `${entries.length} of ${requested} visit(s) planned for ${bounds.start} to ${bounds.end} could not be placed. ${entries[0].message} Wanted on ${dates.join(', ')}.`,
+      });
+    }
+
+    return shortfalls;
+  }
+
   /** Shared by preview and confirm, so the two can never disagree. */
   private async build(
     dto: GenerateVisitsDto,
@@ -981,6 +1051,16 @@ export class VisitGenerationService {
       capacityByDay,
       range.standing,
       await this.feasibilityFor(honoured, range.standing),
+      // Which requirements already have a visit standing on their own date.
+      // The guard may leave new work unplanned when a day is full; it may
+      // never shed a date the customer already has, which would be a removal
+      // wearing a shortfall's clothes. Cancelled rows do not count: the slot
+      // they hold is not work anybody is doing.
+      new Set(
+        around
+          .filter((visit) => visit.status !== VisitStatus.CANCELLED)
+          .map((visit) => agreementDayKey(visit.serviceAgreementId, visit.visitDate)),
+      ),
     );
     // A day the run was never asked about is not its to warn about. Standing
     // work is already read over the range alone, but `honoured` can pin a
@@ -995,7 +1075,14 @@ export class VisitGenerationService {
     const required = guarded.required.filter(
       (visit) => visit.visitDate >= dto.from && visit.visitDate <= dto.to,
     );
-    const shortfalls = planned.shortfalls;
+    // Work the guard could not place on any day its period allows. Reported
+    // in the same vocabulary as every other period that cannot hold what its
+    // agreement promises — a shortfall carrying a stable reason — rather than
+    // a second, parallel list every caller would have to learn.
+    const shortfalls = [
+      ...planned.shortfalls,
+      ...this.shortfallsForUnplaceable(guarded.unplaceable, honoured, agreements, dto),
+    ];
 
     const plan = planGeneration(required, existing);
 
@@ -1551,22 +1638,17 @@ export class VisitGenerationService {
    *   deliberately, and a backstop that turned that warning into a refusal
    *   would stop a branch generating at all.
    *
-   * Known gap, deliberately left for a decision rather than patched here: the
-   * two conditions together do not hold the cap when a run *plans* against a
-   * day that is already exactly full. The guard sees no room, has nowhere
-   * else to put the visit, warns, and commits — and the day has not grown
-   * since this run read it, so nothing below fires. That is how a generation
-   * confirm and an optimizer write racing for a day's last slot can both
-   * win, whichever of them reads the calendar second.
-   *
-   * It cannot be closed from here. Every rule that refuses it also refuses
-   * the ordinary over-cap commits this backstop exists to let through: a day
-   * at 1845 crew-minutes against a cap of 480 taking another 180 is
-   * indistinguishable, at this point in the code, from a day at 480 taking
-   * another 60. The real answer is upstream — `applyDailyLoadGuard` should
-   * report work it cannot place as unplanned instead of placing it anyway —
-   * and that changes what generation promises, so it belongs in its own
-   * change.
+   * These two conditions are all this backstop needs, because the case they
+   * do *not* cover no longer exists. A run that plans against a day already
+   * at its cap used to have nowhere to put the visit, warn, and commit it
+   * anyway — and since the day had not grown since that run read it, nothing
+   * here fired and the day ended one visit over. That was how a generation
+   * confirm and an optimizer write racing for a day's last slot could both
+   * win, whichever of them read the calendar second. It is closed upstream
+   * now: `applyDailyLoadGuard` leaves work it cannot place unplanned and
+   * reports the reason, so a plan reaching this point never asks for a day
+   * that was already full when it was made. What is left for the lock is the
+   * genuine race — a day that filled up *after* this run read it.
    *
    * The refusal is the whole run, not the one visit. A generation is all or
    * nothing by design — a half-applied one leaves a calendar nobody can

@@ -208,6 +208,12 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   // This database is shared with the other integration suites, and a stray
   // book of sixty-five active agreements would quietly change their counts.
   // Dependants first and by hand: the schema does cascade a customer's sites

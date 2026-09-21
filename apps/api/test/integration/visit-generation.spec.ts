@@ -221,6 +221,20 @@ beforeAll(async () => {
   siteId = site.body.id;
 });
 
+/**
+ * Every test here leaves its generated visits behind on the same four
+ * Wednesdays, and there are around thirty of them. That was free while the
+ * load guard would place work on a day already at its cap; now that it leaves
+ * such work unplanned and says so, the day genuinely fills up and later tests
+ * in this file start losing visits they did nothing wrong to lose. Each test
+ * clears its own, so what any one of them sees is its own work against a
+ * branch-day, not thirty tests' worth. Scoped to this suite's own job type,
+ * so nothing another suite is relying on is touched.
+ */
+afterEach(async () => {
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
+});
+
 afterAll(async () => {
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
   await prisma.$disconnect();
@@ -1929,11 +1943,13 @@ describe('a day the spread cannot rescue', () => {
       fixedCapacity(cap * DEFAULT_AGREEMENT_CREW_MINUTES),
     );
 
-  it('says so by date, count and cap before anything is confirmed', async () => {
+  it('leaves what will not fit unplanned, and says so before anything is confirmed', async () => {
     // Weekly agreements allowed exactly one weekday have nowhere inside their
-    // week to move to, so the guard cannot spread them and the day stays over
-    // the cap. That is precisely when the manager has to be told, and it has
-    // to come out of a real preview rather than a fixture.
+    // week to move to. The guard cannot spread them, and it no longer places
+    // them anyway: the day is held at its cap and what will not fit comes
+    // back as a shortfall naming the reason. That is precisely when the
+    // manager has to be told, and it has to come out of a real preview rather
+    // than a fixture.
     const week = { from: '2027-06-07', to: '2027-06-13' };
     await prisma.generatedVisit.deleteMany({
       where: {
@@ -1972,27 +1988,42 @@ describe('a day the spread cannot rescue', () => {
 
     const impact = await cappedAt(2).preview({ ...week, serviceAgreementIds: ids });
 
+    // Two of the three fit inside the cap. The third has nowhere in its own
+    // week to go, so it is not planned at all — the day is left at exactly
+    // what the branch can carry rather than one visit over it.
+    const onTheWednesday = impact.additions.filter(
+      (addition) => addition.visitDate === '2027-06-09',
+    );
+    expect(onTheWednesday).toHaveLength(2);
+
     // Not asserted as the whole array: `cappedAt`'s stubbed capacity applies
     // uniformly to every branch-day the query's enclosing months touch, and
     // this shared integration database carries other suites' own stray
     // COLOMBO visits across those same months (documented pollution, as in
-    // rolling-horizon.spec.ts) — real over-cap warnings on dates outside
-    // this test's own scope, not something this fixture controls. What this
-    // test owns is its own three agreements' own Wednesday.
+    // rolling-horizon.spec.ts) — real warnings on dates outside this test's
+    // own scope, not something this fixture controls. What this test owns is
+    // its own three agreements' own Wednesday.
     const own = impact.loadWarnings.find(
       (warning) => warning.branchCode === BranchCode.KANDY && warning.date === '2027-06-09',
     );
-    expect(own).toEqual(
+    // The day is at its cap, not over it, so there is nothing to warn about.
+    expect(own).toBeUndefined();
+
+    // What did not fit is named instead, against the agreement and period it
+    // belongs to, with the stable reason a caller can key off.
+    const unplanned = impact.shortfalls.filter((shortfall) =>
+      ids.includes(shortfall.serviceAgreementId),
+    );
+    expect(unplanned).toHaveLength(1);
+    expect(unplanned[0]).toEqual(
       expect.objectContaining({
-        branchCode: BranchCode.KANDY,
-        date: '2027-06-09', // the Wednesday
-        plannedCount: 3,
-        plannedMinutes: 3 * DEFAULT_AGREEMENT_CREW_MINUTES,
-        cap: 2 * DEFAULT_AGREEMENT_CREW_MINUTES,
+        reason: 'BRANCH_DAY_AT_CAPACITY',
+        requested: 1,
+        scheduled: 0,
       }),
     );
-    expect(own?.message).toContain('2027-06-09');
-    expect(own?.message).toContain('3 visits');
+    expect(unplanned[0].message).toContain('2027-06-09');
+    expect(unplanned[0].message).toContain(String(2 * DEFAULT_AGREEMENT_CREW_MINUTES));
   });
 });
 

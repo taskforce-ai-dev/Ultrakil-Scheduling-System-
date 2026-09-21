@@ -332,6 +332,12 @@ beforeAll(async () => {
 }, 300_000);
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   if (agreementIds.length > 0) {
     const visitIds = (
       await prisma.generatedVisit.findMany({
@@ -374,6 +380,61 @@ afterAll(async () => {
   await prisma.$disconnect();
   await app.close();
 }, 120_000);
+
+/**
+ * No branch-day this suite's own work stands on — today or any day after it —
+ * carries more crew-minutes than the capacity calculated for that day.
+ *
+ * The cap is the promise; a test that only checks the one contested day
+ * proves that day and nothing else. This reads every current or future
+ * branch-day any of this suite's agreements put work on, recomputes each
+ * day's capacity from the real workforce the same way generation does, and
+ * counts everything standing there — this suite's work and anybody else's,
+ * because a cap is a property of the day, not of who filled it.
+ *
+ * Days whose calculated capacity is zero are skipped, and deliberately: zero
+ * is what `branch-day-capacity.ts` reports when it cannot answer — no PMS
+ * supervisor available, no authorized driver — which is a gap in the
+ * workforce records rather than a measurement that the work will not fit.
+ * Generation does not shed against it either (see `load-guard.ts`), so
+ * asserting on it here would be asserting on a different rule than the one
+ * being kept.
+ */
+async function expectNoBranchDayOverItsCapacity(): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const mine = await prisma.generatedVisit.findMany({
+    where: {
+      serviceAgreementId: { in: agreementIds },
+      status: { not: VisitStatus.CANCELLED },
+      visitDate: { gte: at(today) },
+    },
+    select: { branchCode: true, visitDate: true },
+  });
+  const days = [
+    ...new Set(
+      mine.map((visit) => `${visit.branchCode}|${visit.visitDate.toISOString().slice(0, 10)}`),
+    ),
+  ].sort();
+
+  const capacity = app.get(BranchDayCapacityService);
+  const over: string[] = [];
+  for (const key of days) {
+    const [branchCode, date] = key.split('|') as [BranchCode, string];
+    const standing = await prisma.generatedVisit.findMany({
+      where: { branchCode, visitDate: at(date), status: { not: VisitStatus.CANCELLED } },
+      select: { durationMinutes: true, requiredCrewSize: true },
+    });
+    const crewMinutes = standing.reduce(
+      (total, visit) => total + visit.durationMinutes * visit.requiredCrewSize,
+      0,
+    );
+    const calculated = await capacity.capacityFor(branchCode, date);
+    if (calculated.capacityMinutes > 0 && crewMinutes > calculated.capacityMinutes) {
+      over.push(`${key}: ${crewMinutes} crew-minutes against a calculated cap of ${calculated.capacityMinutes}`);
+    }
+  }
+  expect(over).toEqual([]);
+}
 
 it('two real optimizer writes racing for the last slot leave the day at the cap', async () => {
   const filler = await makeAgreement('writers-filler', WRITERS_WEEK.from);
@@ -419,6 +480,8 @@ it('two real optimizer writes racing for the last slot leave the day at the cap'
   // and never neither.
   expect(dates.filter((date) => date === WRITERS_DAY)).toHaveLength(1);
   expect(dates.filter((date) => date === WRITERS_WEEK.to)).toHaveLength(1);
+  // The cap held, and not only on the day these two writers were fighting over.
+  await expectNoBranchDayOverItsCapacity();
 }, 180_000);
 
 it('a real generation confirm and a real optimizer write racing for the last slot leave the day at the cap', async () => {
@@ -439,22 +502,17 @@ it('a real generation confirm and a real optimizer write racing for the last slo
   expect(await loadOn(CROSS_DAY)).toBe(fillers);
 
   // Generation's side: a brand-new agreement generation itself will plan
-  // straight on to the contested day — the earliest weekday it allows, and
-  // the only one it prefers.
+  // straight on to the contested day, because every other weekday of its
+  // week already has its own filler-free visit from a wider fixture pass —
+  // simplest is a single-day allowance, so the load guard has nowhere else to
+  // put it and it goes to the one day this agreement allows.
   //
-  // Tuesday is allowed as well, and that is not padding. With Monday alone
-  // this test asserted something the system does not actually guarantee, and
-  // passed only on the ordering where generation read the calendar first: a
-  // run that plans against a day *already* at its cap has nowhere to put the
-  // visit, and `applyDailyLoadGuard` warns and places it anyway rather than
-  // blocking, by design. The day then ends one visit over the cap whatever
-  // the branch-day lock does, because the overfill was decided before the
-  // lock was ever taken (see the "known gap" note on
-  // `assertTheDaysStillHaveRoom`). Leaving generation somewhere to spread to
-  // makes the contest itself — two writers, one free slot, one lock —
-  // decidable in both orderings, which is what this test is about. The
-  // corner it gives up is the guard's over-cap escape hatch, which belongs
-  // with the change that closes it.
+  // A single allowed day is the whole point, and this test briefly gave it up
+  // when the guard still placed work on a day it knew was full: the day ended
+  // one visit over the cap whenever generation read the calendar second, and
+  // no lock could help, because the overfill was decided before the lock was
+  // taken. The guard now leaves that visit unplanned and says why, so the one
+  // allowed day is back.
   const site = await prisma.serviceSite.create({
     data: {
       customerId,
@@ -485,11 +543,7 @@ it('a real generation confirm and a real optimizer write racing for the last slo
       durationMinutes: REFERENCE_VISIT_MINUTES,
       startDate: at(CROSS_WEEK.from),
       dayRules: {
-        create: [
-          { weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED },
-          { weekday: Weekday.TUESDAY, kind: DayRuleKind.ALLOWED },
-          { weekday: Weekday.MONDAY, kind: DayRuleKind.PREFERRED },
-        ],
+        create: [{ weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED }],
       },
     },
   });
@@ -521,7 +575,290 @@ it('a real generation confirm and a real optimizer write racing for the last slo
   const optimizerLandedOnDay = optimizerResult.scheduled === 1;
   expect(genLandedOnDay && optimizerLandedOnDay).toBe(false);
 
+  // A confirm that succeeds has either placed the visit or said, in the same
+  // response, exactly why it could not — never neither. Which of the two
+  // depends on who read the calendar first, and that is the point: the run
+  // that reads a full day plans nothing on it and reports a shortfall rather
+  // than committing the day over its cap.
   if (confirmResponse.status === 200) {
-    expect(genVisits).toHaveLength(1);
+    if (genVisits.length === 1) {
+      expect(genVisits[0].visitDate.toISOString().slice(0, 10)).toBe(CROSS_DAY);
+      expect(optimizerLandedOnDay).toBe(false);
+    } else {
+      expect(genVisits).toHaveLength(0);
+      expect(
+        (confirmResponse.body.shortfalls as { reason: string; message: string }[]).map(
+          (shortfall) => shortfall.reason,
+        ),
+      ).toContain('BRANCH_DAY_AT_CAPACITY');
+    }
   }
+  // The cap held, and not only on the day these two writers were fighting over.
+  await expectNoBranchDayOverItsCapacity();
+}, 180_000);
+
+// ---------------------------------------------------------------------------
+// The same contest, with the ordering forced rather than raced.
+//
+// The test above runs both writers at once, so which of them reads the
+// calendar first is up to the machine. That is worth having — it is what
+// actually happens — but it means the interesting half only gets exercised
+// when the scheduler happens to cooperate, and for a long time it did not:
+// the ordering where generation reads a day that is already full went
+// untested, and the cap quietly did not hold there. These two force each
+// ordering in turn, so both are covered on every run.
+
+/** An agreement allowed exactly one weekday, so the guard has nowhere to spread to. */
+async function makeSingleDayAgreement(
+  label: string,
+  startDate: string,
+  weekday: Weekday,
+): Promise<string> {
+  const site = await prisma.serviceSite.create({
+    data: {
+      customerId,
+      name: `Cross Writer Site ${label} ${suffix}`,
+      branchId,
+      branchCode: BranchCode.COLOMBO,
+      operatingHours: {
+        create: ALL_WEEKDAYS.map((day) => ({
+          weekday: day,
+          opensAtMinute: 8 * 60,
+          closesAtMinute: 17 * 60,
+          provenance: DataProvenance.MANAGER_CONFIRMED,
+        })),
+      },
+    },
+  });
+  const agreement = await prisma.serviceAgreement.create({
+    data: {
+      customerId,
+      serviceSiteId: site.id,
+      jobTypeId,
+      branchId,
+      branchCode: BranchCode.COLOMBO,
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      frequencyInterval: 1,
+      crewSize: 1,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
+      startDate: at(startDate),
+      dayRules: { create: [{ weekday, kind: DayRuleKind.ALLOWED }] },
+    },
+  });
+  agreementIds.push(agreement.id);
+  return agreement.id;
+}
+
+const FULL_WEEK = { from: '2029-04-16', to: '2029-04-22' };
+const FULL_DAY = FULL_WEEK.from;
+
+it('leaves a visit unplanned, with its reason, when the one day it allows is already full', async () => {
+  const filler = await makeAgreement('forced-filler', FULL_WEEK.from);
+  const agreementOpt = await makeAgreement('forced-optimizer', FULL_WEEK.from);
+  const visitOpt = await makeMovableVisit(agreementOpt, FULL_WEEK.to);
+  const crewOpt = await makeCrew('forced-optimizer');
+  const { runId, lease } = await makeLeasedRun(FULL_WEEK);
+
+  const capVisits = await capVisitsOn(FULL_DAY);
+  await fillDay(filler, FULL_DAY, capVisits - 1);
+
+  const agreementGen = await makeSingleDayAgreement('forced-generation', FULL_WEEK.from, Weekday.MONDAY);
+
+  // The optimizer goes first and takes the day's last slot, so the day is
+  // exactly at its cap by the time generation reads it.
+  const optimizerResult = await persistMoveTo(runId, lease, visitOpt, crewOpt, FULL_DAY);
+  expect(optimizerResult.scheduled).toBe(1);
+  expect(await loadOn(FULL_DAY)).toBe(capVisits);
+
+  const confirmed = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({ ...FULL_WEEK, branchCode: BranchCode.COLOMBO, serviceAgreementIds: [agreementGen] });
+
+  // The run succeeds — nothing has gone wrong, and refusing it outright would
+  // stop a branch generating the moment one of its days filled up. What it
+  // does not do is create the visit.
+  expect(confirmed.status).toBe(200);
+  expect(confirmed.body.additions).toHaveLength(0);
+  expect(await loadOn(FULL_DAY)).toBe(capVisits);
+  expect(
+    await prisma.generatedVisit.count({ where: { serviceAgreementId: agreementGen } }),
+  ).toBe(0);
+
+  // And it says so, in the same vocabulary as every other period that cannot
+  // hold what its agreement promises: a stable reason, the period it belongs
+  // to, and how much of it landed.
+  const shortfall = (
+    confirmed.body.shortfalls as {
+      serviceAgreementId: string;
+      reason: string;
+      requested: number;
+      scheduled: number;
+      periodStart: string;
+      message: string;
+    }[]
+  ).find((entry) => entry.serviceAgreementId === agreementGen);
+  expect(shortfall).toBeDefined();
+  expect(shortfall!.reason).toBe('BRANCH_DAY_AT_CAPACITY');
+  expect(shortfall!.requested).toBe(1);
+  expect(shortfall!.scheduled).toBe(0);
+  expect(shortfall!.periodStart).toBe(FULL_DAY);
+  expect(shortfall!.message).toContain(FULL_DAY);
+
+  // Repeating the run changes nothing and says exactly the same thing. A
+  // manager who clicks Generate twice on a full day gets one answer, not a
+  // second visit and not a different explanation.
+  const again = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({ ...FULL_WEEK, branchCode: BranchCode.COLOMBO, serviceAgreementIds: [agreementGen] });
+  expect(again.status).toBe(200);
+  expect(again.body.additions).toHaveLength(0);
+  expect(again.body.removals).toHaveLength(0);
+  expect(await loadOn(FULL_DAY)).toBe(capVisits);
+  expect(
+    (again.body.shortfalls as { serviceAgreementId: string; reason: string }[]).find(
+      (entry) => entry.serviceAgreementId === agreementGen,
+    )?.reason,
+  ).toBe('BRANCH_DAY_AT_CAPACITY');
+  // The cap held, and not only on the day these two writers were fighting over.
+  await expectNoBranchDayOverItsCapacity();
+}, 180_000);
+
+const GEN_FIRST_WEEK = { from: '2029-04-23', to: '2029-04-29' };
+const GEN_FIRST_DAY = GEN_FIRST_WEEK.from;
+
+it('refuses the optimizer the last slot when a generation confirm took it first', async () => {
+  const filler = await makeAgreement('gen-first-filler', GEN_FIRST_WEEK.from);
+  const agreementOpt = await makeAgreement('gen-first-optimizer', GEN_FIRST_WEEK.from);
+  const visitOpt = await makeMovableVisit(agreementOpt, GEN_FIRST_WEEK.to);
+  const crewOpt = await makeCrew('gen-first-optimizer');
+  const { runId, lease } = await makeLeasedRun(GEN_FIRST_WEEK);
+
+  const capVisits = await capVisitsOn(GEN_FIRST_DAY);
+  await fillDay(filler, GEN_FIRST_DAY, capVisits - 1);
+
+  const agreementGen = await makeSingleDayAgreement(
+    'gen-first-generation',
+    GEN_FIRST_WEEK.from,
+    Weekday.MONDAY,
+  );
+
+  // Generation goes first this time, and the one free slot is genuinely free
+  // when it reads the day — so it plans the visit and the day reaches its cap.
+  const confirmed = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({
+      ...GEN_FIRST_WEEK,
+      branchCode: BranchCode.COLOMBO,
+      serviceAgreementIds: [agreementGen],
+    });
+  expect(confirmed.status).toBe(200);
+  expect(confirmed.body.additions).toHaveLength(1);
+  expect(
+    (confirmed.body.shortfalls as { serviceAgreementId: string }[]).some(
+      (entry) => entry.serviceAgreementId === agreementGen,
+    ),
+  ).toBe(false);
+  expect(await loadOn(GEN_FIRST_DAY)).toBe(capVisits);
+
+  // The optimizer now wants the slot that has gone. Its own cap check refuses
+  // the move and leaves the visit where it was, rather than taking the day
+  // one over.
+  const optimizerResult = await persistMoveTo(runId, lease, visitOpt, crewOpt, GEN_FIRST_DAY);
+  expect(await loadOn(GEN_FIRST_DAY)).toBe(capVisits);
+  const optVisit = await prisma.generatedVisit.findUniqueOrThrow({ where: { id: visitOpt.id } });
+  expect(optVisit.visitDate.toISOString().slice(0, 10)).toBe(GEN_FIRST_WEEK.to);
+  // A refused move still staffs the visit on the day it already had, so the
+  // run itself reports it scheduled — the assertion that matters is where it
+  // landed, checked above.
+  expect(optimizerResult.scheduled).toBe(1);
+  // The cap held, and not only on the day these two writers were fighting over.
+  await expectNoBranchDayOverItsCapacity();
+}, 180_000);
+
+const SPREAD_WEEK = { from: '2029-04-30', to: '2029-05-06' };
+const SPREAD_DAY = SPREAD_WEEK.from;
+
+it('plans the visit on the alternative day rather than leaving it unplanned, when there is one', async () => {
+  const filler = await makeAgreement('spread-filler', SPREAD_WEEK.from);
+  const capVisits = await capVisitsOn(SPREAD_DAY);
+  await fillDay(filler, SPREAD_DAY, capVisits);
+  expect(await loadOn(SPREAD_DAY)).toBe(capVisits);
+
+  // The mirror of the test above, and the reason it is here: "no compliant
+  // destination" has to mean no destination, not merely a full preference.
+  // The same full Monday, the same agreement — except that this one is also
+  // allowed on Tuesday, and so it is planned rather than dropped.
+  const site = await prisma.serviceSite.create({
+    data: {
+      customerId,
+      name: `Cross Writer Site spread-generation ${suffix}`,
+      branchId,
+      branchCode: BranchCode.COLOMBO,
+      operatingHours: {
+        create: ALL_WEEKDAYS.map((day) => ({
+          weekday: day,
+          opensAtMinute: 8 * 60,
+          closesAtMinute: 17 * 60,
+          provenance: DataProvenance.MANAGER_CONFIRMED,
+        })),
+      },
+    },
+  });
+  const agreementGen = await prisma.serviceAgreement.create({
+    data: {
+      customerId,
+      serviceSiteId: site.id,
+      jobTypeId,
+      branchId,
+      branchCode: BranchCode.COLOMBO,
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      frequencyInterval: 1,
+      crewSize: 1,
+      durationMinutes: REFERENCE_VISIT_MINUTES,
+      startDate: at(SPREAD_WEEK.from),
+      dayRules: {
+        create: [
+          { weekday: Weekday.MONDAY, kind: DayRuleKind.ALLOWED },
+          { weekday: Weekday.TUESDAY, kind: DayRuleKind.ALLOWED },
+          { weekday: Weekday.MONDAY, kind: DayRuleKind.PREFERRED },
+        ],
+      },
+    },
+  });
+  agreementIds.push(agreementGen.id);
+
+  const confirmed = await request(http)
+    .post('/api/visit-generation/confirm')
+    .set(auth())
+    .send({
+      ...SPREAD_WEEK,
+      branchCode: BranchCode.COLOMBO,
+      serviceAgreementIds: [agreementGen.id],
+    });
+
+  expect(confirmed.status).toBe(200);
+  expect(confirmed.body.additions).toHaveLength(1);
+  expect(
+    (confirmed.body.shortfalls as { serviceAgreementId: string }[]).some(
+      (entry) => entry.serviceAgreementId === agreementGen.id,
+    ),
+  ).toBe(false);
+
+  const planned = await prisma.generatedVisit.findMany({
+    where: { serviceAgreementId: agreementGen.id },
+    select: { visitDate: true },
+  });
+  expect(planned).toHaveLength(1);
+  // Tuesday, not the full Monday it would have preferred.
+  expect(planned[0].visitDate.toISOString().slice(0, 10)).toBe('2029-05-01');
+  // And the full day is untouched: the guard moved its own work, it did not
+  // make room by shifting somebody else's.
+  expect(await loadOn(SPREAD_DAY)).toBe(capVisits);
+  // The cap held, and not only on the day these two writers were fighting over.
+  await expectNoBranchDayOverItsCapacity();
 }, 180_000);

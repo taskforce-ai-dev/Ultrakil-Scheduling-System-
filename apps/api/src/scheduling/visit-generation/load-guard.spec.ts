@@ -211,7 +211,17 @@ describe('applyDailyLoadGuard', () => {
     const result = applyDailyLoadGuard(required, 2 * UNIT_MINUTES);
 
     expect(countOn(result.required, '2026-09-08')).toBe(2);
-    expect(result.warnings.map((warning) => warning.date)).toContain('2026-09-07');
+    // The 8th has no room, so the 7th's overflow has nowhere compliant to go.
+    // It comes off the plan rather than leaving the 7th over its cap.
+    expect(countOn(result.required, '2026-09-07')).toBe(2);
+    expect(result.unplaceable).toHaveLength(2);
+    expect(result.unplaceable.map((entry) => entry.reason)).toEqual([
+      'BRANCH_DAY_AT_CAPACITY',
+      'BRANCH_DAY_AT_CAPACITY',
+    ]);
+    expect(result.unplaceable.every((entry) => entry.visit.visitDate === '2026-09-07')).toBe(true);
+    // And with both days sitting at their cap there is nothing left to warn about.
+    expect(result.warnings).toEqual([]);
   });
 
   it('never moves a visit onto a day its own agreement already uses', () => {
@@ -350,7 +360,11 @@ describe('applyDailyLoadGuard', () => {
 
       // The 8th is full before the run starts, so nothing may move onto it.
       expect(countOn(result.required, '2026-09-08')).toBe(0);
-      expect(result.warnings.map((warning) => warning.date)).toContain('2026-09-07');
+      // Which leaves the 7th holding four against a cap of two, and no day to
+      // move the other two to: they are left unplanned, not stacked on the 7th.
+      expect(countOn(result.required, '2026-09-07')).toBe(2);
+      expect(result.unplaceable).toHaveLength(2);
+      expect(result.warnings).toEqual([]);
     });
 
     it('counts a standing visit\'s own crew-minutes, not a flat unit', () => {
@@ -450,15 +464,70 @@ describe('applyDailyLoadGuard', () => {
       );
     });
 
-    it('says in the warning that part of the day is not this run to move', () => {
+    it('spends the day on standing work first, and sheds its own rather than exceed it', () => {
       const result = applyDailyLoadGuard(crowd(2, { alternatives: [] }), 2 * UNIT_MINUTES, [
         standing({ serviceAgreementId: 'outside-this-run', visitDate: '2026-09-07' }),
       ]);
 
+      // One hour of the day's two is already spent on work this run cannot
+      // move, so only one of its own two fits. The other has no alternative
+      // day at all, so it is left unplanned and named.
+      expect(countOn(result.required, '2026-09-07')).toBe(1);
+      expect(result.unplaceable).toHaveLength(1);
+      expect(result.unplaceable[0].reason).toBe('BRANCH_DAY_AT_CAPACITY');
+      expect(result.unplaceable[0].message).toContain('2026-09-07');
+      // The day ends on its cap, so there is nothing over it to report.
+      expect(result.warnings).toEqual([]);
+    });
+
+    it('never sheds a booked visit, and reports the day instead', () => {
+      // Three booked visits on one day against a cap of two. A booked date is
+      // a commitment to a customer: the day goes over its cap and says so,
+      // which is the one case where that is still the honest answer.
+      const result = applyDailyLoadGuard(
+        crowd(3, { alternatives: [], placement: VisitPlacement.BOOKED }),
+        2 * UNIT_MINUTES,
+      );
+
+      expect(countOn(result.required, '2026-09-07')).toBe(3);
+      expect(result.unplaceable).toEqual([]);
       expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0].plannedCount).toBe(3);
-      expect(result.warnings[0].plannedMinutes).toBe(3 * UNIT_MINUTES);
-      expect(result.warnings[0].message).toContain('already in the calendar');
+      expect(result.warnings[0].date).toBe('2026-09-07');
+    });
+
+    it('never sheds a requirement the calendar already holds on that date', () => {
+      // Three visits on a day capped at two, and every one of them already
+      // exists. Shedding one would not leave work unplanned, it would delete
+      // a visit the customer already has — so the day is reported over its
+      // cap instead, exactly as before.
+      const result = applyDailyLoadGuard(
+        crowd(3, { alternatives: [] }),
+        2 * UNIT_MINUTES,
+        [],
+        undefined,
+        new Set([
+          'agreement-000|2026-09-07',
+          'agreement-001|2026-09-07',
+          'agreement-002|2026-09-07',
+        ]),
+      );
+
+      expect(countOn(result.required, '2026-09-07')).toBe(3);
+      expect(result.unplaceable).toEqual([]);
+      expect(result.warnings).toHaveLength(1);
+    });
+
+    it('sheds nothing on a day with no calculated capacity at all', () => {
+      // Zero is what capacity reports when it cannot answer — no supervisor
+      // available, no authorized driver, or a day this run never asked about.
+      // That is a gap in what is known about the branch, not a measurement
+      // that the work will not fit, and shedding against it would quietly
+      // delete a whole day's plan.
+      const result = applyDailyLoadGuard(crowd(3, { alternatives: [] }), 0);
+
+      expect(countOn(result.required, '2026-09-07')).toBe(3);
+      expect(result.unplaceable).toEqual([]);
+      expect(result.warnings).toHaveLength(1);
     });
   });
 

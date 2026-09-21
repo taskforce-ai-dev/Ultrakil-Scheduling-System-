@@ -31,6 +31,21 @@ import { RequiredVisit } from './plan';
  * month is a different promise. And nothing is moved onto a day that would
  * end up over the cap, which would merely relocate the problem.
  *
+ * What is left when those rules run out used to be placed anyway, on a day
+ * the guard had just proved could not hold it, and reported as a warning. It
+ * is now left **unplanned** instead, and named: no day the visit's own period
+ * allows has room for it, so no visit is created and the reason is carried
+ * back to the manager. That is the difference between a cap and a suggestion,
+ * and it is what makes the cap hold when two writers reach for a day's last
+ * slot at once — the second one to read the calendar finds the day full and
+ * plans nothing there, rather than warning and committing anyway.
+ *
+ * Two things are never shed, and both matter more than the cap. A booked
+ * visit is a commitment. And a requirement that already has a visit standing
+ * in the calendar on its own date is existing work: dropping it would not
+ * leave work unplanned, it would delete work the customer already has, and
+ * the day is reported as over its cap exactly as before.
+ *
  * Every ordering here is total — agreements by id, days by date — so running
  * it twice on the same horizon produces the same calendar, which is what lets
  * regeneration report nothing to do.
@@ -60,9 +75,30 @@ export interface DailyLoadWarning {
   infeasibility?: { code: DayInfeasibilityCode; message: string };
 }
 
+/**
+ * Why a visit ended up with nowhere to go.
+ *
+ * A stable code, not prose: the manager portal and any later caller key off
+ * it, and the message beside it is free to be rewritten.
+ */
+export type UnplaceableReason = 'BRANCH_DAY_AT_CAPACITY';
+
+/** A visit the guard could not place on any day its own period allows. */
+export interface UnplaceableVisit {
+  visit: RequiredVisit;
+  reason: UnplaceableReason;
+  /** Written for a manager: what was wanted, where, and what stood in the way. */
+  message: string;
+}
+
 export interface LoadGuardResult {
   required: RequiredVisit[];
   warnings: DailyLoadWarning[];
+  /**
+   * Requirements that are deliberately not in `required`, because no day
+   * their period allows could take them. Reported, never silently dropped.
+   */
+  unplaceable: UnplaceableVisit[];
 }
 
 /**
@@ -89,6 +125,15 @@ export interface StandingVisit {
 }
 
 const loadKey = (branchCode: BranchCode, date: string) => `${branchCode}|${date}`;
+
+/**
+ * How a requirement is matched to a visit already standing in the calendar:
+ * agreement and date, deliberately without the start minute. A day the
+ * agreement already has a visit on is existing work whatever time it runs at,
+ * and the guard must not shed it.
+ */
+export const agreementDayKey = (serviceAgreementId: string, date: string) =>
+  `${serviceAgreementId}|${date}`;
 
 /** A planned or standing visit, as the feasibility check wants to see it. */
 const toDemand = (visit: RequiredVisit | StandingVisit): DayVisitDemand => ({
@@ -139,11 +184,27 @@ export function applyDailyLoadGuard(
   capacity: CapacityByDay,
   standing: StandingVisit[] = [],
   isFeasible?: DayFeasibilityCheck,
+  /**
+   * `agreementDayKey`s of visits already standing in the calendar. A
+   * requirement matching one of these is existing work and is never shed —
+   * see the note on shedding above. Callers with nothing to declare (every
+   * unit test in this file, for one) get the same answer as before for
+   * everything except days that would have gone over the cap.
+   */
+  alreadyInCalendar: ReadonlySet<string> = new Set(),
 ): LoadGuardResult {
   // Copies throughout: the caller's list is its own account of what the
   // agreements asked for, and a guard that edited it in place would make the
   // two impossible to compare.
   const visits = required.map((visit) => ({ ...visit }));
+  const unplaceable: UnplaceableVisit[] = [];
+  // Captured from the incoming date, before any move: a visit the guard
+  // relocates must not become sheddable by having been moved.
+  const existingWork = new Set(
+    visits.filter((visit) =>
+      alreadyInCalendar.has(agreementDayKey(visit.serviceAgreementId, visit.visitDate)),
+    ),
+  );
 
   const load = new Map<string, number>();
   // Visit counts, kept only so a warning can tell a dispatcher how many
@@ -198,6 +259,26 @@ export function applyDailyLoadGuard(
       const [branchB, dateB] = b.split('|');
       return dateA.localeCompare(dateB) || branchA.localeCompare(branchB);
     });
+
+  /**
+   * Takes a visit off the plan and off its day.
+   *
+   * Everything the guard counts has to come back down with it — the day's
+   * crew-minutes and its visit count, and the period's record of which dates
+   * it has spent, so a later move is free to offer that date again.
+   */
+  const shed = (
+    visit: (typeof visits)[number],
+    reason: UnplaceableReason,
+    message: string,
+  ): void => {
+    const key = loadKey(visit.branchCode, visit.visitDate);
+    load.set(key, (load.get(key) ?? crewMinutesOf(visit)) - crewMinutesOf(visit));
+    counts.set(key, (counts.get(key) ?? 1) - 1);
+    usedDates.get(periodKey(visit))?.delete(visit.visitDate);
+    visits.splice(visits.indexOf(visit), 1);
+    unplaceable.push({ visit, reason, message });
+  };
 
   for (const key of overloaded) {
     const movers = visits
@@ -281,6 +362,51 @@ export function applyDailyLoadGuard(
         .filter((alternative) => alternative.date !== target.alternative.date)
         .concat(origin.date === target.alternative.date ? [] : [origin])
         .sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    // Every visit on this day that could move has now been offered every day
+    // its own period allows, and the day is still over its cap. What is left
+    // has nowhere compliant to go. Placing it here anyway is what used to put
+    // a branch-day over the very cap this pass exists to hold, so it comes
+    // off the plan instead and is named.
+    const dayCap = capacityForKey(capacity, key);
+    // A day with no capacity at all is not a full day, and shedding is only
+    // ever for a full one. Zero is what `branch-day-capacity.ts` reports when
+    // it cannot answer the question — no PMS supervisor available, vehicles
+    // with no authorized driver — and what `capacityOf` returns for a day
+    // this run never asked about. Neither is a measurement saying the work
+    // will not fit; treating them as one would quietly delete a branch's
+    // whole plan over a gap in its workforce records. Those days are already
+    // reported, by the warning below and by the feasibility pass, which is
+    // where an unanswerable question belongs.
+    if (dayCap > 0 && (load.get(key) ?? 0) > dayCap) {
+      const [branchCode, date] = key.split('|') as [BranchCode, string];
+      const sheddable = visits
+        .filter(
+          (candidate) =>
+            loadKey(candidate.branchCode, candidate.visitDate) === key &&
+            candidate.placement !== VisitPlacement.BOOKED &&
+            !existingWork.has(candidate),
+        )
+        // Heaviest first, so the day comes back under its cap having dropped
+        // as few visits as it can. Ties broken by the same total order the
+        // move pass uses, so two runs over the same calendar shed the same
+        // work in the same sequence.
+        .sort(
+          (a, b) =>
+            crewMinutesOf(b) - crewMinutesOf(a) ||
+            a.serviceAgreementId.localeCompare(b.serviceAgreementId) ||
+            a.windowStartMinute - b.windowStartMinute,
+        );
+
+      for (const candidate of sheddable) {
+        if ((load.get(key) ?? 0) <= dayCap) break;
+        shed(
+          candidate,
+          'BRANCH_DAY_AT_CAPACITY',
+          `${date} in ${branchCode} already carries the ${dayCap} crew-minutes a day this branch plans for, and no other day inside this visit's own period has room for it. It is left unplanned rather than placed on a day that cannot carry it.`,
+        );
+      }
     }
   }
 
@@ -485,5 +611,5 @@ export function applyDailyLoadGuard(
   }
 
   // Back in the order they arrived, so the plan reads the same way it was built.
-  return { required: visits, warnings };
+  return { required: visits, warnings, unplaceable };
 }

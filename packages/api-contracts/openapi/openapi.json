@@ -5391,7 +5391,7 @@
             "description": "Already correct; nothing to do."
           },
           "shortfalls": {
-            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped.",
+            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped. `reason` is a stable code: the scheduling rule ones a period can fail on its own (NOT_ENOUGH_ALLOWED_DAYS, SITE_CLOSED_ON_ALLOWED_DAYS, BOOKED_BELOW_FREQUENCY and the rest), plus BRANCH_DAY_AT_CAPACITY — every day the visit is allowed on already carries the crew-minutes its branch plans for, so it is left unplanned rather than placed on a day that cannot carry it. `requested` and `scheduled` say how much of the period landed.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GenerationShortfallDto"

@@ -80,6 +80,7 @@ let adminToken: string;
 let customerId: string;
 let jobTypeId: string;
 let churnSupervisorId: string;
+let churnTechnicianId: string;
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -176,9 +177,18 @@ beforeAll(async () => {
   // deliberately, elsewhere: the "Kandy problem" other suites rely on to
   // prove a branch with no PMS supervisor cannot be staffed at all. This
   // suite is about week/month view consistency, not that gap, so it adds its
-  // own PMS-grade employee rather than disturbing the shared fixture other
-  // tests depend on. Together with KANDY's existing employee this gives
-  // exactly two available employees, matching `CAP`.
+  // own people rather than disturbing the shared fixture other tests depend
+  // on.
+  //
+  // Both of them, and that is the point of the pair. The arithmetic here
+  // needs exactly `CAP` available employees at sixty minutes each, and this
+  // used to count on one of KANDY's own being there to make up the second.
+  // It is not reliably there — a freshly migrated database has no imported
+  // workforce at all — which left the branch at one employee and a real cap
+  // of one visit while every number in this file assumed two. That was
+  // invisible while the load guard would place a third visit on a day it
+  // knew was full; now that such work is left unplanned, a fixture has to own
+  // the capacity its own arithmetic claims.
   const churnSupervisor = await prisma.employee.create({
     data: {
       sourceKey: `view-churn-supervisor-${suffix}`,
@@ -190,6 +200,18 @@ beforeAll(async () => {
     },
   });
   churnSupervisorId = churnSupervisor.id;
+
+  const churnTechnician = await prisma.employee.create({
+    data: {
+      sourceKey: `view-churn-technician-${suffix}`,
+      fullName: `View Churn Technician ${suffix}`,
+      gradeLabel: 'TECH',
+      isPmsGrade: false,
+      branchId: branch.id,
+      branchCode: BranchCode.KANDY,
+    },
+  });
+  churnTechnicianId = churnTechnician.id;
 
   // A cap of two is only a cap if nothing else is on these days. This database
   // is shared with every other integration suite, so say so loudly rather than
@@ -295,6 +317,12 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   await prisma.generatedVisit.deleteMany({
     where: { serviceAgreementId: { in: AGREEMENTS } },
   });
@@ -314,6 +342,9 @@ afterAll(async () => {
   if (jobTypeId) await prisma.jobType.delete({ where: { id: jobTypeId } }).catch(() => undefined);
   if (churnSupervisorId) {
     await prisma.employee.delete({ where: { id: churnSupervisorId } }).catch(() => undefined);
+  }
+  if (churnTechnicianId) {
+    await prisma.employee.delete({ where: { id: churnTechnicianId } }).catch(() => undefined);
   }
   await prisma.user.deleteMany({ where: { email: ADMIN.email } });
   await prisma.$disconnect();

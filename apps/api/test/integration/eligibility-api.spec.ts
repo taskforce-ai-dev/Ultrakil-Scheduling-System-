@@ -32,7 +32,24 @@ let technicianId: string;
 let vehicleId: string;
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
-const HORIZON = { from: '2026-09-07', to: '2026-09-13' }; // one week, Mon-Sun
+/** Monday of the first week this suite plans on; each call takes the next. */
+const FIRST_WEEK_FROM = '2026-09-07';
+const dayAfter = (date: string, days: number) =>
+  new Date(new Date(`${date}T00:00:00.000Z`).getTime() + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+/**
+ * Every visit this suite makes used to land on the same Wednesday, and it
+ * makes twenty-nine of them. That cost nothing while the load guard would
+ * place work on a branch-day already at its cap; now that it leaves such work
+ * unplanned and says why, that Wednesday genuinely fills up and later
+ * fixtures get no visit at all. A week per call keeps each fixture about the
+ * assignment rule it is testing rather than about how full one day has
+ * become. The two double-booking tests need their pair on a single day, and
+ * ask for it.
+ */
+let weekIndex = 0;
 
 async function login(email: string, password: string): Promise<string> {
   const res = await request(http).post('/api/auth/login').send({ email, password });
@@ -43,7 +60,12 @@ async function login(email: string, password: string): Promise<string> {
 let lastAgreementId = '';
 
 /** An agreement with one Wednesday visit generated, and that visit's id. */
-async function visitForAssignment(): Promise<string> {
+async function visitForAssignment(options: { sameWeek?: boolean } = {}): Promise<string> {
+  if (!options.sameWeek) weekIndex += 1;
+  const horizon = {
+    from: dayAfter(FIRST_WEEK_FROM, weekIndex * 7),
+    to: dayAfter(FIRST_WEEK_FROM, weekIndex * 7 + 6),
+  };
   const agreement = await request(http)
     .post('/api/service-agreements')
     .set(auth(adminToken))
@@ -53,14 +75,14 @@ async function visitForAssignment(): Promise<string> {
       frequencyCount: 1,
       frequencyUnit: 'WEEK',
       allowedDays: [Weekday.WEDNESDAY],
-      startDate: '2026-09-07',
+      startDate: horizon.from,
       durationMinutes: 90,
       crewSize: 2,
     });
   expect(agreement.status).toBe(201);
   // Agreement creation now automatically plans a scoped onboarding horizon,
   // which lands on the real clock's "today" — a different window than this
-  // fixture's own fixed `HORIZON`. Clear it so the explicit confirm below is
+  // fixture's own week. Clear it so the explicit confirm below is
   // the only thing that plants a visit, as `listed.body.items[0]` assumes.
   await prisma.generatedVisit.deleteMany({
     where: { serviceAgreementId: agreement.body.id },
@@ -69,7 +91,7 @@ async function visitForAssignment(): Promise<string> {
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
     .set(auth(adminToken))
-    .send({ ...HORIZON, serviceAgreementIds: [agreement.body.id] });
+    .send({ ...horizon, serviceAgreementIds: [agreement.body.id] });
   expect(generated.status).toBe(200);
 
   lastAgreementId = agreement.body.id as string;
@@ -209,6 +231,12 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   // Crew rows restrict deletion of an employee, so the assignments have to go
   // first — otherwise cleanup throws and Jest hangs instead of exiting.
   await prisma.assignment.deleteMany({
@@ -676,7 +704,7 @@ describe('a rejected replacement', () => {
 describe('double booking across two visits', () => {
   it('refuses the same crew on two overlapping visits on one day', async () => {
     const first = await visitForAssignment();
-    const second = await visitForAssignment();
+    const second = await visitForAssignment({ sameWeek: true });
 
     const one = await request(http)
       .put(`/api/visits/${first}/assignment`)
@@ -696,7 +724,7 @@ describe('double booking across two visits', () => {
 
   it('allows the same crew on two visits that do not overlap', async () => {
     const first = await visitForAssignment();
-    const second = await visitForAssignment();
+    const second = await visitForAssignment({ sameWeek: true });
 
     await request(http)
       .put(`/api/visits/${first}/assignment`)
