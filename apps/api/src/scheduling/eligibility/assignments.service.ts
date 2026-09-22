@@ -174,6 +174,14 @@ export class AssignmentsService {
           branchId: visit.branchId,
           branchCode: visit.branchCode,
           status: AssignmentStatus.DRAFT,
+          // Changing a crew by hand replaces the run's draft; it does not take
+          // the visit out of the run. Forgetting the run here dropped the visit
+          // from the publication that followed — the run went on counting it as
+          // staffed while no crew had been told anything, and the visit stayed
+          // editable after the week was frozen, because nothing about it had
+          // ever been published. The replacement stands in the draft's place,
+          // lineage and all.
+          scheduleRunId: existing?.scheduleRunId ?? null,
           plannedStart: at(visit.visitDate, proposal.plannedStartMinute),
           plannedEnd: at(visit.visitDate, proposal.plannedEndMinute),
           crewMembers: {
@@ -214,6 +222,13 @@ export class AssignmentsService {
         },
         tx,
       );
+      await this.recordCrewChange(tx, visitId, actor, {
+        action: existing ? 'CREW_REPLACED' : 'CREW_SET',
+        assignmentId: assignment.id,
+        replacedAssignmentId: existing?.id ?? null,
+        crewSize: assignment.crewMembers.length,
+        reason: dto.reason?.trim() || null,
+      });
 
       return { kind: 'assigned' as const, assignment };
     }, { timeout: 30_000 });
@@ -282,6 +297,13 @@ export class AssignmentsService {
         },
         tx,
       );
+      await this.recordCrewChange(tx, visitId, actor, {
+        action: 'CREW_REMOVED',
+        assignmentId: null,
+        replacedAssignmentId: existing.id,
+        crewSize: 0,
+        reason: null,
+      });
     });
   }
 
@@ -666,6 +688,41 @@ export class AssignmentsService {
       where: { id: visitId },
       data: { status: VisitStatus.UNASSIGNED },
     });
+  }
+
+  /**
+   * The visit's own record of a crew being set, replaced or taken off by hand.
+   *
+   * There is already an audit entry against the assignment, carrying the full
+   * before/after. It cannot be the visit's history, though: replacing a crew
+   * hard-deletes the draft it replaces, so after a second edit the first
+   * edit's entry names a row that no longer exists and the reason a manager
+   * was required to give goes with it. This entry is about the visit, which
+   * stays, and holds only what a history line needs to say.
+   */
+  private async recordCrewChange(
+    tx: Prisma.TransactionClient,
+    visitId: string,
+    actor: AuthenticatedUser,
+    change: {
+      action: 'CREW_SET' | 'CREW_REPLACED' | 'CREW_REMOVED';
+      assignmentId: string | null;
+      replacedAssignmentId: string | null;
+      crewSize: number;
+      reason: string | null;
+    },
+  ) {
+    await this.audit.record(
+      {
+        entityType: 'GeneratedVisit',
+        entityId: visitId,
+        action: 'visit.crew_changed',
+        actor,
+        before: null,
+        after: change,
+      },
+      tx,
+    );
   }
 
   private async deleteDraft(

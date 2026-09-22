@@ -1,6 +1,8 @@
+import { ConfigService } from '@nestjs/config';
 import {
   AssignmentStatus,
   BranchCode,
+  CrewRole,
   LockScope,
   Prisma,
   ScheduleRunStatus,
@@ -12,11 +14,16 @@ import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
 import { PrismaService } from '../../prisma/prisma.service';
 import { EligibilityService } from '../eligibility/eligibility.service';
+import { BranchDayCapacityService } from '../visit-generation/branch-day-capacity.service';
+import {
+  BRANCH_DAY_LOCK_CLASS,
+  branchDayLockKey,
+} from './branch-day-lock';
 import {
   ScheduleRunJobData,
   ScheduleRunProcessor,
 } from './schedule-run.processor';
-import { ScheduleRunService } from './schedule-run.service';
+import { ScheduleRunService, solvedCrewRoles } from './schedule-run.service';
 import {
   BULLMQ_EXECUTION_LEASE_SECONDS,
   BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
@@ -36,6 +43,12 @@ function deferred<T>() {
 function fixture(
   scheduledDate = '2027-03-03',
   initialStatus: AssignmentStatus = AssignmentStatus.DRAFT,
+  /**
+   * How many visits each branch-day already carries, for the backstop that
+   * refuses a move on to a full one. Days left out are empty, which is what a
+   * week nobody has planned yet looks like.
+   */
+  dayLoad: Record<string, number> = {},
 ) {
   const started = deferred<void>();
   const answer = deferred<SolveResponse>();
@@ -169,14 +182,36 @@ function fixture(
       return replacement;
     }),
   };
+  // The day-load read: how many crew-minutes each branch-day the run would
+  // move work between already carries. Each unit of `dayLoad` stands for a
+  // one-hour, one-crew reference visit, so `{ '2027-03-04': 12 }` reads
+  // exactly as it did when the cap was a raw count: twelve of them are
+  // seven hundred and twenty crew-minutes, the default cap itself.
+  const dayLoadFindMany = jest.fn(
+    async ({ where }: { where: { branchCode: { in: BranchCode[] }; visitDate: { in: Date[] } } }) =>
+      where.visitDate.in.flatMap((visitDate) => {
+        const date = visitDate.toISOString().slice(0, 10);
+        return Array.from({ length: dayLoad[date] ?? 0 }, () => ({
+          branchCode: where.branchCode.in[0],
+          visitDate,
+          durationMinutes: 60,
+          requiredCrewSize: 1,
+        }));
+      }),
+  );
   const generatedVisit = {
-    findMany: jest.fn(async () => [
-      { ...visit, assignments: assignments.map((a) => ({ ...a })) },
-    ]),
+    findMany: jest.fn(
+      async (args?: { where?: { branchCode?: { in: BranchCode[] } | BranchCode } }) =>
+        args?.where?.branchCode && typeof args.where.branchCode === 'object'
+          ? dayLoadFindMany(args as never)
+          : [{ ...visit, assignments: assignments.map((a) => ({ ...a })) }],
+    ),
     findUniqueOrThrow: jest.fn(async () => ({ ...visit })),
     update: jest.fn(async ({ data }: { data: Partial<typeof visit> }) =>
       Object.assign(visit, data),
     ),
+    /** The day-load half of `findMany`, exposed so tests can assert on it alone. */
+    dayLoadFindMany,
   };
   const scheduleRun = {
     findUnique: jest.fn(async () => ({ ...run })),
@@ -349,6 +384,28 @@ function fixture(
     assignmentLock: { updateMany: jest.fn() },
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
+    // Read by `BranchDayCapacityService` inside the same transaction the
+    // daily-cap backstop runs in — one PMS-grade employee and no vehicles,
+    // matching the plain `prisma.employee`/`prisma.vehicle` mocks below, so
+    // capacity is real and available rather than the branch reading as
+    // having no workforce recorded at all.
+    employee: {
+      findMany: jest.fn(async () => [
+        {
+          id: 'employee',
+          branchCode: BranchCode.COLOMBO,
+          isPmsGrade: true,
+          permanentAssignments: [],
+          skills: [],
+          vehicleAuthorizations: [],
+          availability: [],
+        },
+      ]),
+    },
+    vehicle: { findMany: jest.fn(async () => []) },
+    // The branch-day advisory lock. It returns a row count rather than rows,
+    // which is why it is `$executeRaw` and not the `$queryRaw` the row locks use.
+    $executeRaw: jest.fn(async () => 1),
     $queryRaw: jest.fn(async (query: Prisma.Sql) =>
       query.sql.includes('generated_visits')
         ? [{ id: visit.id }]
@@ -365,20 +422,6 @@ function fixture(
   };
   const prisma = {
     ...tx,
-    employee: {
-      findMany: jest.fn(async () => [
-        {
-          id: 'employee',
-          branchCode: BranchCode.COLOMBO,
-          isPmsGrade: true,
-          permanentAssignments: [],
-          skills: [],
-          vehicleAuthorizations: [],
-          availability: [],
-        },
-      ]),
-    },
-    vehicle: { findMany: jest.fn(async () => []) },
     $transaction: jest.fn(
       async (work: (client: typeof tx) => Promise<unknown>) => work(tx),
     ),
@@ -397,6 +440,18 @@ function fixture(
     scheduler as unknown as SchedulerClient,
     eligibility as unknown as EligibilityService,
     {} as AuditService,
+    // A 720-minute workday for the mock's one PMS-grade employee — this
+    // fixture's real resource-derived capacity therefore lands on exactly
+    // the same 720-crew-minute (twelve reference-hour) figure the daily-cap
+    // backstop tests below were written against, so their own numbers stay
+    // meaningful rather than being about dispatch/locking mechanics alone.
+    new BranchDayCapacityService(
+      prisma as unknown as PrismaService,
+      {
+        get: (key: string) =>
+          key === 'visitGeneration.employeeWorkdayMinutes' ? 720 : undefined,
+      } as unknown as ConfigService,
+    ),
   );
   const processor = new ScheduleRunProcessor(service, {
     isCurrentDispatch: jest.fn(async () => true),
@@ -1527,5 +1582,357 @@ describe('at-least-once schedule-run delivery leases', () => {
 
     expect(f.run.status).toBe(ScheduleRunStatus.RUNNING);
     expect(f.dispatchOutbox.terminalFailureAt).toBeInstanceOf(Date);
+  });
+});
+
+/**
+ * The daily cap, held where the move is actually committed.
+ *
+ * Generation spreads a calendar so no branch-day carries more than
+ * `VISIT_GENERATION_DAILY_CAP`. The solver is never told that number, so it
+ * moved work on to days that were already full and handed the manager back the
+ * twenty-job day the cap exists to prevent. These cover the decision itself:
+ * what is refused, what is not, and what a manager is told when it is.
+ */
+describe('the daily-cap backstop on a solver move', () => {
+  it('refuses a move on to a day already at the cap and leaves the visit where it was', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // The visit keeps its generated date, and the assignment is written for
+    // that date rather than the one the solver chose.
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.generatedVisit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: VisitStatus.SCHEDULED },
+      }),
+    );
+    // The engine was asked about the day the visit is standing on, not the
+    // day the solver wanted: refusing a move is not refusing an assignment.
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      f.visit.id,
+      expect.anything(),
+      expect.objectContaining({ proposedVisit: undefined }),
+      expect.anything(),
+    );
+  });
+
+  it('lets a move on to a day with room through', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 10,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // Ten reference hours plus the visit's own ninety minutes stays under
+    // twelve, so the move is the solver's to place. A backstop that refused
+    // this would have satisfied the cap by destroying the optimizer.
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-04T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+  });
+
+  it('still assigns a crew to a visit standing on a day that is already over the cap', async () => {
+    // Twenty on the visit's own day, and the solver is not moving it. A day
+    // over the cap from protected work still needs its crews; only making it
+    // worse is refused.
+    const f = fixture('2027-03-03', AssignmentStatus.DRAFT, {
+      '2027-03-03': 20,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.reasons.createMany).not.toHaveBeenCalled();
+    expect(f.assignments.map((entry) => entry.id)).toContain('replacement');
+  });
+
+  it('tells the manager the day was full when the kept day cannot be crewed', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+    // The solver's crew works on the 4th and not on the 3rd. With the move
+    // refused the visit has nowhere to be staffed, and must say so rather
+    // than disappear.
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'EMPLOYEE_DOUBLE_BOOKED',
+          message: 'Employee is already booked.',
+          remediation: 'Choose somebody else.',
+          resources: { employeeIds: ['employee'] },
+        },
+      ],
+    } as never);
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+
+    const written = f.reasons.createMany.mock.calls[0][0] as {
+      data: { code: string; message: string; details: unknown }[];
+    };
+    // The cap refusal comes first: it is why the visit is on this day at all,
+    // and a queue that only said "employee double booked" would be telling
+    // the manager to fix the wrong thing.
+    expect(written.data.map((row) => row.code)).toEqual([
+      'DAILY_VISIT_CAP_REACHED',
+      'EMPLOYEE_DOUBLE_BOOKED',
+    ]);
+    expect(written.data[0].message).toContain('2027-03-04');
+    expect(written.data[0].message).toContain('720 crew-minutes');
+    expect(written.data[0].message).toContain('2027-03-03');
+    expect(written.data[0].details).toMatchObject({
+      remediation: expect.stringContaining('2027-03-04'),
+    });
+  });
+
+  /**
+   * A refused move must not leave the engine reasoning about the day the
+   * visit did not go to.
+   *
+   * The visit keeps its generated date, so every conflict recorded beside the
+   * cap refusal has to have been judged against that date: the crews and
+   * vehicles busy then, the site's hours then. Were the engine still handed
+   * the day the solver proposed, the queue would name clashes on a day the
+   * visit is not on — and the Edit crew drawer, which checks live against the
+   * real date, would contradict it on the same screen.
+   */
+  it('judges a refused move against the day the visit kept, never the day it was offered', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 12,
+    });
+    f.eligibility.evaluate.mockResolvedValue({
+      isEligible: false,
+      conflicts: [
+        {
+          code: 'EMPLOYEE_DOUBLE_BOOKED',
+          message: 'Employee is already booked.',
+          remediation: 'Choose somebody else.',
+          resources: { employeeIds: ['employee'] },
+        },
+      ],
+    } as never);
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // proposedVisit undefined: the engine reads the visit's own stored date,
+    // window and duration, and loads that day's busy windows.
+    expect(f.eligibility.evaluate).toHaveBeenCalledWith(
+      'visit',
+      expect.any(Object),
+      expect.objectContaining({ proposedVisit: undefined }),
+      f.tx,
+    );
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+  });
+
+  /**
+   * The same rule for the other way a move can fail.
+   *
+   * The cap refuses a move before the engine ever sees it, and that path has
+   * been right since the last round. But a move the cap lets through can still
+   * be refused by the engine itself — the crew the solver chose is busy on the
+   * day it wanted — and that refusal used to be recorded as-is: conflicts
+   * judged against the proposed day, written against a visit that never left
+   * its generated one. A coordinator found unassigned visits dated Monday 21
+   * September whose reasons cited clashes on the previous Friday and Saturday,
+   * and there is no way to tell from the queue that those dates are not the
+   * visit's own. Sent to the wrong day, a manager checks the wrong crews.
+   */
+  it('re-judges a move the engine refuses against the day the visit keeps', async () => {
+    // Ten reference hours on the 4th, comfortably under the cap once the
+    // visit's own ninety minutes are added: the cap lets the move through,
+    // so the refusal here is the engine's own.
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 10,
+    });
+    f.eligibility.evaluate.mockImplementation(
+      (async (
+        _visitId: string,
+        _proposal: unknown,
+        options: { proposedVisit?: { visitDate: Date } },
+      ) => ({
+        isEligible: false,
+        conflicts: [
+          {
+            code: 'EMPLOYEE_DOUBLE_BOOKED',
+            message: `Employee is already on another job on ${
+              options.proposedVisit
+                ? options.proposedVisit.visitDate.toISOString().slice(0, 10)
+                : '2027-03-03'
+            }.`,
+            remediation: 'Choose somebody else.',
+            resources: { employeeIds: ['employee'] },
+          },
+        ],
+      })) as never,
+    );
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.UNASSIGNED);
+    // The last question asked was about the day the visit is actually on.
+    expect(f.eligibility.evaluate).toHaveBeenLastCalledWith(
+      'visit',
+      expect.any(Object),
+      expect.objectContaining({ proposedVisit: undefined }),
+      f.tx,
+    );
+
+    const written = f.reasons.createMany.mock.calls[0][0] as {
+      data: { code: string; message: string }[];
+    };
+    expect(written.data).toHaveLength(1);
+    expect(written.data[0].message).toContain('2027-03-03');
+    // The day the visit did not go to must not appear as though it were the
+    // visit's own.
+    expect(written.data[0].message).not.toContain('2027-03-04');
+  });
+
+  /**
+   * Refusing a move is not refusing an assignment — the principle the cap
+   * backstop already runs on, applied to the engine's own refusal. A crew that
+   * cannot serve the day the solver wanted may well be free on the day the
+   * visit was generated for, and leaving that visit unstaffed helps nobody.
+   */
+  it('staffs the day the visit keeps when only the move was impossible', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+    f.eligibility.evaluate.mockImplementation(
+      (async (
+        _visitId: string,
+        _proposal: unknown,
+        options: { proposedVisit?: unknown },
+      ) =>
+        options.proposedVisit
+          ? {
+              isEligible: false,
+              conflicts: [
+                {
+                  code: 'EMPLOYEE_DOUBLE_BOOKED',
+                  message: 'Employee is already on another job on 2027-03-04.',
+                  remediation: 'Choose somebody else.',
+                  resources: { employeeIds: ['employee'] },
+                },
+              ],
+            }
+          : { isEligible: true, conflicts: [] }) as never,
+    );
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+    expect(f.reasons.createMany).not.toHaveBeenCalled();
+  });
+
+  it('reads no day load at all when the solver moves nothing', async () => {
+    const f = fixture();
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // A run that proposes no move asks the database nothing extra. The cap is
+    // a rule about moving work, so a solve that only staffs what is already
+    // dated pays nothing for it — and takes no branch-day lock, so it never
+    // queues behind a run that is actually moving something.
+    expect(f.generatedVisit.dayLoadFindMany).not.toHaveBeenCalled();
+    expect(f.tx.$executeRaw).not.toHaveBeenCalled();
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
+  });
+
+  it('holds the day it is moving on to before it counts what stands there', async () => {
+    const f = fixture('2027-03-04', AssignmentStatus.DRAFT, {
+      '2027-03-04': 11,
+    });
+
+    const pending = f.processor.process(f.job);
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    // The count is an aggregate and locks nothing, so reading it before the
+    // day is held would let two runs over disjoint work both see room for one
+    // and both take it. The lock names the destination day, in this codebase's
+    // own advisory scheme, and it is asked for first.
+    const [lock] = f.tx.$executeRaw.mock.calls;
+    expect(lock.slice(1)).toEqual([
+      BRANCH_DAY_LOCK_CLASS,
+      branchDayLockKey(BranchCode.COLOMBO, '2027-03-04'),
+    ]);
+    expect(f.tx.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      f.generatedVisit.dayLoadFindMany.mock.invocationCallOrder[0],
+    );
+  });
+});
+
+/**
+ * The Dispatch Board's Supervisor column reads the PMS grade; the Edit crew
+ * drawer reads the crew row's role. The solver was stamping SUPERVISOR on
+ * whoever came first in `employee_ids`, which the Python model sorts by
+ * employee UUID — so on the same visit the column named the PMS-grade person
+ * and the drawer called them a Technician while labelling somebody else
+ * Supervisor. The role now follows the grade that actually satisfies the rule.
+ */
+describe('solvedCrewRoles', () => {
+  const pms = (...ids: string[]) => (id: string) => ids.includes(id);
+
+  it('makes the PMS-grade member the supervisor, wherever the solver put them', () => {
+    expect(solvedCrewRoles(['tech-22', 'tech-13'], pms('tech-13'))).toEqual([
+      { employeeId: 'tech-22', role: CrewRole.TECHNICIAN },
+      { employeeId: 'tech-13', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('names exactly one supervisor when the crew holds more than one PMS grade', () => {
+    const roles = solvedCrewRoles(['a', 'b', 'c'], pms('b', 'c'));
+
+    expect(roles.filter((member) => member.role === CrewRole.SUPERVISOR)).toEqual([
+      { employeeId: 'b', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('falls back to the first member when no grade is known, rather than leaving nobody in charge', () => {
+    // The eligibility engine refuses a crew with no PMS grade, so this is a
+    // defined outcome for an impossible input, not a supported one.
+    expect(solvedCrewRoles(['a', 'b'], () => false)).toEqual([
+      { employeeId: 'a', role: CrewRole.SUPERVISOR },
+      { employeeId: 'b', role: CrewRole.TECHNICIAN },
+    ]);
+  });
+
+  it('has nothing to say about an empty crew', () => {
+    expect(solvedCrewRoles([], () => true)).toEqual([]);
   });
 });

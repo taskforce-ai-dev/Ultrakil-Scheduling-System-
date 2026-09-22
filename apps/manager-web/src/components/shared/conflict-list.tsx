@@ -58,9 +58,15 @@ export function ConflictList({ conflicts }: { conflicts: Conflict[] }) {
             <div className="flex items-start gap-2.5">
               <Icon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
               <div className="flex-1 space-y-1">
+                {/*
+                  * The group label, not the engine's code. NO_AUTHORIZED_DRIVER
+                  * and DAILY_VISIT_CAP_REACHED shouted above a sentence that
+                  * already said the same thing in English made a handled
+                  * refusal read as a crash. `conflict.code` stays on the wire
+                  * for support and for the group filter; it is not shown.
+                  */}
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{CONFLICT_GROUP_LABEL[group]}</Badge>
-                  <code className="text-xs text-muted-foreground">{conflict.code}</code>
                 </div>
                 <p className="text-sm">{conflict.message}</p>
                 <p className="text-sm text-muted-foreground">

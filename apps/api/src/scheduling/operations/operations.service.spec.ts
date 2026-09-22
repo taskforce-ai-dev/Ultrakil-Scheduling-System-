@@ -88,6 +88,7 @@ describe('OperationsService', () => {
     const published = assignment('published', AssignmentStatus.PUBLISHED, date);
     const draft = assignment('draft', AssignmentStatus.DRAFT, new Date('2026-09-10T12:00:00.000Z'));
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: {
         findMany: jest.fn().mockResolvedValue([visit({ assignments: [draft, published] })]),
@@ -105,7 +106,8 @@ describe('OperationsService', () => {
         total: 1,
         ready: 1,
         proposed: 0,
-        unassigned: 0,
+        awaitingStaffing: 0,
+        staffingFailed: 0,
         exceptions: 0,
         hoursUnconfirmed: 0,
       },
@@ -132,6 +134,7 @@ describe('OperationsService', () => {
 
   it('keeps an unassigned visit honest and surfaces stored conflicts and missing hours', async () => {
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: {
         findMany: jest.fn().mockResolvedValue([visit({
@@ -175,6 +178,46 @@ describe('OperationsService', () => {
     expect(result.summary.hoursUnconfirmed).toBe(1);
   });
 
+  /**
+   * Two facts, two numbers.
+   *
+   * The day's UNASSIGNED state means only "there is nothing to dispatch". It
+   * covers a visit nobody has tried to staff and a visit the scheduler tried
+   * and could not, and the queue strip reported their sum under one word
+   * while every other screen named them apart. Counted separately here, at
+   * the one place that owns the totals, so no client has to re-derive them
+   * from whichever rows it is holding.
+   */
+  it('counts work nobody has attempted apart from work that failed to be staffed', async () => {
+    const untried = visit({ id: 'untried', status: VisitStatus.PENDING });
+    const failed = visit({
+      id: 'failed',
+      status: VisitStatus.UNASSIGNED,
+      unassignedReasons: [{ code: 'CREW_TOO_SMALL', message: 'Crew is short', details: null }],
+    });
+    const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
+      assignment: { findMany: jest.fn().mockResolvedValue([]) },
+      generatedVisit: { findMany: jest.fn().mockResolvedValue([untried, failed]) },
+    };
+    const service = new OperationsService(prisma as never, { evaluate: jest.fn() } as never);
+
+    const result = await service.day({ date: '2026-09-10' });
+
+    expect(result.summary).toMatchObject({
+      total: 2,
+      awaitingStaffing: 1,
+      staffingFailed: 1,
+    });
+    // Both are the same operational state — nothing to dispatch — and the
+    // visit's own status is what tells them apart, so it travels with the row.
+    expect(result.items.map((item) => item.state)).toEqual(['UNASSIGNED', 'UNASSIGNED']);
+    expect(result.items.map((item) => item.visit.status)).toEqual([
+      VisitStatus.PENDING,
+      VisitStatus.UNASSIGNED,
+    ]);
+  });
+
   it('makes competing live proposals a deterministic exception without confusing one for dispatch truth', async () => {
     const first = assignment('first', AssignmentStatus.DRAFT, new Date('2026-09-10T11:00:00.000Z'));
     const second = assignment('second', AssignmentStatus.PROPOSED, new Date('2026-09-10T11:00:00.000Z'));
@@ -185,6 +228,7 @@ describe('OperationsService', () => {
       driverEmployee: null,
     }];
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: {
         findMany: jest.fn().mockResolvedValue([visit({ assignments: [second, first] })]),
@@ -212,6 +256,7 @@ describe('OperationsService', () => {
       driverEmployee: null,
     }];
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: { findMany: jest.fn().mockResolvedValue([visit({ assignments: [published] })]) },
     };
@@ -234,6 +279,7 @@ describe('OperationsService', () => {
       employee: { fullName: 'Published technician' },
     }];
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: { findMany: jest.fn().mockResolvedValue([visit({ assignments: [published] })]) },
     };
@@ -281,6 +327,7 @@ describe('OperationsService', () => {
       },
     });
     const prisma = {
+      scheduleRun: { findMany: jest.fn().mockResolvedValue([]) },
       assignment: { findMany: jest.fn().mockResolvedValue([]) },
       generatedVisit: { findMany: jest.fn().mockResolvedValue([unknownDayRuleVisit]) },
     };
@@ -326,10 +373,11 @@ function lineageRow(id: string, overrides: Partial<LineageRowFixture> = {}): Lin
   };
 }
 
-function serviceFor(visits: unknown[], lineage: LineageRowFixture[]) {
+function serviceFor(visits: unknown[], lineage: LineageRowFixture[], runs: unknown[] = []) {
   const prisma = {
     assignment: { findMany: jest.fn().mockResolvedValue(lineage) },
     generatedVisit: { findMany: jest.fn().mockResolvedValue(visits) },
+    scheduleRun: { findMany: jest.fn().mockResolvedValue(runs) },
   };
   const eligibility = { evaluate: jest.fn().mockResolvedValue({ isEligible: true, conflicts: [] }) };
   return {
@@ -338,6 +386,47 @@ function serviceFor(visits: unknown[], lineage: LineageRowFixture[]) {
     service: new OperationsService(prisma as never, eligibility as never),
   };
 }
+
+describe('OperationsService schedule-run identity', () => {
+  it("carries the run's own horizon, so a screen can name it by its weeks", async () => {
+    const current = assignment('v1', AssignmentStatus.PUBLISHED, date);
+    const { service } = serviceFor(
+      [visit({ assignments: [current] })],
+      [],
+      [
+        {
+          id: 'v1-run',
+          rangeStart: new Date('2026-09-15T00:00:00.000Z'),
+          rangeEnd: new Date('2026-09-21T00:00:00.000Z'),
+        },
+      ],
+    );
+
+    const version = (await service.day({ date: '2026-09-10' })).items[0].scheduleVersion;
+
+    expect(version).toMatchObject({
+      id: 'v1-run',
+      status: AssignmentStatus.PUBLISHED,
+      rangeStart: '2026-09-15',
+      rangeEnd: '2026-09-21',
+    });
+  });
+
+  it('leaves the horizon null for an assignment no run produced', async () => {
+    const current = assignment('hand', AssignmentStatus.PUBLISHED, date);
+    const { service, prisma } = serviceFor(
+      [visit({ assignments: [{ ...current, scheduleRunId: null }] })],
+      [],
+    );
+
+    const version = (await service.day({ date: '2026-09-10' })).items[0].scheduleVersion;
+
+    // No run id to look up, so no query at all — the day of a hand-published
+    // schedule should not pay for a round trip that can only come back empty.
+    expect(prisma.scheduleRun.findMany).not.toHaveBeenCalled();
+    expect(version).toMatchObject({ id: null, rangeStart: null, rangeEnd: null });
+  });
+});
 
 describe('OperationsService published-assignment lineage', () => {
   beforeEach(() => {

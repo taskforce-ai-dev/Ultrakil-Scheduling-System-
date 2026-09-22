@@ -14,9 +14,13 @@ function required(overrides: Partial<RequiredVisit> = {}): RequiredVisit {
     windowEndMinute: 1020,
     durationMinutes: 90,
     requiredCrewSize: 2,
+    requiredSkillCodes: [],
     branchCode: 'COLOMBO',
     agreementVersionId: 'version-1',
     isPreferredDay: true,
+    placement: 'EARLIEST',
+    periodIndex: 0,
+    alternatives: [],
     ...overrides,
   };
 }
@@ -32,6 +36,7 @@ function existing(overrides: Partial<ExistingVisit> = {}): ExistingVisit {
     durationMinutes: 90,
     requiredCrewSize: 2,
     status: 'PENDING',
+    placement: 'EARLIEST',
     isManuallyAdjusted: false,
     isLocked: false,
     hasAssignments: false,
@@ -102,6 +107,38 @@ describe('planGeneration', () => {
     expect(plan.updates[0].changes).toEqual([
       { field: 'durationMinutes', from: 90, to: 120 },
       { field: 'requiredCrewSize', from: 2, to: 3 },
+    ]);
+  });
+
+  it('updates a visit whose date is right but whose stated reason is stale', () => {
+    // Placement is only an explanation — but an explanation that has gone
+    // wrong explains the visit wrongly, and a manager who cannot trust the
+    // label will stop reading it.
+    const plan = planGeneration([required({ placement: 'ANCHORED' })], [existing()]);
+
+    expect(plan.unchangedCount).toBe(0);
+    expect(plan.updates).toHaveLength(1);
+    expect(plan.updates[0].changes).toEqual([
+      { field: 'placement', from: 'EARLIEST', to: 'ANCHORED' },
+    ]);
+  });
+
+  it('reports a stale reason on a protected visit rather than rewriting it', () => {
+    const plan = planGeneration(
+      [required({ placement: 'ANCHORED' })],
+      [existing({ isLocked: true })],
+    );
+
+    expect(plan.updates).toEqual([]);
+    expect(plan.protectedVisits).toEqual([
+      {
+        visitId: 'visit-1',
+        serviceAgreementId: 'agreement-1',
+        visitDate: '2026-09-09',
+        protection: 'LOCKED',
+        wouldHave: 'UPDATE',
+        changes: [{ field: 'placement', from: 'EARLIEST', to: 'ANCHORED' }],
+      },
     ]);
   });
 

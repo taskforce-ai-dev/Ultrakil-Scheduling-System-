@@ -96,7 +96,7 @@ describe("EmployeeDetailView", () => {
       id: "employee-driver",
       authorizedVehicleIds: ["vehicle-1"],
       authorizedVehicles: [
-        { id: "vehicle-1", code: "253-4289", label: "Van( 04 People) 253-4289", seatCapacity: 4 },
+        { id: "vehicle-1", code: "253-4289", label: "Van (4 People) 253-4289", seatCapacity: 4 },
       ],
     });
     vi.mocked(submitVehicleAuthorizations).mockResolvedValueOnce(

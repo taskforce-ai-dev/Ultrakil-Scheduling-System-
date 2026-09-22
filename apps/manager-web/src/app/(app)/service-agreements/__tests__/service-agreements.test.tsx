@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -11,7 +11,8 @@ vi.mock("@/lib/api-client", async () => {
     fetchJobTypes: vi.fn(),
     fetchSkills: vi.fn(),
     createServiceAgreement: vi.fn(),
-    fetchSchedulePreview: vi.fn(),
+    previewVisitGeneration: vi.fn(),
+    confirmVisitGeneration: vi.fn(),
     changeAgreementStatus: vi.fn(),
   };
 });
@@ -20,20 +21,15 @@ import ServiceAgreementsPage from "../page";
 import {
   ApiError,
   changeAgreementStatus,
+  confirmVisitGeneration,
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
-  fetchSchedulePreview,
   fetchServiceAgreements,
   fetchSkills,
+  previewVisitGeneration,
 } from "@/lib/api-client";
-import {
-  buildCustomer,
-  buildJobType,
-  buildSchedulePreview,
-  buildServiceAgreement,
-  buildServiceSite,
-} from "@/test/fixtures";
+import { buildCustomer, buildJobType, buildServiceAgreement, buildServiceSite } from "@/test/fixtures";
 
 // The site is open Mon 06:00-22:00 and Wed 08:00-18:00 — deliberately
 // different hours, so the read-only summary can prove it shows each
@@ -59,7 +55,8 @@ beforeEach(() => {
   vi.mocked(fetchJobTypes).mockResolvedValue([jobType]);
   vi.mocked(fetchSkills).mockResolvedValue([]);
   vi.mocked(createServiceAgreement).mockReset();
-  vi.mocked(fetchSchedulePreview).mockReset();
+  vi.mocked(previewVisitGeneration).mockReset();
+  vi.mocked(confirmVisitGeneration).mockReset();
   vi.mocked(changeAgreementStatus).mockReset();
 });
 
@@ -76,6 +73,71 @@ describe("ServiceAgreementsPage", () => {
     render(<ServiceAgreementsPage />);
     expect(await screen.findByText("Cinnamon Grand Colombo")).toBeInTheDocument();
     expect(screen.getByText("Termite Control")).toBeInTheDocument();
+  });
+
+  it("names a cadence by its interval, not by its unit alone", async () => {
+    // ULK: a fortnightly agreement (1 visit, every 2 weeks) was rendered
+    // "1x / week" — the interval was dropped — so every fortnightly contract
+    // read as weekly on the screen a manager answers "how often do we serve
+    // this customer" from. A coordinator concluded the scheduler was dropping
+    // visits; it was not.
+    vi.mocked(fetchServiceAgreements).mockResolvedValue({
+      items: [
+        buildServiceAgreement({
+          id: "agreement-fortnightly",
+          customerName: "Synthetic Client 60",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "WEEK",
+          frequencyLabel: "Fortnightly",
+        }),
+        buildServiceAgreement({
+          id: "agreement-two-monthly",
+          customerName: "Synthetic Client 79",
+          frequencyCount: 1,
+          frequencyInterval: 2,
+          frequencyUnit: "MONTH",
+          frequencyLabel: "Two-monthly",
+        }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 200,
+    });
+
+    render(<ServiceAgreementsPage />);
+
+    expect(await screen.findByText("Fortnightly")).toBeInTheDocument();
+    expect(screen.getByText("Two-monthly")).toBeInTheDocument();
+    expect(screen.queryByText("1x / week")).not.toBeInTheDocument();
+    expect(screen.queryByText("1x / month")).not.toBeInTheDocument();
+  });
+
+  it("lets a manager set the interval, so a fortnightly agreement can be created at all", async () => {
+    const user = await openForm();
+
+    const interval = screen.getByLabelText("Every");
+    await user.clear(interval);
+    await user.type(interval, "2");
+
+    // The cadence is named back before it is saved: a manager should not have
+    // to save an agreement to find out they built a weekly one.
+    expect(await screen.findByText("fortnightly")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), "2026-09-17");
+
+    vi.mocked(createServiceAgreement).mockResolvedValue(
+      buildServiceAgreement({ frequencyInterval: 2, frequencyLabel: "Fortnightly" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    await vi.waitFor(() =>
+      expect(createServiceAgreement).toHaveBeenCalledWith(
+        expect.objectContaining({ frequencyCount: 1, frequencyInterval: 2, frequencyUnit: "WEEK" }),
+      ),
+    );
   });
 
   it("is reachable by keyboard and exposes accessible labels for every field", async () => {
@@ -129,6 +191,19 @@ describe("ServiceAgreementsPage", () => {
     expect(siteTrigger).not.toHaveTextContent(site.id);
   });
 
+  it("says the start date sets the cycle, not only when the work begins", async () => {
+    // A fortnight belongs to the agreement: its periods are counted from this
+    // day. Moving it re-phases every future one, and the next generation run
+    // then plans different days — which is not something to discover from a
+    // calendar that has quietly moved.
+    await openForm();
+
+    expect(
+      screen.getByText(/The start date also sets the cycle/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/re-phases every future\s+period/)).toBeInTheDocument();
+  });
+
   it("requires a start date before saving", async () => {
     const user = await openForm();
 
@@ -172,60 +247,110 @@ describe("ServiceAgreementsPage", () => {
     expect(list?.textContent).toContain("Tue: Closed");
   });
 
-  it("saves the agreement, then shows a loading state and the real preview, including shortfalls", async () => {
-    const created = buildServiceAgreement({ id: "agreement-2" });
-    vi.mocked(createServiceAgreement).mockResolvedValue(created);
-    // Hold the preview response until after the loading state has been
-    // asserted. A wall-clock timeout races with the user interactions above
-    // on slower CI runners and can resolve before this assertion runs.
-    let resolvePreview!: (preview: ReturnType<typeof buildSchedulePreview>) => void;
-    const previewPromise = new Promise<ReturnType<typeof buildSchedulePreview>>((resolve) => {
-      resolvePreview = resolve;
+  // Far enough out that a fixed future date reads clearly in assertions,
+  // regardless of which day the suite actually runs on.
+  const FAR_FUTURE_START = "2099-01-06";
+
+  it("shows the automatic onboarding result when planning succeeds, with no second scheduling request", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-2",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 24,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message: null,
+      },
     });
-    vi.mocked(fetchSchedulePreview).mockReturnValue(previewPromise);
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
 
     const user = await openForm();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Calculating preview…");
-
-    resolvePreview(
-      buildSchedulePreview({
-        shortfalls: [
-          {
-            periodStart: "2026-09-07",
-            periodEnd: "2026-09-13",
-            requested: 2,
-            scheduled: 1,
-            reason: "NOT_ENOUGH_ALLOWED_DAYS",
-            message: "Only 1 of the 2 requested visits could be placed this week.",
-          },
-        ],
-      })
-    );
-
+    expect(screen.getByRole("heading", { name: "Scheduled" })).toBeInTheDocument();
+    expect(screen.getByText(/24 visits scheduled between/)).toBeInTheDocument();
+    // The "existing work" guarantee is stated unconditionally.
     expect(
-      await screen.findByText("Only 1 of the 2 requested visits could be placed this week.")
+      screen.getByText(/every other customer's existing schedule is untouched/)
     ).toBeInTheDocument();
-    expect(screen.getByText(/2026-09-07/)).toBeInTheDocument();
+
+    // The agreement was already fully scheduled by the create response
+    // itself — there is no second manual step, and none was requested.
+    expect(screen.queryByRole("button", { name: "Schedule now" })).not.toBeInTheDocument();
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
-  it("shows an error if the preview fails to load, without losing the created agreement", async () => {
-    vi.mocked(createServiceAgreement).mockResolvedValue(buildServiceAgreement());
-    vi.mocked(fetchSchedulePreview).mockRejectedValue(
-      new ApiError({ code: "UNKNOWN_ERROR", message: "Could not load the preview." })
-    );
+  it("shows shortfalls from automatic onboarding without hiding what was still scheduled", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-shortfall",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED_WITH_SHORTFALLS",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 20,
+        shortfallPeriods: 3,
+        overCapacityDays: 2,
+        message: null,
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
 
     const user = await openForm();
     await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
-    await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
+    expect(await screen.findByRole("heading", { name: "Scheduled, with shortfalls" })).toBeInTheDocument();
+    expect(screen.getByText(/20 visits scheduled between/)).toBeInTheDocument();
+    expect(screen.getByText(/3 periods could not hold everything requested/)).toBeInTheDocument();
+    expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+
+  it("shows why automatic onboarding failed, without losing the created agreement", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-failed",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "FAILED",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 0,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message: "Every allowed day is already at branch capacity for the next twelve months.",
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    // The agreement itself was still created — only planning failed.
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(await screen.findByText("Could not load the preview.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Scheduling failed" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Every allowed day is already at branch capacity for the next twelve months.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/visits scheduled between/)).not.toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
   it("surfaces a backend rejection (e.g. an unsatisfiable agreement) without closing the form", async () => {
@@ -303,6 +428,61 @@ describe("ServiceAgreementsPage", () => {
     expect(await screen.findByText("Harbour Logistics")).toBeInTheDocument();
     expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status")).toHaveTextContent("Archived");
+  });
+
+  /**
+   * An active agreement that has generated nothing must not be invisible.
+   *
+   * Synthetic Client 79 has an active two-monthly agreement and zero visits
+   * in September, October, November and December. It appears on no calendar,
+   * in no queue and in no schedule run — there is nothing of it to appear —
+   * and two testers raised it independently before anything on screen said a
+   * word about it. This list is the only place that can.
+   */
+  it("marks an agreement that has generated no visits, and gathers them behind a filter", async () => {
+    const barren = buildServiceAgreement({
+      id: "agreement-barren",
+      customerName: "Synthetic Client 79",
+      siteName: "Rear Store",
+      status: "ACTIVE",
+      isActive: true,
+      generatedVisitCount: 0,
+    });
+    vi.mocked(fetchServiceAgreements).mockImplementation((query) =>
+      Promise.resolve(
+        query?.withoutVisits
+          ? { items: [barren], total: 1, page: 1, pageSize: 200 }
+          : { items: [existingAgreement, barren], total: 2, page: 1, pageSize: 200 }
+      )
+    );
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByText("Synthetic Client 79");
+
+    // Said on the row, in words, without being asked for.
+    const barrenRow = screen.getByRole("row", { name: /Synthetic Client 79/ });
+    expect(within(barrenRow).getByText("No visits generated")).toBeInTheDocument();
+    // And not said about an agreement that has produced work.
+    const healthyRow = screen.getByRole("row", { name: /Cinnamon Grand Colombo/ });
+    expect(within(healthyRow).queryByText("No visits generated")).toBeNull();
+
+    // The default look asks the server for everything, not only these.
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.not.objectContaining({ withoutVisits: expect.anything() })
+    );
+
+    expect(screen.getByLabelText("Visits generated")).toHaveTextContent("Any");
+    await user.click(screen.getByLabelText("Visits generated"));
+    await user.click(await screen.findByRole("option", { name: "None generated" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("Cinnamon Grand Colombo")).toBeNull();
+    });
+    expect(fetchServiceAgreements).toHaveBeenCalledWith(
+      expect.objectContaining({ withoutVisits: true })
+    );
+    expect(screen.getByText("Synthetic Client 79")).toBeInTheDocument();
   });
 
   it("reaches archived agreements through the Status filter and labels them in text (ULK-O08)", async () => {
@@ -410,5 +590,102 @@ describe("ServiceAgreementsPage", () => {
     // And no invented window: not the other agreement's, and not a default
     // like 08:00-17:00 dressed up as this agreement's fact.
     expect(within(noWindowRow).queryByText(/AM|PM/)).toBeNull();
+  });
+
+  describe("job duration slider", () => {
+    it("initializes duration from the selected job type's default, in the field, the slider and the readable text", async () => {
+      const user = await openForm();
+
+      await user.click(screen.getByLabelText("Job type"));
+      await user.click(await screen.findByRole("option", { name: "Termite Control" }));
+
+      expect(screen.getByLabelText("Duration (minutes)")).toHaveValue(90);
+      expect(screen.getByText("1 hour 30 minutes")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Job duration" })).toHaveValue("90");
+    });
+
+    it("moves the numeric field in exact 15-minute steps when the slider is used (60 → 75 → 90)", async () => {
+      const user = await openForm();
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+
+      // The form's own default (60) — already on the slider's own grid
+      // (min 15, step 15), so a single step lands on a real quarter-hour.
+      expect(durationInput).toHaveValue(60);
+
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+      expect(durationInput).toHaveValue(75);
+      expect(screen.getByText("1 hour 15 minutes")).toBeInTheDocument();
+
+      await user.keyboard("{ArrowRight}");
+      expect(durationInput).toHaveValue(90);
+      expect(screen.getByText("1 hour 30 minutes")).toBeInTheDocument();
+    });
+
+    it("moves a job type's own default in the same exact steps (90 → 105)", async () => {
+      const user = await openForm();
+      await user.click(screen.getByLabelText("Job type"));
+      await user.click(await screen.findByRole("option", { name: "Termite Control" }));
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+      expect(durationInput).toHaveValue(90);
+
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+
+      expect(durationInput).toHaveValue(105);
+      expect(screen.getByText("1 hour 45 minutes")).toBeInTheDocument();
+    });
+
+    it("moves an off-grid manager-typed duration onto the slider's real grid once the slider is operated", async () => {
+      const user = await openForm();
+      const durationInput = screen.getByLabelText("Duration (minutes)") as HTMLInputElement;
+
+      await user.clear(durationInput);
+      await user.type(durationInput, "47");
+      expect(durationInput).toHaveValue(47);
+
+      const slider = screen.getByRole("slider", { name: "Job duration" });
+      slider.focus();
+      await user.keyboard("{ArrowRight}");
+
+      // Base UI rounds the off-grid 47 to its nearest grid point (45) before
+      // applying the step, landing on 60 rather than 47 + 15 = 62.
+      expect(durationInput).toHaveValue(60);
+      expect(screen.getByText("1 hour")).toBeInTheDocument();
+    });
+
+    it("keeps a manager-typed duration exact, without snapping it to the nearest slider step", async () => {
+      const user = await openForm();
+      const durationInput = screen.getByLabelText("Duration (minutes)");
+
+      await user.clear(durationInput);
+      await user.type(durationInput, "47");
+
+      expect(durationInput).toHaveValue(47);
+      expect(screen.getByText("47 minutes")).toBeInTheDocument();
+      // The slider reflects the exact value too — never rounded to a step.
+      expect(screen.getByRole("slider", { name: "Job duration" })).toHaveValue("47");
+    });
+
+    it("rejects a duration past 1440 minutes with the API's own bound, instead of silently clamping it", async () => {
+      const user = await openForm();
+      await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+      await user.type(screen.getByLabelText("Start date"), "2026-09-07");
+
+      const durationInput = screen.getByLabelText("Duration (minutes)");
+      await user.clear(durationInput);
+      await user.type(durationInput, "1500");
+
+      await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+      expect(
+        await screen.findByText("1440 minutes (24 hours) is the longest a single visit can run"),
+      ).toBeInTheDocument();
+      // The manager's own number is still there — not reset or clamped to 1440.
+      expect(durationInput).toHaveValue(1500);
+      expect(createServiceAgreement).not.toHaveBeenCalled();
+    });
   });
 });

@@ -122,12 +122,12 @@ describe("VehicleDetailView", () => {
   it("shows the vehicle's seat capacity and branch", () => {
     render(
       <VehicleDetailView
-        vehicle={buildVehicle({ label: "Van( 04 People) 253-4289", seatCapacity: 4, branchCode: "KANDY" })}
+        vehicle={buildVehicle({ label: "Van (4 People) 253-4289", seatCapacity: 4, branchCode: "KANDY" })}
         authorized={buildAuthorizedDrivers()}
       />
     );
 
-    expect(screen.getByText("Van( 04 People) 253-4289")).toBeInTheDocument();
+    expect(screen.getByText("Van (4 People) 253-4289")).toBeInTheDocument();
     expect(screen.getByText("4")).toBeInTheDocument();
     expect(screen.getByText("Kandy")).toBeInTheDocument();
   });

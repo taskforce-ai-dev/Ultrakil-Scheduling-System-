@@ -15,9 +15,9 @@ import type { ConflictCode, ConflictGroupCode } from "@/lib/api-client";
  * carries. Filtering is the server's job; this is display only, and every
  * individual conflict is still shown in full whatever group it falls under.
  *
- * Five codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
- * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW) don't fit any of the eleven named groups, so they fall
- * under "Other" rather than being force-fit somewhere misleading.
+ * Six codes (EMPLOYEE_INACTIVE, EMPLOYEE_UNAVAILABLE, VISIT_NOT_SCHEDULABLE,
+ * ASSIGNMENT_LOCKED, NO_FEASIBLE_CREW, DAILY_VISIT_CAP_REACHED) don't fit any of the eleven
+ * named groups, so they fall under "Other" rather than being force-fit somewhere misleading.
  */
 export type ConflictGroup = ConflictGroupCode;
 
@@ -59,6 +59,7 @@ const CODE_TO_GROUP: Record<ConflictCode, ConflictGroup> = {
   VISIT_NOT_SCHEDULABLE: "OTHER",
   ASSIGNMENT_LOCKED: "OTHER",
   NO_FEASIBLE_CREW: "OTHER",
+  DAILY_VISIT_CAP_REACHED: "OTHER",
 };
 
 export function conflictGroup(code: ConflictCode): ConflictGroup {

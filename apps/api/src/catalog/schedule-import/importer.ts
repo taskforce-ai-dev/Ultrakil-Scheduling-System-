@@ -3,12 +3,17 @@ import {
   BranchCode,
   DataProvenance,
   DayRuleKind,
+  Prisma,
   PrismaClient,
   Weekday,
 } from '@prisma/client';
 
+import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { decideBranch } from './branch-match';
+import { createOrRaceToExisting, lockCustomerImport } from './customer-lock';
 import { ParsedAgreement, ParsedSchedule } from './types';
+
+type TransactionClient = Prisma.TransactionClient;
 
 export interface ScheduleImportSummary {
   customersCreated: number;
@@ -20,6 +25,8 @@ export interface ScheduleImportSummary {
   agreementsUpdated: number;
   /** Rows the parser could not turn into an agreement without guessing. */
   agreementsSkipped: number;
+  /** Booked dates written from the workbook's month columns. */
+  bookingsImported: number;
   sitesInColombo: number;
   sitesInKandy: number;
   /** Sites whose town was not recognised; placed in Colombo for review. */
@@ -96,6 +103,7 @@ export async function importSchedule(
     agreementsCreated: 0,
     agreementsUpdated: 0,
     agreementsSkipped: 0,
+    bookingsImported: 0,
     sitesInColombo: 0,
     sitesInKandy: 0,
     sitesUncertain: 0,
@@ -107,6 +115,11 @@ export async function importSchedule(
   }
 
   const jobTypeIds = await ensureJobTypes(prisma, parsed, summary);
+  // Agreements whose imported bookings this run has already cleared. Two
+  // workbook rows can resolve to one agreement — the same site and treatment
+  // written twice — and clearing again on the second would throw away the
+  // dates the first just wrote.
+  const clearedOfSourceBookings = new Set<string>();
   const startDate = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
 
   for (const customer of parsed.customers) {
@@ -132,6 +145,10 @@ export async function importSchedule(
     // import is re-runnable, so a partial import is recoverable. The explicit
     // timeout absorbs cross-region latency in supported operator imports.
     await prisma.$transaction(async (tx) => {
+      // Held for the rest of this customer's transaction, before the
+      // existence check it would otherwise race: see `customer-lock.ts`.
+      await lockCustomerImport(tx, customer.name);
+
       const existing = await tx.customer.findFirst({
         where: { name: customer.name },
         select: { id: true },
@@ -218,6 +235,36 @@ export async function importSchedule(
         else summary.sitesCreated += 1;
       }
 
+      // Every agreement this customer already has, held before a single one is
+      // updated, in the id order `lockAgreementRows` defines.
+      //
+      // The rows below are taken in **workbook order** — whatever order a
+      // spreadsheet kept by hand happens to list them in — while every
+      // schedule writer takes them sorted. That is two orders over the same
+      // rows, and it deadlocked exactly as you would expect: a generation
+      // confirm adding visits for two of this customer's agreements held the
+      // lower id and waited for the higher; this loop held the higher and then
+      // asked for the lower; Postgres killed one of them and a manager saw a
+      // 500 on Generate. Taking them all here, sorted, costs nothing this
+      // transaction was not already going to hold — it updates most of them
+      // anyway, and held them to commit once it had — and it puts the importer
+      // on the same order as everybody else.
+      const held = await tx.serviceAgreement.findMany({
+        where: {
+          OR: [
+            { customerId: record.id },
+            ...(siteIds.size > 0
+              ? [{ serviceSiteId: { in: [...siteIds.values()] } }]
+              : []),
+          ],
+        },
+        select: { id: true },
+      });
+      await lockAgreementRows(
+        tx,
+        held.map((agreement) => agreement.id),
+      );
+
       for (const agreement of customer.agreements) {
         if (!isImportable(agreement)) {
           summary.agreementsSkipped += 1;
@@ -292,7 +339,6 @@ export async function importSchedule(
                     ? DataProvenance.DERIVED
                     : DataProvenance.SOURCE,
               }),
-          startDate,
           endDate: agreement.endDate
             ? new Date(`${agreement.endDate}T00:00:00.000Z`)
             : null,
@@ -309,7 +355,20 @@ export async function importSchedule(
 
         const dayRules = toDayRuleRows(allowedDays);
 
+        let agreementId: string;
         if (existingAgreement) {
+          // `startDate` is deliberately not in `data`, so it is not written
+          // here. It is the agreement's **period anchor**: `periodIndexOf`
+          // counts fortnights from the ISO week it began in and quarters from
+          // the month it began in. Stamping it with the day the import ran —
+          // which is what happened on every update — re-phased every cadence
+          // with an interval above one, so re-uploading a corrected workbook a
+          // week later moved the period boundaries of every fortnightly
+          // agreement by seven days and of every quarterly one by a month.
+          // Periods already planned became different periods, and the promise
+          // this whole branch rests on, that asking for the same range twice
+          // changes nothing, did not survive a re-import. An agreement keeps
+          // the anchor it has always had; only a new one takes today's date.
           await tx.serviceAgreement.update({
             where: { id: existingAgreement.id },
             data: {
@@ -317,11 +376,13 @@ export async function importSchedule(
               ...(preservesDayRules ? {} : { dayRules: { deleteMany: {}, create: dayRules } }),
             },
           });
+          agreementId = existingAgreement.id;
           summary.agreementsUpdated += 1;
         } else {
-          await tx.serviceAgreement.create({
+          const created = await tx.serviceAgreement.create({
             data: {
               ...data,
+              startDate,
               crewSize: sourceCrewSize,
               crewSizeProvenance:
                 agreement.effort.crewSize === null
@@ -339,13 +400,72 @@ export async function importSchedule(
               dayRules: { create: dayRules },
             },
           });
+          agreementId = created.id;
           summary.agreementsCreated += 1;
         }
+
+        summary.bookingsImported += await writeSourceBookings(
+          tx,
+          agreementId,
+          agreement.bookedDates,
+          clearedOfSourceBookings,
+        );
       }
     }, { timeout: 120_000 });
   }
 
   return summary;
+}
+
+/**
+ * Replaces an agreement's imported bookings with what the workbook now says.
+ *
+ * Delete-then-insert rather than upsert: a date the workbook has dropped must
+ * stop being a commitment, and there is no other way to notice its absence.
+ * The delete is narrowed to SOURCE, so a date a manager entered by hand is not
+ * the importer's to remove — and `skipDuplicates` leaves that manager row
+ * standing when the workbook happens to name the same day.
+ *
+ * Cleared **once per agreement per import**, not once per workbook row. Two
+ * rows can resolve to the same agreement — the same site and treatment written
+ * twice, which the workbook does — and deleting again on the second threw away
+ * the dates the first had just written, so the agreement ended up with
+ * whichever row happened to come last.
+ *
+ * The count returned is the number of rows the database actually created, not
+ * the number of dates offered: `skipDuplicates` drops any the manager already
+ * holds, and reporting those as imported overstated the total in the summary a
+ * manager reads.
+ *
+ * Both statements run on the caller's transaction client, so an agreement is
+ * never left with its old bookings deleted and its new ones unwritten.
+ */
+async function writeSourceBookings(
+  tx: TransactionClient,
+  serviceAgreementId: string,
+  bookedDates: string[],
+  alreadyCleared: Set<string>,
+): Promise<number> {
+  if (!alreadyCleared.has(serviceAgreementId)) {
+    await tx.serviceAgreementBooking.deleteMany({
+      where: { serviceAgreementId, provenance: DataProvenance.SOURCE },
+    });
+    alreadyCleared.add(serviceAgreementId);
+  }
+
+  const dates = [...new Set(bookedDates)].sort();
+  if (dates.length === 0) return 0;
+
+  const written = await tx.serviceAgreementBooking.createMany({
+    data: dates.map((date) => ({
+      serviceAgreementId,
+      bookedDate: new Date(`${date}T00:00:00.000Z`),
+      provenance: DataProvenance.SOURCE,
+    })),
+    skipDuplicates: true,
+  });
+
+  return written.count;
 }
 
 function isImportable(agreement: ParsedAgreement): boolean {
@@ -388,17 +508,24 @@ async function ensureJobTypes(
     const code = `IMPORTED_${key}`;
     const existing = await prisma.jobType.findUnique({ where: { code } });
 
-    const record =
-      existing ??
-      (await prisma.jobType.create({
-        data: {
-          code,
-          name: codes.join(' + '),
-          requiredSkillCode: null,
-        },
-      }));
+    if (existing) {
+      ids.set(key, existing.id);
+      continue;
+    }
 
-    if (!existing) summary.jobTypesCreated += 1;
+    // Two imports sharing a treatment combination can both read no existing
+    // row here; `code` is unique, so the loser's `create` used to reach the
+    // operator as a crashed import instead of the row the winner already
+    // made. See `customer-lock.ts`.
+    const { record, created } = await createOrRaceToExisting(
+      () =>
+        prisma.jobType.create({
+          data: { code, name: codes.join(' + '), requiredSkillCode: null },
+        }),
+      () => prisma.jobType.findUniqueOrThrow({ where: { code } }),
+    );
+
+    if (created) summary.jobTypesCreated += 1;
     ids.set(key, record.id);
   }
 

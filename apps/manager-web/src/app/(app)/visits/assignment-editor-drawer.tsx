@@ -142,6 +142,8 @@ export function AssignmentEditorDrawer({
   const [crewRows, setCrewRows] = React.useState<CrewRow[]>([]);
   const [vehicleRows, setVehicleRows] = React.useState<VehicleRow[]>([]);
   const [reason, setReason] = React.useState("");
+  // Focused when a manager presses a Save that is only waiting for these words.
+  const reasonRef = React.useRef<HTMLTextAreaElement>(null);
 
   const [checkResult, setCheckResult] = React.useState<EligibilityResult | null>(null);
   const [isChecking, setIsChecking] = React.useState(false);
@@ -222,10 +224,16 @@ export function AssignmentEditorDrawer({
   // refresh within the same visit, which would erase the one honest record
   // this drawer has of which scopes it locked/unlocked this session (see the
   // note above `sessionLocks`) the moment it saves its own change.
+  /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSessionLocks({});
+    // The reason belongs to the change a manager is composing, not to whatever
+    // the last fetch returned. Resetting it with the form prefill below meant
+    // any refresh of the same visit erased what they were typing; a successful
+    // save clears it explicitly instead, once the reason has been recorded.
+    setReason("");
   }, [visitId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Pre-fill the form from the current assignment (or the visit's own window,
   // for a visit that has none yet) whenever a fresh visit/assignment loads.
@@ -252,12 +260,19 @@ export function AssignmentEditorDrawer({
         }))
       );
     } else {
+      // The visit's own planned window, not the site's whole day. The service
+      // window is the span the work has to fall *inside* — 08:00-17:00 for an
+      // all-day site — and offering its far end as the default "Leaves by"
+      // booked a crew out for nine hours on a 60-minute job for anyone who
+      // pressed Save without editing it. Clamped to the window, so the
+      // default never proposes a crew still on site after it closes.
       setStartMinute(visit.windowStartMinute);
-      setEndMinute(visit.windowEndMinute);
+      setEndMinute(
+        Math.min(visit.windowEndMinute, visit.windowStartMinute + visit.durationMinutes)
+      );
       setCrewRows([]);
       setVehicleRows([]);
     }
-    setReason("");
     setSaveConflicts(null);
   }, [visit, assignment]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -459,7 +474,11 @@ export function AssignmentEditorDrawer({
     setSaveConflicts(null);
     try {
       await assignCrew(visitId, { ...proposal, reason: reason.trim() });
-      notify.success("Assignment saved.");
+      notify.success("Assignment saved. The reason is on this visit's history.");
+      // The reason has been recorded; the next change needs its own. Cleared
+      // here rather than as a side effect of the reload, so a refusal — which
+      // does not reload — leaves the words a manager already typed in place.
+      setReason("");
       load();
       onChanged();
     } catch (caught) {
@@ -527,13 +546,53 @@ export function AssignmentEditorDrawer({
     }
   }
 
-  const canSave =
-    !isSaving &&
-    !isPublicationHistory &&
-    !isChecking &&
-    reason.trim().length > 0 &&
-    proposal.crew.length > 0 &&
-    checkResult?.isEligible === true;
+  /**
+   * What Save is waiting for, in the words of the step that is missing.
+   *
+   * A greyed-out button with nothing marked required and no explanation is
+   * indistinguishable from a broken one: a coordinator trialling the portal
+   * read "This crew is eligible to take the visit", found Save dead, and said
+   * they would have concluded the system was broken and phoned someone. The
+   * blocker was the reason box, which `save()` requires and which said nothing
+   * about itself.
+   *
+   * Named in the order the drawer is filled in, so the answer is always the
+   * next thing to do rather than the last thing checked.
+   */
+  const saveBlockedReason: string | null = isSaving
+    ? null // Already under way; the button says "Saving…" for itself.
+    : isPublicationHistory
+      ? "Published history cannot be edited here."
+      : proposal.crew.length === 0
+        ? "Add at least one crew member before saving."
+        : isChecking
+          ? "Waiting for the eligibility check to finish."
+          : checkResult?.isEligible !== true
+            ? "This crew cannot take the visit yet — see Validation below."
+            : reason.trim().length === 0
+              ? "Add a reason for this change before saving."
+              : null;
+
+  /**
+   * Clicking a blocked Save explains itself rather than doing nothing.
+   *
+   * The button is aria-disabled, not natively disabled, for the reason already
+   * established for the vehicle picker below: a natively disabled button
+   * leaves the tab order, so its explanation could never be read by the people
+   * it is meant for.
+   */
+  function attemptSave() {
+    if (!saveBlockedReason) {
+      void save();
+      return;
+    }
+    if (reason.trim().length === 0 && checkResult?.isEligible === true) {
+      notify.error("A reason is required for a manual override.");
+      reasonRef.current?.focus();
+      return;
+    }
+    notify.error(saveBlockedReason);
+  }
 
   return (
     <AppDrawer
@@ -558,9 +617,26 @@ export function AssignmentEditorDrawer({
             ) : (
               <span />
             )}
-            <Button type="button" onClick={save} disabled={!canSave}>
-              {isSaving ? "Saving…" : "Save assignment"}
-            </Button>
+            <div className="flex flex-col items-end gap-1">
+              <Button
+                type="button"
+                onClick={attemptSave}
+                disabled={isSaving || isPublicationHistory}
+                aria-disabled={saveBlockedReason !== null || undefined}
+                aria-describedby={saveBlockedReason ? "save-blocked" : undefined}
+              >
+                {isSaving ? "Saving…" : "Save assignment"}
+              </Button>
+              {/* Not a live region: it is the button's own accessible
+                  description, announced with the button, and the drawer
+                  already has one polite region (Validation) that a second
+                  would compete with. */}
+              {saveBlockedReason && (
+                <p id="save-blocked" className="text-xs text-muted-foreground">
+                  {saveBlockedReason}
+                </p>
+              )}
+            </div>
           </div>
         ) : undefined
       }
@@ -807,15 +883,28 @@ export function AssignmentEditorDrawer({
           </section>
 
           <section>
-            <Label htmlFor="override-reason">Reason for this change</Label>
+            {/* "Required" sits beside the label rather than inside it: the
+                label is this field's accessible name, and a name that drifts
+                is a name no test and no screen reader can rely on. The
+                textarea carries `required` for the same fact in markup. */}
+            <div className="flex items-baseline justify-between gap-2">
+              <Label htmlFor="override-reason">Reason for this change</Label>
+              <span className="text-xs font-medium text-muted-foreground">Required</span>
+            </div>
             <Textarea
               id="override-reason"
+              ref={reasonRef}
+              required
+              aria-describedby="override-reason-hint"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="Why is this being changed by hand?"
               disabled={isPublicationHistory}
               className="mt-1.5"
             />
+            <p id="override-reason-hint" className="mt-1 text-xs text-muted-foreground">
+              Every hand-made change is kept on the visit&apos;s history with the reason given.
+            </p>
           </section>
 
           <section aria-live="polite">

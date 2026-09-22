@@ -131,8 +131,11 @@ function FindingCard({
       <ul className="space-y-2" aria-label={`Violations for ${finding.customerName}`}>
         {finding.conflicts.map((conflict) => (
           <li key={`${conflict.code}-${conflict.message}`} className="rounded-lg border bg-muted/35 p-3">
+            {/*
+              * The sentence, not the engine's name for it. `conflict.code`
+              * stays on the wire for support.
+              */}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-xs font-semibold">{conflict.code}</span>
               <span className="text-sm">{conflict.message}</span>
             </div>
             {conflict.remediation && (
@@ -312,7 +315,7 @@ function PlanItem({
           <p className="text-sm font-medium text-destructive">Planner conflicts</p>
           {item.conflicts.map((conflict) => (
             <p key={`${conflict.code}-${conflict.message}`} className="mt-1 text-sm">
-              <span className="font-mono text-xs">{conflict.code}</span> — {conflict.message}
+              {conflict.message}
             </p>
           ))}
         </div>

@@ -20,9 +20,19 @@ import type { Visit, VisitStatus } from "@/lib/api-client";
  * silence on a calendar reads as "fine".
  */
 
-const STATUS_LABEL: Record<VisitStatus, string> = {
-  PENDING: "Pending",
-  UNASSIGNED: "Unassigned",
+/**
+ * One word per status, used by every screen that names one.
+ *
+ * "Unassigned" is not among them any more, and deliberately. It was the API's
+ * word for "the scheduler tried to staff this visit and could not", while the
+ * calendar also said "no crew assigned yet" for the broader fact — every visit
+ * without a crew, PENDING ones nobody has tried to staff included. A manager
+ * filtering by the obvious word lost the untried visits and went home
+ * believing the month was covered. The two facts now have two names.
+ */
+export const VISIT_STATUS_LABEL: Record<VisitStatus, string> = {
+  PENDING: "Awaiting staffing",
+  UNASSIGNED: "Staffing failed",
   SCHEDULED: "Crew assigned",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
@@ -39,7 +49,7 @@ const STATUS_VARIANT: Record<VisitStatus, BadgeVariant> = {
 };
 
 export function VisitStatusBadge({ status }: { status: VisitStatus }) {
-  return <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>;
+  return <Badge variant={STATUS_VARIANT[status]}>{VISIT_STATUS_LABEL[status]}</Badge>;
 }
 
 /**
@@ -48,11 +58,14 @@ export function VisitStatusBadge({ status }: { status: VisitStatus }) {
  * unstaffed visit as covered.
  */
 export function CrewBadge({ visit }: { visit: Visit }) {
-  if (visit.assignmentCount > 0) {
+  // People, not assignment records. `assignmentCount` counts the latter — one
+  // record holds a whole crew — so a two-person job badged "1 crew member"
+  // beside a dispatch row naming both of them.
+  if (visit.assignedCrewCount > 0) {
     return (
       <Badge variant="success">
         <UserCheck aria-hidden="true" />
-        {visit.assignmentCount === 1 ? "1 crew member" : `${visit.assignmentCount} crew`}
+        {visit.assignedCrewCount === 1 ? "1 crew member" : `${visit.assignedCrewCount} crew`}
       </Badge>
     );
   }
@@ -117,4 +130,32 @@ export const PROTECTION_LABEL: Record<string, string> = {
 export function protectionLabel(reason: string | null): string | null {
   if (!reason) return null;
   return PROTECTION_LABEL[reason] ?? reason;
+}
+
+/**
+ * Plain-language reason a visit sits on the date it does.
+ *
+ * The API decides the placement; this only puts it into words. A manager
+ * asking "why is this on the 17th?" needs to know first of all whether the
+ * date is a commitment to the customer or the system's own choice.
+ */
+export const PLACEMENT_LABEL: Record<string, string> = {
+  BOOKED: "Booked with the customer",
+  ANCHORED: "Near this site's usual day",
+  SPREAD: "Moved off a day that was full",
+  EARLIEST: "First allowed day of the period",
+};
+
+/**
+ * A reason the API added after this build shipped still has to read as
+ * English. Showing the raw enum puts SPREAD_BY_REGION in front of a manager as
+ * though it were a sentence; "Placed by the generator" is true of every
+ * placement the API can invent, and says the one thing the label exists to
+ * say — that a person did not choose this date.
+ */
+const UNKNOWN_PLACEMENT_LABEL = "Placed by the generator";
+
+export function placementLabel(placement: string | null): string | null {
+  if (!placement) return null;
+  return PLACEMENT_LABEL[placement] ?? UNKNOWN_PLACEMENT_LABEL;
 }

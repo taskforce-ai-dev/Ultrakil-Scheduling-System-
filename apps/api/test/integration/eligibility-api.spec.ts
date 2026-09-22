@@ -32,7 +32,24 @@ let technicianId: string;
 let vehicleId: string;
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
-const HORIZON = { from: '2026-09-07', to: '2026-09-13' }; // one week, Mon-Sun
+/** Monday of the first week this suite plans on; each call takes the next. */
+const FIRST_WEEK_FROM = '2026-09-07';
+const dayAfter = (date: string, days: number) =>
+  new Date(new Date(`${date}T00:00:00.000Z`).getTime() + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+/**
+ * Every visit this suite makes used to land on the same Wednesday, and it
+ * makes twenty-nine of them. That cost nothing while the load guard would
+ * place work on a branch-day already at its cap; now that it leaves such work
+ * unplanned and says why, that Wednesday genuinely fills up and later
+ * fixtures get no visit at all. A week per call keeps each fixture about the
+ * assignment rule it is testing rather than about how full one day has
+ * become. The two double-booking tests need their pair on a single day, and
+ * ask for it.
+ */
+let weekIndex = 0;
 
 async function login(email: string, password: string): Promise<string> {
   const res = await request(http).post('/api/auth/login').send({ email, password });
@@ -43,7 +60,12 @@ async function login(email: string, password: string): Promise<string> {
 let lastAgreementId = '';
 
 /** An agreement with one Wednesday visit generated, and that visit's id. */
-async function visitForAssignment(): Promise<string> {
+async function visitForAssignment(options: { sameWeek?: boolean } = {}): Promise<string> {
+  if (!options.sameWeek) weekIndex += 1;
+  const horizon = {
+    from: dayAfter(FIRST_WEEK_FROM, weekIndex * 7),
+    to: dayAfter(FIRST_WEEK_FROM, weekIndex * 7 + 6),
+  };
   const agreement = await request(http)
     .post('/api/service-agreements')
     .set(auth(adminToken))
@@ -53,16 +75,23 @@ async function visitForAssignment(): Promise<string> {
       frequencyCount: 1,
       frequencyUnit: 'WEEK',
       allowedDays: [Weekday.WEDNESDAY],
-      startDate: '2026-09-07',
+      startDate: horizon.from,
       durationMinutes: 90,
       crewSize: 2,
     });
   expect(agreement.status).toBe(201);
+  // Agreement creation now automatically plans a scoped onboarding horizon,
+  // which lands on the real clock's "today" — a different window than this
+  // fixture's own week. Clear it so the explicit confirm below is
+  // the only thing that plants a visit, as `listed.body.items[0]` assumes.
+  await prisma.generatedVisit.deleteMany({
+    where: { serviceAgreementId: agreement.body.id },
+  });
 
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
     .set(auth(adminToken))
-    .send({ ...HORIZON, serviceAgreementIds: [agreement.body.id] });
+    .send({ ...horizon, serviceAgreementIds: [agreement.body.id] });
   expect(generated.status).toBe(200);
 
   lastAgreementId = agreement.body.id as string;
@@ -202,6 +231,12 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   // Crew rows restrict deletion of an employee, so the assignments have to go
   // first — otherwise cleanup throws and Jest hangs instead of exiting.
   await prisma.assignment.deleteMany({
@@ -353,6 +388,88 @@ describe('assigning a crew', () => {
       where: { entityId: res.body.id, action: 'assignment.created' },
     });
     expect(event).not.toBeNull();
+  });
+
+  /**
+   * ULK: if a reason is required, it is recorded and it can be read back.
+   *
+   * The drawer makes "Reason for this change" mandatory, then the box reset to
+   * its placeholder on save and the edit never appeared in the visit's
+   * History, which listed only "Generated" and "Last updated". The manager had
+   * no way to tell whether what they wrote had been kept at all.
+   */
+  it("keeps a hand edit, and its reason, in the visit's own history", async () => {
+    const visitId = await visitForAssignment();
+
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), reason: 'Client asked for the senior supervisor.' })
+      .expect(200);
+
+    const first = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+    expect(first.status).toBe(200);
+    expect(first.body.crewChanges).toEqual([
+      expect.objectContaining({
+        action: 'CREW_SET',
+        reason: 'Client asked for the senior supervisor.',
+        crewSize: 2,
+      }),
+    ]);
+    expect(first.body.crewChanges[0].actorLabel).toContain('@');
+    expect(typeof first.body.crewChanges[0].changedAt).toBe('string');
+
+    // A second edit replaces the assignment row, which the first edit's
+    // assignment-scoped audit entry named — so the visit has to hold the
+    // history, or the earlier reason disappears with the row.
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({
+        ...goodCrew(),
+        plannedEndMinute: 12 * 60,
+        reason: 'Site pushed the finish time back.',
+      })
+      .expect(200);
+
+    const second = await request(http)
+      .get(`/api/visits/${visitId}`)
+      .set(auth(adminToken));
+    // Newest first: a manager reads this backwards from what is true now.
+    expect(
+      second.body.crewChanges.map((change: { reason: string | null }) => change.reason),
+    ).toEqual([
+      'Site pushed the finish time back.',
+      'Client asked for the senior supervisor.',
+    ]);
+    expect(second.body.crewChanges[0].action).toBe('CREW_REPLACED');
+  });
+
+  it('records taking a crew off a visit in the same history', async () => {
+    const visitId = await visitForAssignment();
+    await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), reason: 'Staffing it now.' })
+      .expect(200);
+
+    await request(http)
+      .delete(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .expect(204);
+
+    const visit = await request(http).get(`/api/visits/${visitId}`).set(auth(adminToken));
+    expect(visit.body.crewChanges[0]).toMatchObject({ action: 'CREW_REMOVED', crewSize: 0 });
+  });
+
+  it('leaves the history empty for a visit nobody has touched', async () => {
+    const visitId = await visitForAssignment();
+
+    const visit = await request(http).get(`/api/visits/${visitId}`).set(auth(adminToken));
+
+    expect(visit.body.crewChanges).toEqual([]);
   });
 
   it('accepts a vehicle with an authorized driver in the crew', async () => {
@@ -587,7 +704,7 @@ describe('a rejected replacement', () => {
 describe('double booking across two visits', () => {
   it('refuses the same crew on two overlapping visits on one day', async () => {
     const first = await visitForAssignment();
-    const second = await visitForAssignment();
+    const second = await visitForAssignment({ sameWeek: true });
 
     const one = await request(http)
       .put(`/api/visits/${first}/assignment`)
@@ -607,7 +724,7 @@ describe('double booking across two visits', () => {
 
   it('allows the same crew on two visits that do not overlap', async () => {
     const first = await visitForAssignment();
-    const second = await visitForAssignment();
+    const second = await visitForAssignment({ sameWeek: true });
 
     await request(http)
       .put(`/api/visits/${first}/assignment`)

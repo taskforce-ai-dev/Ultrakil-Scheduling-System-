@@ -58,6 +58,13 @@ async function agreementWithVisits(overrides: Record<string, unknown> = {}) {
       ...overrides,
     });
   expect(created.status).toBe(201);
+  // Agreement creation now automatically plans a scoped onboarding horizon,
+  // which lands on the real clock's "today" — a different window than this
+  // fixture's own fixed `HORIZON`. Clear it so the explicit confirm below is
+  // the only thing that plants the four Wednesday visits this suite expects.
+  await prisma.generatedVisit.deleteMany({
+    where: { serviceAgreementId: created.body.id },
+  });
 
   const generated = await request(http)
     .post('/api/visit-generation/confirm')
@@ -143,7 +150,23 @@ beforeAll(async () => {
   siteId = site.body.id;
 });
 
+/**
+ * Each test clears the visits it generated. They all plan on the same handful
+ * of branch-days, and the load guard now leaves work unplanned rather than
+ * placing it on a day already at its cap — so without this, the later tests
+ * in the file lose visits to the earlier ones' leftovers.
+ */
+afterEach(async () => {
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
+});
+
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   await prisma.user.deleteMany({ where: { email: { in: [ADMIN.email, MANAGER.email] } } });
   await prisma.$disconnect();
   await app.close();

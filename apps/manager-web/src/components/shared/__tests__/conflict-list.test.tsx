@@ -22,17 +22,29 @@ const GROUP_EXAMPLES: Array<{ group: string; code: ConflictCode; message: string
 
 describe("ConflictList", () => {
   it.each(GROUP_EXAMPLES)(
-    "presents a $group conflict with its group label, code, and message",
+    "presents a $group conflict with its group label and message",
     ({ group, code, message }) => {
       const conflict = buildConflict({ code, message, remediation: "Fix it." });
       render(<ConflictList conflicts={[conflict]} />);
 
       expect(screen.getByText(CONFLICT_GROUP_LABEL[group as keyof typeof CONFLICT_GROUP_LABEL])).toBeInTheDocument();
-      expect(screen.getByText(code)).toBeInTheDocument();
       expect(screen.getByText(message)).toBeInTheDocument();
       expect(screen.getByText("Fix it.")).toBeInTheDocument();
     }
   );
+
+  /**
+   * The sentences are the product. Printing NO_AUTHORIZED_DRIVER or
+   * DAILY_VISIT_CAP_REACHED above them shouted the engine's internal name at a
+   * dispatcher who already had a plain-English explanation to read, and made a
+   * handled refusal look like a crash. The code stays in the payload for
+   * support; it does not belong on the screen.
+   */
+  it.each(GROUP_EXAMPLES)("never shouts the raw $code at a manager", ({ code, message }) => {
+    render(<ConflictList conflicts={[buildConflict({ code, message })]} />);
+
+    expect(screen.queryByText(code)).not.toBeInTheDocument();
+  });
 
   it("displays every returned conflict, not only the first", () => {
     const conflicts: Conflict[] = [
@@ -47,13 +59,16 @@ describe("ConflictList", () => {
     expect(screen.getByText("Third problem.")).toBeInTheDocument();
   });
 
-  it("does not rely on color alone: every conflict carries a text label and code beside its icon", () => {
-    const conflict = buildConflict({ code: "BRANCH_HAS_NO_PMS_SUPERVISOR" });
+  it("does not rely on color alone: every conflict carries a text label beside its icon", () => {
+    const conflict = buildConflict({
+      code: "BRANCH_HAS_NO_PMS_SUPERVISOR",
+      message: "No PMS supervisor available in this branch.",
+    });
     render(<ConflictList conflicts={[conflict]} />);
 
-    const item = screen.getByText("BRANCH_HAS_NO_PMS_SUPERVISOR").closest("li")!;
+    const item = screen.getByText("No PMS supervisor available in this branch.").closest("li")!;
     // The icon is decorative — hidden from assistive tech — because the
-    // adjacent text badge and stable code are the real signal.
+    // adjacent text badge and the written sentence are the real signal.
     const icon = item.querySelector("svg");
     expect(icon).toHaveAttribute("aria-hidden", "true");
     expect(within(item).getByText("Missing PMS supervisor")).toBeInTheDocument();

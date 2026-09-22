@@ -21,7 +21,7 @@ export class CreateVehicleDto {
   @MaxLength(40)
   code!: string;
 
-  @ApiProperty({ example: 'Van( 04 People) 253-4289' })
+  @ApiProperty({ example: 'Van (4 People) 253-4289' })
   @IsString()
   @MinLength(2)
   @MaxLength(200)

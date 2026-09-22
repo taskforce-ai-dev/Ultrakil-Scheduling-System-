@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Minus, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CalendarX,
+  Minus,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 
 import { AppDrawer } from "@/components/shared/app-drawer";
 import { LoadingState } from "@/components/shared/loading-state";
@@ -14,15 +22,34 @@ import {
   previewVisitGeneration,
   type GenerationImpact,
 } from "@/lib/api-client";
-import { formatLongDate } from "@/lib/calendar";
+import {
+  cadenceName,
+  cadenceNoun,
+  cadenceSpans,
+  type CadenceUnit,
+} from "@/lib/cadence";
+import { formatLongDate, type CalendarView } from "@/lib/calendar";
 import { notify } from "@/lib/notify";
 
 interface GenerationImpactDrawerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The visible calendar range. Generation applies to exactly what is on screen. */
+  /**
+   * The range to generate. Chosen to hold whole periods — whole ISO weeks
+   * either way, and the whole calendar month from a month view. See
+   * `rangeForGeneration`.
+   */
   from: string;
   to: string;
+  /**
+   * The view the manager is standing in.
+   *
+   * The advice for a cycle no whole period of which fits the range is "widen
+   * the range", and from a week view the shortest way to do that is the month
+   * view. Without knowing the view, the drawer told managers already in the
+   * month view to switch to it — advice they had no way to follow.
+   */
+  view: CalendarView;
   branchCode?: "COLOMBO" | "KANDY";
   /** Called after a confirmed run, so the calendar reloads. */
   onConfirmed: () => void;
@@ -67,6 +94,87 @@ const REMOVAL_REASON: Record<string, string> = {
   NO_LONGER_REQUIRED: "the agreement no longer asks for it",
 };
 
+/**
+ * The scheduling pipeline's shortfall reason codes, in words a manager
+ * reads rather than an enum. `shortfall.message` already narrates every
+ * cause for a period in prose (the API joins each one's sentence); these
+ * short tags let a manager scan a long conflict list for the same cause
+ * without re-reading every paragraph. `shortfall.reasons` can hold more
+ * than one of these at once — a period can run out of allowed days and
+ * then land on a day already at capacity — and all of them are shown.
+ */
+const SHORTFALL_REASON_LABEL: Record<string, string> = {
+  NOT_ENOUGH_ALLOWED_DAYS: "Not enough allowed days",
+  SITE_CLOSED_ON_ALLOWED_DAYS: "Site closed on allowed days",
+  WINDOW_TOO_SHORT_FOR_VISIT: "Service window too short",
+  BOOKED_BELOW_FREQUENCY: "Fewer bookings than the frequency asks for",
+  PERIOD_HELD_BY_A_CANCELLED_VISIT: "Period held by a cancelled visit",
+  BRANCH_DAY_AT_CAPACITY: "Branch day at capacity",
+};
+
+/**
+ * A booked date the site's own hours contradict, headlined in a few words.
+ *
+ * The visit is still planned — the booking is a commitment to the customer —
+ * so this is not a failure to fix before generating. It is the one thing a
+ * manager must know before a crew is sent: the door may be locked, or the
+ * window may be an hour rather than a day.
+ */
+const BOOKING_WARNING_TITLE: Record<string, string> = {
+  SITE_CLOSED_ON_BOOKED_DAY: "No hours recorded for that weekday",
+  WINDOW_TOO_SHORT_FOR_BOOKED_VISIT: "Recorded hours are shorter than the visit",
+  AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS:
+    "The agreement's window and the site's hours do not overlap",
+  BOOKED_DATE_CANCELLED: "The visit on that booked date is cancelled",
+};
+
+/**
+ * One line per cadence and reason, not one per agreement: the sentence is the
+ * same, and the two reasons ask for different things.
+ *
+ * RANGE_HOLDS_NO_WHOLE_PERIOD is the ordinary hand-off — a quarterly agreement
+ * asked about from a week view, which the month view will plan. A range that
+ * *clips* a period is not a hand-off at all: nothing beginning later picks it
+ * up and nothing already stands in it, so telling a manager to switch views
+ * would be advice that does not work. Neither is "generate over a range that
+ * reaches its last day": in the month view a manager picks a month, not a
+ * range, so the advice has to be given in the months they can actually
+ * choose.
+ */
+function skippedByCadence(
+  skipped: GenerationImpact["skippedPeriods"]
+): { key: string; text: string }[] {
+  const counts = new Map<string, number>();
+  for (const entry of skipped) {
+    const key = `${entry.reason}|${entry.frequencyUnit}|${entry.frequencyInterval}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => {
+      const [reason, unit, interval] = key.split("|");
+      const cadenceUnit = unit as CadenceUnit;
+      const name = cadenceName(cadenceUnit, Number(interval));
+      const span = cadenceNoun(cadenceUnit, Number(interval));
+      const counted = `${count} ${
+        count === 1 ? span : cadenceSpans(cadenceUnit, Number(interval))
+      }`;
+      return {
+        key,
+        text:
+          reason === "RANGE_CLIPS_A_PERIOD"
+            ? `${name} agreements: ${counted} ${count === 1 ? "runs" : "run"} past an edge of this range with no visit in ${count === 1 ? "it" : "them"}, and no neighbouring month's grid holds ${count === 1 ? "it" : "them"} whole either. Generate from the month ${count === 1 ? "it starts" : "they start"} in, or use a wider range, to plan ${count === 1 ? "it" : "them"}.`
+            : `${name} agreements need a range covering a whole ${span}; ${count} skipped.`,
+      };
+    });
+}
+
+/** True when at least one entry is a period this range cut in half. */
+function anyClipped(skipped: GenerationImpact["skippedPeriods"]): boolean {
+  return skipped.some((entry) => entry.reason === "RANGE_CLIPS_A_PERIOD");
+}
+
 /** At most eight rows, then a count. A month on real data runs to hundreds. */
 function capped<T>(items: T[]): { shown: T[]; hidden: number } {
   return { shown: items.slice(0, 8), hidden: Math.max(0, items.length - 8) };
@@ -85,6 +193,7 @@ export function GenerationImpactDrawer({
   onOpenChange,
   from,
   to,
+  view,
   branchCode,
   onConfirmed,
 }: GenerationImpactDrawerProps) {
@@ -96,22 +205,34 @@ export function GenerationImpactDrawer({
   // double-click) both close over the same pre-update `isConfirming`, so the
   // state check alone can't stop the second one.
   const isConfirmingRef = React.useRef(false);
+  // Confirm always applies the current from/to/branchCode props, never the
+  // displayed impact itself — so the impact shown has to be fenced to match
+  // those same props, or a manager could see one range's preview and confirm
+  // a different one without either of them being wrong on its own. Same
+  // pattern as CalendarBoard's request fence.
+  const requestGeneration = React.useRef(0);
 
   const loadPreview = React.useCallback(() => {
     if (!open) return;
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     setImpact(null);
     previewVisitGeneration({ from, to, branchCode })
-      .then(setImpact)
+      .then((result) => {
+        if (generation === requestGeneration.current) setImpact(result);
+      })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught.message
             : "Could not work out what generation would change."
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [open, from, to, branchCode]);
 
   // Re-preview whenever the drawer opens or the visible range moves. The
@@ -154,7 +275,7 @@ export function GenerationImpactDrawer({
     <AppDrawer
       open={open}
       onOpenChange={onOpenChange}
-      title="Generate visits"
+      title="Generate Schedule"
       description={`${formatLongDate(from)} to ${formatLongDate(to)}`}
       // This body is a read-only impact summary — no form fields, nothing
       // for the Sheet's open-time autofocus to prefer instead.
@@ -241,16 +362,36 @@ export function GenerationImpactDrawer({
             title="Protected — will not be touched"
             count={impact.protectedVisits.length}
           >
-            {capped(impact.protectedVisits).shown.map((visit) => (
-              <li key={visit.visitId}>
-                <span className="font-medium">{visit.visitDate}</span> — {visit.customerName}
-                <span className="text-muted-foreground">
-                  {" "}
-                  ({protectionLabel(visit.protection)}; generation would have{" "}
-                  {visit.wouldHave === "REMOVE" ? "removed" : "updated"} it)
-                </span>
-              </li>
-            ))}
+            {capped(impact.protectedVisits).shown.map((visit) => {
+              // A pinned visit satisfies its period, so it is never an
+              // addition and never a removal — which is exactly why the day
+              // the agreement now points at has to be said out loud. Left
+              // unsaid, a visit stranded on a weekday the agreement dropped
+              // reads as "nothing to do" on every run for ever.
+              const moved = visit.changes?.find((change) => change.field === "visitDate");
+              const rest = (visit.changes ?? []).filter(
+                (change) => change.field !== "visitDate"
+              );
+              return (
+                <li key={visit.visitId}>
+                  <span className="font-medium">{visit.visitDate}</span> — {visit.customerName}
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({protectionLabel(visit.protection)}; generation would have{" "}
+                    {visit.wouldHave === "REMOVE"
+                      ? "removed it"
+                      : moved
+                        ? `moved it to ${moved.to}`
+                        : "updated it"}
+                    {rest.length > 0 &&
+                      `: ${rest
+                        .map((change) => `${change.field} ${change.from} → ${change.to}`)
+                        .join(", ")}`}
+                    )
+                  </span>
+                </li>
+              );
+            })}
             {capped(impact.protectedVisits).hidden > 0 && (
               <li className="text-muted-foreground">
                 and {capped(impact.protectedVisits).hidden} more
@@ -274,11 +415,99 @@ export function GenerationImpactDrawer({
                   {shortfall.periodStart} to {shortfall.periodEnd}: asked for{" "}
                   {shortfall.requested}, can place {shortfall.scheduled}. {shortfall.message}
                 </span>
+                {shortfall.reasons.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {shortfall.reasons.map((reason) => (
+                      <Badge key={reason} variant="outline">
+                        {SHORTFALL_REASON_LABEL[reason] ?? reason}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
             {capped(impact.shortfalls).hidden > 0 && (
               <li className="text-muted-foreground">
                 and {capped(impact.shortfalls).hidden} more
+              </li>
+            )}
+          </Section>
+
+          <Section
+            icon={AlertTriangle}
+            title="Days over the branch's limit"
+            count={impact.loadWarnings.length}
+            tone="danger"
+          >
+            {capped(impact.loadWarnings).shown.map((warning, index) => (
+              <li key={`${warning.branchCode}-${warning.date}-${index}`}>
+                <span className="font-medium">
+                  {warning.date}, {warning.branchCode}: {warning.plannedCount} visits,{" "}
+                  {warning.plannedMinutes} crew-min — limit {warning.cap} crew-min
+                </span>
+                <br />
+                <span className="text-muted-foreground">{warning.message}</span>
+              </li>
+            ))}
+            {capped(impact.loadWarnings).hidden > 0 && (
+              <li className="text-muted-foreground">
+                and {capped(impact.loadWarnings).hidden} more
+              </li>
+            )}
+          </Section>
+
+          <Section
+            icon={CalendarX}
+            title="Booked on a day the site's hours do not allow"
+            count={impact.bookingWarnings.length}
+            tone="danger"
+          >
+            {capped(impact.bookingWarnings).shown.map((warning, index) => (
+              <li key={`${warning.serviceAgreementId}-${warning.date}-${index}`}>
+                <span className="font-medium">
+                  {warning.date} — {BOOKING_WARNING_TITLE[warning.reason] ?? "Hours do not fit"}
+                </span>
+                <br />
+                <span className="text-muted-foreground">{warning.message}</span>
+              </li>
+            ))}
+            {capped(impact.bookingWarnings).hidden > 0 && (
+              <li className="text-muted-foreground">
+                and {capped(impact.bookingWarnings).hidden} more
+              </li>
+            )}
+          </Section>
+
+          <Section
+            icon={CalendarClock}
+            title="Not planned by this range"
+            count={impact.skippedPeriods.length}
+          >
+            {skippedByCadence(impact.skippedPeriods).map((line) => (
+              <li key={line.key}>{line.text}</li>
+            ))}
+            {impact.skippedPeriods.length > 0 && !anyClipped(impact.skippedPeriods) && (
+              <li className="text-muted-foreground">
+                {/*
+                  * Said as what it is: the agreements are fine and the range is
+                  * too short to hold a whole cycle. "Nothing is wrong with
+                  * these agreements", full stop, directly under a heading
+                  * saying they were not planned, reads as a shrug.
+                  */}
+                These agreements are not in trouble — this range is simply too short to hold
+                a whole cycle of them.{" "}
+                {view === "week"
+                  ? "Switch to the month view, or generate over a longer range, and the run that covers a whole cycle will plan them."
+                  : "Generate over a longer range — one that covers a whole cycle — and they will be planned."}
+              </li>
+            )}
+            {anyClipped(impact.skippedPeriods) && (
+              <li className="text-muted-foreground">
+                Nothing is wrong with these agreements either — but a cycle that runs past
+                an edge of this range, with nothing standing in it, is nobody&apos;s: the
+                month before and the month after both cut it short too. Generate from the
+                month it starts in, or use a wider range, or it will not be planned at
+                all.
               </li>
             )}
           </Section>

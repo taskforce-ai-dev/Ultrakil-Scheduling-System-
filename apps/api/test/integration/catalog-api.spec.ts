@@ -150,6 +150,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // This suite's own generated visits, cleared so the branch-days it used are
+  // free for whatever runs after it. Generation now leaves work unplanned
+  // rather than placing it on a day already at its cap, so a shared calendar
+  // that every suite adds to and nobody clears eventually has no room left in
+  // it for anybody.
+  await prisma.generatedVisit.deleteMany({ where: { serviceAgreement: { jobTypeId } } });
   await prisma.user.deleteMany({
     where: { email: { in: [ADMIN.email, MANAGER.email] } },
   });

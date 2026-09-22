@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Slider } from "@/components/ui/slider";
 import {
   Select,
   SelectContent,
@@ -38,16 +39,16 @@ import {
   createServiceAgreement,
   fetchCustomers,
   fetchJobTypes,
-  fetchSchedulePreview,
   fetchServiceAgreements,
   fetchSkills,
   type Customer,
   type JobType,
   type ServiceAgreement,
   type ServiceSite,
-  type SchedulePreview,
   type SkillListItem,
 } from "@/lib/api-client";
+import { describeFrequency } from "@/lib/cadence";
+import { formatDurationMinutes, formatLongDate } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
 import { notify } from "@/lib/notify";
 
@@ -56,6 +57,7 @@ interface ServiceAgreementFormValues {
   serviceSiteId: string;
   jobTypeId: string;
   frequencyCount: number;
+  frequencyInterval: number;
   frequencyUnit: "WEEK" | "MONTH";
   crewSize: number;
   durationMinutes: number;
@@ -88,6 +90,21 @@ const WEEKDAY_SHORT: Record<Weekday, string> = {
   SUNDAY: "Sun",
 };
 
+type OnboardingPlan = NonNullable<ServiceAgreement["onboardingPlan"]>;
+
+/**
+ * The automatic onboarding plan's own outcome, in words rather than an enum.
+ * `AgreementsService.create()` already scheduled the agreement for its
+ * rolling twelve-month horizon by the time the create response comes back —
+ * this heading says what that run actually did, not what a manager might do
+ * next.
+ */
+const ONBOARDING_STATUS_LABEL: Record<OnboardingPlan["status"], string> = {
+  PLANNED: "Scheduled",
+  PLANNED_WITH_SHORTFALLS: "Scheduled, with shortfalls",
+  FAILED: "Scheduling failed",
+};
+
 const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
   ACTIVE: "Active",
   PAUSED: "Paused",
@@ -110,6 +127,22 @@ const AGREEMENT_STATUS_FILTER_LABEL: Record<AgreementStatusFilter, string> = {
   CURRENT: "Active & paused",
   ARCHIVED: "Archived",
 };
+
+/**
+ * An agreement that has generated nothing is invisible everywhere else.
+ *
+ * Two testers found the same customer independently: an active two-monthly
+ * agreement with no visits in September, October, November or December. It
+ * appears on no calendar, in no queue and in no schedule run — there is
+ * nothing of it to appear — so the only screen that can raise it is this one.
+ * The row says so, and this filter gathers them.
+ */
+type VisitsFilter = "ANY" | "NONE";
+const VISITS_FILTER_LABEL: Record<VisitsFilter, string> = {
+  ANY: "Any",
+  NONE: "None generated",
+};
+const NO_VISITS_LABEL = "No visits generated";
 
 /**
  * An agreement's *own* service window, or a plain statement that it has none.
@@ -141,6 +174,7 @@ const defaultValues: ServiceAgreementFormValues = {
   serviceSiteId: "",
   jobTypeId: "",
   frequencyCount: 1,
+  frequencyInterval: 1,
   frequencyUnit: "WEEK",
   crewSize: 2,
   durationMinutes: 60,
@@ -161,13 +195,13 @@ const defaultValues: ServiceAgreementFormValues = {
  * enforced by the API, which rejects a genuinely-impossible agreement outright
  * (400/422 with a stable code) rather than the UI second-guessing it.
  *
- * The one API-shape consequence worth calling out: `GET .../schedule-preview`
- * only works on an *existing* agreement — there is no dry-run endpoint. So
- * "preview before saving" becomes "save, then immediately show the real
- * preview before the drawer closes" rather than a preview on unsaved draft
- * values. Flagged to Chanya; a dry-run preview endpoint would be a nice
- * follow-up but isn't required for this to be correct and honest about what
- * it shows.
+ * Saving an agreement is the whole scheduling operation: `POST
+ * /service-agreements` already runs the agreement's automatic onboarding —
+ * a scoped, rolling twelve-month plan — before the response comes back, and
+ * returns its outcome as `onboardingPlan`. There is no separate preview or
+ * confirm step here to run afterwards, and no second "Schedule now" action
+ * that could trigger a duplicate planning run: the create response is read
+ * straight into the drawer.
  */
 export default function ServiceAgreementsPage() {
   const [agreements, setAgreements] = React.useState<ServiceAgreement[]>([]);
@@ -177,6 +211,7 @@ export default function ServiceAgreementsPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<AgreementStatusFilter>("CURRENT");
+  const [visitsFilter, setVisitsFilter] = React.useState<VisitsFilter>("ANY");
   // Switching the filter fires a second list request while the first may still
   // be in flight; without this an older response can land last and repopulate
   // the table with the rows the manager just filtered away.
@@ -193,9 +228,6 @@ export default function ServiceAgreementsPage() {
   const busyAgreementIdRef = React.useRef<string | null>(null);
 
   const [createdAgreement, setCreatedAgreement] = React.useState<ServiceAgreement | null>(null);
-  const [preview, setPreview] = React.useState<SchedulePreview | null>(null);
-  const [previewError, setPreviewError] = React.useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = React.useState(false);
 
   const {
     register,
@@ -212,6 +244,27 @@ export default function ServiceAgreementsPage() {
   const jobTypeId = useWatch({ control, name: "jobTypeId" });
   const allowedWeekdays = useWatch({ control, name: "allowedWeekdays" }) ?? [];
   const overrideWindow = useWatch({ control, name: "overrideWindow" });
+  const frequencyCount = useWatch({ control, name: "frequencyCount" });
+  const frequencyInterval = useWatch({ control, name: "frequencyInterval" });
+  const frequencyUnit = useWatch({ control, name: "frequencyUnit" });
+  const durationMinutes = useWatch({ control, name: "durationMinutes" });
+  // The slider's own displayed position only — never what's actually saved.
+  // A manager who types 47 keeps exactly 47 in the field and on submission;
+  // this just gives the thumb a valid, in-range spot to sit at meanwhile.
+  // Floored at 15, not 1: the slider's own min is 15 (see below) so its grid
+  // lands on real quarter-hours — 15, 30, 45… — instead of 1, 16, 31…
+  const sliderDurationMinutes = Number.isFinite(durationMinutes)
+    ? Math.min(Math.max(durationMinutes, 15), 1440)
+    : 15;
+  // A half-typed number field reads back NaN; say nothing rather than
+  // "NaN times a week".
+  const cadencePreview =
+    Number.isFinite(frequencyCount) &&
+    Number.isFinite(frequencyInterval) &&
+    frequencyCount >= 1 &&
+    frequencyInterval >= 1
+      ? describeFrequency(frequencyCount, frequencyUnit, frequencyInterval).toLowerCase()
+      : "not set yet";
 
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
   // ULK-O09: an inactive site must never be offered when creating an
@@ -236,6 +289,7 @@ export default function ServiceAgreementsPage() {
       fetchServiceAgreements({
         pageSize: 200,
         ...(statusFilter === "ARCHIVED" ? { status: "ARCHIVED" as const } : {}),
+        ...(visitsFilter === "NONE" ? { withoutVisits: true } : {}),
       }),
       fetchCustomers({ pageSize: 200 }),
       fetchJobTypes(),
@@ -259,7 +313,7 @@ export default function ServiceAgreementsPage() {
       .finally(() => {
         if (generation === requestGeneration.current) setIsLoading(false);
       });
-  }, [statusFilter]);
+  }, [statusFilter, visitsFilter]);
 
   // A handler that awaited a request resumes holding the `load` of the render
   // it started in. If the Status filter changed meanwhile, that stale `load`
@@ -312,8 +366,6 @@ export default function ServiceAgreementsPage() {
 
   function openDrawer() {
     setCreatedAgreement(null);
-    setPreview(null);
-    setPreviewError(null);
     setSubmitError(null);
     const firstCustomer = customers[0];
     const firstActiveSite = firstCustomer?.sites.find((site) => site.isActive);
@@ -330,11 +382,16 @@ export default function ServiceAgreementsPage() {
     isSubmittingRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
+
+    // Creating the agreement is the whole operation: the response already
+    // carries `onboardingPlan`, the outcome of the automatic scoped plan the
+    // API ran before answering. Nothing further to request or confirm.
     try {
       const agreement = await createServiceAgreement({
         serviceSiteId: values.serviceSiteId,
         jobTypeId: values.jobTypeId,
         frequencyCount: Number(values.frequencyCount),
+        frequencyInterval: Number(values.frequencyInterval),
         frequencyUnit: values.frequencyUnit,
         crewSize: Number(values.crewSize),
         durationMinutes: Number(values.durationMinutes),
@@ -351,21 +408,8 @@ export default function ServiceAgreementsPage() {
         requiredSkillCodes: values.requiredSkillCodes,
         notes: values.notes || null,
       });
-
       setCreatedAgreement(agreement);
       notify.success(`Service agreement for ${agreement.customerName} created.`);
-
-      setIsPreviewLoading(true);
-      try {
-        const result = await fetchSchedulePreview(agreement.id);
-        setPreview(result);
-      } catch (caught) {
-        setPreviewError(
-          caught instanceof ApiError ? caught.message : "Could not load the schedule preview."
-        );
-      } finally {
-        setIsPreviewLoading(false);
-      }
     } catch (caught) {
       setSubmitError(caught instanceof ApiError ? caught.message : "Something went wrong.");
     } finally {
@@ -430,6 +474,23 @@ export default function ServiceAgreementsPage() {
             </SelectContent>
           </Select>
         </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="agreements-visits">Visits generated</Label>
+          <Select
+            items={VISITS_FILTER_LABEL}
+            value={visitsFilter}
+            onValueChange={(value) => setVisitsFilter((value ?? "ANY") as VisitsFilter)}
+          >
+            <SelectTrigger id="agreements-visits" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ANY">{VISITS_FILTER_LABEL.ANY}</SelectItem>
+              <SelectItem value="NONE">{VISITS_FILTER_LABEL.NONE}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {isLoading ? (
@@ -480,9 +541,11 @@ export default function ServiceAgreementsPage() {
                 <TableCell className="font-medium">{agreement.customerName}</TableCell>
                 <TableCell>{agreement.siteName}</TableCell>
                 <TableCell>{agreement.jobTypeName}</TableCell>
-                <TableCell>
-                  {agreement.frequencyCount}x / {agreement.frequencyUnit.toLowerCase()}
-                </TableCell>
+                {/* The API's own words for this cadence, interval and all.
+                    Composing them here from frequencyCount and frequencyUnit
+                    dropped frequencyInterval, and every fortnightly agreement
+                    read as weekly. */}
+                <TableCell>{agreement.frequencyLabel}</TableCell>
                 <TableCell>
                   {agreement.crewSize} {agreement.crewSize === 1 ? "person" : "people"}
                 </TableCell>
@@ -503,9 +566,20 @@ export default function ServiceAgreementsPage() {
                   {agreement.preferredDays.map((day) => WEEKDAY_SHORT[day]).join(", ") || "—"}
                 </TableCell>
                 <TableCell>
-                  <Badge variant={agreement.status === "ACTIVE" ? "success" : "outline"}>
-                    {STATUS_LABEL[agreement.status]}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge variant={agreement.status === "ACTIVE" ? "success" : "outline"}>
+                      {STATUS_LABEL[agreement.status]}
+                    </Badge>
+                    {/* In words, never colour alone — and inside the Status
+                        cell rather than an eleventh column, which this table
+                        has no room for at tablet width. */}
+                    {agreement.status !== "ARCHIVED" && agreement.generatedVisitCount === 0 && (
+                      <Badge variant="destructive">
+                        <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                        {NO_VISITS_LABEL}
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   {agreement.status !== "ARCHIVED" && (
@@ -535,10 +609,10 @@ export default function ServiceAgreementsPage() {
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? "Here's what the system will schedule for it."
+            ? "Automatic onboarding has already scheduled it — here's what that run did."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
-        // The created-agreement view is a read-only schedule preview (no
+        // The created-agreement view is a read-only onboarding summary (no
         // form fields) — same scrollable-region-focusable case as the
         // visit-generation drawer. The form view keeps the default so the
         // Sheet's autofocus still lands on the first real field.
@@ -566,72 +640,78 @@ export default function ServiceAgreementsPage() {
               <p className="font-medium">{createdAgreement.customerName}</p>
               <p className="text-muted-foreground">
                 {createdAgreement.siteName} · {createdAgreement.jobTypeName} ·{" "}
-                {createdAgreement.frequencyCount}x / {createdAgreement.frequencyUnit.toLowerCase()}
+                {createdAgreement.frequencyLabel}
               </p>
             </div>
 
-            <div className="space-y-3 rounded-xl border p-4">
-              <h3 className="flex items-center gap-1.5 text-sm font-medium">
-                <CalendarClock className="h-4 w-4" aria-hidden="true" />
-                Schedule preview
-              </h3>
+            {createdAgreement.onboardingPlan && (
+              <div className="space-y-3 rounded-xl border p-4">
+                <h3 className="flex items-center gap-1.5 text-sm font-medium">
+                  <CalendarClock className="h-4 w-4" aria-hidden="true" />
+                  {ONBOARDING_STATUS_LABEL[createdAgreement.onboardingPlan.status]}
+                </h3>
 
-              {isPreviewLoading ? (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Calculating preview…
+                {/*
+                  Stated unconditionally, not only when planning succeeded:
+                  the guarantee holds whether this run planned everything,
+                  part of it, or nothing at all, and a manager reading a
+                  shortfall or a failure below still needs to know nobody
+                  else's calendar moved.
+                */}
+                <p className="text-xs text-muted-foreground">
+                  This only plans {createdAgreement.customerName}&apos;s own visits — every
+                  other customer&apos;s existing schedule is untouched.
                 </p>
-              ) : previewError ? (
-                <p role="alert" className="text-sm text-destructive">
-                  {previewError}
-                </p>
-              ) : preview ? (
-                <>
-                  {preview.shortfalls.length > 0 && (
-                    <div className="space-y-2">
-                      {preview.shortfalls.map((shortfall, index) => (
-                        <p
-                          key={index}
-                          className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300"
-                        >
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                          {shortfall.message}
-                        </p>
-                      ))}
-                    </div>
-                  )}
 
-                  {preview.visits.length > 0 ? (
-                    <ul className="space-y-1 text-sm">
-                      {preview.visits.map((visit) => (
-                        <li key={visit.date} className="flex items-center justify-between">
-                          <span>
-                            {visit.date} ({WEEKDAY_SHORT[visit.weekday]})
-                            {visit.isPreferredDay && (
-                              <Badge variant="success" className="ml-2">
-                                Preferred
-                              </Badge>
-                            )}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {formatMinutes(visit.windowStartMinute)}–{formatMinutes(visit.windowEndMinute)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      No visits fall in the preview window.
+                {createdAgreement.onboardingPlan.status === "FAILED" ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {createdAgreement.onboardingPlan.message}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm">
+                      {createdAgreement.onboardingPlan.visitsPlanned}{" "}
+                      {createdAgreement.onboardingPlan.visitsPlanned === 1 ? "visit" : "visits"}{" "}
+                      scheduled between{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.from)} and{" "}
+                      {formatLongDate(createdAgreement.onboardingPlan.to)}.
                     </p>
-                  )}
-                </>
-              ) : null}
-            </div>
+                    {createdAgreement.onboardingPlan.status === "PLANNED_WITH_SHORTFALLS" && (
+                      <p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span>
+                          {createdAgreement.onboardingPlan.shortfallPeriods}{" "}
+                          {createdAgreement.onboardingPlan.shortfallPeriods === 1
+                            ? "period"
+                            : "periods"}{" "}
+                          could not hold everything requested.
+                          {createdAgreement.onboardingPlan.overCapacityDays > 0 &&
+                            ` ${createdAgreement.onboardingPlan.overCapacityDays} ${
+                              createdAgreement.onboardingPlan.overCapacityDays === 1
+                                ? "day is"
+                                : "days are"
+                            } already carrying more than the branch plans for.`}
+                        </span>
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <form
             id="agreement-form"
             onSubmit={(event) => handleSubmit(onSubmit)(event)}
             className="space-y-6 py-4"
+            // react-hook-form owns every validation message here, shown
+            // through FormField's own error text. Without this, the
+            // browser's native constraint validation also runs — and the
+            // duration slider's hidden range input (min 1, step 15) reports
+            // a step mismatch for any value not on that exact grid, which
+            // silently blocks the whole form's submission before RHF or its
+            // onSubmit handler ever runs, for every field, not only duration.
+            noValidate
           >
             {submitError && (
               <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -717,7 +797,12 @@ export default function ServiceAgreementsPage() {
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* Three controls, not two. A cadence is visits-per-cycle *and*
+                how long the cycle is: without the interval there was no way
+                to write down a fortnightly or a quarterly agreement at all,
+                and every one of them had to be created as weekly or monthly
+                and corrected in the database. */}
+            <div className="grid grid-cols-3 gap-4">
               <FormField id="frequencyCount" label="Visits" error={errors.frequencyCount?.message}>
                 <Input
                   id="frequencyCount"
@@ -730,7 +815,26 @@ export default function ServiceAgreementsPage() {
                   })}
                 />
               </FormField>
-              <FormField id="frequencyUnit" label="Per">
+              <FormField
+                id="frequencyInterval"
+                label="Every"
+                error={errors.frequencyInterval?.message}
+              >
+                <Input
+                  id="frequencyInterval"
+                  type="number"
+                  min={1}
+                  max={12}
+                  {...register("frequencyInterval", {
+                    required: "Required",
+                    valueAsNumber: true,
+                    min: { value: 1, message: "Must be at least 1" },
+                    // The API rejects anything past 12 (CreateServiceAgreementDto).
+                    max: { value: 12, message: "12 is the longest cycle" },
+                  })}
+                />
+              </FormField>
+              <FormField id="frequencyUnit" label="Week or month">
                 <Controller
                   control={control}
                   name="frequencyUnit"
@@ -748,6 +852,12 @@ export default function ServiceAgreementsPage() {
                 />
               </FormField>
             </div>
+            {/* Named back before it is saved. Three numeric controls do not
+                add up to a cadence in anyone's head, and "1 / 2 / Week" is
+                exactly the shape a manager needs told back as "Fortnightly". */}
+            <p className="text-xs text-muted-foreground">
+              This agreement is <span className="font-medium">{cadencePreview}</span>.
+            </p>
 
             <div className="grid grid-cols-2 gap-4">
               <FormField id="crewSize" label="Crew size" error={errors.crewSize?.message}>
@@ -763,16 +873,50 @@ export default function ServiceAgreementsPage() {
                 />
               </FormField>
               <FormField id="durationMinutes" label="Duration (minutes)" error={errors.durationMinutes?.message}>
-                <Input
-                  id="durationMinutes"
-                  type="number"
-                  min={1}
-                  {...register("durationMinutes", {
-                    required: "Required",
-                    valueAsNumber: true,
-                    min: { value: 1, message: "Must be at least 1" },
-                  })}
-                />
+                <div className="space-y-2">
+                  <Input
+                    id="durationMinutes"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    {...register("durationMinutes", {
+                      required: "Required",
+                      valueAsNumber: true,
+                      min: { value: 1, message: "Must be at least 1 minute" },
+                      // The API rejects anything past 1440 (a full day) —
+                      // CreateServiceAgreementDto's own durationMinutes bound.
+                      max: {
+                        value: 1440,
+                        message: "1440 minutes (24 hours) is the longest a single visit can run",
+                      },
+                    })}
+                  />
+                  <Slider
+                    aria-label="Job duration"
+                    // A quarter-hour grid has to start on a quarter-hour: with
+                    // min={1} the grid was 1, 16, 31… — a step off true 15s,
+                    // so Arrow Right from the 60-minute default landed on 76,
+                    // not 75. min=15 makes every step a real 15/30/45/60…
+                    // The field itself still keeps the API's real 1-1440
+                    // bound — this only changes where the slider's own steps
+                    // fall.
+                    min={15}
+                    max={1440}
+                    step={15}
+                    value={sliderDurationMinutes}
+                    onValueChange={(value) =>
+                      setValue("durationMinutes", value as number, {
+                        shouldValidate: true,
+                        shouldDirty: true,
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {Number.isFinite(durationMinutes)
+                      ? formatDurationMinutes(durationMinutes)
+                      : "Enter a duration"}
+                  </p>
+                </div>
               </FormField>
             </div>
 
@@ -921,6 +1065,19 @@ export default function ServiceAgreementsPage() {
                 <Input id="endDate" type="date" {...register("endDate")} />
               </FormField>
             </div>
+
+            {/*
+              The start date is not only when the work begins: `periodIndexOf`
+              counts a fortnightly agreement's fortnights and a quarterly one's
+              quarters from it, so moving it re-phases every future period —
+              and a visit already generated under the old phasing sits in a
+              period the next run no longer plans.
+            */}
+            <p className="text-xs text-muted-foreground" id="startDate-cycle-hint">
+              The start date also sets the cycle: a fortnightly or quarterly agreement counts
+              its fortnights and quarters from this day, so changing it re-phases every future
+              period and the next generation run may move visits.
+            </p>
 
             <FormField id="notes" label="Notes (optional)">
               <Textarea id="notes" {...register("notes")} />

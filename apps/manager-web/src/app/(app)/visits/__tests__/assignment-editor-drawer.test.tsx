@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -358,14 +358,147 @@ describe("AssignmentEditorDrawer", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
-  it("will not save without a reason", async () => {
+  /**
+   * The reason box reset to its placeholder on save and the edit never
+   * appeared in the visit's History, so a manager had no way to tell whether
+   * what they were made to write had been kept. It is kept — the drawer
+   * clears the box deliberately, because the next change needs its own reason,
+   * and the one just given is on the visit's History.
+   */
+  it("clears the reason after it has been saved, so the next change needs its own", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    vi.mocked(assignCrew).mockResolvedValue(buildAssignment({}));
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Customer requested this crew");
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reason for this change")).toHaveValue("")
+    );
+  });
+
+  /**
+   * The coordinator's report: the validation panel said the crew was fine,
+   * Save was greyed out, nothing was marked required and nothing explained
+   * why — "I would have concluded the system was broken and phoned someone."
+   * The reason box was what Save was waiting for.
+   */
+  it("will not save without a reason, and says that is what it is waiting for", async () => {
     vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
     const { user } = await openDrawer();
 
     await addCrewMember(user, "A Perera");
     await screen.findByText("This crew is eligible to take the visit.");
 
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    const saveButton = screen.getByRole("button", { name: "Save assignment" });
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    expect(
+      screen.getByText("Add a reason for this change before saving.")
+    ).toBeInTheDocument();
+    // Named by the button itself, so the reason is announced with it rather
+    // than only sitting somewhere on the page.
+    expect(saveButton).toHaveAccessibleDescription(
+      "Add a reason for this change before saving."
+    );
+
+    await user.click(saveButton);
+    expect(assignCrew).not.toHaveBeenCalled();
+    // And it puts the manager in the box it is waiting for.
+    expect(screen.getByLabelText("Reason for this change")).toHaveFocus();
+  });
+
+  /**
+   * The drawer opened on "Arrives 08:00 / Leaves by 17:00" — the site's whole
+   * working day — for a 60-minute job. Save it unchanged and the crew is
+   * blocked out for nine hours, and nothing on screen said the numbers were a
+   * fallback rather than the plan.
+   */
+  it("defaults to the visit's own planned window, not the site's whole day", async () => {
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        windowStartMinute: 8 * 60,
+        windowEndMinute: 17 * 60,
+        durationMinutes: 60,
+      })
+    );
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(null);
+    await openDrawer();
+
+    expect(screen.getByLabelText("Arrives")).toHaveValue("08:00");
+    expect(screen.getByLabelText("Leaves by")).toHaveValue("09:00");
+  });
+
+  it("never defaults past the window the visit has to stay inside", async () => {
+    // A window shorter than the job is already flagged elsewhere; the default
+    // must not quietly propose a crew leaving after the site shuts.
+    vi.mocked(fetchVisit).mockResolvedValue(
+      buildVisitDetail({
+        id: "visit-1",
+        windowStartMinute: 9 * 60,
+        windowEndMinute: 10 * 60,
+        durationMinutes: 180,
+      })
+    );
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(null);
+    await openDrawer();
+
+    expect(screen.getByLabelText("Leaves by")).toHaveValue("10:00");
+  });
+
+  it("marks the reason box required where it is asked for", async () => {
+    const { user } = await openDrawer();
+    await addCrewMember(user, "A Perera");
+
+    const box = screen.getByLabelText("Reason for this change");
+    expect(box).toBeRequired();
+    expect(screen.getByText("Required")).toBeInTheDocument();
+  });
+
+  it("says which step is missing when there is no crew yet", async () => {
+    await openDrawer();
+
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(
+      "Add at least one crew member before saving."
+    );
+  });
+
+  it("names the failed validation as the blocker, not silence", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(
+      buildEligibilityResult({
+        isEligible: false,
+        conflicts: [buildConflict({ code: "BRANCH_MISMATCH", message: "Wrong branch." })],
+      })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("Wrong branch.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Because");
+
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(
+      "This crew cannot take the visit yet — see Validation below."
+    );
+  });
+
+  it("never leaves Save dead and silent", async () => {
+    // Whatever is missing, the button that cannot be pressed says why.
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    const { user } = await openDrawer();
+
+    const saveButton = screen.getByRole("button", { name: "Save assignment" });
+    expect(saveButton).toHaveAccessibleDescription(/\S/);
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    expect(saveButton).toHaveAccessibleDescription(/\S/);
+
+    await user.type(screen.getByLabelText("Reason for this change"), "Customer requested this crew");
+    // Nothing missing: no aria-disabled, and nothing left to explain.
+    expect(saveButton).not.toHaveAttribute("aria-disabled");
   });
 
   it("shows every rejection reason for an invalid move, and blocks Save", async () => {
@@ -407,7 +540,10 @@ describe("AssignmentEditorDrawer", () => {
     expect(
       screen.getByText("This employee is permanently stationed elsewhere.")
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   it("offers only crew members who are also authorized for the vehicle as driver choices (ULK-O09)", async () => {
@@ -561,7 +697,10 @@ describe("AssignmentEditorDrawer", () => {
       expect(screen.getByRole("button", { name: "Add vehicle" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Remove vehicle" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "Remove crew" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
       for (const { label } of [
         { label: "Date & time" },
         { label: "Supervisor" },
@@ -631,7 +770,10 @@ describe("AssignmentEditorDrawer", () => {
     });
     await user.type(screen.getByLabelText("Reason for this change"), "Trying another crew");
     expect(await screen.findByText("The replacement crew is invalid.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await act(async () => {
       resolveOlder?.(buildEligibilityResult({ isEligible: true }));
@@ -639,7 +781,25 @@ describe("AssignmentEditorDrawer", () => {
 
     expect(screen.getByText("The replacement crew is invalid.")).toBeInTheDocument();
     expect(screen.queryByText("This crew is eligible to take the visit.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save assignment" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("keeps the reason when a save is refused, so nobody retypes it", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult({ isEligible: true }));
+    vi.mocked(assignCrew).mockRejectedValue(
+      new ApiError({ code: "RESOURCE_CONFLICT", message: "Somebody else changed this." })
+    );
+    const { user } = await openDrawer();
+
+    await addCrewMember(user, "A Perera");
+    await screen.findByText("This crew is eligible to take the visit.");
+    await user.type(screen.getByLabelText("Reason for this change"), "Emergency cover");
+    await user.click(screen.getByRole("button", { name: "Save assignment" }));
+
+    expect(screen.getByLabelText("Reason for this change")).toHaveValue("Emergency cover");
   });
 
   it("surfaces a backend refusal without losing the drawer", async () => {

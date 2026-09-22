@@ -1,29 +1,54 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchCode } from '@prisma/client';
+import { BranchCode, VisitPlacement } from '@prisma/client';
+
+import { BOOKING_ISSUE_REASONS } from '../../catalog/schedule-preview';
 import {
   ArrayMaxSize,
+  Equals,
   IsArray,
   IsDateString,
   IsEnum,
+  IsHash,
   IsOptional,
+  IsString,
   IsUUID,
+  Length,
+  Matches,
 } from 'class-validator';
+
+/**
+ * A calendar day, and nothing else.
+ *
+ * Every date comparison in generation is a string comparison against
+ * `YYYY-MM-DD`, so an instant with a time or a zone — which `IsDateString`
+ * accepts on its own — would silently never match. The contract now says what
+ * the code has always assumed.
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_ONLY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
+const DATE_ONLY_MESSAGE = 'must be a calendar date in YYYY-MM-DD form';
 
 export class GenerateVisitsDto {
   @ApiProperty({
+    type: String,
     example: '2026-09-07',
     format: 'date',
-    description: 'First date of the planning horizon, inclusive.',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'First date of the planning horizon, inclusive. YYYY-MM-DD.',
   })
   @IsDateString()
+  @Matches(DATE_ONLY, { message: `from ${DATE_ONLY_MESSAGE}` })
   from!: string;
 
   @ApiProperty({
+    type: String,
     example: '2026-10-04',
     format: 'date',
-    description: 'Last date of the planning horizon, inclusive.',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'Last date of the planning horizon, inclusive. YYYY-MM-DD.',
   })
   @IsDateString()
+  @Matches(DATE_ONLY, { message: `to ${DATE_ONLY_MESSAGE}` })
   to!: string;
 
   @ApiPropertyOptional({
@@ -39,6 +64,48 @@ export class GenerateVisitsDto {
     format: 'uuid',
     description:
       'Limit the run to particular agreements. Omit for every active agreement in range.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
+export class ExtendHorizonsDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every open-ended agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every open-ended agreement in scope.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('4', { each: true })
+  serviceAgreementIds?: string[];
+}
+
+export class RepairBunchingDto {
+  @ApiPropertyOptional({
+    enum: BranchCode,
+    description: 'Limit to one branch. Omit to consider every active agreement in the company.',
+  })
+  @IsOptional()
+  @IsEnum(BranchCode)
+  branchCode?: BranchCode;
+
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description: 'Limit to particular agreements. Omit for every active agreement in scope.',
   })
   @IsOptional()
   @IsArray()
@@ -68,6 +135,13 @@ class PlannedVisitDto {
     description: 'Fell on a preferred weekday rather than a merely allowed one.',
   })
   isPreferredDay!: boolean;
+  @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
 }
 
 class PlannedUpdateDto extends PlannedVisitDto {
@@ -122,12 +196,85 @@ class GenerationShortfallDto {
   @ApiProperty({ type: Number }) requested!: number;
   @ApiProperty({ type: Number }) scheduled!: number;
   @ApiProperty({ type: String }) reason!: string;
+  @ApiProperty({
+    type: [String],
+    description:
+      'Every cause that kept this period short, in the order the pipeline met them; `reason` is the first of them. A period can fail for more than one reason at once — too few allowed days to hold the promise, and then the one allowed day already full — and both are kept here rather than published as two rows disagreeing about the denominator.',
+  })
+  reasons!: string[];
+  @ApiProperty({ type: String }) message!: string;
+}
+
+class DailyLoadWarningDto {
+  @ApiProperty({ type: String, enum: Object.values(BranchCode) })
+  branchCode!: string;
+  @ApiProperty({ type: String, format: 'date' }) date!: string;
+  @ApiProperty({ type: Number, description: 'How many visits the day carries.' })
+  plannedCount!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'How many of them are dates already booked, so unmovable.',
+  })
+  bookedCount!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      "The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits.",
+  })
+  plannedMinutes!: number;
+  @ApiProperty({ type: Number, description: 'The crew-minutes cap itself.' })
+  cap!: number;
+  @ApiProperty({ type: String }) message!: string;
+}
+
+class BookingWarningDto {
+  @ApiProperty({ type: String, format: 'uuid' }) serviceAgreementId!: string;
+  @ApiProperty({ type: String, format: 'date' }) date!: string;
+  @ApiProperty({
+    type: String,
+    // The shared list, never a copy.
+    enum: BOOKING_ISSUE_REASONS,
+    description:
+      "SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all; BOOKED_DATE_CANCELLED is a booked date whose visit is cancelled, so the day the customer agreed can never be served again.",
+  })
+  reason!: string;
+  @ApiProperty({ type: String }) message!: string;
+}
+
+class SkippedPeriodsDto {
+  @ApiProperty({ type: String, format: 'uuid' }) serviceAgreementId!: string;
+  @ApiProperty({
+    type: String,
+    enum: ['WEEK', 'MONTH'],
+    description: 'The unit this agreement\'s cycle is counted in.',
+  })
+  frequencyUnit!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'How many units make one cycle: 2 with WEEK is fortnightly, 3 with MONTH quarterly.',
+  })
+  frequencyInterval!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'How many of this agreement\'s cycles the range holds only a slice of.',
+  })
+  periodsSkipped!: number;
+  @ApiProperty({
+    type: String,
+    enum: ['RANGE_HOLDS_NO_WHOLE_PERIOD', 'RANGE_CLIPS_A_PERIOD'],
+    description:
+      'RANGE_HOLDS_NO_WHOLE_PERIOD is an agreement this range could plan nothing at all for. RANGE_CLIPS_A_PERIOD is one it planned some cycles of while cutting another in half — reported for cadences no neighbouring range is guaranteed to pick up.',
+  })
+  reason!: string;
   @ApiProperty({ type: String }) message!: string;
 }
 
 export class GenerationImpactDto {
-  @ApiProperty({ type: String, format: 'date' }) from!: string;
-  @ApiProperty({ type: String, format: 'date' }) to!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
   @ApiProperty({ type: Number }) agreementsConsidered!: number;
 
   @ApiProperty({ type: [PlannedVisitDto], description: 'Visits that would be created.' })
@@ -158,9 +305,30 @@ export class GenerationImpactDto {
   @ApiProperty({
     type: [GenerationShortfallDto],
     description:
-      'Periods that cannot hold the promised number of visits. Reported, never quietly dropped.',
+      'Periods that cannot hold the promised number of visits. Reported, never quietly dropped. `reason` is a stable code: the scheduling rule ones a period can fail on its own (NOT_ENOUGH_ALLOWED_DAYS, SITE_CLOSED_ON_ALLOWED_DAYS, BOOKED_BELOW_FREQUENCY and the rest), plus BRANCH_DAY_AT_CAPACITY — every day the visit is allowed on already carries the crew-minutes its branch plans for, so it is left unplanned rather than placed on a day that cannot carry it. `requested` and `scheduled` say how much of the period landed.',
   })
   shortfalls!: GenerationShortfallDto[];
+
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description:
+      'Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only.',
+  })
+  loadWarnings!: DailyLoadWarningDto[];
+
+  @ApiProperty({
+    type: [BookingWarningDto],
+    description:
+      "Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only.",
+  })
+  bookingWarnings!: BookingWarningDto[];
+
+  @ApiProperty({
+    type: [SkippedPeriodsDto],
+    description:
+      'Agreements this range could plan nothing for, because it holds no whole cycle of theirs — a quarterly agreement asked about from a week view, say. Nothing is wrong with the agreement; the run that covers a whole quarter will plan it. Listed so a zero is never silent.',
+  })
+  skippedPeriods!: SkippedPeriodsDto[];
 
   @ApiProperty({
     type: Boolean,
@@ -176,4 +344,170 @@ export class GenerationImpactDto {
       'The schedule run recorded, when this was confirmed. Null on a preview, which writes nothing.',
   })
   scheduleRunId!: string | null;
+}
+
+export class HorizonExtensionDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({ type: Number })
+  visitsAdded!: number;
+}
+
+export class HorizonExtensionFailureDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({
+    type: String,
+    description: 'Why this one agreement could not be extended — e.g. a branch-day genuinely full.',
+  })
+  message!: string;
+}
+
+export class HorizonExtensionSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: String,
+    format: 'date',
+    pattern: DATE_ONLY_PATTERN,
+    description: 'today plus a rolling year — every open-ended agreement is planned up to here.',
+  })
+  targetHorizon!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active, open-ended agreement considered — extended or already caught up.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [HorizonExtensionDto],
+    description: 'Only the agreements this call actually planned further into.',
+  })
+  agreementsExtended!: HorizonExtensionDto[];
+  @ApiProperty({
+    type: [HorizonExtensionFailureDto],
+    description:
+      "One agreement's own conflict never stops the sweep from reaching the rest of the company — each one that could not be extended is reported here instead of aborting the call.",
+  })
+  failures!: HorizonExtensionFailureDto[];
+}
+
+export class RepairedAgreementDto {
+  @ApiProperty({ type: String, format: 'uuid' })
+  serviceAgreementId!: string;
+  @ApiProperty({ type: String })
+  customerName!: string;
+  @ApiProperty({ type: String })
+  siteName!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  from!: string;
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  to!: string;
+  @ApiProperty({
+    type: Number,
+    description: "How many of this agreement's own unbooked visits moved to a different day.",
+  })
+  visitsMoved!: number;
+}
+
+export class RepairBunchingSummaryDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active agreement with a generated visit in scope, whether or not it needed repair.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [RepairedAgreementDto],
+    description: 'Only the agreements this call actually moved a visit for.',
+  })
+  agreementsRepaired!: RepairedAgreementDto[];
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description:
+      'Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager\'s own decision, only its own unbooked, unpublished work.',
+  })
+  stillOverCap!: DailyLoadWarningDto[];
+}
+
+/**
+ * What `plan` returned, echoed back by the caller so `apply` can prove the
+ * calendar has not moved since — the same "no surprise write" contract
+ * `PublishedAssignmentRepairApplyDto` already uses for assignment repairs.
+ */
+export class RepairBunchingApplyDto extends RepairBunchingDto {
+  @ApiProperty({
+    type: String,
+    description: 'Canonical SHA-256 plan hash returned by plan.',
+  })
+  @IsHash('sha256')
+  planHash!: string;
+
+  @ApiProperty({ type: Boolean, enum: [true], description: 'Must be exactly true.' })
+  @Equals(true)
+  confirmation!: boolean;
+
+  @ApiProperty({ type: String, minLength: 1, maxLength: 500 })
+  @IsString()
+  @Length(1, 500)
+  reason!: string;
+
+  @ApiProperty({
+    type: String,
+    minLength: 1,
+    maxLength: 200,
+    description:
+      'Repeating a call with the same key and the same body returns the first result again rather than repeating the write.',
+  })
+  @IsString()
+  @Length(1, 200)
+  idempotencyKey!: string;
+}
+
+export class RepairBunchingPlanResponseDto {
+  @ApiProperty({ type: String, format: 'date', pattern: DATE_ONLY_PATTERN })
+  today!: string;
+  @ApiProperty({
+    type: Number,
+    description: 'Every active agreement with a generated visit in scope, whether or not it needed repair.',
+  })
+  agreementsConsidered!: number;
+  @ApiProperty({
+    type: [RepairedAgreementDto],
+    description: 'Only the agreements applying this plan would actually move a visit for.',
+  })
+  moves!: RepairedAgreementDto[];
+  @ApiProperty({
+    type: [DailyLoadWarningDto],
+    description: 'Days this plan would still leave over the cap, because every visit on them is protected.',
+  })
+  stillOverCap!: DailyLoadWarningDto[];
+  @ApiProperty({
+    type: String,
+    description:
+      'Canonical SHA-256 hash of this plan and the calendar state it was computed from. Pass back unchanged to apply.',
+  })
+  planHash!: string;
+}
+
+export class RepairBunchingApplyResultDto extends RepairBunchingSummaryDto {
+  @ApiProperty({ type: String }) planHash!: string;
+  @ApiProperty({ type: String }) idempotencyKey!: string;
+  @ApiProperty({
+    type: Boolean,
+    description: 'True when this call did no new work and returned an earlier apply of the same idempotency key.',
+  })
+  replayed!: boolean;
 }

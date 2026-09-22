@@ -1,8 +1,9 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
   AgreementStatus,
   DataProvenance,
   DayRuleKind,
+  FrequencyUnit,
   Prisma,
   Weekday,
 } from '@prisma/client';
@@ -10,7 +11,13 @@ import {
 import { AuditService, PrismaLike } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
+import { lockAgreementRows } from '../common/locks/agreement-lock';
 import { PrismaService } from '../prisma/prisma.service';
+import { anchorDaysFrom } from '../scheduling/visit-generation/anchors';
+import {
+  ROLLING_HORIZON_DAYS,
+  VisitGenerationService,
+} from '../scheduling/visit-generation/visit-generation.service';
 import {
   AgreementWithRelations,
   sortWeekdays,
@@ -26,10 +33,28 @@ import {
   ServiceAgreementQueryDto,
 } from './dto/query.dto';
 import {
-  SchedulePreview,
-  computeSchedulePreview,
-  parseDateOnly,
-} from './schedule-preview';
+  AgreementOnboardingPlanDto,
+  SchedulePreviewDto,
+} from './dto/responses.dto';
+import { computeSchedulePreview, parseDateOnly } from './schedule-preview';
+
+/**
+ * How far past today (or the agreement's own start, if later) the automatic
+ * onboarding generation reaches.
+ *
+ * The same rolling twelve months the nightly sweep keeps every other
+ * open-ended agreement at — deliberately not a shorter "first look" window.
+ * A new agreement planned only a month out is a new agreement that differs
+ * from every existing one until a sweep happens to catch it up, and the
+ * manager has no way to see which state theirs is in. Bounded by the
+ * agreement's own end date where it has one, since planning past the work
+ * the customer has actually bought is not a horizon, it is an invention.
+ */
+const ONBOARDING_HORIZON_DAYS = ROLLING_HORIZON_DAYS;
+
+function addDaysOnly(date: string, days: number): string {
+  return toDateOnly(new Date(parseDateOnly(date).getTime() + days * 86_400_000));
+}
 
 const AGREEMENT_INCLUDE = {
   customer: { select: { id: true, name: true } },
@@ -37,13 +62,22 @@ const AGREEMENT_INCLUDE = {
   jobType: { select: { id: true, name: true } },
   dayRules: true,
   requiredSkills: true,
+  bookings: { orderBy: { bookedDate: 'asc' } },
+  // How many visits this agreement has ever produced. An active agreement
+  // that has produced none is invisible everywhere else in the portal — it
+  // appears on no calendar, in no queue and in no run — so the list that does
+  // show it has to be able to say so.
+  _count: { select: { generatedVisits: true } },
 } satisfies Prisma.ServiceAgreementInclude;
 
 @Injectable()
 export class AgreementsService {
+  private readonly logger = new Logger(AgreementsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly visitGeneration: VisitGenerationService,
   ) {}
 
   async list(query: ServiceAgreementQueryDto) {
@@ -61,6 +95,9 @@ export class AgreementsService {
       ...(query.serviceSiteId ? { serviceSiteId: query.serviceSiteId } : {}),
       ...(query.jobTypeId ? { jobTypeId: query.jobTypeId } : {}),
       ...(query.frequencyUnit ? { frequencyUnit: query.frequencyUnit } : {}),
+      // Its own key, deliberately: `activeOn` and `search` already contend for
+      // the one top-level OR.
+      ...(query.withoutVisits ? { generatedVisits: { none: {} } } : {}),
       ...(query.activeOn
         ? {
             startDate: { lte: parseDateOnly(query.activeOn) },
@@ -185,7 +222,80 @@ export class AgreementsService {
       return agreement;
     });
 
-    return toAgreementDto(created as AgreementWithRelations);
+    // Automatic, not merely available: a manager registering a new client no
+    // longer has to remember a separate Generate Visits click for it to be
+    // accommodated. Scoped to this one agreement's own id, so it goes through
+    // exactly the same guarantee a manually-scoped run already has — it can
+    // only ever place or move this agreement's own visits, never another
+    // customer's — proven in `visit-generation.spec.ts`. Runs after the
+    // creation transaction commits, since generation opens and locks its own
+    // transaction; a failure here is not a reason to fail the agreement's own
+    // creation, which already succeeded — an over-capacity branch-day is a
+    // legitimate, expected outcome for the manager to see on the calendar,
+    // not a defect in creating the agreement.
+    const today = toDateOnly(new Date());
+    const from = today > dto.startDate ? today : dto.startDate;
+    const horizonEnd = addDaysOnly(from, ONBOARDING_HORIZON_DAYS);
+    const to = dto.endDate && dto.endDate < horizonEnd ? dto.endDate : horizonEnd;
+
+    const onboardingPlan = await this.planNewAgreement(created.id, from, to, actor);
+
+    return {
+      ...toAgreementDto((await this.load(created.id)) as AgreementWithRelations),
+      onboardingPlan,
+    };
+  }
+
+  /**
+   * Plans a newly created agreement's first horizon and says what happened.
+   *
+   * A failure here still does not fail the creation — the agreement exists,
+   * and an over-capacity branch or an unstaffable day is a real answer about
+   * the calendar rather than a defect in creating the record. What changed is
+   * that the answer is returned instead of only logged: silently handing back
+   * an agreement with no visits, and no indication why, left the manager to
+   * discover it on an empty calendar days later.
+   */
+  private async planNewAgreement(
+    agreementId: string,
+    from: string,
+    to: string,
+    actor: AuthenticatedUser,
+  ): Promise<AgreementOnboardingPlanDto> {
+    try {
+      const impact = await this.visitGeneration.confirm(
+        { from, to, serviceAgreementIds: [agreementId] },
+        actor,
+      );
+      const shortfallPeriods = impact.shortfalls.length;
+      const overCapacityDays = impact.loadWarnings.length;
+      return {
+        status:
+          shortfallPeriods > 0 || overCapacityDays > 0
+            ? 'PLANNED_WITH_SHORTFALLS'
+            : 'PLANNED',
+        from,
+        to,
+        visitsPlanned: impact.additions.length,
+        shortfallPeriods,
+        overCapacityDays,
+        message: null,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Automatic onboarding generation for agreement ${agreementId} did not complete: ${message}`,
+      );
+      return {
+        status: 'FAILED',
+        from,
+        to,
+        visitsPlanned: 0,
+        shortfallPeriods: 0,
+        overCapacityDays: 0,
+        message,
+      };
+    }
   }
 
   async update(
@@ -246,7 +356,6 @@ export class AgreementsService {
           : null;
     assertDateRange(startDate, endDate);
 
-    const crewSize = dto.crewSize ?? before.crewSize;
     const durationMinutes = dto.durationMinutes ?? before.durationMinutes;
 
     this.assertSatisfiable({
@@ -264,6 +373,90 @@ export class AgreementsService {
     });
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Same order every other writer touching `service_agreements` keeps —
+      // the agreement itself before anything hanging off it. The importer now
+      // locks the agreement before touching its day rules; deleting the day
+      // rules here first, before this row was locked, waited on the same
+      // agreement from the opposite direction and deadlocked against it.
+      await lockAgreementRows(tx, [id]);
+
+      // `before` was read before this transaction opened, and everything
+      // above it derived from it — including every field this edit did not
+      // itself carry. A concurrent import can archive this agreement, or
+      // refresh its crew size, duration, window or dates, in the gap between
+      // that read and this lock. Re-read now, under the lock, so a field this
+      // edit leaves alone falls back to what the row actually holds rather
+      // than silently reverting it to what `before` happened to say.
+      const current = await tx.serviceAgreement.findUniqueOrThrow({
+        where: { id },
+        include: AGREEMENT_INCLUDE,
+      });
+      if (current.status === AgreementStatus.ARCHIVED) {
+        throw new AppException(
+          'AGREEMENT_ARCHIVED',
+          'This agreement was archived while this edit was being prepared. Past visits reference it as it stands. Create a new agreement instead.',
+          HttpStatus.CONFLICT,
+          { serviceAgreementId: id },
+        );
+      }
+      const currentAllowedDays = dto.allowedDays
+        ? sortWeekdays(dto.allowedDays)
+        : sortWeekdays(
+            current.dayRules
+              .filter((rule) => rule.kind === DayRuleKind.ALLOWED)
+              .map((rule) => rule.weekday),
+          );
+      const currentPreferredDays = dto.preferredDays
+        ? sortWeekdays(dto.preferredDays)
+        : sortWeekdays(
+            current.dayRules
+              .filter((rule) => rule.kind === DayRuleKind.PREFERRED)
+              .map((rule) => rule.weekday),
+          );
+      const currentStartMinute =
+        dto.serviceWindowStartMinute !== undefined
+          ? dto.serviceWindowStartMinute
+          : current.serviceWindowStartMinute;
+      const currentEndMinute =
+        dto.serviceWindowEndMinute !== undefined
+          ? dto.serviceWindowEndMinute
+          : current.serviceWindowEndMinute;
+      const currentStartDate = dto.startDate ?? toDateOnly(current.startDate);
+      const currentEndDate =
+        dto.endDate !== undefined
+          ? dto.endDate
+          : current.endDate
+            ? toDateOnly(current.endDate)
+            : null;
+      const currentCrewSize = dto.crewSize ?? current.crewSize;
+      const currentDurationMinutes = dto.durationMinutes ?? current.durationMinutes;
+
+      // The checks above ran against `before`, read outside this transaction.
+      // Everything this edit did not itself carry has since been rebased onto
+      // `current` — including fields a concurrent writer changed in the gap —
+      // and that rebased combination has never been validated. Two edits each
+      // individually fine (one narrows the service window, the other adds a
+      // day) can combine into an agreement that can never produce a visit, and
+      // the pre-transaction checks, run against the wrong half of that
+      // combination each, would wave both through. Re-run every coupled check
+      // against the composition this write is actually about to persist.
+      assertDayRules(currentAllowedDays, currentPreferredDays);
+      assertServiceWindow(currentStartMinute, currentEndMinute);
+      assertDateRange(currentStartDate, currentEndDate);
+      this.assertSatisfiable({
+        allowedDays: currentAllowedDays,
+        preferredDays: currentPreferredDays,
+        frequencyCount: dto.frequencyCount ?? current.frequencyCount,
+        frequencyUnit: dto.frequencyUnit ?? current.frequencyUnit,
+        frequencyInterval: dto.frequencyInterval ?? current.frequencyInterval,
+        startDate: currentStartDate,
+        endDate: currentEndDate,
+        durationMinutes: currentDurationMinutes,
+        site,
+        serviceWindowStartMinute: currentStartMinute,
+        serviceWindowEndMinute: currentEndMinute,
+      });
+
       if (dto.allowedDays || dto.preferredDays) {
         await tx.serviceAgreementDayRule.deleteMany({
           where: { serviceAgreementId: id },
@@ -294,8 +487,8 @@ export class AgreementsService {
           ...(dto.frequencyInterval !== undefined
             ? { frequencyInterval: dto.frequencyInterval }
             : {}),
-          crewSize,
-          durationMinutes,
+          crewSize: currentCrewSize,
+          durationMinutes: currentDurationMinutes,
           // Only what this edit actually carried becomes confirmed. Changing
           // the crew size says nothing about whether the imported duration was
           // right, and confirming it anyway would quietly promote an
@@ -309,14 +502,18 @@ export class AgreementsService {
           ...(dto.allowedDays || dto.preferredDays
             ? { dayRuleProvenance: DataProvenance.MANAGER_CONFIRMED }
             : {}),
-          serviceWindowStartMinute: startMinute,
-          serviceWindowEndMinute: endMinute,
-          startDate: parseDateOnly(startDate),
-          endDate: endDate ? parseDateOnly(endDate) : null,
+          serviceWindowStartMinute: currentStartMinute,
+          serviceWindowEndMinute: currentEndMinute,
+          startDate: parseDateOnly(currentStartDate),
+          endDate: currentEndDate ? parseDateOnly(currentEndDate) : null,
           ...(dto.notes !== undefined ? { notes: dto.notes?.trim() || null } : {}),
           currentVersion: { increment: 1 },
           ...(dto.allowedDays || dto.preferredDays
-            ? { dayRules: { create: toDayRuleRows(allowedDays, preferredDays) } }
+            ? {
+                dayRules: {
+                  create: toDayRuleRows(currentAllowedDays, currentPreferredDays),
+                },
+              }
             : {}),
           ...(dto.requiredSkillCodes
             ? {
@@ -339,7 +536,10 @@ export class AgreementsService {
           entityId: id,
           action: 'service_agreement.updated',
           actor,
-          before,
+          // `current`, not the pre-lock `before`: the audit trail should read
+          // as "what this write actually changed", and `before` may already
+          // be a stale account of the row by the time this write commits.
+          before: current,
           after: agreement,
         },
         tx,
@@ -378,16 +578,37 @@ export class AgreementsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // `before` was read before this transaction opened. A concurrent import
+      // can archive this agreement in the gap between that read and this
+      // write — a routine "set ACTIVE" request that was a no-op against
+      // `before` would then unconditionally write `status: ACTIVE` over an
+      // import's fresh ARCHIVED, leaving `importedInactiveAt` still set
+      // underneath a status that says otherwise. Lock and re-read first, and
+      // decide against what the row actually holds right now.
+      await lockAgreementRows(tx, [id]);
+      const current = await tx.serviceAgreement.findUniqueOrThrow({ where: { id } });
+      if (
+        current.status === AgreementStatus.ARCHIVED &&
+        dto.status !== AgreementStatus.ARCHIVED
+      ) {
+        throw new AppException(
+          'AGREEMENT_ARCHIVED',
+          'This agreement was archived while this change was being prepared. Archiving is final, because past visits are explained by it. Create a new agreement instead of reviving this one.',
+          HttpStatus.CONFLICT,
+          { serviceAgreementId: id, requestedStatus: dto.status },
+        );
+      }
+
       const agreement = await tx.serviceAgreement.update({
         where: { id },
         data: {
           status: dto.status,
-          ...(before.status === dto.status ? {} : { currentVersion: { increment: 1 } }),
+          ...(current.status === dto.status ? {} : { currentVersion: { increment: 1 } }),
         },
         include: AGREEMENT_INCLUDE,
       });
 
-      if (before.status !== dto.status) {
+      if (current.status !== dto.status) {
         await this.writeVersion(
           tx,
           agreement as AgreementWithRelations,
@@ -499,11 +720,14 @@ export class AgreementsService {
   }
 
   /** What this agreement asks for, and anything it cannot deliver. */
-  async preview(id: string, query: SchedulePreviewQueryDto): Promise<SchedulePreview> {
+  async preview(id: string, query: SchedulePreviewQueryDto): Promise<SchedulePreviewDto> {
     const agreement = await this.load(id);
     const site = await this.loadSiteForAgreement(agreement.serviceSiteId);
+    const bookedDates = agreement.bookings.map((booking) =>
+      toDateOnly(booking.bookedDate),
+    );
 
-    return computeSchedulePreview({
+    const preview = computeSchedulePreview({
       frequencyCount: agreement.frequencyCount,
       frequencyUnit: agreement.frequencyUnit,
       frequencyInterval: agreement.frequencyInterval,
@@ -525,7 +749,35 @@ export class AgreementsService {
       durationMinutes: agreement.durationMinutes,
       horizonWeeks: query.horizonWeeks,
       from: query.from,
+      // The same inputs generation uses, so the dates a manager is shown here
+      // are the dates that will actually be created. The one thing this
+      // preview cannot know is the other agreements' days, so a visit the
+      // load guard would later spread still reads as anchored.
+      bookedDates,
+      anchorDays:
+        agreement.frequencyUnit === FrequencyUnit.MONTH
+          ? anchorDaysFrom(bookedDates, agreement.frequencyCount)
+          : [],
     });
+
+    // The period index and the days a visit could have moved to are the load
+    // guard's working notes, not part of the contract, and so are the periods
+    // a run planned or skipped — this screen plans whole and partial periods
+    // alike. Booking issues belong to a generation run, which reports them
+    // against a whole horizon; this screen answers "what does this one
+    // agreement ask for?".
+    const {
+      bookingIssues: _bookingIssues,
+      plannedPeriods: _plannedPeriods,
+      skippedPeriods: _skippedPeriods,
+      ...rest
+    } = preview;
+    return {
+      ...rest,
+      visits: preview.visits.map(
+        ({ alternatives: _alternatives, periodIndex: _periodIndex, ...visit }) => visit,
+      ),
+    };
   }
 
   // --- Internals -----------------------------------------------------------

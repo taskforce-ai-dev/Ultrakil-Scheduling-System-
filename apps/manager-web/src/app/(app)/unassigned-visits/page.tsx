@@ -26,7 +26,8 @@ import {
   type UnassignedVisit,
   type UnassignedVisitsQuery,
 } from "@/lib/api-client";
-import { formatLongDate, todayIso } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import { formatLongDate } from "@/lib/calendar";
 import {
   CONFLICT_GROUPS,
   CONFLICT_GROUP_LABEL,
@@ -35,8 +36,16 @@ import {
 import { AssignmentEditorDrawer } from "../visits/assignment-editor-drawer";
 import { VisitDetailDrawer } from "../visits/visit-detail-drawer";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
-type GroupFilter = "ALL" | ConflictGroup;
+/**
+ * "All", one of the engine's conflict groups, or the backlog nobody has
+ * looked at yet.
+ *
+ * NOT_CHECKED is not a conflict — it is the absence of one, which is what 63
+ * of 70 queued visits are. Without it this filter could only name the handful
+ * that need a decision, and the untouched backlog could not be separated out
+ * at all. It goes to the server as `checked=false`, the API's own spelling.
+ */
+type GroupFilter = "ALL" | "NOT_CHECKED" | ConflictGroup;
 /**
  * The server's two operation states, plus "no preference". Both names come
  * from the API (`operationState` on every row and on the filter), so the page
@@ -48,16 +57,19 @@ type StateFilter = "ALL" | UnassignedOperationState;
 const KANDY_PMS_CODES = new Set(["NO_PMS_SUPERVISOR_AVAILABLE", "BRANCH_HAS_NO_PMS_SUPERVISOR"]);
 const PAGE_SIZE = 25;
 
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
+// Base UI's <SelectValue> renders the raw value unless the root is given a
+// value -> label map, which showed the raw "UNASSIGNED" on this trigger.
+const STATE_LABELS: Record<StateFilter, string> = {
+  ALL: "All unresolved",
+  UNASSIGNED: "Not checked yet",
+  EXCEPTION: "Checked and refused",
 };
 
 // Base UI's <SelectValue> renders the raw value unless the root is given a
 // value -> label map, which would show the raw group code on the trigger.
 const GROUP_LABELS: Record<GroupFilter, string> = {
   ALL: "All conflict types",
+  NOT_CHECKED: "Not yet checked",
   ...CONFLICT_GROUP_LABEL,
 };
 
@@ -82,7 +94,17 @@ export default function UnassignedVisitsPage() {
 
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [group, setGroup] = React.useState<GroupFilter>("ALL");
-  const [date, setDate] = React.useState(todayIso());
+  /**
+   * Empty means "every date", and that is the queue's default.
+   *
+   * This opened on today, and the date input's change handler dropped an empty
+   * value, so the filter could not be cleared once set. A queue holding 115
+   * uncrewed visits across three months — four of them inside a week that had
+   * already been published — therefore reported "Nothing unassigned", under a
+   * heading promising work nobody has tried to staff yet. The backlog is the
+   * page; a date is something a manager asks for.
+   */
+  const [date, setDate] = React.useState("");
   const [status, setStatus] = React.useState<StateFilter>("ALL");
   const [page, setPage] = React.useState(1);
   const [items, setItems] = React.useState<UnassignedVisit[]>([]);
@@ -113,11 +135,14 @@ export default function UnassignedVisitsPage() {
       : {
           page,
           pageSize: PAGE_SIZE,
-          from: date,
-          to: date,
+          ...(date ? { from: date, to: date } : {}),
           ...(branch === "ALL" ? {} : { branchCode: branch }),
           ...(status === "ALL" ? {} : { operationState: status }),
-          ...(group === "ALL" ? {} : { conflictGroup: group }),
+          ...(group === "ALL"
+            ? {}
+            : group === "NOT_CHECKED"
+              ? { checked: false }
+              : { conflictGroup: group }),
         };
     fetchUnassignedVisits(query)
       .then((page) => {
@@ -168,6 +193,39 @@ export default function UnassignedVisitsPage() {
       : items.length === 0 ||
         items.some((visit) => visit.visitId !== focusVisitId));
 
+  /**
+   * What an empty queue is allowed to say.
+   *
+   * "Every visit currently has a valid crew and vehicle assignment" is a claim
+   * about the whole system, and the page can only make it when it asked about
+   * the whole system. With a filter in force it knows one thing — that nothing
+   * matched — so that is all it says, and it names the filter so the manager
+   * can see what is being kept out.
+   */
+  const emptyQueue = React.useMemo(() => {
+    const narrowedByAnythingElse =
+      branch !== "ALL" || status !== "ALL" || group !== "ALL";
+    if (date && !narrowedByAnythingElse) {
+      return {
+        title: `Nothing unassigned on ${formatLongDate(date)}`,
+        description:
+          "Every visit on this date has a crew. Clear the date to see the rest of the backlog.",
+      };
+    }
+    if (date || narrowedByAnythingElse) {
+      return {
+        title: "Nothing matches these filters",
+        description:
+          "No unassigned visit matches the filters above. Widen or clear them to see the rest of the backlog.",
+      };
+    }
+    return {
+      title: "Nothing unassigned",
+      description:
+        "Every visit in the system has a crew and vehicle assignment — nothing is waiting to be staffed on any date.",
+    };
+  }, [branch, date, group, status]);
+
   const kandyPmsShortage = React.useMemo(
     () =>
       items.some(
@@ -207,7 +265,7 @@ export default function UnassignedVisitsPage() {
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-branch">Branch</Label>
           <Select
-            items={BRANCH_LABELS}
+            items={BRANCH_FILTER_LABELS}
             value={branch}
             onValueChange={(value) => {
               setBranch((value as BranchFilter) ?? "ALL");
@@ -218,7 +276,7 @@ export default function UnassignedVisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">Both branches</SelectItem>
+              <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
               <SelectItem value="COLOMBO">Colombo</SelectItem>
               <SelectItem value="KANDY">Kandy</SelectItem>
             </SelectContent>
@@ -227,25 +285,44 @@ export default function UnassignedVisitsPage() {
 
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-date">Date</Label>
-          <input
-            id="unassigned-date"
-            type="date"
-            value={date}
-            onChange={(event) => { if (event.target.value) { setDate(event.target.value); setPage(1); } }}
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              id="unassigned-date"
+              type="date"
+              value={date}
+              // An empty value is a real choice — "any date" — and dropping it
+              // was what made the filter one-way.
+              onChange={(event) => { setDate(event.target.value); setPage(1); }}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+            {date && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => { setDate(""); setPage(1); }}
+              >
+                Clear date
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-1.5">
           <Label htmlFor="unassigned-status">Status</Label>
-          <Select value={status} onValueChange={(value) => { setStatus((value as typeof status) ?? "ALL"); setPage(1); }}>
+          <Select items={STATE_LABELS} value={status} onValueChange={(value) => { setStatus((value as typeof status) ?? "ALL"); setPage(1); }}>
             <SelectTrigger id="unassigned-status" className="w-44">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All unresolved</SelectItem>
-              <SelectItem value="UNASSIGNED">Unassigned</SelectItem>
-              <SelectItem value="EXCEPTION">Exceptions</SelectItem>
+              {/* Named by what the server means, not by the word both ends of
+                  the portal were using for opposite things: here UNASSIGNED
+                  is work nobody has proposed a crew for, while on the Visit
+                  Calendar the same word meant the scheduler tried and
+                  failed. */}
+              <SelectItem value="UNASSIGNED">Not checked yet</SelectItem>
+              <SelectItem value="EXCEPTION">Checked and refused</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -262,6 +339,7 @@ export default function UnassignedVisitsPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="ALL">All conflict types</SelectItem>
+              <SelectItem value="NOT_CHECKED">Not yet checked</SelectItem>
               {CONFLICT_GROUPS.map((g) => (
                 <SelectItem key={g} value={g}>
                   {CONFLICT_GROUP_LABEL[g]}
@@ -304,10 +382,7 @@ export default function UnassignedVisitsPage() {
           onRetry={load}
         />
       ) : items.length === 0 ? (
-        <EmptyState
-          title="Nothing unassigned"
-          description="Every visit currently has a valid crew and vehicle assignment."
-        />
+        <EmptyState {...emptyQueue} />
       ) : (
         <>
           {focusVisitId ? (
@@ -326,11 +401,25 @@ export default function UnassignedVisitsPage() {
               </Button>
             </p>
           ) : (
-            total > items.length && (
+            /* Always a count, and always a way to reach the rest.
+               "Narrow the branch filter" was advice that could not work —
+               everything in the pilot is one branch — and it never mentioned
+               the pager at the very bottom, which is the only thing that
+               reaches row 26. And when a filtered queue fitted on one page
+               the whole line disappeared, so a manager could not tell 2 from
+               2 of 70. */
+            total > items.length ? (
               <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-                Showing {items.length} of {total} unassigned visits. Narrow the branch filter to see
-                the rest.
+                Showing {items.length} of {total} unassigned visits — page {page} of{" "}
+                {Math.max(1, Math.ceil(total / PAGE_SIZE))}. Use the pager at the end of this list
+                to see the rest, or narrow the filters above.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {total === 1
+                  ? "The 1 unassigned visit matching these filters is shown."
+                  : `All ${total} unassigned visits are shown.`}
               </p>
             )
           )}

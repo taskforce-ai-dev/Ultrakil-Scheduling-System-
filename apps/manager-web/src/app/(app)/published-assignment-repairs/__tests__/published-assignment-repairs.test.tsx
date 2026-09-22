@@ -220,6 +220,23 @@ describe("PublishedAssignmentRepairsPage", () => {
     expect(screen.getByText(/have not been validated yet/)).toBeInTheDocument();
   });
 
+  /**
+   * Same complaint as the dispatch board and the conflict cards: an internal
+   * name shouted above a sentence that already says it in English makes a
+   * handled refusal read as a crash.
+   */
+  it("explains a published violation in words, without the engine's code", async () => {
+    vi.mocked(fetchPublishedAssignmentRepairFindings).mockResolvedValue(
+      findingsPage(findings, { page: 1, checkedInPage: 3, checkedThrough: 3, totalCandidates: 3, hasNextPage: false }),
+    );
+
+    await renderPage();
+
+    expect(await screen.findByText("Five vehicles were published.")).toBeInTheDocument();
+    expect(screen.queryByText("TOO_MANY_VEHICLES")).not.toBeInTheDocument();
+    expect(screen.queryByText("CREW_CANNOT_TRAVEL")).not.toBeInTheDocument();
+  });
+
   it("checks the next candidate page only when the manager asks, merging without duplicates", async () => {
     const laterFinding: PublishedAssignmentRepairFinding = {
       ...findings[2],

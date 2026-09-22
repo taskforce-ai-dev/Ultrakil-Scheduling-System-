@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchCode, LockScope, ScheduleRunStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -139,8 +139,21 @@ export class ScheduleRunQueryDto {
   @IsEnum(ScheduleRunStatus)
   status?: ScheduleRunStatus;
 
-  @ApiPropertyOptional({ type: [String], format: 'uuid' })
+  @ApiPropertyOptional({
+    type: [String],
+    format: 'uuid',
+    description:
+      'Repeat the parameter for more than one id (?ids=a&ids=b) or send one comma-separated value (?ids=a,b) — the manager portal\'s own query builder sends the latter for any array. Express parses a single bare occurrence (?ids=a) as a plain string rather than a one-element array; all three shapes are normalized here.',
+  })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) return value;
+    if (Array.isArray(value)) return value;
+    return String(value)
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+  })
   @IsArray()
   @ArrayMaxSize(50)
   @IsUUID('4', { each: true })
@@ -159,7 +172,20 @@ export class ScheduleRunDto {
   @ApiProperty({ type: Number }) visitsConsidered!: number;
   @ApiProperty({ type: Number }) visitsScheduled!: number;
   @ApiProperty({ type: Number }) visitsUnassigned!: number;
-  @ApiProperty({ type: PublishReadinessDto }) publishReadiness!: PublishReadinessDto;
+  @ApiProperty({
+    enum: ['OPTIMIZER', 'VISIT_GENERATION'],
+    description:
+      'What produced this run. OPTIMIZER is a solve, with assignments to review and publish. VISIT_GENERATION is the record of a confirmed "Generate visits" — it creates visits, never assignments, and has nothing to publish.',
+  })
+  kind!: 'OPTIMIZER' | 'VISIT_GENERATION';
+
+  @ApiProperty({
+    type: PublishReadinessDto,
+    nullable: true,
+    description:
+      'Null for a VISIT_GENERATION run: there is no publication for it to be ready for, and reporting one as BLOCKED/ZERO_RESULTS told a manager a schedule had failed when none had been attempted.',
+  })
+  publishReadiness!: PublishReadinessDto | null;
 
   @ApiProperty({ type: Boolean, description: 'True once published and frozen.' })
   isPublished!: boolean;

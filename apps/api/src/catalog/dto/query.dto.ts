@@ -82,6 +82,15 @@ export class ServiceAgreementQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Only agreements that have generated no visits at all. An active one produces no work and appears on no other screen.',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  withoutVisits?: boolean;
 }
 
 export class JobTypeQueryDto {

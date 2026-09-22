@@ -28,6 +28,11 @@ import { SchedulerClient } from './optimizer/scheduler.client';
 import { AssignmentsController } from './eligibility/assignments.controller';
 import { AssignmentsService } from './eligibility/assignments.service';
 import { EligibilityService } from './eligibility/eligibility.service';
+import { BranchDayCapacityService } from './visit-generation/branch-day-capacity.service';
+import {
+  HorizonExtensionProcessor,
+  HorizonExtensionScheduler,
+} from './visit-generation/horizon-extension.processor';
 import { VisitGenerationController } from './visit-generation/visit-generation.controller';
 import { VisitGenerationService } from './visit-generation/visit-generation.service';
 import { VisitsController } from './visits/visits.controller';
@@ -63,6 +68,7 @@ export class SchedulingModule {
       ],
       providers: [
         VisitGenerationService,
+        BranchDayCapacityService,
         VisitsService,
         EligibilityService,
         AssignmentsService,
@@ -106,10 +112,15 @@ export class SchedulingModule {
                 provide: SCHEDULE_RUN_DISPATCHER,
                 useExisting: ScheduleRunQueue,
               },
+              // QStash/serverless deployments have no persistent worker to run a
+              // BullMQ repeatable job at all — see horizon-extension.processor.ts.
+              HorizonExtensionProcessor,
+              HorizonExtensionScheduler,
             ]),
       ],
       exports: [
         VisitGenerationService,
+        BranchDayCapacityService,
         VisitsService,
         EligibilityService,
         ScheduleRunService,

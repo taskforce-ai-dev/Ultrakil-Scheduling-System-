@@ -10,6 +10,7 @@ import {
   CrewBadge,
   VisitOwnershipBadges,
   VisitStatusBadge,
+  placementLabel,
   protectionLabel,
 } from "@/components/shared/visit-badges";
 import { Badge } from "@/components/ui/badge";
@@ -21,7 +22,7 @@ import {
   unlockVisit,
   type VisitDetail,
 } from "@/lib/api-client";
-import { formatLongDate, formatMinuteOfDay } from "@/lib/calendar";
+import { formatDayRange, formatLongDate, formatMinuteOfDay } from "@/lib/calendar";
 import { notify } from "@/lib/notify";
 
 interface VisitDetailDrawerProps {
@@ -59,6 +60,13 @@ const WEEKDAY_SHORT: Record<string, string> = {
  * correctly after the agreement itself has been edited — which is exactly when
  * a manager asks the question.
  */
+/** What each recorded crew change is called on screen. */
+const CREW_CHANGE_LABEL: Record<VisitDetail["crewChanges"][number]["action"], string> = {
+  CREW_SET: "Crew set by hand",
+  CREW_REPLACED: "Crew changed by hand",
+  CREW_REMOVED: "Crew taken off by hand",
+};
+
 export function VisitDetailDrawer({
   visitId,
   onOpenChange,
@@ -158,6 +166,18 @@ export function VisitDetailDrawer({
             <VisitStatusBadge status={visit.status} />
             <VisitOwnershipBadges visit={visit} />
             <CrewBadge visit={visit} />
+            {/*
+              A booked date on hours the site itself records as an hour is
+              planned on those hours deliberately — a booking is a commitment,
+              and inventing a nine-hour day in its place would be worse. The
+              generation panel warns about it once, and then it closes. The
+              visit carries the problem for weeks afterwards, so it says so
+              here too, in words rather than by leaving the arithmetic to the
+              reader.
+            */}
+            {visit.windowEndMinute - visit.windowStartMinute < visit.durationMinutes && (
+              <Badge variant="outline">Window shorter than the visit</Badge>
+            )}
           </div>
 
 
@@ -189,6 +209,9 @@ export function VisitDetailDrawer({
                       .map((day) => WEEKDAY_SHORT[day] ?? day)
                       .join(", ")}
               </Row>
+              <Row label="Why this date">
+                {placementLabel(visit.placement) ?? "Not recorded"}
+              </Row>
             </dl>
           </section>
 
@@ -203,7 +226,7 @@ export function VisitDetailDrawer({
               <Row label="Crew needed">
                 {visit.requiredCrewSize}{" "}
                 <span className="font-normal text-muted-foreground">
-                  ({visit.assignmentCount} assigned)
+                  ({visit.assignedCrewCount} assigned)
                 </span>
               </Row>
               <Row label="Branch">
@@ -220,12 +243,19 @@ export function VisitDetailDrawer({
                   ? new Date(visit.origin.generatedAt).toLocaleString()
                   : "Not recorded"}
               </Row>
+              {/*
+                * The weeks the run covered, never its id. "Schedule run
+                * 6a1d0f2e-9c4b-…" is a string a manager can neither search
+                * for nor say out loud, and every run's line looked different
+                * from every other. The id stays in the payload for links.
+                */}
               <Row label="Schedule run">
-                {visit.origin.generatedByRunId ? (
-                  <code className="text-xs">{visit.origin.generatedByRunId}</code>
-                ) : (
-                  "Not recorded"
-                )}
+                {visit.origin.generatedByRunRangeStart && visit.origin.generatedByRunRangeEnd
+                  ? formatDayRange(
+                      visit.origin.generatedByRunRangeStart,
+                      visit.origin.generatedByRunRangeEnd
+                    )
+                  : "Not recorded"}
               </Row>
               {visit.isManuallyAdjusted && (
                 <Row label="Modified by hand">
@@ -243,6 +273,39 @@ export function VisitDetailDrawer({
                 {new Date(visit.updatedAt).toLocaleString()}
               </Row>
             </dl>
+
+            {/*
+              * Hand edits to the crew, newest first, with the reason the
+              * manager was made to give. The drawer that demands the reason
+              * used to clear it on save and leave no trace of it anywhere, so
+              * "Generated" and "Last updated" were the whole story of a visit
+              * somebody had re-crewed twice.
+              */}
+            {visit.crewChanges.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {visit.crewChanges.map((change) => (
+                  <li
+                    key={`${change.changedAt}-${change.action}`}
+                    className="rounded-lg border bg-muted/30 p-2 text-sm"
+                  >
+                    <p className="font-medium">
+                      {CREW_CHANGE_LABEL[change.action]}
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {new Date(change.changedAt).toLocaleString()}
+                      </span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {change.actorLabel ?? "Actor not recorded"}
+                      {change.action !== "CREW_REMOVED" &&
+                        ` · ${change.crewSize} ${change.crewSize === 1 ? "person" : "people"} on the visit`}
+                    </p>
+                    <p className={change.reason ? "mt-1" : "mt-1 text-muted-foreground"}>
+                      {change.reason ?? "No reason given"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         </div>
       ) : null}

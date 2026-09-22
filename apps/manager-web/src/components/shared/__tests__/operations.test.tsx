@@ -6,7 +6,7 @@ import { parseOperationsDay } from "@/lib/api-client";
 
 const day = parseOperationsDay({
   date: "2026-09-10",
-  summary: { total: 3, ready: 1, proposed: 1, unassigned: 0, exceptions: 1, hoursUnconfirmed: 1 },
+  summary: { total: 3, ready: 1, proposed: 1, awaitingStaffing: 0, staffingFailed: 0, exceptions: 1, hoursUnconfirmed: 1 },
   items: [
     {
       visit: { id: "ready", customerName: "Ready customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false },
@@ -41,6 +41,85 @@ const day = parseOperationsDay({
   ],
 });
 
+/**
+ * The queue strip was the last place in the portal that still said
+ * "Unassigned" — on the same Dispatch Board screen as a table saying
+ * "Awaiting staffing" and "Staffing failed" about the very same rows. The
+ * word covered two different facts, and a coordinator reading it as the
+ * backlog read straight past the work nobody had attempted.
+ */
+const unstaffedDay = parseOperationsDay({
+  date: "2026-09-21",
+  summary: { total: 2, ready: 0, proposed: 0, awaitingStaffing: 1, staffingFailed: 1, exceptions: 0, hoursUnconfirmed: 0 },
+  items: [
+    {
+      visit: { id: "untried", customerName: "Untried customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false, status: "PENDING" },
+      state: "UNASSIGNED",
+      dispatchAssignment: null,
+      proposedAssignment: null,
+      violations: [],
+      warnings: [],
+      nextAction: "Assign an eligible crew.",
+      scheduleVersion: null,
+    },
+    {
+      visit: { id: "refused", customerName: "Refused customer", siteName: "Site", jobTypeName: "Job", requiredCrewSize: 2, windowStartMinute: 480, windowEndMinute: 1020, hoursUnconfirmed: false, status: "UNASSIGNED" },
+      state: "UNASSIGNED",
+      dispatchAssignment: null,
+      proposedAssignment: null,
+      violations: [{ code: "CREW_TOO_SMALL", message: "Only one of the two required crew members was proposed." }],
+      warnings: [],
+      nextAction: "Resolve crew too small before assigning a crew.",
+      scheduleVersion: null,
+    },
+  ],
+});
+
+describe("the queue strip's vocabulary", () => {
+  it("names the two kinds of unstaffed work instead of calling both Unassigned", () => {
+    render(<OperationsDayPanel data={unstaffedDay} />);
+
+    const untried = screen.getByText("Untried customer").closest("li")!;
+    expect(within(untried).getByText("Awaiting staffing")).toBeInTheDocument();
+
+    const refused = screen.getByText("Refused customer").closest("li")!;
+    expect(within(refused).getByText("Staffing failed")).toBeInTheDocument();
+
+    expect(screen.queryByText("Unassigned")).not.toBeInTheDocument();
+  });
+
+  it("counts them apart on the summary strip, in the same words as the rows", () => {
+    render(<OperationsDayPanel data={unstaffedDay} />);
+
+    const strip = screen.getByText("Total").closest("dl")!;
+    expect(within(strip).getByText("Awaiting staffing").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).getByText("Staffing failed").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).queryByText("Unassigned")).not.toBeInTheDocument();
+  });
+
+  it("does not guess which kind it is when the server named no visit status", () => {
+    const unknown = parseOperationsDay({
+      date: "2026-09-21",
+      summary: { total: 1, ready: 0, proposed: 0, awaitingStaffing: 0, staffingFailed: 0, exceptions: 0, hoursUnconfirmed: 0 },
+      items: [
+        {
+          visit: { id: "mystery", customerName: "Mystery customer", siteName: "Site", jobTypeName: "Job" },
+          state: "UNASSIGNED",
+          dispatchAssignment: null,
+          proposedAssignment: null,
+          violations: [],
+          warnings: [],
+          nextAction: "Assign an eligible crew.",
+        },
+      ],
+    });
+    render(<OperationsDayPanel data={unknown} />);
+
+    const row = screen.getByText("Mystery customer").closest("li")!;
+    expect(within(row).getByText("No crew yet")).toBeInTheDocument();
+  });
+});
+
 describe("OperationsDayPanel", () => {
   it("labels proposals and exceptions without calling them assigned", () => {
     render(<OperationsDayPanel data={day} />);
@@ -56,6 +135,19 @@ describe("OperationsDayPanel", () => {
     expect(within(exception).queryByText("Crew assigned")).not.toBeInTheDocument();
   });
 
+  /**
+   * "EMPLOYEE_DOUBLE_BOOKED: This employee is already assigned…" printed the
+   * engine's own name above a sentence that already said it in English, and
+   * made a handled refusal read as a crash. The sentence is the product.
+   */
+  it("explains a violation in words, without shouting the engine's code", () => {
+    render(<OperationsDayPanel data={day} />);
+
+    const exception = screen.getByText("Exception customer").closest("li")!;
+    expect(within(exception).getByText(/Branch needs confirmation/)).toBeInTheDocument();
+    expect(within(exception).queryByText(/UNKNOWN_BRANCH/)).not.toBeInTheDocument();
+  });
+
   it("shows the server summary and a concrete next action", () => {
     render(<OperationsDayPanel data={day} />);
 
@@ -63,7 +155,7 @@ describe("OperationsDayPanel", () => {
     expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
     const exception = screen.getByText("Exception customer").closest("li")!;
     expect(within(exception).getByText("Confirm branch")).toBeInTheDocument();
-    expect(within(exception).getByText(/Published schedule version/)).toBeInTheDocument();
+    expect(within(exception).getByText(/^Published schedule\b/)).toBeInTheDocument();
   });
 
   it("keeps the published crew visible after a visit is completed", () => {
@@ -113,8 +205,94 @@ describe("OperationsDayPanel", () => {
 
     const item = screen.getByText("Acknowledged customer").closest("li")!;
     expect(within(item).getByText("Crew assigned")).toBeInTheDocument();
-    expect(within(item).getByText("Published schedule version run-1")).toBeInTheDocument();
+    expect(within(item).getByText(/Published schedule/)).toBeInTheDocument();
     expect(within(item).queryByText(/not dispatch truth/)).not.toBeInTheDocument();
+  });
+
+  it("names the schedule run by its weeks and never by its id", () => {
+    const published = parseOperationsDay({
+      date: "2026-09-10",
+      items: [{
+        visit: { id: "named", customerName: "Named customer" },
+        state: "READY",
+        dispatchAssignment: {
+          id: "named-published",
+          status: "PUBLISHED",
+          crew: [{ fullName: "Named crew" }],
+          vehicles: [],
+        },
+        proposedAssignment: null,
+        violations: [],
+        warnings: [],
+        nextAction: "Dispatch the published assignment.",
+        scheduleVersion: {
+          id: "6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
+          status: "PUBLISHED",
+          publishedAt: "2026-09-15T12:05:00.000Z",
+          rangeStart: "2026-09-15",
+          rangeEnd: "2026-09-21",
+        },
+      }],
+    });
+
+    render(<OperationsDayPanel data={published} />);
+
+    const item = screen.getByText("Named customer").closest("li")!;
+    expect(
+      within(item).getByText(/^Published schedule 15–21 Sep, published \d{1,2} Sep \d{2}:\d{2}$/),
+    ).toBeInTheDocument();
+    // Schedule History is where the rest of the run's story is.
+    // The link carries the run, so Schedule History can pick it out of fifty.
+    expect(within(item).getByRole("link", { name: /Published schedule 15–21 Sep/ })).toHaveAttribute(
+      "href",
+      "/schedule-history?run=6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
+    );
+  });
+
+  it("prints no uuid anywhere on a day of published work", () => {
+    const withRuns = parseOperationsDay({
+      date: "2026-09-10",
+      items: [
+        {
+          visit: { id: "one", customerName: "First customer" },
+          state: "READY",
+          dispatchAssignment: { id: "a1", status: "PUBLISHED", crew: [], vehicles: [] },
+          proposedAssignment: null,
+          violations: [],
+          warnings: [],
+          nextAction: "No action needed",
+          scheduleVersion: {
+            id: "6a1d0f2e-9c4b-4a3d-8f10-2b7c5e9d0a14",
+            status: "PUBLISHED",
+            publishedAt: "2026-09-15T12:05:00.000Z",
+            rangeStart: "2026-09-15",
+            rangeEnd: "2026-09-21",
+          },
+        },
+        {
+          visit: { id: "two", customerName: "Second customer" },
+          state: "PROPOSED",
+          dispatchAssignment: null,
+          proposedAssignment: { id: "a2", status: "DRAFT", crew: [], vehicles: [] },
+          violations: [],
+          warnings: [],
+          nextAction: "Review and publish",
+          scheduleVersion: {
+            id: "e3c7b9a1-55d2-4e68-9b0c-71f4a8d2c603",
+            status: "DRAFT",
+            publishedAt: null,
+            rangeStart: "2026-09-28",
+            rangeEnd: "2026-10-04",
+          },
+        },
+      ],
+    });
+
+    const { container } = render(<OperationsDayPanel data={withRuns} />);
+
+    const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+    expect(container.textContent ?? "").not.toMatch(UUID);
+    expect(screen.getByText(/^Draft schedule 28 Sep – 4 Oct — not dispatch truth$/)).toBeInTheDocument();
   });
 });
 
@@ -187,13 +365,18 @@ describe("OperationsDayPanel published assignment lineage", () => {
 
     const history = screen.getByRole("region", { name: "Published assignment history" });
     expect(within(history).getByText(/current published version/)).toBeInTheDocument();
-    expect(within(history).getByText(/supersedes v2/)).toBeInTheDocument();
-    expect(within(history).getByText(/audited repair repair77/)).toBeInTheDocument();
+    // Ordinal and human labels, never an id fragment: "supersedes 8f2c1a0b…"
+    // is a string a manager can neither search for nor say out loud.
+    expect(within(history).getByText(/Version 3 of 3/)).toBeInTheDocument();
+    expect(within(history).getByText(/replaces version 2/)).toBeInTheDocument();
+    expect(within(history).getByText(/the audited repair of \d{1,2} Sep/)).toBeInTheDocument();
     expect(within(history).getByText(/mixes scheduled and repaired/)).toBeInTheDocument();
+    expect(history.textContent ?? "").not.toContain("repair77");
+    expect(history.textContent ?? "").not.toMatch(/\b[0-9a-f]{8}\b/);
 
     // Schedule-run history is a different thing and must survive.
     const item = screen.getByText("Corrected customer").closest("li")!;
-    expect(within(item).getByText("Published schedule version run-9")).toBeInTheDocument();
+    expect(within(item).getByText(/^Published schedule, published /)).toBeInTheDocument();
   });
 
   it("says plainly when the chain was truncated", () => {
@@ -233,6 +416,13 @@ describe("OperationsDayPanel published assignment lineage", () => {
     const history = screen.getByRole("region", { name: "Published assignment history" });
     expect(within(history).getByText(/Showing the 2 most recent of 13 published versions/)).toBeInTheDocument();
     expect(within(history).getByText(/11 older versions are not shown/)).toBeInTheDocument();
+    // The numbering counts from the whole chain, not from what fitted.
+    expect(within(history).getByText(/Version 13 of 13/)).toBeInTheDocument();
+    expect(within(history).getByText(/Version 12 of 13/)).toBeInTheDocument();
+    // v12's own predecessor is not in the shown window, so it is described
+    // rather than named by an id nobody can look up here.
+    expect(within(history).getByText(/replaces an earlier version/)).toBeInTheDocument();
+    expect(history.textContent ?? "").not.toContain("v11");
   });
 
   it("says a visit has no published history rather than staying silent", () => {
@@ -263,6 +453,6 @@ describe("OperationsDayPanel published assignment lineage", () => {
 
     const item = screen.getByText("Fresh customer").closest("li")!;
     expect(within(item).getByText("No published assignment history for this visit yet.")).toBeInTheDocument();
-    expect(within(item).getByText(/Draft schedule version run-2/)).toBeInTheDocument();
+    expect(within(item).getByText("Draft schedule — not dispatch truth")).toBeInTheDocument();
   });
 });

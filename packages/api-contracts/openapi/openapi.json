@@ -1423,6 +1423,15 @@
         "operationId": "AgreementsController_list",
         "parameters": [
           {
+            "name": "withoutVisits",
+            "required": false,
+            "in": "query",
+            "description": "Only agreements that have generated no visits at all.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "search",
             "required": false,
             "in": "query",
@@ -2004,6 +2013,16 @@
         "description": "Writes nothing. Returns the full impact: visits to add, untouched ones to update or remove, and the ones a manager owns — which are left alone and listed so the change is never a surprise. Confirm applies exactly this.",
         "operationId": "VisitGenerationController_preview",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateVisitsDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -2038,6 +2057,16 @@
         "description": "Applies what preview described and records a schedule run. Safe to repeat: a visit is identified by its agreement, date and start time, so running the same horizon twice leaves the calendar unchanged. Visits that are locked, hand-edited, scheduled or completed are never touched.",
         "operationId": "VisitGenerationController_confirm",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateVisitsDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -2059,6 +2088,132 @@
           }
         ],
         "summary": "Generate the visits",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/extend-horizons": {
+      "post": {
+        "description": "Generates the missing stretch, up to a year from today, for every active agreement with no end date — an agreement with an end date is untouched, the same as it is for a dated range. Each agreement is planned through the same scoped confirm a manager's own Generate Visits uses, so it can only ever change that agreement's own visits, and calling this again immediately reports nothing further to do. A self-hosted (BullMQ) deployment already calls this itself once a day (see HorizonExtensionScheduler) — this endpoint remains for an operator to sweep on demand, or for a QStash/serverless deployment's own external Schedule to call. Body is optional — omit it, or leave both fields out, to sweep every open-ended agreement in the company.",
+        "operationId": "VisitGenerationController_extendHorizons",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendHorizonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HorizonExtensionSummaryDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Keep every open-ended agreement planned a rolling year ahead",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/repair-bunching/plan": {
+      "post": {
+        "description": "Writes nothing. For every active agreement with a generated visit today or later, works out — over the stretch that agreement already has generated — which of its own unbooked, unpublished visits the current crew-minutes cap would move, exactly as a newly generated one would be placed. A booked date, a published or locked visit, a hand-adjusted one is never listed as moving. Returns a planHash: pass it unchanged to apply, which refuses to run if the calendar has moved since.",
+        "operationId": "VisitGenerationController_planBunchingRepair",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairBunchingDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBunchingPlanResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "What un-bunching an agreement's own visits off a day the current cap no longer allows would move",
+        "tags": [
+          "visit-generation"
+        ]
+      }
+    },
+    "/api/visit-generation/repair-bunching/apply": {
+      "post": {
+        "description": "Applies what plan described, calling the same scoped confirm a manager's own Generate Visits already uses for each moved agreement — never a new kind of write. Requires the planHash plan returned, explicit confirmation, a reason and an idempotencyKey: repeating the same key with the same body returns the first application's own result again rather than moving anything twice; the same key with a different body is refused. If the calendar changed since the plan was reviewed, nothing is applied and a fresh plan is required. Calling it again after everything settled finds nothing left to move.",
+        "operationId": "VisitGenerationController_applyBunchingRepair",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairBunchingApplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairBunchingApplyResultDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — either the plan is stale, or this idempotency key was already used for a different request."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Apply exactly the plan repair-bunching/plan described",
         "tags": [
           "visit-generation"
         ]
@@ -2516,7 +2671,8 @@
                 "ASSIGNMENT_LOCKED",
                 "CREW_CANNOT_TRAVEL",
                 "TOO_MANY_VEHICLES",
-                "NO_FEASIBLE_CREW"
+                "NO_FEASIBLE_CREW",
+                "DAILY_VISIT_CAP_REACHED"
               ],
               "type": "string"
             }
@@ -2773,7 +2929,57 @@
       },
       "get": {
         "operationId": "ScheduleRunsController_list",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "description": "1-based page number.",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "pageSize",
+            "required": false,
+            "in": "query",
+            "description": "Up to 100 per page.",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "QUEUED",
+                "RUNNING",
+                "SUCCEEDED",
+                "FAILED",
+                "CANCELLED",
+                "SUPERSEDED"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "ids",
+            "required": false,
+            "in": "query",
+            "description": "Up to 50. Accepts a repeated parameter (?ids=a&ids=b), one comma-separated value (?ids=a,b — what the manager portal itself sends), or a single bare id.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -3559,7 +3765,7 @@
           },
           "label": {
             "type": "string",
-            "example": "Van( 04 People) 253-4289"
+            "example": "Van (4 People) 253-4289"
           },
           "seatCapacity": {
             "type": "number",
@@ -3759,7 +3965,7 @@
           },
           "label": {
             "type": "string",
-            "example": "Van( 04 People) 253-4289"
+            "example": "Van (4 People) 253-4289"
           },
           "seatCapacity": {
             "type": "number",
@@ -3919,6 +4125,10 @@
           "pmsSupervisorCount": {
             "type": "number",
             "description": "Active PMS-grade supervisors. A branch with zero cannot be scheduled at all — every job needs one."
+          },
+          "dailyVisitCap": {
+            "type": "number",
+            "description": "Most visits this branch's day is planned to carry. Generation spreads work off a day above it and warns when it cannot; the calendar marks such a day so the limit is visible outside that one panel."
           }
         },
         "required": [
@@ -3927,7 +4137,8 @@
           "name",
           "employeeCount",
           "vehicleCount",
-          "pmsSupervisorCount"
+          "pmsSupervisorCount",
+          "dailyVisitCap"
         ]
       },
       "SkillListItemDto": {
@@ -4149,6 +4360,55 @@
           "pageSize"
         ]
       },
+      "AgreementOnboardingPlanDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "PLANNED",
+              "PLANNED_WITH_SHORTFALLS",
+              "FAILED"
+            ],
+            "description": "PLANNED: the whole horizon is on the calendar. PLANNED_WITH_SHORTFALLS: visits were placed, but some periods could not hold everything the agreement promises, or land on days already over capacity. FAILED: nothing was planned, and `message` says why."
+          },
+          "from": {
+            "type": "string",
+            "format": "date"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "description": "End of the horizon planned, a rolling twelve months from the start, or the agreement's own end date when that comes first."
+          },
+          "visitsPlanned": {
+            "type": "number",
+            "description": "Visits created across that horizon."
+          },
+          "shortfallPeriods": {
+            "type": "number",
+            "description": "Periods that could not hold the promised number of visits. Reported rather than quietly dropped."
+          },
+          "overCapacityDays": {
+            "type": "number",
+            "description": "Days this agreement lands on that are already carrying more than the branch plans for."
+          },
+          "message": {
+            "type": "string",
+            "nullable": true,
+            "description": "Why nothing could be planned. Null unless status is FAILED."
+          }
+        },
+        "required": [
+          "status",
+          "from",
+          "to",
+          "visitsPlanned",
+          "shortfallPeriods",
+          "overCapacityDays",
+          "message"
+        ]
+      },
       "ServiceAgreementDayRuleDto": {
         "type": "object",
         "properties": {
@@ -4183,6 +4443,14 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "onboardingPlan": {
+            "description": "Only on the response to creating an agreement: what the automatic onboarding plan did. Absent everywhere else, because it describes one event rather than the agreement.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AgreementOnboardingPlanDto"
+              }
+            ]
           },
           "customerId": {
             "type": "string",
@@ -4269,6 +4537,10 @@
             "type": "boolean",
             "description": "True only when status is ACTIVE."
           },
+          "generatedVisitCount": {
+            "type": "number",
+            "description": "How many visits this agreement has ever generated. Zero on an active agreement means it has produced no work at all, which is invisible on every other screen."
+          },
           "currentVersion": {
             "type": "number",
             "description": "Increments whenever a change would alter the visits produced."
@@ -4320,6 +4592,18 @@
               "type": "string"
             }
           },
+          "bookedDates": {
+            "example": [
+              "2026-01-05",
+              "2026-01-20"
+            ],
+            "description": "Dates already agreed with the customer, read from the master schedule workbook. Read-only: generation places a visit on each of them rather than re-planning the period.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date"
+            }
+          },
           "notes": {
             "type": "string",
             "nullable": true
@@ -4354,11 +4638,13 @@
           "endDate",
           "status",
           "isActive",
+          "generatedVisitCount",
           "currentVersion",
           "dayRules",
           "allowedDays",
           "preferredDays",
           "requiredSkillCodes",
+          "bookedDates",
           "notes",
           "createdAt",
           "updatedAt"
@@ -4454,6 +4740,16 @@
           "isPreferredDay": {
             "type": "boolean",
             "description": "Fell on a preferred weekday, not merely an allowed one."
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
           }
         },
         "required": [
@@ -4461,7 +4757,8 @@
           "weekday",
           "windowStartMinute",
           "windowEndMinute",
-          "isPreferredDay"
+          "isPreferredDay",
+          "placement"
         ]
       },
       "PreviewShortfallDto": {
@@ -4486,7 +4783,9 @@
             "enum": [
               "NOT_ENOUGH_ALLOWED_DAYS",
               "SITE_CLOSED_ON_ALLOWED_DAYS",
-              "WINDOW_TOO_SHORT_FOR_VISIT"
+              "WINDOW_TOO_SHORT_FOR_VISIT",
+              "BOOKED_BELOW_FREQUENCY",
+              "PERIOD_HELD_BY_A_CANCELLED_VISIT"
             ]
           },
           "message": {
@@ -4590,6 +4889,45 @@
           "updatedAt"
         ]
       },
+      "GenerateVisitsDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "example": "2026-09-07",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "First date of the planning horizon, inclusive. YYYY-MM-DD."
+          },
+          "to": {
+            "type": "string",
+            "example": "2026-10-04",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "Last date of the planning horizon, inclusive. YYYY-MM-DD."
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit the run to one branch. Omit for both."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit the run to particular agreements. Omit for every active agreement in range.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ]
+      },
       "PlannedVisitDto": {
         "type": "object",
         "properties": {
@@ -4625,6 +4963,16 @@
           "isPreferredDay": {
             "type": "boolean",
             "description": "Fell on a preferred weekday rather than a merely allowed one."
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
           }
         },
         "required": [
@@ -4637,7 +4985,8 @@
           "durationMinutes",
           "requiredCrewSize",
           "branchCode",
-          "isPreferredDay"
+          "isPreferredDay",
+          "placement"
         ]
       },
       "VisitChangeDto": {
@@ -4695,6 +5044,16 @@
             "type": "boolean",
             "description": "Fell on a preferred weekday rather than a merely allowed one."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this date: BOOKED is a date already agreed with the customer, ANCHORED is near the days this agreement is usually served on, SPREAD was moved off a day that was already full, EARLIEST is the first allowed day of the period."
+          },
           "visitId": {
             "type": "string",
             "format": "uuid"
@@ -4717,6 +5076,7 @@
           "requiredCrewSize",
           "branchCode",
           "isPreferredDay",
+          "placement",
           "visitId",
           "changes"
         ]
@@ -4846,6 +5206,13 @@
           "reason": {
             "type": "string"
           },
+          "reasons": {
+            "description": "Every cause that kept this period short, in the order the pipeline met them; `reason` is the first of them. A period can fail for more than one reason at once — too few allowed days to hold the promise, and then the one allowed day already full — and both are kept here rather than published as two rows disagreeing about the denominator.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "message": {
             "type": "string"
           }
@@ -4859,6 +5226,127 @@
           "requested",
           "scheduled",
           "reason",
+          "reasons",
+          "message"
+        ]
+      },
+      "DailyLoadWarningDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedCount": {
+            "type": "number",
+            "description": "How many visits the day carries."
+          },
+          "bookedCount": {
+            "type": "number",
+            "description": "How many of them are dates already booked, so unmovable."
+          },
+          "plannedMinutes": {
+            "type": "number",
+            "description": "The day's total crew-minutes — each visit's duration times its crew size, summed — which is what the cap actually limits."
+          },
+          "cap": {
+            "type": "number",
+            "description": "The crew-minutes cap itself."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "branchCode",
+          "date",
+          "plannedCount",
+          "bookedCount",
+          "plannedMinutes",
+          "cap",
+          "message"
+        ]
+      },
+      "BookingWarningDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "SITE_CLOSED_ON_BOOKED_DAY",
+              "WINDOW_TOO_SHORT_FOR_BOOKED_VISIT",
+              "AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS",
+              "BOOKED_DATE_CANCELLED"
+            ],
+            "description": "SITE_CLOSED_ON_BOOKED_DAY is a booking on a weekday the site has no recorded hours for; WINDOW_TOO_SHORT_FOR_BOOKED_VISIT is a booking inside recorded hours shorter than the visit needs; AGREEMENT_WINDOW_OUTSIDE_SITE_HOURS is a booking on a day whose recorded hours the agreement's own service window does not overlap at all; BOOKED_DATE_CANCELLED is a booked date whose visit is cancelled, so the day the customer agreed can never be served again."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "date",
+          "reason",
+          "message"
+        ]
+      },
+      "SkippedPeriodsDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "frequencyUnit": {
+            "type": "string",
+            "enum": [
+              "WEEK",
+              "MONTH"
+            ],
+            "description": "The unit this agreement's cycle is counted in."
+          },
+          "frequencyInterval": {
+            "type": "number",
+            "description": "How many units make one cycle: 2 with WEEK is fortnightly, 3 with MONTH quarterly."
+          },
+          "periodsSkipped": {
+            "type": "number",
+            "description": "How many of this agreement's cycles the range holds only a slice of."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "RANGE_HOLDS_NO_WHOLE_PERIOD",
+              "RANGE_CLIPS_A_PERIOD"
+            ],
+            "description": "RANGE_HOLDS_NO_WHOLE_PERIOD is an agreement this range could plan nothing at all for. RANGE_CLIPS_A_PERIOD is one it planned some cycles of while cutting another in half — reported for cadences no neighbouring range is guaranteed to pick up."
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "frequencyUnit",
+          "frequencyInterval",
+          "periodsSkipped",
+          "reason",
           "message"
         ]
       },
@@ -4867,11 +5355,13 @@
         "properties": {
           "from": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
           "to": {
             "type": "string",
-            "format": "date"
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
           },
           "agreementsConsidered": {
             "type": "number"
@@ -4909,10 +5399,31 @@
             "description": "Already correct; nothing to do."
           },
           "shortfalls": {
-            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped.",
+            "description": "Periods that cannot hold the promised number of visits. Reported, never quietly dropped. `reason` is a stable code: the scheduling rule ones a period can fail on its own (NOT_ENOUGH_ALLOWED_DAYS, SITE_CLOSED_ON_ALLOWED_DAYS, BOOKED_BELOW_FREQUENCY and the rest), plus BRANCH_DAY_AT_CAPACITY — every day the visit is allowed on already carries the crew-minutes its branch plans for, so it is left unplanned rather than placed on a day that cannot carry it. `requested` and `scheduled` say how much of the period landed.",
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GenerationShortfallDto"
+            }
+          },
+          "loadWarnings": {
+            "description": "Days still carrying more visits than the branch plans for, because the work on them is already booked with customers. Named by date and count only.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DailyLoadWarningDto"
+            }
+          },
+          "bookingWarnings": {
+            "description": "Dates booked with a customer that the site's own recorded opening hours do not support — a weekday it is shut, or a window shorter than the visit. The visit is still planned, because the booking is a commitment. Named by date and agreement only.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BookingWarningDto"
+            }
+          },
+          "skippedPeriods": {
+            "description": "Agreements this range could plan nothing for, because it holds no whole cycle of theirs — a quarterly agreement asked about from a week view, say. Nothing is wrong with the agreement; the run that covers a whole quarter will plan it. Listed so a zero is never silent.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkippedPeriodsDto"
             }
           },
           "isPreview": {
@@ -4936,8 +5447,327 @@
           "protectedVisits",
           "unchangedCount",
           "shortfalls",
+          "loadWarnings",
+          "bookingWarnings",
+          "skippedPeriods",
           "isPreview",
           "scheduleRunId"
+        ]
+      },
+      "ExtendHorizonsDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every open-ended agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every open-ended agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "HorizonExtensionDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "visitsAdded": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "from",
+          "to",
+          "visitsAdded"
+        ]
+      },
+      "HorizonExtensionFailureDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "Why this one agreement could not be extended — e.g. a branch-day genuinely full."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "message"
+        ]
+      },
+      "HorizonExtensionSummaryDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "targetHorizon": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+            "description": "today plus a rolling year — every open-ended agreement is planned up to here."
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active, open-ended agreement considered — extended or already caught up."
+          },
+          "agreementsExtended": {
+            "description": "Only the agreements this call actually planned further into.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HorizonExtensionDto"
+            }
+          },
+          "failures": {
+            "description": "One agreement's own conflict never stops the sweep from reaching the rest of the company — each one that could not be extended is reported here instead of aborting the call.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HorizonExtensionFailureDto"
+            }
+          }
+        },
+        "required": [
+          "today",
+          "targetHorizon",
+          "agreementsConsidered",
+          "agreementsExtended",
+          "failures"
+        ]
+      },
+      "RepairBunchingDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every active agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every active agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "RepairedAgreementDto": {
+        "type": "object",
+        "properties": {
+          "serviceAgreementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerName": {
+            "type": "string"
+          },
+          "siteName": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "visitsMoved": {
+            "type": "number",
+            "description": "How many of this agreement's own unbooked visits moved to a different day."
+          }
+        },
+        "required": [
+          "serviceAgreementId",
+          "customerName",
+          "siteName",
+          "from",
+          "to",
+          "visitsMoved"
+        ]
+      },
+      "RepairBunchingPlanResponseDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active agreement with a generated visit in scope, whether or not it needed repair."
+          },
+          "moves": {
+            "description": "Only the agreements applying this plan would actually move a visit for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairedAgreementDto"
+            }
+          },
+          "stillOverCap": {
+            "description": "Days this plan would still leave over the cap, because every visit on them is protected.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DailyLoadWarningDto"
+            }
+          },
+          "planHash": {
+            "type": "string",
+            "description": "Canonical SHA-256 hash of this plan and the calendar state it was computed from. Pass back unchanged to apply."
+          }
+        },
+        "required": [
+          "today",
+          "agreementsConsidered",
+          "moves",
+          "stillOverCap",
+          "planHash"
+        ]
+      },
+      "RepairBunchingApplyDto": {
+        "type": "object",
+        "properties": {
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "description": "Limit to one branch. Omit to consider every active agreement in the company."
+          },
+          "serviceAgreementIds": {
+            "description": "Limit to particular agreements. Omit for every active agreement in scope.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "planHash": {
+            "type": "string",
+            "description": "Canonical SHA-256 plan hash returned by plan."
+          },
+          "confirmation": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "Must be exactly true."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Repeating a call with the same key and the same body returns the first result again rather than repeating the write."
+          }
+        },
+        "required": [
+          "planHash",
+          "confirmation",
+          "reason",
+          "idempotencyKey"
+        ]
+      },
+      "RepairBunchingApplyResultDto": {
+        "type": "object",
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "agreementsConsidered": {
+            "type": "number",
+            "description": "Every active agreement with a generated visit in scope, whether or not it needed repair."
+          },
+          "agreementsRepaired": {
+            "description": "Only the agreements this call actually moved a visit for.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RepairedAgreementDto"
+            }
+          },
+          "stillOverCap": {
+            "description": "Days still over the cap after repair, because every visit still standing on them is booked, published, locked or hand-adjusted — the repair cannot move a manager's own decision, only its own unbooked, unpublished work.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DailyLoadWarningDto"
+            }
+          },
+          "planHash": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "True when this call did no new work and returned an earlier apply of the same idempotency key."
+          }
+        },
+        "required": [
+          "today",
+          "agreementsConsidered",
+          "agreementsRepaired",
+          "stillOverCap",
+          "planHash",
+          "idempotencyKey",
+          "replayed"
         ]
       },
       "VisitDto": {
@@ -4997,6 +5827,16 @@
             "type": "boolean",
             "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -5022,7 +5862,22 @@
             "nullable": true
           },
           "assignmentCount": {
-            "type": "number"
+            "type": "number",
+            "description": "How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew."
+          },
+          "assignedCrewCount": {
+            "type": "number",
+            "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
+          },
+          "plannedStartMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is due to leave, on the same scale. Null when nobody is assigned."
           },
           "createdAt": {
             "type": "string",
@@ -5047,6 +5902,7 @@
           "siteName",
           "jobTypeName",
           "hoursUnconfirmed",
+          "placement",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
@@ -5054,6 +5910,9 @@
           "isLocked",
           "lockReason",
           "assignmentCount",
+          "assignedCrewCount",
+          "plannedStartMinute",
+          "plannedEndMinute",
           "createdAt",
           "updatedAt"
         ]
@@ -5124,7 +5983,20 @@
           "generatedByRunId": {
             "type": "string",
             "nullable": true,
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The schedule run that generated this visit. For links only — a screen names a run by the weeks it covered, never by its id."
+          },
+          "generatedByRunRangeStart": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "First day of that run's horizon, which is how a screen names it. Null when no run generated this visit."
+          },
+          "generatedByRunRangeEnd": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "Last day of that run's horizon. Null when no run generated this visit."
           }
         },
         "required": [
@@ -5136,7 +6008,48 @@
           "frequencyLabel",
           "allowedDaysAtGeneration",
           "generatedAt",
-          "generatedByRunId"
+          "generatedByRunId",
+          "generatedByRunRangeStart",
+          "generatedByRunRangeEnd"
+        ]
+      },
+      "VisitCrewChangeDto": {
+        "type": "object",
+        "properties": {
+          "changedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "CREW_SET",
+              "CREW_REPLACED",
+              "CREW_REMOVED"
+            ],
+            "description": "CREW_SET: a crew was put on a visit that had none. CREW_REPLACED: a crew already on the visit was changed. CREW_REMOVED: the crew was taken off."
+          },
+          "actorLabel": {
+            "type": "string",
+            "nullable": true,
+            "description": "Who made the change, as recorded at the time."
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "The reason the manager gave. Null where none was asked for, as when a crew is taken off."
+          },
+          "crewSize": {
+            "type": "number",
+            "description": "How many people the change left on the visit."
+          }
+        },
+        "required": [
+          "changedAt",
+          "action",
+          "actorLabel",
+          "reason",
+          "crewSize"
         ]
       },
       "VisitDetailDto": {
@@ -5196,6 +6109,16 @@
             "type": "boolean",
             "description": "The site has no recorded opening hours, so this visit was placed on an assumed working day. Clears itself once real hours are entered."
           },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "BOOKED",
+              "ANCHORED",
+              "SPREAD",
+              "EARLIEST"
+            ],
+            "description": "Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period."
+          },
           "isProtected": {
             "type": "boolean",
             "description": "True when regeneration will leave this visit alone."
@@ -5221,7 +6144,22 @@
             "nullable": true
           },
           "assignmentCount": {
-            "type": "number"
+            "type": "number",
+            "description": "How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew."
+          },
+          "assignedCrewCount": {
+            "type": "number",
+            "description": "How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize."
+          },
+          "plannedStartMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong."
+          },
+          "plannedEndMinute": {
+            "type": "number",
+            "nullable": true,
+            "description": "When the crew is due to leave, on the same scale. Null when nobody is assigned."
           },
           "createdAt": {
             "type": "string",
@@ -5238,6 +6176,13 @@
                 "$ref": "#/components/schemas/VisitOriginDto"
               }
             ]
+          },
+          "crewChanges": {
+            "description": "Every time a manager set, changed or removed this visit's crew by hand, newest first, with the reason they gave. Empty for a visit only the scheduler has touched. Capped at the most recent 20.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitCrewChangeDto"
+            }
           }
         },
         "required": [
@@ -5254,6 +6199,7 @@
           "siteName",
           "jobTypeName",
           "hoursUnconfirmed",
+          "placement",
           "isProtected",
           "protectionReason",
           "isManuallyAdjusted",
@@ -5261,9 +6207,13 @@
           "isLocked",
           "lockReason",
           "assignmentCount",
+          "assignedCrewCount",
+          "plannedStartMinute",
+          "plannedEndMinute",
           "createdAt",
           "updatedAt",
-          "origin"
+          "origin",
+          "crewChanges"
         ]
       },
       "ConflictResourcesDto": {
@@ -5339,7 +6289,8 @@
               "ASSIGNMENT_LOCKED",
               "CREW_CANNOT_TRAVEL",
               "TOO_MANY_VEHICLES",
-              "NO_FEASIBLE_CREW"
+              "NO_FEASIBLE_CREW",
+              "DAILY_VISIT_CAP_REACHED"
             ]
           },
           "message": {
@@ -5899,8 +6850,23 @@
           "visitsUnassigned": {
             "type": "number"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "OPTIMIZER",
+              "VISIT_GENERATION"
+            ],
+            "description": "What produced this run. OPTIMIZER is a solve, with assignments to review and publish. VISIT_GENERATION is the record of a confirmed \"Generate visits\" — it creates visits, never assignments, and has nothing to publish."
+          },
           "publishReadiness": {
-            "$ref": "#/components/schemas/PublishReadinessDto"
+            "nullable": true,
+            "description": "Null for a VISIT_GENERATION run: there is no publication for it to be ready for, and reporting one as BLOCKED/ZERO_RESULTS told a manager a schedule had failed when none had been attempted.",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PublishReadinessDto"
+              }
+            ]
           },
           "isPublished": {
             "type": "boolean",
@@ -5953,6 +6919,7 @@
           "visitsConsidered",
           "visitsScheduled",
           "visitsUnassigned",
+          "kind",
           "publishReadiness",
           "isPublished",
           "publishedAt",
@@ -6253,8 +7220,13 @@
           "proposed": {
             "type": "number"
           },
-          "unassigned": {
-            "type": "number"
+          "awaitingStaffing": {
+            "type": "number",
+            "description": "No crew and no proposal, and nobody has tried: visit status PENDING."
+          },
+          "staffingFailed": {
+            "type": "number",
+            "description": "No crew and no proposal because staffing was attempted and refused: visit status UNASSIGNED."
           },
           "exceptions": {
             "type": "number"
@@ -6267,7 +7239,8 @@
           "total",
           "ready",
           "proposed",
-          "unassigned",
+          "awaitingStaffing",
+          "staffingFailed",
           "exceptions",
           "hoursUnconfirmed"
         ]
@@ -6313,6 +7286,17 @@
           },
           "hoursUnconfirmed": {
             "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "SCHEDULED",
+              "UNASSIGNED",
+              "COMPLETED",
+              "CANCELLED"
+            ],
+            "description": "The visit's own stage, which is how every screen names it. The day item's `state` answers a different question — whether there is anything to dispatch — and its UNASSIGNED covers both a visit nobody has tried to staff (PENDING) and one the scheduler tried and could not (UNASSIGNED). A client needs this to tell a manager which."
           }
         },
         "required": [
@@ -6326,7 +7310,8 @@
           "durationMinutes",
           "windowStartMinute",
           "windowEndMinute",
-          "hoursUnconfirmed"
+          "hoursUnconfirmed",
+          "status"
         ]
       },
       "OperationsCrewMemberDto": {
@@ -6477,12 +7462,26 @@
             "type": "string",
             "nullable": true,
             "format": "date-time"
+          },
+          "rangeStart": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "First day of the run's horizon. Null when the assignment records no run."
+          },
+          "rangeEnd": {
+            "type": "string",
+            "nullable": true,
+            "format": "date",
+            "description": "Last day of the run's horizon. Null when the assignment records no run."
           }
         },
         "required": [
           "id",
           "status",
-          "publishedAt"
+          "publishedAt",
+          "rangeStart",
+          "rangeEnd"
         ]
       },
       "OperationsPublishedAssignmentLineageEntryDto": {

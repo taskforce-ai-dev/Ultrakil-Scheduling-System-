@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { CalendarPlus, ChevronLeft, ChevronRight, Move } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Move, UserX, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -17,7 +18,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -25,13 +28,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
+import { VISIT_STATUS_LABEL } from "@/components/shared/visit-badges";
 import { Badge } from "@/components/ui/badge";
 import {
   adjustVisit,
   ApiError,
+  fetchBranches,
   fetchCustomers,
   fetchJobTypes,
   fetchVisits,
+  type BranchListItem,
   type Customer,
   type JobType,
   type Visit,
@@ -41,16 +47,24 @@ import {
   addDays,
   addMonths,
   daysInView,
-  formatMinuteOfDay,
   formatLongDate,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
+  rangeForGeneration,
   rangeForView,
   todayIso,
   WEEKDAY_INITIALS,
   type CalendarView,
 } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import {
+  compareVisitTiles,
+  visitTileAccessibleName,
+  visitTileTime,
+  NO_CREW_LABEL,
+  type VisitTileFacts,
+} from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { VisitDetailDrawer } from "./visit-detail-drawer";
@@ -62,25 +76,36 @@ interface MoveRequest {
   targetDate: string;
 }
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StateFilter = "ALL" | VisitStatus | "LOCKED" | "MANUALLY_ADJUSTED" | "GENERATED";
 
-const STATE_OPTIONS: { value: StateFilter; label: string }[] = [
-  { value: "ALL", label: "All states" },
+/**
+ * Two different questions, asked in two labelled groups.
+ *
+ * Where a visit has got to (its status) and how it got there (generated,
+ * hand-modified, locked) are independent facts, and one flat list of both
+ * invited a manager to add them up: 6 "Unassigned" and 66 "Crew assigned"
+ * against 104 visits, with the rest — the PENDING ones nobody had tried to
+ * staff — not offered at all.
+ */
+const STAGE_OPTIONS: { value: StateFilter; label: string }[] = [
+  { value: "PENDING", label: VISIT_STATUS_LABEL.PENDING },
+  { value: "UNASSIGNED", label: VISIT_STATUS_LABEL.UNASSIGNED },
+  { value: "SCHEDULED", label: VISIT_STATUS_LABEL.SCHEDULED },
+  { value: "COMPLETED", label: VISIT_STATUS_LABEL.COMPLETED },
+  { value: "CANCELLED", label: VISIT_STATUS_LABEL.CANCELLED },
+];
+
+const PROVENANCE_OPTIONS: { value: StateFilter; label: string }[] = [
   { value: "GENERATED", label: "Generated (untouched)" },
   { value: "MANUALLY_ADJUSTED", label: "Manually modified" },
   { value: "LOCKED", label: "Locked" },
-  { value: "UNASSIGNED", label: "Unassigned" },
-  { value: "SCHEDULED", label: "Crew assigned" },
-  { value: "COMPLETED", label: "Completed" },
-  { value: "CANCELLED", label: "Cancelled" },
 ];
 
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
+const STATE_OPTIONS: { value: StateFilter; label: string }[] = [
+  { value: "ALL", label: "All states" },
+  ...STAGE_OPTIONS,
+  ...PROVENANCE_OPTIONS,
+];
 
 const STATE_LABELS = Object.fromEntries(
   STATE_OPTIONS.map((option) => [option.value, option.label])
@@ -95,6 +120,26 @@ const STATE_LABELS = Object.fromEntries(
  * week view for that day, so nothing is hidden without a way to reach it.
  */
 const MAX_CHIPS_PER_MONTH_CELL = 3;
+
+/**
+ * This screen's payload, reduced to the facts a tile may state.
+ *
+ * `calendar-board` builds the identical shape from the calendar read model,
+ * and both render it through the same helpers — see `@/lib/visit-tile`. The
+ * two screens are pinned to the same answer by test, because they have
+ * already drifted once.
+ */
+function tileFacts(visit: Visit): VisitTileFacts {
+  return {
+    customerName: visit.customerName,
+    visitDate: visit.visitDate,
+    durationMinutes: visit.durationMinutes,
+    plannedStartMinute: visit.plannedStartMinute,
+    plannedEndMinute: visit.plannedEndMinute,
+    windowStartMinute: visit.windowStartMinute,
+    crewCount: visit.assignedCrewCount,
+  };
+}
 
 /**
  * One visit as it appears inside a day cell.
@@ -129,6 +174,7 @@ function VisitChip({
   // uses the normal foreground for scheduled chips.
   const supportingTextTone =
     visit.status === "SCHEDULED" ? "text-foreground" : "text-muted-foreground";
+  const facts = tileFacts(visit);
 
   return (
     <div
@@ -146,22 +192,39 @@ function VisitChip({
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`${visit.customerName} at ${formatMinuteOfDay(visit.windowStartMinute)} on ${visit.visitDate}${
-          ""
-        }`}
-        className="min-w-0 flex-1 truncate px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={visitTileAccessibleName(facts, VISIT_STATUS_LABEL[visit.status].toLowerCase())}
+        className="min-w-0 flex-1 px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="flex items-center gap-1">
+        <span className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+          {/* The hour a crew is actually due, or the plain statement that
+              nobody has decided one. This used to print windowStartMinute —
+              the service window, defaulted to 08:00 on a site with no
+              recorded hours — under the word "at", so nine tiles in twelve
+              announced a time nobody was attending. */}
+          <span className={cn("w-full tabular-nums", supportingTextTone)}>
+            {visitTileTime(facts)}
+          </span>
           {visit.isLocked && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
           )}
           {!visit.isLocked && visit.isManuallyAdjusted && (
             <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-secondary-foreground/60" />
           )}
-          <span className={cn("shrink-0 tabular-nums", supportingTextTone)}>
-            {formatMinuteOfDay(visit.windowStartMinute)}
-          </span>
-          <span className="truncate">{visit.customerName}</span>
+          <span className="min-w-0 flex-1 truncate">{visit.customerName}</span>
+          {/* Said, never left blank: staffed and unstaffed tiles read
+              identically without it, which is what this screen lost while the
+              other calendar kept it. */}
+          {facts.crewCount > 0 ? (
+            <span className={cn("flex shrink-0 items-center gap-0.5", supportingTextTone)}>
+              <Users className="h-3 w-3" aria-hidden="true" />
+              {facts.crewCount}
+            </span>
+          ) : (
+            <span className="flex shrink-0 items-center gap-0.5 font-medium">
+              <UserX className="h-3 w-3" aria-hidden="true" />
+              {NO_CREW_LABEL}
+            </span>
+          )}
         </span>
       </button>
       <button
@@ -205,6 +268,7 @@ export default function VisitsPage() {
   const [totalInRange, setTotalInRange] = React.useState(0);
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [jobTypes, setJobTypes] = React.useState<JobType[]>([]);
+  const [branches, setBranches] = React.useState<BranchListItem[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
 
@@ -228,8 +292,18 @@ export default function VisitsPage() {
   const isMovingRef = React.useRef(false);
 
   const { from, to } = rangeForView(anchor, view);
+  // What a run is asked for is not what the grid shows: see
+  // `rangeForGeneration`.
+  const generationRange = rangeForGeneration(anchor, view);
+
+  // Stepping months or switching branch fires a new load before an older one
+  // has answered. Without a fence, whichever response lands last wins — which
+  // is not necessarily the one for what is now on screen. Every setter below
+  // is guarded by the same check the calendar board already uses.
+  const requestGeneration = React.useRef(0);
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
     Promise.all([
@@ -241,21 +315,27 @@ export default function VisitsPage() {
       }),
       fetchCustomers({ pageSize: 200 }),
       fetchJobTypes(),
+      fetchBranches(),
     ])
-      .then(([visitPage, customerPage, jobTypeList]) => {
+      .then(([visitPage, customerPage, jobTypeList, branchList]) => {
+        if (generation !== requestGeneration.current) return;
         setVisits(visitPage.items);
         setTotalInRange(visitPage.total);
         setCustomers(customerPage.items);
         setJobTypes(jobTypeList);
+        setBranches(branchList);
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
   }, [from, to, branch]);
 
   React.useEffect(() => {
@@ -309,10 +389,43 @@ export default function VisitsPage() {
       else grouped.set(visit.visitDate, [visit]);
     }
     for (const bucket of grouped.values()) {
-      bucket.sort((left, right) => left.windowStartMinute - right.windowStartMinute);
+      bucket.sort((left, right) => compareVisitTiles(tileFacts(left), tileFacts(right)));
     }
     return grouped;
   }, [visible]);
+
+  /**
+   * Days carrying more work than their branch plans for.
+   *
+   * Counted from everything fetched for the range rather than from the
+   * filtered view: narrowing to one customer does not make a day less busy.
+   * Counted per branch too — the limit is a branch's day, and Colombo and
+   * Kandy never share a crew.
+   *
+   * Generation says this once, in a panel that closes. The day goes on
+   * carrying the work for weeks, so the calendar says it as well.
+   *
+   * Cancelled work occupies no part of the day, exactly as the guard reads it.
+   * Counting it here badged days the guard was perfectly happy with, and a
+   * badge the generator contradicts is worse than no badge at all.
+   */
+  const overCapDays = React.useMemo(() => {
+    const caps = new Map(branches.map((entry) => [entry.code, entry.dailyVisitCap]));
+    const load = new Map<string, number>();
+    for (const visit of visits) {
+      if (visit.status === "CANCELLED") continue;
+      const key = `${visit.branchCode}|${visit.visitDate}`;
+      load.set(key, (load.get(key) ?? 0) + 1);
+    }
+
+    const over = new Set<string>();
+    for (const [key, count] of load) {
+      const [branchCode, date] = key.split("|");
+      const cap = caps.get(branchCode as BranchListItem["code"]);
+      if (cap !== undefined && count > cap) over.add(date);
+    }
+    return over;
+  }, [visits, branches]);
 
   // Base UI's <SelectValue> renders the raw value unless the root is given a
   // value -> label map, which would show a customer's UUID on the trigger.
@@ -380,14 +493,19 @@ export default function VisitsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Visit Calendar</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Generate Schedule</h1>
+          {/* "Nobody is assigned here" was meant as "crew is not set on this
+              screen" and read as "none of this work has a crew" — above tiles
+              carrying crew badges and beside a filter that returns 66 staffed
+              visits. Say which of the two it is. */}
           <p className="text-muted-foreground">
-            Recurring work generated from service agreements. Nobody is assigned here.
+            Recurring work generated from service agreements. Crew is shown where there is one;
+            assign one from Unassigned Visits or the Dispatch Board.
           </p>
         </div>
         <Button onClick={() => setGenerateOpen(true)}>
           <CalendarPlus className="h-4 w-4" />
-          Generate visits
+          Generate Schedule
         </Button>
       </div>
 
@@ -430,7 +548,7 @@ export default function VisitsPage() {
         <div className="space-y-1.5">
           <Label htmlFor="branch-filter">Branch</Label>
           <Select
-            items={BRANCH_LABELS}
+            items={BRANCH_FILTER_LABELS}
             value={branch}
             onValueChange={(value) => setBranch((value ?? "ALL") as BranchFilter)}
           >
@@ -438,7 +556,7 @@ export default function VisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ALL">Both branches</SelectItem>
+              <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
               <SelectItem value="COLOMBO">Colombo</SelectItem>
               <SelectItem value="KANDY">Kandy</SelectItem>
             </SelectContent>
@@ -498,11 +616,23 @@ export default function VisitsPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {STATE_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
+              <SelectItem value="ALL">All states</SelectItem>
+              <SelectGroup>
+                <SelectLabel>Stage</SelectLabel>
+                {STAGE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+              <SelectGroup>
+                <SelectLabel>How it got here</SelectLabel>
+                {PROVENANCE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </div>
@@ -533,9 +663,13 @@ export default function VisitsPage() {
             {adjustedCount > 0 && (
               <Badge variant="secondary">{adjustedCount} manually modified</Badge>
             )}
+            {/* Which population, in the line itself. "38 with no crew
+                assigned yet" beside a filter reading "Unassigned" read as the
+                same number, and the filter returned 6 of the 38. */}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
-                {unstaffedCount} with no crew assigned yet
+                {unstaffedCount} with no crew yet — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
+                {VISIT_STATUS_LABEL.UNASSIGNED.toLowerCase()}
               </span>
             )}
           </div>
@@ -634,6 +768,12 @@ export default function VisitsPage() {
                             </span>
                           )}
                         </div>
+
+                        {overCapDays.has(day) && (
+                          <Badge variant="destructive" className="w-full justify-center">
+                            Over the branch&apos;s daily limit
+                          </Badge>
+                        )}
                         {shownVisits.map((visit) => (
                           <VisitChip
                             key={visit.id}
@@ -645,6 +785,9 @@ export default function VisitsPage() {
                             }}
                           />
                         ))}
+                        {/* Says what it does: it used to read "+ 9 more" and
+                            silently swap the month view for Week, after which
+                            the next arrow stepped by week. */}
                         {hiddenCount > 0 && (
                           <button
                             type="button"
@@ -654,7 +797,7 @@ export default function VisitsPage() {
                             }}
                             className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
-                            + {hiddenCount} more
+                            + {hiddenCount} more in Week view
                           </button>
                         )}
                       </div>
@@ -678,8 +821,9 @@ export default function VisitsPage() {
       <GenerationImpactDrawer
         open={generateOpen}
         onOpenChange={setGenerateOpen}
-        from={from}
-        to={to}
+        from={generationRange.from}
+        to={generationRange.to}
+        view={view}
         branchCode={branch === "ALL" ? undefined : branch}
         onConfirmed={load}
       />
@@ -694,30 +838,32 @@ export default function VisitsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="move-date">New date</Label>
-            <Input
-              id="move-date"
-              type="date"
-              value={moveRequest?.targetDate ?? ""}
-              onChange={(event) =>
-                event.target.value &&
-                setMoveRequest((current) =>
-                  current ? { ...current, targetDate: event.target.value } : current
-                )
-              }
-            />
-          </div>
+          <DialogBody>
+            <div className="space-y-1.5">
+              <Label htmlFor="move-date">New date</Label>
+              <Input
+                id="move-date"
+                type="date"
+                value={moveRequest?.targetDate ?? ""}
+                onChange={(event) =>
+                  event.target.value &&
+                  setMoveRequest((current) =>
+                    current ? { ...current, targetDate: event.target.value } : current
+                  )
+                }
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="move-reason">Reason</Label>
-            <Textarea
-              id="move-reason"
-              value={moveReason}
-              onChange={(event) => setMoveReason(event.target.value)}
-              placeholder="Why is this visit moving?"
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="move-reason">Reason</Label>
+              <Textarea
+                id="move-reason"
+                value={moveReason}
+                onChange={(event) => setMoveReason(event.target.value)}
+                placeholder="Why is this visit moving?"
+              />
+            </div>
+          </DialogBody>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setMoveRequest(null)}>

@@ -81,6 +81,13 @@ export interface ParsedAgreement {
   effort: ParsedEffort;
   /** "Agreement date Up to", when the sheet records one. */
   endDate: string | null;
+  /**
+   * The dates already booked with the customer, as YYYY-MM-DD, read from the
+   * workbook's month columns. These are commitments, not proposals: generation
+   * places a visit on each of them rather than re-planning the month from the
+   * frequency. Empty when the sheet carries no month columns.
+   */
+  bookedDates: string[];
   notes: string | null;
   /** False when its site is marked red. Such an agreement is imported, but
    *  never ACTIVE, so it produces no future visits. */
@@ -117,6 +124,8 @@ export interface ImportIssue {
     | 'SITE_NAME_MISSING'
     | 'BRANCH_UNKNOWN'
     | 'SHEET_NOT_MAPPED'
+    /** A booked day the month does not have, e.g. the 31st of June. */
+    | 'BOOKED_DATE_INVALID'
     /** Read as no longer serviced because its identity cells are red. */
     | 'RECORD_INACTIVE'
     /** Some identity cells red and some not. Left active for a human to rule on. */

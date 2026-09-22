@@ -111,6 +111,22 @@ enum VisitStatus {
   CANCELLED
 }
 
+/// Why a generated visit sits on the date it does.
+///
+/// The master schedule workbook already records the days UltraKIL has booked
+/// with each customer. BOOKED means the date came straight from one of those
+/// bookings and is a fact, not a plan. ANCHORED means no booking covered the
+/// period, so the date was placed near the days this agreement is usually
+/// served on. SPREAD means the daily load guard moved it off a day that was
+/// already full. EARLIEST is the old behaviour — no booking and no anchor to
+/// aim at, so the first allowed day of the period.
+enum VisitPlacement {
+  BOOKED
+  ANCHORED
+  SPREAD
+  EARLIEST
+}
+
 enum AssignmentStatus {
   DRAFT
   PROPOSED
@@ -409,8 +425,10 @@ model Vehicle {
   seatCapacity Int?
 
   /// Workbook column group, e.g. Personal or Transport Company. The matrix
-  /// states this ownership grouping but does not state a branch, so branchId
-  /// intentionally remains nullable and is never inferred by its importer.
+  /// states this ownership grouping but never a branch; the Technician Matrix
+  /// importer defaults every vehicle it writes to Colombo on both create and
+  /// update (Technical Director decision, 2026-09-21). branchId stays
+  /// nullable for a vehicle created outside that importer.
   ownershipGroup String?
 
   isActive Boolean @default(true)
@@ -641,6 +659,7 @@ model ServiceAgreement {
   requiredSkills  ServiceAgreementRequiredSkill[]
   versions        ServiceAgreementVersion[]
   generatedVisits GeneratedVisit[]
+  bookings        ServiceAgreementBooking[]
 
   @@index([customerId])
   @@index([serviceSiteId])
@@ -648,8 +667,36 @@ model ServiceAgreement {
   @@map("service_agreements")
 }
 
-/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
-/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
+/// A date the workbook has already booked with the customer.
+///
+/// The master schedule's twelve month columns hold the day numbers UltraKIL
+/// has agreed with each client — "10", or "5 & 20". Until now those numbers
+/// were read only to infer which weekdays a site is serviced on and then
+/// thrown away, so generation re-planned every visit from the frequency and
+/// piled the whole month onto its first allowed weekday. A booked date is a
+/// commitment, not a suggestion: it is kept here so generation can place the
+/// visit where the customer is actually expecting it.
+///
+/// `provenance` is SOURCE for a date read from the workbook. A re-import
+/// replaces only its own SOURCE rows — anything a manager entered stays.
+model ServiceAgreementBooking {
+  id String @id @default(uuid()) @db.Uuid
+
+  serviceAgreementId String           @db.Uuid
+  serviceAgreement   ServiceAgreement @relation(fields: [serviceAgreementId], references: [id], onDelete: Cascade)
+
+  /// The booked calendar date, in Asia/Colombo terms.
+  bookedDate DateTime @db.Date
+
+  provenance DataProvenance @default(SOURCE)
+
+  createdAt DateTime @default(now())
+
+  @@unique([serviceAgreementId, bookedDate])
+  @@index([serviceAgreementId])
+  @@map("service_agreement_bookings")
+}
+
 /// A skill a crew member must hold for this agreement's work.
 ///
 /// The job type carries a default, but a particular customer can need more —
@@ -702,6 +749,10 @@ model ServiceAgreementVersion {
   @@map("service_agreement_versions")
 }
 
+/// Which weekdays an agreement may be served on.
+///
+/// ALLOWED rows are hard constraints — a visit may only fall on an allowed day.
+/// PREFERRED rows are soft preferences used for ranking, never for exclusion.
 model ServiceAgreementDayRule {
   id String @id @default(uuid()) @db.Uuid
 
@@ -750,6 +801,12 @@ model GeneratedVisit {
 
   status VisitStatus @default(PENDING)
 
+  /// Why the visit sits on this date: straight from a customer booking, near
+  /// the agreement's usual days, moved off a full day by the load guard, or
+  /// simply the first allowed day. EARLIEST is the honest default for rows
+  /// generated before placement was recorded — that is what they were.
+  placement VisitPlacement @default(EARLIEST)
+
   /// True once a manager has changed this visit by hand — moved its date,
   /// widened its window, altered the crew size. Regeneration must never
   /// overwrite one: the manager knows something the agreement does not.
@@ -785,6 +842,10 @@ model GeneratedVisit {
   @@index([branchId, visitDate, status])
   @@index([status])
   @@index([serviceAgreementId, visitDate])
+  /// The load guard reads every visit standing in a branch's horizon on every
+  /// generation run, by branch code and date. Without this it is a sequential
+  /// scan of the whole table each time.
+  @@index([branchCode, visitDate])
   @@map("generated_visits")
 }
 
@@ -918,6 +979,59 @@ model PublishedAssignmentRepairItem {
   @@unique([repairId, sourceAssignmentId])
   @@index([generatedVisitId])
   @@map("published_assignment_repair_items")
+}
+
+/// One administrator-confirmed, idempotent bunching-repair batch: the
+/// preview→review→apply ledger the Technical Director's review asked for,
+/// mirroring `PublishedAssignmentRepair`'s request/plan-hash pattern. A
+/// bunching repair only ever moves an agreement's own unbooked
+/// `GeneratedVisit` rows through the same scoped `confirm` ordinary
+/// generation already uses, which writes and protects each visit
+/// individually — so, unlike an assignment repair, no separate before/after
+/// item table is needed; the applied summary is recorded whole, in `result`.
+/// Where one bunching-repair apply got to.
+///
+/// The row is written *before* the first move, so the key is claimed by
+/// whoever starts rather than by whoever finishes. That is what makes a
+/// partial apply impossible to lose: a crash between two moves leaves an
+/// IN_PROGRESS row naming exactly what had already landed.
+enum RepairBunchingStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+model RepairBunchingBatch {
+  id String @id @default(uuid()) @db.Uuid
+
+  idempotencyKey String @unique
+  requestHash    String
+  planHash       String
+  reason         String?
+
+  actorUserId String
+  actorLabel  String
+
+  status RepairBunchingStatus @default(IN_PROGRESS)
+
+  /// Every move that has actually landed, appended as each one commits, so
+  /// the ledger is never behind the calendar. Written even when the apply
+  /// later fails: an unrecorded partial repair is the one outcome this
+  /// table exists to rule out.
+  appliedMoves Json @default("[]")
+
+  /// Only once the whole plan has been applied. Null while in progress, and
+  /// on a failure — there is no complete result to replay in either case.
+  result Json?
+
+  failureReason String?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([createdAt])
+  @@index([status])
+  @@map("repair_bunching_batches")
 }
 
 model AssignmentCrewMember {

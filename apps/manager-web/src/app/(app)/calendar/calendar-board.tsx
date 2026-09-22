@@ -1,12 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { ChevronLeft, ChevronRight, Car, Users, Crown } from "lucide-react";
+import { ChevronLeft, ChevronRight, Car, Users, UserX, Crown } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -29,7 +30,6 @@ import {
   addMonths,
   daysInView,
   formatLongDate,
-  formatMinuteOfDay,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
@@ -38,22 +38,23 @@ import {
   WEEKDAY_INITIALS,
   type CalendarView,
 } from "@/lib/calendar";
+import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
+import {
+  compareVisitTiles,
+  visitTileAccessibleName,
+  visitTileTime,
+  NO_CREW_LABEL,
+  type VisitTileFacts,
+} from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
 
-type BranchFilter = "ALL" | "COLOMBO" | "KANDY";
 type StageFilter = "ALL" | "UNASSIGNED" | "DRAFT" | "PUBLISHED" | "DONE";
-
-const BRANCH_LABELS: Record<BranchFilter, string> = {
-  ALL: "Both branches",
-  COLOMBO: "Colombo",
-  KANDY: "Kandy",
-};
 
 const STAGE_LABELS: Record<StageFilter, string> = {
   ALL: "Every stage",
   UNASSIGNED: "Needs a crew",
   DRAFT: "Proposed, not published",
-  PUBLISHED: "Published to the crew",
+  PUBLISHED: "Post to the crew",
   DONE: "Completed or cancelled",
 };
 
@@ -96,7 +97,7 @@ const STAGE_STYLES: Record<
     dot: "bg-emerald-500",
     badge:
       "border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-    label: "Published",
+    label: "Post",
   },
   DONE: {
     chip: "border-slate-300 bg-slate-50 text-slate-600 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400",
@@ -111,25 +112,38 @@ const BRANCH_DOT: Record<"COLOMBO" | "KANDY", string> = {
   KANDY: "bg-violet-500",
 };
 
-function startMinute(entry: CalendarEntry): number {
-  return entry.assignment?.plannedStartMinute ?? entry.windowStartMinute;
+/**
+ * This screen's payload, reduced to the facts a tile may state. The Visit
+ * Calendar builds the same shape from its own payload, so the two screens
+ * cannot disagree about the same visit.
+ */
+function tileFacts(entry: CalendarEntry): VisitTileFacts {
+  return {
+    customerName: entry.customerName,
+    visitDate: entry.visitDate,
+    durationMinutes: entry.durationMinutes,
+    plannedStartMinute: entry.assignment?.plannedStartMinute ?? null,
+    plannedEndMinute: entry.assignment?.plannedEndMinute ?? null,
+    windowStartMinute: entry.windowStartMinute,
+    crewCount: entry.assignment?.crew.length ?? 0,
+  };
 }
 
 function timeRange(entry: CalendarEntry): string {
-  const end = entry.assignment?.plannedEndMinute ?? entry.windowEndMinute;
-  return `${formatMinuteOfDay(startMinute(entry))}–${formatMinuteOfDay(end)}`;
+  return visitTileTime(tileFacts(entry));
 }
 
 function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void }) {
   const stage = stageOf(entry);
   const style = STAGE_STYLES[stage];
-  const crewCount = entry.assignment?.crew.length ?? 0;
+  const facts = tileFacts(entry);
+  const crewCount = facts.crewCount;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${entry.customerName} at ${timeRange(entry)} on ${entry.visitDate}, ${style.label.toLowerCase()}`}
+      aria-label={visitTileAccessibleName(facts, style.label.toLowerCase())}
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
@@ -143,10 +157,17 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
         className={cn("h-1.5 w-1.5 shrink-0 rounded-full", BRANCH_DOT[entry.branchCode])}
       />
       <span className="min-w-0 flex-1 truncate font-medium">{entry.customerName}</span>
-      {crewCount > 0 && (
+      {/* Said, never left blank. Silence on a calendar reads as "fine", and an
+          unstaffed tile is the one thing on this screen that is not. */}
+      {crewCount > 0 ? (
         <span className="flex shrink-0 items-center gap-0.5 opacity-80">
           <Users className="h-3 w-3" aria-hidden="true" />
           {crewCount}
+        </span>
+      ) : (
+        <span className="flex shrink-0 items-center gap-0.5 font-medium">
+          <UserX className="h-3 w-3" aria-hidden="true" />
+          {NO_CREW_LABEL}
         </span>
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (
@@ -179,79 +200,81 @@ function DetailDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Badge className={style.badge}>{style.label}</Badge>
-              <Badge variant="outline">{entry.branchCode}</Badge>
-              <Badge variant="outline">{entry.jobTypeName}</Badge>
-              {entry.assignment?.publishedAt && (
-                <Badge variant="outline">
-                  Published {new Date(entry.assignment.publishedAt).toLocaleString()}
-                </Badge>
-              )}
-            </div>
-
-
-            {entry.instructions && (
-              <div className="rounded-md border border-border bg-muted/40 p-2.5 text-sm">
-                {entry.instructions}
+            <DialogBody tabIndex={0}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Badge className={style.badge}>{style.label}</Badge>
+                <Badge variant="outline">{entry.branchCode}</Badge>
+                <Badge variant="outline">{entry.jobTypeName}</Badge>
+                {entry.assignment?.publishedAt && (
+                  <Badge variant="outline">
+                    Published {new Date(entry.assignment.publishedAt).toLocaleString()}
+                  </Badge>
+                )}
               </div>
-            )}
 
-            {entry.assignment ? (
-              <div className="space-y-3 border-t border-border pt-3">
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">Crew</p>
-                  <ul className="space-y-1">
-                    {entry.assignment.crew.map((member) => (
-                      <li key={member.employeeId} className="flex items-center gap-1.5 text-sm">
-                        {member.isPmsSupervisor && (
-                          <Crown
-                            className="h-3.5 w-3.5 shrink-0 text-amber-500"
-                            aria-label="PMS supervisor"
-                          />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">{member.fullName}</span>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {member.role}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+
+              {entry.instructions && (
+                <div className="rounded-md border border-border bg-muted/40 p-2.5 text-sm">
+                  {entry.instructions}
                 </div>
+              )}
 
-                {entry.assignment.vehicles.length > 0 && (
+              {entry.assignment ? (
+                <div className="space-y-3 border-t border-border pt-3">
                   <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">Vehicle</p>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">Crew</p>
                     <ul className="space-y-1">
-                      {entry.assignment.vehicles.map((vehicle) => (
-                        <li key={vehicle.vehicleId} className="flex items-center gap-1.5 text-sm">
-                          <Car
-                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                            aria-hidden="true"
-                          />
-                          <span>{vehicle.label}</span>
-                          {vehicle.driverName && (
-                            <span className="text-xs text-muted-foreground">
-                              — driven by {vehicle.driverName}
-                            </span>
+                      {entry.assignment.crew.map((member) => (
+                        <li key={member.employeeId} className="flex items-center gap-1.5 text-sm">
+                          {member.isPmsSupervisor && (
+                            <Crown
+                              className="h-3.5 w-3.5 shrink-0 text-amber-500"
+                              aria-label="PMS supervisor"
+                            />
                           )}
+                          <span className="min-w-0 flex-1 truncate">{member.fullName}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {member.role}
+                          </span>
                         </li>
                       ))}
                     </ul>
                   </div>
-                )}
 
-                <div className="text-xs text-muted-foreground">
-                  {entry.assignment.acknowledgedAt
-                    ? `Acknowledged ${new Date(entry.assignment.acknowledgedAt).toLocaleString()}`
-                    : "Not yet acknowledged — the worker app is Phase 2."}
+                  {entry.assignment.vehicles.length > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium text-muted-foreground">Vehicle</p>
+                      <ul className="space-y-1">
+                        {entry.assignment.vehicles.map((vehicle) => (
+                          <li key={vehicle.vehicleId} className="flex items-center gap-1.5 text-sm">
+                            <Car
+                              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                            <span>{vehicle.label}</span>
+                            {vehicle.driverName && (
+                              <span className="text-xs text-muted-foreground">
+                                — driven by {vehicle.driverName}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="text-xs text-muted-foreground">
+                    {entry.assignment.acknowledgedAt
+                      ? `Acknowledged ${new Date(entry.assignment.acknowledgedAt).toLocaleString()}`
+                      : "Not yet acknowledged — the worker app is Phase 2."}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="border-t border-border pt-3 text-sm text-muted-foreground">
-                No crew on this visit yet. It belongs in the Unassigned Visits queue.
-              </div>
-            )}
+              ) : (
+                <div className="border-t border-border pt-3 text-sm text-muted-foreground">
+                  No crew on this visit yet. It belongs in the Unassigned Visits queue.
+                </div>
+              )}
+            </DialogBody>
           </>
         )}
       </DialogContent>
@@ -338,7 +361,7 @@ export function CalendarBoard() {
       else grouped.set(entry.visitDate, [entry]);
     }
     for (const bucket of grouped.values()) {
-      bucket.sort((left, right) => startMinute(left) - startMinute(right));
+      bucket.sort((left, right) => compareVisitTiles(tileFacts(left), tileFacts(right)));
     }
     return grouped;
   }, [visible]);
@@ -408,7 +431,7 @@ export function CalendarBoard() {
           <div className="space-y-1.5">
             <Label htmlFor="branch-filter">Branch</Label>
             <Select
-              items={BRANCH_LABELS}
+              items={BRANCH_FILTER_LABELS}
               value={branch}
               onValueChange={(value) => setBranch((value ?? "ALL") as BranchFilter)}
             >
@@ -416,7 +439,7 @@ export function CalendarBoard() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ALL">Both branches</SelectItem>
+                <SelectItem value="ALL">{BRANCH_FILTER_LABELS.ALL}</SelectItem>
                 <SelectItem value="COLOMBO">Colombo</SelectItem>
                 <SelectItem value="KANDY">Kandy</SelectItem>
               </SelectContent>
@@ -538,6 +561,10 @@ export function CalendarBoard() {
                         onOpen={() => setOpenEntry(entry)}
                       />
                     ))}
+                    {/* Says what it does. It used to read "+ 9 more" and
+                        silently swap the whole month view for Week, after
+                        which the next arrow stepped by week and a manager had
+                        no idea why. */}
                     {hiddenCount > 0 && (
                       <button
                         type="button"
@@ -547,7 +574,7 @@ export function CalendarBoard() {
                         }}
                         className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
-                        + {hiddenCount} more
+                        + {hiddenCount} more in Week view
                       </button>
                     )}
                   </div>

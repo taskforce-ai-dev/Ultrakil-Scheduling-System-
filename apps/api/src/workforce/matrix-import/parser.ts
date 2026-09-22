@@ -3,6 +3,7 @@ import { isPmsGradeLabel } from '../pms-grade';
 import {
   DEFAULT_MAPPING,
   MatrixMapping,
+  formatVehicleLabel,
   isCheckmark,
   normalizeHeader,
   parseVehicleHeader,
@@ -446,9 +447,10 @@ function buildVehicles(
 
     byCode.set(code, {
       code,
-      // Keep the useful workbook wording, but do not leak stray spaces around
-      // a registration hyphen into the manager UI or a second natural key.
-      label: column.label.replace(/\s*-\s*(?=\d{4}\b)/g, '-'),
+      // Keep the useful workbook wording, but written for a screen rather than
+      // a spreadsheet column: the heading's own spacing and zero padding do not
+      // belong in the manager UI or in a second natural key.
+      label: formatVehicleLabel(column.label),
       seatCapacity,
       ownershipGroup: groupLabels[column.index]?.trim() || null,
     });

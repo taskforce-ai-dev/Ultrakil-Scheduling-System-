@@ -73,30 +73,74 @@ function readEndDate(raw: string): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
 }
 
+/** A day the workbook has booked, resolved against the mapping's year. */
+export interface BookedDate {
+  month: number;
+  day: number;
+  /** YYYY-MM-DD. */
+  date: string;
+}
+
+export interface BookedDates {
+  bookings: BookedDate[];
+  /**
+   * Day numbers that read as a day of the month but are not one — the 31st of
+   * a 30-day month, the 30th of February. Reported rather than rolled forward
+   * into the next month, which is what JavaScript's Date would do and what
+   * would quietly book a visit nobody agreed to.
+   */
+  invalid: { month: number; day: number }[];
+}
+
 /**
- * Pulls the day-of-month numbers out of a row's month columns.
+ * Pulls the booked dates out of a row's month columns.
  *
  * The cells are handwritten and hold things like "5,2,7,9,12" and "16.10.30",
- * so every one- or two-digit number is taken and anything outside 1-31 is
- * dropped. A wrong number simply contributes no weekday; it cannot invent one.
+ * so every one- or two-digit number is taken. Anything outside 1-31 is not a
+ * day of the month at all — a stray total, a year fragment — and is ignored
+ * without comment. A number inside 1-31 was meant as a day, so when the month
+ * does not have it that is worth someone's attention.
+ *
+ * The same day written twice in one cell is one booking: the workbook lists
+ * the days it visits, not how many times it writes them down.
  */
-function readBookedDates(
+export function readBookedDates(
   row: ExcelJS.Row,
   mapping: AgreementSheetMapping,
-): { month: number; day: number }[] {
-  const bookings: { month: number; day: number }[] = [];
+): BookedDates {
+  const bookings: BookedDate[] = [];
+  const invalid: { month: number; day: number }[] = [];
+  const year = mapping.year;
+  if (!mapping.monthColumns || year === undefined) return { bookings, invalid };
 
-  mapping.monthColumns?.forEach((column, index) => {
+  const seen = new Set<string>();
+
+  mapping.monthColumns.forEach((column, index) => {
     const raw = cellText(row, column);
     if (!raw) return;
 
+    const month = index + 1;
     for (const match of raw.matchAll(/\b(\d{1,2})\b/g)) {
       const day = Number.parseInt(match[1], 10);
-      if (day >= 1 && day <= 31) bookings.push({ month: index + 1, day });
+      if (day < 1 || day > 31) continue;
+
+      const date = new Date(Date.UTC(year, month - 1, day));
+      // Rejects the 31st of a 30-day month, which JavaScript rolls forward.
+      if (date.getUTCMonth() !== month - 1) {
+        if (!invalid.some((entry) => entry.month === month && entry.day === day)) {
+          invalid.push({ month, day });
+        }
+        continue;
+      }
+
+      const iso = date.toISOString().slice(0, 10);
+      if (seen.has(iso)) continue;
+      seen.add(iso);
+      bookings.push({ month, day, date: iso });
     }
   });
 
-  return bookings;
+  return { bookings, invalid };
 }
 
 function readAgreementSheet(
@@ -184,13 +228,29 @@ function readAgreementSheet(
     const frequency = parseFrequency(cellText(row, columns.frequency));
     let dayRule = parseDayRule(cellText(row, columns.day));
 
+    // The month columns are read for every row, whatever the Day column says.
+    // These are the dates UltraKIL has already agreed with the customer; the
+    // weekdays are only what can be inferred from them when nothing else is
+    // written down.
+    const booked = readBookedDates(row, mapping);
+
+    for (const { month, day } of booked.invalid) {
+      issues.push({
+        sheet: mapping.sheet,
+        rowNumber,
+        code: 'BOOKED_DATE_INVALID',
+        source: `${day}/${month}`,
+        message: `${customerName} — ${siteName}: month ${month} has no day ${day}, so that booking was skipped rather than guessed. Correct the workbook cell.`,
+      });
+    }
+
     // Most rows leave the Day column empty but do record the dates actually
     // booked. Those dates say which weekdays the site is really serviced on,
     // so they are read rather than the row being discarded for want of a rule
     // the workbook never wrote down.
     if (dayRule.kind === 'absent') {
       const derived = deriveAllowedDaysFromDates(
-        readBookedDates(row, mapping),
+        booked.bookings.map(({ month, day }) => ({ month, day })),
         mapping.year ?? new Date().getUTCFullYear(),
       );
       if (derived) dayRule = { kind: 'derived', ...derived };
@@ -206,6 +266,7 @@ function readAgreementSheet(
       dayRule,
       effort: parseEffort(cellText(row, columns.effort)),
       endDate: readEndDate(cellText(row, columns.endDate)),
+      bookedDates: booked.bookings.map((booking) => booking.date),
       notes: null,
     });
   });

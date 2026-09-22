@@ -71,12 +71,12 @@ describe("route smoke tests", () => {
     ["Calendar", CalendarPage],
     ["Customers", CustomersPage],
     ["Service Agreements", ServiceAgreementsPage],
-    ["Visit Calendar", VisitsPage],
+    ["Generate Schedule", VisitsPage],
     ["Workforce", WorkforcePage],
     ["Vehicles", VehiclesPage],
     ["Dispatch Board", DispatchBoardPage],
     ["Unassigned Visits", UnassignedVisitsPage],
-    ["Schedule History", ScheduleHistoryPage],
+    ["Assign Crew", ScheduleHistoryPage],
     ["Published Assignment Repair Center", PublishedAssignmentRepairsPage],
   ])("renders the %s page without throwing", async (heading, Page) => {
     render(<Page />);

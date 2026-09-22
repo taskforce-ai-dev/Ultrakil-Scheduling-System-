@@ -1,5 +1,6 @@
-import { DayRuleKind, FrequencyUnit, Prisma, Weekday } from '@prisma/client';
+import { DayRuleKind, Prisma, Weekday } from '@prisma/client';
 
+import { describeFrequency } from '../scheduling/visit-generation/cadence';
 import {
   CustomerDto,
   JobTypeDto,
@@ -32,6 +33,8 @@ export type AgreementWithRelations = Prisma.ServiceAgreementGetPayload<{
     jobType: { select: { id: true; name: true } };
     dayRules: true;
     requiredSkills: true;
+    bookings: true;
+    _count: { select: { generatedVisits: true } };
   };
 }>;
 
@@ -165,6 +168,7 @@ export function toAgreementDto(
     endDate: agreement.endDate ? toDateOnly(agreement.endDate) : null,
     status: agreement.status,
     isActive: agreement.status === 'ACTIVE',
+    generatedVisitCount: agreement._count.generatedVisits,
     currentVersion: agreement.currentVersion,
     dayRules: agreement.dayRules.map((rule) => ({
       weekday: rule.weekday,
@@ -175,37 +179,14 @@ export function toAgreementDto(
     requiredSkillCodes: agreement.requiredSkills
       .map((skill) => skill.skillCode)
       .sort(),
+    // Shown, never edited here: these are what the workbook agreed with the
+    // customer, and a manager changing one on this screen would be changing
+    // the schedule without saying so.
+    bookedDates: agreement.bookings
+      .map((booking) => toDateOnly(booking.bookedDate))
+      .sort(),
     notes: agreement.notes,
     createdAt: agreement.createdAt.toISOString(),
     updatedAt: agreement.updatedAt.toISOString(),
   };
-}
-
-/**
- * Says a frequency the way a manager would.
- *
- * "1 per WEEK interval 2" is how the database holds it and how the scheduler
- * reasons about it, but nobody at UltraKIL calls it that — they say
- * fortnightly. The screens should use their words.
- */
-export function describeFrequency(
-  count: number,
-  unit: FrequencyUnit,
-  interval: number,
-): string {
-  const unitWord = unit === FrequencyUnit.WEEK ? 'week' : 'month';
-
-  if (count === 1 && interval === 1) {
-    return unit === FrequencyUnit.WEEK ? 'Weekly' : 'Monthly';
-  }
-  if (count === 1 && interval === 2) {
-    return unit === FrequencyUnit.WEEK ? 'Fortnightly' : 'Once in two months';
-  }
-  if (count === 1 && interval === 3 && unit === FrequencyUnit.MONTH) {
-    return 'Quarterly';
-  }
-  if (count === 1) return `Once every ${interval} ${unitWord}s`;
-  if (interval === 1) return `${count} times a ${unitWord}`;
-
-  return `${count} times every ${interval} ${unitWord}s`;
 }

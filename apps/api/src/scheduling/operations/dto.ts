@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AssignmentStatus, BranchCode } from '@prisma/client';
+import { AssignmentStatus, BranchCode, VisitStatus } from '@prisma/client';
 import { IsEnum, IsOptional } from 'class-validator';
 
 import { IsDateOnly } from '../../common/validation/is-date-only';
@@ -79,10 +79,33 @@ export class OperationsWarningDto {
   message!: string;
 }
 
+/**
+ * The schedule run an assignment came from, said in a manager's terms.
+ *
+ * The id is here because the portal links to Schedule History with it; it is
+ * never what a screen shows. A run is recognised by the weeks it covers and
+ * the moment it was published — "Published schedule 15-21 Sep, published 15
+ * Sep 20:05" — and a raw uuid printed nineteen times down a day's list told
+ * nobody anything they could act on.
+ */
 export class OperationsScheduleVersionDto {
   @ApiProperty({ type: String, nullable: true, format: 'uuid' }) id!: string | null;
   @ApiProperty({ enum: AssignmentStatus }) status!: AssignmentStatus;
   @ApiProperty({ type: String, nullable: true, format: 'date-time' }) publishedAt!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description: "First day of the run's horizon. Null when the assignment records no run.",
+  })
+  rangeStart!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description: "Last day of the run's horizon. Null when the assignment records no run.",
+  })
+  rangeEnd!: string | null;
 }
 
 export class OperationsPublishedAssignmentLineageEntryDto {
@@ -149,6 +172,12 @@ export class OperationsVisitDto {
   @ApiProperty({ type: Number }) windowStartMinute!: number;
   @ApiProperty({ type: Number }) windowEndMinute!: number;
   @ApiProperty({ type: Boolean }) hoursUnconfirmed!: boolean;
+  @ApiProperty({
+    enum: VisitStatus,
+    description:
+      "The visit's own stage, which is how every screen names it. The day item's `state` answers a different question — whether there is anything to dispatch — and its UNASSIGNED covers both a visit nobody has tried to staff (PENDING) and one the scheduler tried and could not (UNASSIGNED). A client needs this to tell a manager which.",
+  })
+  status!: VisitStatus;
 }
 
 export class OperationsDayItemDto {
@@ -168,11 +197,32 @@ export class OperationsDayItemDto {
   publishedAssignmentLineage!: OperationsPublishedAssignmentLineageDto;
 }
 
+/**
+ * The day's counts.
+ *
+ * "Unassigned" used to be one number here, and it was two facts: visits
+ * nobody has tried to staff yet and visits the scheduler tried and could not.
+ * Every other screen names those separately, because a manager who reads the
+ * second number as the whole backlog goes home believing the untried work is
+ * covered. The strip that shows these counts now names them the same way, so
+ * the one number is split at its source rather than being re-derived by
+ * whichever client happens to be looking.
+ */
 export class OperationsSummaryDto {
   @ApiProperty({ type: Number }) total!: number;
   @ApiProperty({ type: Number }) ready!: number;
   @ApiProperty({ type: Number }) proposed!: number;
-  @ApiProperty({ type: Number }) unassigned!: number;
+  @ApiProperty({
+    type: Number,
+    description: 'No crew and no proposal, and nobody has tried: visit status PENDING.',
+  })
+  awaitingStaffing!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'No crew and no proposal because staffing was attempted and refused: visit status UNASSIGNED.',
+  })
+  staffingFailed!: number;
   @ApiProperty({ type: Number }) exceptions!: number;
   @ApiProperty({ type: Number }) hoursUnconfirmed!: number;
 }

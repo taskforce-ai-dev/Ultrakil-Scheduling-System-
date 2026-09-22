@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchCode, VisitStatus } from '@prisma/client';
+import { BranchCode, VisitPlacement, VisitStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -164,8 +164,29 @@ export class VisitOriginDto {
   allowedDaysAtGeneration!: string[];
   @ApiProperty({ type: String, nullable: true, format: 'date-time' })
   generatedAt!: string | null;
-  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'uuid',
+    description:
+      'The schedule run that generated this visit. For links only — a screen names a run by the weeks it covered, never by its id.',
+  })
   generatedByRunId!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description:
+      "First day of that run's horizon, which is how a screen names it. Null when no run generated this visit.",
+  })
+  generatedByRunRangeStart!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    format: 'date',
+    description: "Last day of that run's horizon. Null when no run generated this visit.",
+  })
+  generatedByRunRangeEnd!: string | null;
 }
 
 export class VisitDto {
@@ -191,6 +212,14 @@ export class VisitDto {
   hoursUnconfirmed!: boolean;
 
   @ApiProperty({
+    type: String,
+    enum: Object.values(VisitPlacement),
+    description:
+      'Why this visit is on this date. BOOKED: the date is already agreed with the customer. ANCHORED: no booking covered the period, so it was placed near the days this agreement is usually served on. SPREAD: moved off a day that was already full. EARLIEST: no booking and no usual day, so the first allowed day of the period.',
+  })
+  placement!: VisitPlacement;
+
+  @ApiProperty({
     type: Boolean,
     description: 'True when regeneration will leave this visit alone.',
   })
@@ -207,10 +236,70 @@ export class VisitDto {
   manuallyAdjustedAt!: string | null;
   @ApiProperty({ type: Boolean }) isLocked!: boolean;
   @ApiProperty({ type: String, nullable: true }) lockReason!: string | null;
-  @ApiProperty({ type: Number }) assignmentCount!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'How many assignment records this visit has ever had, live and historical. Not a headcount — one record holds a whole crew.',
+  })
+  assignmentCount!: number;
+  @ApiProperty({
+    type: Number,
+    description:
+      'How many people are on the visit right now: the crew of the assignment in force, or 0 when nobody is assigned. This is the number to show a manager beside requiredCrewSize.',
+  })
+  assignedCrewCount!: number;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'When the crew is actually due, in minutes from visitDate at UTC midnight — the same number the calendar read model reports. Null when nobody is assigned: the service window is what the visit must fall inside, never a decided time, and a defaulted 08:00-17:00 window presented as a plan sends a manager six hours wrong.',
+  })
+  plannedStartMinute!: number | null;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description: 'When the crew is due to leave, on the same scale. Null when nobody is assigned.',
+  })
+  plannedEndMinute!: number | null;
 
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
   @ApiProperty({ type: String, format: 'date-time' }) updatedAt!: string;
+}
+
+export const VISIT_CREW_CHANGE_ACTIONS = [
+  'CREW_SET',
+  'CREW_REPLACED',
+  'CREW_REMOVED',
+] as const;
+
+export type VisitCrewChangeAction = (typeof VISIT_CREW_CHANGE_ACTIONS)[number];
+
+export class VisitCrewChangeDto {
+  @ApiProperty({ type: String, format: 'date-time' }) changedAt!: string;
+  @ApiProperty({
+    type: String,
+    enum: VISIT_CREW_CHANGE_ACTIONS,
+    description:
+      'CREW_SET: a crew was put on a visit that had none. CREW_REPLACED: a crew already on the visit was changed. CREW_REMOVED: the crew was taken off.',
+  })
+  action!: VisitCrewChangeAction;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'Who made the change, as recorded at the time.',
+  })
+  actorLabel!: string | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description:
+      'The reason the manager gave. Null where none was asked for, as when a crew is taken off.',
+  })
+  reason!: string | null;
+  @ApiProperty({ type: Number, description: 'How many people the change left on the visit.' })
+  crewSize!: number;
 }
 
 export class VisitDetailDto extends VisitDto {
@@ -219,6 +308,13 @@ export class VisitDetailDto extends VisitDto {
     description: 'Why this visit exists — the agreement and version behind it.',
   })
   origin!: VisitOriginDto;
+
+  @ApiProperty({
+    type: [VisitCrewChangeDto],
+    description:
+      "Every time a manager set, changed or removed this visit's crew by hand, newest first, with the reason they gave. Empty for a visit only the scheduler has touched. Capped at the most recent 20.",
+  })
+  crewChanges!: VisitCrewChangeDto[];
 }
 
 export class PaginatedVisitsDto {

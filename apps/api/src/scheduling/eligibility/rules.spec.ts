@@ -58,7 +58,7 @@ function employee(overrides: Partial<EmployeeFacts> = {}): EmployeeFacts {
 function vehicle(overrides: Partial<VehicleFacts> = {}): VehicleFacts {
   return {
     id: 'veh-1',
-    label: 'Van (04 People) 253-4289',
+    label: 'Van (4 People) 253-4289',
     branchCode: 'COLOMBO',
     isActive: true,
     seatCapacity: 4,
@@ -96,6 +96,12 @@ function proposal(overrides: Partial<AssignmentProposal> = {}): AssignmentPropos
 
 const codesOf = (result: { conflicts: { code: string }[] }) =>
   result.conflicts.map((conflict) => conflict.code);
+
+/** The sentence a manager actually reads for one refusal. */
+const messageOf = (
+  result: { conflicts: { code: string; message: string }[] },
+  code: string,
+) => result.conflicts.find((conflict) => conflict.code === code)?.message;
 
 describe('eligibility engine', () => {
   it('accepts a crew that satisfies every rule', () => {
@@ -172,6 +178,32 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('NO_PMS_SUPERVISOR_AVAILABLE');
+    });
+
+    it('names grades a manager can actually find on the Workforce screen', () => {
+      // The advice used to read "Add a Senior PMS, PMS, Assistant PMS, SPMS or
+      // APMS from COLOMBO", and the Workforce screen's Grade column never
+      // shows "Senior PMS" or "Assistant PMS" — so three of the five names
+      // were unfindable, and none of them said what a PMS grade is for.
+      const second = employee({ id: 'tech-2', fullName: 'U Bandara' });
+      const result = evaluateAssignment(
+        proposal({
+          crew: [
+            { employeeId: TECHNICIAN.id, role: CrewRole.TECHNICIAN },
+            { employeeId: second.id, role: CrewRole.TECHNICIAN },
+          ],
+        }),
+        context({ employees: [TECHNICIAN, second] }),
+      );
+
+      const remediation = result.conflicts[0].remediation ?? '';
+      expect(remediation).toContain('COLOMBO');
+      expect(remediation).toContain('PMS, SPMS or APMS');
+      // Points at what the screen shows rather than at the project's internal
+      // canonical spellings.
+      expect(remediation).toContain('Grade column');
+      expect(remediation).not.toContain('Senior PMS');
+      expect(remediation).not.toContain('Assistant PMS');
     });
 
     it('names the branch shortage when the branch employs no supervisor at all', () => {
@@ -362,6 +394,35 @@ describe('eligibility engine', () => {
       expect(result.conflicts[0].remediation).toContain('S Silva');
     });
 
+    it('says "them", not "one of them", when one person is authorized', () => {
+      // "Synthetic Tech 01 in this crew is authorized — name one of them as
+      // the driver." One person is not a them-among-others.
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: TECHNICIAN.id }] }),
+        context({ employees: [authorizedSupervisor, TECHNICIAN] }),
+      );
+
+      expect(result.conflicts[0].remediation).toBe(
+        'S Silva in this crew is authorized — name them as the driver.',
+      );
+    });
+
+    it('keeps "one of them" when there is a choice to make', () => {
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: null }] }),
+        context({
+          employees: [
+            authorizedSupervisor,
+            { ...TECHNICIAN, authorizedVehicleIds: ['veh-1'] },
+          ],
+        }),
+      );
+
+      expect(result.conflicts[0].remediation).toBe(
+        'S Silva or T Fernando in this crew are authorized — name one of them as the driver.',
+      );
+    });
+
     it('refuses a vehicle with no driver named', () => {
       const result = evaluateAssignment(
         proposal({ vehicles: [{ vehicleId: 'veh-1', driverEmployeeId: null }] }),
@@ -437,7 +498,7 @@ describe('eligibility engine', () => {
   });
 
   describe('one vehicle per visit', () => {
-    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (02 People) DAG-3284' });
+    const SECOND = vehicle({ id: 'veh-2', label: 'Mini Truck (2 People) DAG-3284' });
 
     const twoVehicles = () =>
       evaluateAssignment(
@@ -597,6 +658,47 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('WINDOW_TOO_SHORT');
+    });
+
+    it('refuses a booking shorter than the job takes, and says by how much', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 9 * 60, plannedEndMinute: 10 * 60 }),
+        context({ visit: visit({ durationMinutes: 120 }) }),
+      );
+
+      expect(messageOf(result, 'WINDOW_TOO_SHORT')).toBe(
+        'The crew is booked for 60 minutes but the job takes 120.',
+      );
+    });
+
+    /**
+     * A booking whose end is at or before its start is not a short booking; it
+     * is a backwards one. Reporting it as "booked for -60 minutes but the job
+     * takes 60" asked a dispatcher to reason about a negative duration, which
+     * means nothing to anyone.
+     */
+    it('says a backwards booking ends before it starts, rather than reporting negative minutes', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 10 * 60, plannedEndMinute: 9 * 60 }),
+        context({ visit: visit({ durationMinutes: 60 }) }),
+      );
+
+      const message = messageOf(result, 'WINDOW_TOO_SHORT');
+      expect(message).toBe(
+        'This crew is booked to finish at 09:00, before it starts at 10:00.',
+      );
+      expect(message).not.toContain('-');
+    });
+
+    it('treats a zero-length booking as backwards rather than as nothing at all', () => {
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 9 * 60, plannedEndMinute: 9 * 60 }),
+        context({ visit: visit({ durationMinutes: 60 }) }),
+      );
+
+      expect(messageOf(result, 'WINDOW_TOO_SHORT')).toBe(
+        'This crew is booked to start and finish at the same moment, 09:00.',
+      );
     });
   });
 
