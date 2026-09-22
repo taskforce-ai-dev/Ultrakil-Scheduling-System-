@@ -20,7 +20,21 @@ CREATE UNIQUE INDEX "repair_bunching_batches_idempotencyKey_key" ON "repair_bunc
 CREATE INDEX "repair_bunching_batches_createdAt_idx" ON "repair_bunching_batches"("createdAt");
 
 -- RenameIndex
-ALTER INDEX "assignment_notification_outbox_assignmentId_employeeId_eventTyp" RENAME TO "assignment_notification_outbox_assignmentId_employeeId_even_key";
+DO $$
+BEGIN
+    IF to_regclass('"assignment_notification_outbox_assignmentId_employeeId_eventTyp"') IS NOT NULL
+       AND to_regclass('"assignment_notification_outbox_assignmentId_employeeId_even_key"') IS NULL THEN
+        ALTER INDEX "assignment_notification_outbox_assignmentId_employeeId_eventTyp"
+            RENAME TO "assignment_notification_outbox_assignmentId_employeeId_even_key";
+    END IF;
+END $$;
 
 -- RenameIndex
-ALTER INDEX "published_assignment_repair_items_repairId_sourceAssignmentId_k" RENAME TO "published_assignment_repair_items_repairId_sourceAssignment_key";
+DO $$
+BEGIN
+    IF to_regclass('"published_assignment_repair_items_repairId_sourceAssignmentId_k"') IS NOT NULL
+       AND to_regclass('"published_assignment_repair_items_repairId_sourceAssignment_key"') IS NULL THEN
+        ALTER INDEX "published_assignment_repair_items_repairId_sourceAssignmentId_k"
+            RENAME TO "published_assignment_repair_items_repairId_sourceAssignment_key";
+    END IF;
+END $$;
