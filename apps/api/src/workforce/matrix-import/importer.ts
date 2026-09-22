@@ -161,6 +161,12 @@ export async function importMatrix(
         parsedCodesByIdentity.set(identity, vehicle.code);
       }
 
+      // The matrix never states a vehicle's branch, so every vehicle it
+      // imports defaults to Colombo (Technical Director decision, 2026-09-21
+      // — see the PR #59 thread). Applied on both create and update so
+      // re-import also repairs a legacy vehicle left with a null branchId.
+      const colomboBranchId = branchIds.get(BranchCode.COLOMBO)!;
+
       const vehicleIds = new Map<string, string>();
       for (const vehicle of parsed.vehicles) {
         const identity = vehicleIdentity(vehicle.code);
@@ -177,6 +183,7 @@ export async function importMatrix(
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
                 ownershipGroup: vehicle.ownershipGroup,
+                branchId: colomboBranchId,
               },
             })
           : await tx.vehicle.create({
@@ -185,6 +192,7 @@ export async function importMatrix(
                 label: vehicle.label,
                 seatCapacity: vehicle.seatCapacity,
                 ownershipGroup: vehicle.ownershipGroup,
+                branchId: colomboBranchId,
               },
             });
         summary.authorizationsRemoved += await mergeVehicleAliases(

@@ -1,6 +1,7 @@
 import { BranchCode } from '@prisma/client';
 
 import { BranchDayWorkforce } from './day-feasibility';
+import { maxBipartiteMatching } from './transport-matching';
 
 import {
   DEFAULT_DAILY_CAPACITY_MINUTES,
@@ -63,10 +64,34 @@ export interface BranchDayResourceFacts {
    */
   activeVehicleCount: number;
   /**
-   * Of those, how many have at least one available, authorized driver today.
-   * Only consulted when `activeVehicleCount > 0`.
+   * Of those, how many can actually be driven at once today by a distinct
+   * available authorized employee of this same branch — a maximum matching,
+   * not a per-vehicle "does it have anyone at all" filter. One employee
+   * authorized for several vehicles can drive only one of them; a vehicle
+   * whose only authorization is a Kandy employee or an inactive one does not
+   * count, since neither can actually turn up and drive it. Only consulted
+   * when `activeVehicleCount > 0`.
    */
   driverCapableVehicleCount: number;
+  /**
+   * A maximum matching of vehicles-with-a-driver plus walkers, same as
+   * `driverCapableVehicleCount` but with public-transport-capable staff
+   * folded in — `driverCapableVehicleCount` alone undercounts a branch that
+   * also has such staff, and nobody is counted as covering both roles.
+   *
+   * This function has no visit to ask "how big is this crew" of, so it
+   * cannot tell a one-person crew from a five-person one; treating this
+   * count as "N *crews*" would credit a walker with covering a crew of any
+   * size, which day-feasibility's own transport check (which does see each
+   * visit's `requiredCrewSize`) proved wrong — a walker carries only
+   * themselves. `computeBranchDayCapacity` therefore reads this as *minutes
+   * of transportable labor* (one matched unit is worth one employee's
+   * workday, the same as a person already counts toward `crewMinutes`), a
+   * fungible quantity like `crewMinutes` itself — never as a count of
+   * simultaneous crews. Only consulted when `activeVehicleCount > 0`, for
+   * the same reason as `driverCapableVehicleCount`.
+   */
+  transportCapableConcurrentCrews: number;
 }
 
 export interface BranchDayCapacity {
@@ -99,8 +124,50 @@ export interface BranchResourcePool {
   }[];
   /** Inclusive leave/sickness/training windows, whichever employee they cover. */
   unavailability: { employeeId: string; startDate: string; endDate: string }[];
-  /** Active vehicles only, each with who is authorized to drive it. */
-  vehicles: { id: string; authorizedEmployeeIds: string[] }[];
+  /**
+   * Active vehicles only, each with who is authorized to drive it.
+   * `authorizedEmployeeIds` is read straight off `VehicleAuthorization` —
+   * it can and does contain ids for employees of another branch, or for an
+   * employee who is no longer active, since authorization rows are never
+   * pruned to match. The functions below are what filter that down to
+   * people who could actually turn up and drive for *this* branch; they are
+   * not pre-filtered here so that every caller goes through the same filter
+   * rather than each doing its own version of it.
+   */
+  vehicles: {
+    id: string;
+    /** Null when the workbook did not state a capacity — treated as unlimited. */
+    seatCapacity: number | null;
+    authorizedEmployeeIds: string[];
+  }[];
+}
+
+/**
+ * Vehicles reduced to the people who could actually drive each one for this
+ * branch: on this branch's own active roster, and not on leave that date.
+ * A Kandy employee's id or an inactive employee's id on the authorization
+ * list is never eligible here, however it got onto that list. Shared by
+ * every place that needs "who could drive this vehicle right now" so the
+ * filter is applied exactly once, the same way, everywhere.
+ */
+interface VehicleResource {
+  id: string;
+  seatCapacity: number | null;
+  eligibleDriverIds: string[];
+}
+
+function vehicleResourcesFor(
+  pool: BranchResourcePool,
+  unavailableIds: ReadonlySet<string>,
+): VehicleResource[] {
+  const branchEmployeeIds = new Set(pool.employees.map((employee) => employee.id));
+  return pool.vehicles.map((vehicle) => ({
+    id: vehicle.id,
+    seatCapacity: vehicle.seatCapacity,
+    eligibleDriverIds: vehicle.authorizedEmployeeIds.filter(
+      (employeeId) => branchEmployeeIds.has(employeeId) && !unavailableIds.has(employeeId),
+    ),
+  }));
 }
 
 /**
@@ -126,18 +193,21 @@ export function workforceForDate(
     }
   }
 
+  const vehicleResources = vehicleResourcesFor(pool, unavailableIds);
+
   return {
     totalEmployeeCount: pool.employees.length,
     availableEmployeeCount: available.length,
     availablePmsCount: available.filter((employee) => employee.isPmsGrade).length,
     skillHolderCounts,
     activeVehicleCount: pool.vehicles.length,
-    driverCapableVehicleCount: pool.vehicles.filter((vehicle) =>
-      vehicle.authorizedEmployeeIds.some((employeeId) => !unavailableIds.has(employeeId)),
-    ).length,
-    publicTransportCapableCount: available.filter(
-      (employee) => employee.canUsePublicTransport,
-    ).length,
+    driverCapableVehicleCount: maxBipartiteMatching(
+      vehicleResources.map((vehicle) => vehicle.eligibleDriverIds),
+    ),
+    vehicleResources,
+    availablePublicTransportEmployeeIds: available
+      .filter((employee) => employee.canUsePublicTransport)
+      .map((employee) => employee.id),
   };
 }
 
@@ -153,6 +223,12 @@ export function factsForDate(
       .map((entry) => entry.employeeId),
   );
   const available = pool.employees.filter((employee) => !unavailableIds.has(employee.id));
+  const vehicleDriverLists = vehicleResourcesFor(pool, unavailableIds).map(
+    (vehicle) => vehicle.eligibleDriverIds,
+  );
+  const walkSlots = available
+    .filter((employee) => employee.canUsePublicTransport)
+    .map((employee) => [employee.id]);
 
   return {
     branchCode,
@@ -161,9 +237,8 @@ export function factsForDate(
     totalEmployeeCount: pool.employees.length,
     hasAvailablePmsSupervisor: available.some((employee) => employee.isPmsGrade),
     activeVehicleCount: pool.vehicles.length,
-    driverCapableVehicleCount: pool.vehicles.filter((vehicle) =>
-      vehicle.authorizedEmployeeIds.some((employeeId) => !unavailableIds.has(employeeId)),
-    ).length,
+    driverCapableVehicleCount: maxBipartiteMatching(vehicleDriverLists),
+    transportCapableConcurrentCrews: maxBipartiteMatching([...vehicleDriverLists, ...walkSlots]),
   };
 }
 
@@ -200,7 +275,13 @@ export function computeBranchDayCapacity(
 
   const crewMinutes = facts.availableEmployeeCount * employeeWorkdayMinutes;
 
-  if (facts.activeVehicleCount > 0 && facts.driverCapableVehicleCount === 0) {
+  // Bounded by the same combined vehicles-plus-walkers figure the day-
+  // feasibility transport checks use, not vehicles alone — a branch with
+  // vehicles nobody can drive today but staff who can still reach a site by
+  // public transport is not zero-capacity, and a branch whose driver count
+  // alone looks fine but whose only driver is also its only walker is not
+  // double the transport it actually has.
+  if (facts.activeVehicleCount > 0 && facts.transportCapableConcurrentCrews === 0) {
     return {
       branchCode: facts.branchCode,
       date: facts.date,
@@ -211,7 +292,7 @@ export function computeBranchDayCapacity(
 
   const vehicleMinutes =
     facts.activeVehicleCount > 0
-      ? facts.driverCapableVehicleCount * employeeWorkdayMinutes
+      ? facts.transportCapableConcurrentCrews * employeeWorkdayMinutes
       : Infinity;
 
   return {

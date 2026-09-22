@@ -125,7 +125,20 @@ function fixedCapacity(minutes: number): BranchDayCapacityService {
             skillHolderCounts: { get: () => 99 } as unknown as Map<string, number>,
             activeVehicleCount: 99,
             driverCapableVehicleCount: 99,
-            publicTransportCapableCount: 99,
+            // 99 distinct unlimited-seat vehicles, each with its own distinct
+            // driver, plus 99 distinct walkers — comfortably enough transport
+            // for whatever crew sizes and concurrency this fixture's plans
+            // ever put on one day, the same "can do anything" premise as
+            // every other field here.
+            vehicleResources: Array.from({ length: 99 }, (_, index) => ({
+              id: `stub-vehicle-${index}`,
+              seatCapacity: null,
+              eligibleDriverIds: [`stub-driver-${index}`],
+            })),
+            availablePublicTransportEmployeeIds: Array.from(
+              { length: 99 },
+              (_, index) => `stub-walker-${index}`,
+            ),
           },
         ]),
       ),
