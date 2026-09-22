@@ -414,25 +414,93 @@ describe('checkDayFeasibility', () => {
         ).toBeNull();
       });
 
-      it('a too-small vehicle still frees its driver to count as a walker for a different crew', () => {
-        // A 3-person crew and a 1-person crew forced concurrent; the
-        // 1-seat vehicle cannot help the 3-person crew, but its driver is a
-        // real person who could instead walk the 1-person crew, leaving the
-        // 3-person crew to be covered entirely by walkers.
+      it('a too-small-for-anything vehicle leaves its own driver free to walk, when that driver can', () => {
+        // A 3-person crew and a 2-person crew forced concurrent; the 1-seat
+        // vehicle cannot help either, so its would-be driver — who can also
+        // travel by public transport — must stay free to walk, not get
+        // reserved for a vehicle that was never going to help anyone. Five
+        // walkers exactly meets the combined 3+2 demand; reserving
+        // driver-1 for the useless vehicle would leave only four and wrongly
+        // fail this.
         const verdict = check(
           [
             tight({ serviceAgreementId: 'big', requiredCrewSize: 3 }),
-            tight({ serviceAgreementId: 'small', requiredCrewSize: 1 }),
+            tight({ serviceAgreementId: 'small', requiredCrewSize: 2 }),
           ],
           workforce({
-            availableEmployeeCount: 5,
+            availableEmployeeCount: 6,
             availablePmsCount: 2,
             activeVehicleCount: 1,
             vehicleResources: [{ id: 'v1', seatCapacity: 1, eligibleDriverIds: ['driver-1'] }],
-            availablePublicTransportEmployeeIds: ['walker-1', 'walker-2', 'walker-3'],
+            availablePublicTransportEmployeeIds: [
+              'driver-1', 'walker-2', 'walker-3', 'walker-4', 'walker-5',
+            ],
           }),
         );
         expect(verdict).toBeNull();
+      });
+
+      // The Technical Director's fifth review: `transportFeasible` used to
+      // pick vehicle drivers first, then match visits only against whichever
+      // vehicles happened to get one — two decisions that are actually
+      // coupled. Reproduced on exact head 2521616.
+      describe('vehicle, driver and visit allocation is one coupled decision', () => {
+        // One employee authorized for both a too-small and a big-enough
+        // vehicle: picking the small one first (because it happens to be
+        // checked first) strands the big one driverless and wrongly
+        // rejects a visit that fits it fine. Tested in both vehicle orders,
+        // since the fix must not depend on which one is listed first.
+        it('does not strand a big-enough vehicle by giving its only driver to a too-small one seen first', () => {
+          const verdict = check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 4,
+              availablePmsCount: 3,
+              activeVehicleCount: 2,
+              vehicleResources: [
+                { id: 'small', seatCapacity: 1, eligibleDriverIds: ['driver-1'] },
+                { id: 'large', seatCapacity: 4, eligibleDriverIds: ['driver-1'] },
+              ],
+              availablePublicTransportEmployeeIds: [],
+            }),
+          );
+          expect(verdict).toBeNull();
+        });
+
+        it('finds the same answer with the big-enough vehicle listed first', () => {
+          const verdict = check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 4,
+              availablePmsCount: 3,
+              activeVehicleCount: 2,
+              vehicleResources: [
+                { id: 'large', seatCapacity: 4, eligibleDriverIds: ['driver-1'] },
+                { id: 'small', seatCapacity: 1, eligibleDriverIds: ['driver-1'] },
+              ],
+              availablePublicTransportEmployeeIds: [],
+            }),
+          );
+          expect(verdict).toBeNull();
+        });
+
+        // A public-transport-capable employee's only vehicle is too small
+        // to help at all: they must stay free to walk along with the other
+        // two, rather than get reserved as the driver of a vehicle nobody
+        // was ever going to use.
+        it('leaves an unusable vehicle parked rather than reserving its driver away from walking', () => {
+          const verdict = check(
+            [tight({ requiredCrewSize: 3 })],
+            workforce({
+              availableEmployeeCount: 3,
+              availablePmsCount: 3,
+              activeVehicleCount: 1,
+              vehicleResources: [{ id: 'v1', seatCapacity: 1, eligibleDriverIds: ['driver-1'] }],
+              availablePublicTransportEmployeeIds: ['driver-1', 'walker-2', 'walker-3'],
+            }),
+          );
+          expect(verdict).toBeNull();
+        });
       });
     });
   });

@@ -188,31 +188,40 @@ function transportDemandSets(visits: readonly DayVisitDemand[]): DayVisitDemand[
 
 /**
  * Whether this branch's transport can carry every visit in `activeVisits`
- * at once. A vehicle, once matched to a driver, carries a crew up to its
- * own seat capacity (unlimited when the workbook never stated one); a crew
- * with no vehicle — or too big for any available one — needs
- * `requiredCrewSize` distinct available public-transport-capable
- * employees, since a walker can only carry themselves. Nobody covers two
- * roles — driving two vehicles, driving and walking, or walking for two
- * crews — at the same time.
+ * at once. Each visit is either driven — one vehicle, with a driver from
+ * that vehicle's own eligible list, its seats sufficient for the crew — or
+ * walked — `requiredCrewSize` distinct available public-transport-capable
+ * employees, since a walker can only carry themselves. A vehicle, a driver
+ * and a walker are each spent on at most one visit; nobody is ever both a
+ * driver and a walker, or a driver for two vehicles, at once.
  *
- * Two matchings, each processing its "resources" in the order that
- * matters most first — the exact technique for "maximum matching that also
- * prioritises the right side when there is a choice" (a transversal
- * matroid's greedy optimality, the same guarantee `preferredBipartiteMatching`
- * already relies on for preferring non-walkers as drivers):
+ * Which vehicle should serve which visit, and which vehicles are worth
+ * activating at all, are coupled decisions: activating one only helps if
+ * it is actually needed, and the wrong choice among several seat-compatible
+ * vehicles for one visit can strand a driver who was needed elsewhere — a
+ * different vehicle, or as a walker. There is no way to decompose this into
+ * two independent matchings (vehicles-to-drivers, then visits-to-vehicles,
+ * in either order) without risking exactly that: a locally reasonable
+ * choice made without seeing the rest of the demand can block a feasible
+ * outcome one step later. (An earlier version of this function tried
+ * vehicles-to-drivers first; see the regression tests below for the
+ * concrete cases that broke.)
  *
- * 1. Vehicles matched to distinct available drivers, non-walkers preferred,
- *    so a walker is only ever spent as a driver when nothing else could
- *    cover that vehicle.
- * 2. Visits matched to distinct drivable vehicles with enough seats,
- *    largest crews first — a vehicle costs the same wherever it goes, so
- *    covering the biggest crew with it always saves at least as many
- *    walkers as covering a smaller one instead.
+ * So this searches exhaustively over every way to reserve a distinct,
+ * seat-compatible vehicle for a subset of the active visits (the rest
+ * walk) — exact by construction, not by a further optimality proof.
+ * Branch-sized inputs — a handful of visits genuinely forced together at
+ * one instant, and a branch's own vehicle fleet, tens not thousands — keep
+ * this fast in practice; only vehicles that could conceivably help (an
+ * eligible driver, and enough seats for at least one active visit) are
+ * ever tried, which prunes most of the search up front.
  *
- * Whatever visits phase 2 leaves unmatched still need `requiredCrewSize`
- * walkers each; the total of those, against what phase 1 left free, is the
- * exact answer.
+ * For a *fixed* reservation (which visits get a vehicle, and which one),
+ * whether every reserved vehicle can actually get a distinct driver — and,
+ * if so, using as few walker-eligible employees as possible — needs no
+ * further search: `preferredBipartiteMatching`'s two-phase technique (fill
+ * from non-walkers first) is exact for that, whatever vehicle set it is
+ * asked about.
  */
 function transportFeasible(
   activeVisits: readonly DayVisitDemand[],
@@ -221,27 +230,49 @@ function transportFeasible(
   if (activeVisits.length === 0) return true;
 
   const walkerIds = new Set(workforce.availablePublicTransportEmployeeIds);
-  const matchedDrivers = preferredBipartiteMatching(
-    workforce.vehicleResources.map((vehicle) => vehicle.eligibleDriverIds),
-    walkerIds,
+  const usableVehicles = workforce.vehicleResources.filter(
+    (vehicle) =>
+      vehicle.eligibleDriverIds.length > 0 &&
+      (vehicle.seatCapacity === null ||
+        activeVisits.some((visit) => visit.requiredCrewSize <= vehicle.seatCapacity!)),
   );
-  const driversWhoAreAlsoWalkers = [...matchedDrivers.values()].filter((id) => walkerIds.has(id));
-  const walkersAvailable = walkerIds.size - driversWhoAreAlsoWalkers.length;
-
-  const drivableVehicles = [...matchedDrivers.keys()].map((index) => workforce.vehicleResources[index]);
   const bySizeDescending = [...activeVisits].sort((a, b) => b.requiredCrewSize - a.requiredCrewSize);
-  const visitEligibleVehicleIds = bySizeDescending.map((visit) =>
-    drivableVehicles
-      .filter((vehicle) => vehicle.seatCapacity === null || vehicle.seatCapacity >= visit.requiredCrewSize)
-      .map((vehicle) => vehicle.id),
-  );
-  const visitVehicleMatch = preferredBipartiteMatching(visitEligibleVehicleIds, new Set());
+  const reservedVehicleIds = new Set<string>();
+  const vehicleCovered: boolean[] = new Array(bySizeDescending.length).fill(false);
 
-  const walkSeatsNeeded = bySizeDescending
-    .filter((_, index) => !visitVehicleMatch.has(index))
-    .reduce((sum, visit) => sum + visit.requiredCrewSize, 0);
+  const fits = (): boolean => {
+    const reserved = usableVehicles.filter((vehicle) => reservedVehicleIds.has(vehicle.id));
+    const matchedDrivers = preferredBipartiteMatching(
+      reserved.map((vehicle) => vehicle.eligibleDriverIds),
+      walkerIds,
+    );
+    if (matchedDrivers.size < reserved.length) return false;
 
-  return walkersAvailable >= walkSeatsNeeded;
+    const driversWhoAreAlsoWalkers = [...matchedDrivers.values()].filter((id) => walkerIds.has(id));
+    const walkersAvailable = walkerIds.size - driversWhoAreAlsoWalkers.length;
+    const walkSeatsNeeded = bySizeDescending.reduce(
+      (sum, visit, index) => (vehicleCovered[index] ? sum : sum + visit.requiredCrewSize),
+      0,
+    );
+    return walkersAvailable >= walkSeatsNeeded;
+  };
+
+  const search = (visitIndex: number): boolean => {
+    if (visitIndex === bySizeDescending.length) return fits();
+    const visit = bySizeDescending[visitIndex];
+    for (const vehicle of usableVehicles) {
+      if (reservedVehicleIds.has(vehicle.id)) continue;
+      if (vehicle.seatCapacity !== null && vehicle.seatCapacity < visit.requiredCrewSize) continue;
+      reservedVehicleIds.add(vehicle.id);
+      vehicleCovered[visitIndex] = true;
+      if (search(visitIndex + 1)) return true;
+      vehicleCovered[visitIndex] = false;
+      reservedVehicleIds.delete(vehicle.id);
+    }
+    return search(visitIndex + 1);
+  };
+
+  return search(0);
 }
 
 /**
