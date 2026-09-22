@@ -1,6 +1,6 @@
 import { BranchCode } from '@prisma/client';
 
-import { preferredBipartiteMatching } from './transport-matching';
+import { allocateTransport } from './transport-allocation';
 
 /**
  * Whether a branch-day's actual visits can be performed at all by the actual
@@ -187,92 +187,25 @@ function transportDemandSets(visits: readonly DayVisitDemand[]): DayVisitDemand[
 }
 
 /**
- * Whether this branch's transport can carry every visit in `activeVisits`
- * at once. Each visit is either driven — one vehicle, with a driver from
- * that vehicle's own eligible list, its seats sufficient for the crew — or
- * walked — `requiredCrewSize` distinct available public-transport-capable
- * employees, since a walker can only carry themselves. A vehicle, a driver
- * and a walker are each spent on at most one visit; nobody is ever both a
- * driver and a walker, or a driver for two vehicles, at once.
+ * Whether this branch's transport can carry every visit in `activeVisits` at
+ * once. Each visit is either driven — one vehicle, with a driver from that
+ * vehicle's own eligible list, its seats sufficient for the crew — or walked —
+ * `requiredCrewSize` distinct available public-transport-capable employees,
+ * since a walker can only carry themselves. A vehicle, a driver and a walker
+ * are each spent on at most one visit; nobody is ever both a driver and a
+ * walker, or a driver for two vehicles, at once.
  *
- * Which vehicle should serve which visit, and which vehicles are worth
- * activating at all, are coupled decisions: activating one only helps if
- * it is actually needed, and the wrong choice among several seat-compatible
- * vehicles for one visit can strand a driver who was needed elsewhere — a
- * different vehicle, or as a walker. There is no way to decompose this into
- * two independent matchings (vehicles-to-drivers, then visits-to-vehicles,
- * in either order) without risking exactly that: a locally reasonable
- * choice made without seeing the rest of the demand can block a feasible
- * outcome one step later. (An earlier version of this function tried
- * vehicles-to-drivers first; see the regression tests below for the
- * concrete cases that broke.)
- *
- * So this searches exhaustively over every way to reserve a distinct,
- * seat-compatible vehicle for a subset of the active visits (the rest
- * walk) — exact by construction, not by a further optimality proof.
- * Branch-sized inputs — a handful of visits genuinely forced together at
- * one instant, and a branch's own vehicle fleet, tens not thousands — keep
- * this fast in practice; only vehicles that could conceivably help (an
- * eligible driver, and enough seats for at least one active visit) are
- * ever tried, which prunes most of the search up front.
- *
- * For a *fixed* reservation (which visits get a vehicle, and which one),
- * whether every reserved vehicle can actually get a distinct driver — and,
- * if so, using as few walker-eligible employees as possible — needs no
- * further search: `preferredBipartiteMatching`'s two-phase technique (fill
- * from non-walkers first) is exact for that, whatever vehicle set it is
- * asked about.
+ * Which vehicle serves which visit, which vehicles are worth activating, and
+ * who drives them are one coupled decision, not a sequence of independent
+ * matchings — see `transport-allocation.ts`, which states the whole question
+ * as a minimum-cost flow and solves it exactly in polynomial time.
  */
 function transportFeasible(
   activeVisits: readonly DayVisitDemand[],
   workforce: BranchDayWorkforce,
+  walkerIds: ReadonlySet<string>,
 ): boolean {
-  if (activeVisits.length === 0) return true;
-
-  const walkerIds = new Set(workforce.availablePublicTransportEmployeeIds);
-  const usableVehicles = workforce.vehicleResources.filter(
-    (vehicle) =>
-      vehicle.eligibleDriverIds.length > 0 &&
-      (vehicle.seatCapacity === null ||
-        activeVisits.some((visit) => visit.requiredCrewSize <= vehicle.seatCapacity!)),
-  );
-  const bySizeDescending = [...activeVisits].sort((a, b) => b.requiredCrewSize - a.requiredCrewSize);
-  const reservedVehicleIds = new Set<string>();
-  const vehicleCovered: boolean[] = new Array(bySizeDescending.length).fill(false);
-
-  const fits = (): boolean => {
-    const reserved = usableVehicles.filter((vehicle) => reservedVehicleIds.has(vehicle.id));
-    const matchedDrivers = preferredBipartiteMatching(
-      reserved.map((vehicle) => vehicle.eligibleDriverIds),
-      walkerIds,
-    );
-    if (matchedDrivers.size < reserved.length) return false;
-
-    const driversWhoAreAlsoWalkers = [...matchedDrivers.values()].filter((id) => walkerIds.has(id));
-    const walkersAvailable = walkerIds.size - driversWhoAreAlsoWalkers.length;
-    const walkSeatsNeeded = bySizeDescending.reduce(
-      (sum, visit, index) => (vehicleCovered[index] ? sum : sum + visit.requiredCrewSize),
-      0,
-    );
-    return walkersAvailable >= walkSeatsNeeded;
-  };
-
-  const search = (visitIndex: number): boolean => {
-    if (visitIndex === bySizeDescending.length) return fits();
-    const visit = bySizeDescending[visitIndex];
-    for (const vehicle of usableVehicles) {
-      if (reservedVehicleIds.has(vehicle.id)) continue;
-      if (vehicle.seatCapacity !== null && vehicle.seatCapacity < visit.requiredCrewSize) continue;
-      reservedVehicleIds.add(vehicle.id);
-      vehicleCovered[visitIndex] = true;
-      if (search(visitIndex + 1)) return true;
-      vehicleCovered[visitIndex] = false;
-      reservedVehicleIds.delete(vehicle.id);
-    }
-    return search(visitIndex + 1);
-  };
-
-  return search(0);
+  return allocateTransport(activeVisits, workforce.vehicleResources, walkerIds).feasible;
 }
 
 /**
@@ -368,8 +301,10 @@ export function checkDayFeasibility(
       `${branchCode} has no drivable vehicle and nobody able to travel by public transport on ${date}, so no crew can reach a site.`,
     );
   }
+  // Built once: every demand set below is checked against the same walkers.
+  const walkerIds = new Set(workforce.availablePublicTransportEmployeeIds);
   for (const activeVisits of transportDemandSets(visits)) {
-    if (transportFeasible(activeVisits, workforce)) continue;
+    if (transportFeasible(activeVisits, workforce, walkerIds)) continue;
     const crewSizes = activeVisits.map((visit) => visit.requiredCrewSize).join('+');
     return fail(
       'NOT_ENOUGH_TRANSPORT_AT_ONCE',

@@ -12,6 +12,12 @@
  * person can cover more than one resource's "at least one" independently —
  * they just cannot actually do both at the same time.
  *
+ * This answers the *aggregate* question `branch-day-capacity.ts` asks — how
+ * much this branch could carry on a day, in the abstract. Whether one
+ * concrete set of visits can actually be transported is a different and
+ * harder question, because it depends on each crew's size and each
+ * vehicle's seats; `transport-allocation.ts` owns that one.
+ *
  * Branch-sized inputs (tens of vehicles and employees, not thousands), so a
  * standard Kuhn's-algorithm augmenting-path search — O(resources × edges) —
  * is fast enough and simple enough to read and verify by hand; there is no
@@ -51,43 +57,4 @@ export function maxBipartiteMatching(resourceEligiblePeople: readonly (readonly 
     if (augmentFrom(resourceEligiblePeople, matchedResourceOf, resourceIndex)) matched += 1;
   }
   return matched;
-}
-
-/**
- * A maximum matching that also uses as few `costly` people as possible,
- * among every matching of that maximum size — not a heuristic ordering, an
- * exact two-phase technique. Phase one finds the largest matching possible
- * using only non-costly people. Phase two keeps that matching and augments
- * it, now allowing costly people too, for whichever resources are still
- * unmatched.
- *
- * Every augmenting path phase two adds must use at least one costly edge:
- * if a path existed using only non-costly edges, phase one's exhaustive
- * non-costly-only search would already have found it. So a costly person
- * is only ever drawn on for a resource nothing else could have covered —
- * which is exactly "prefer a non-walker as a vehicle's driver, so as many
- * walkers as possible stay free to walk."
- *
- * @returns resource index -> the person matched to it. `.size` is the
- *   matching's total size, same as `maxBipartiteMatching` would report.
- */
-export function preferredBipartiteMatching(
-  resourceEligiblePeople: readonly (readonly string[])[],
-  costly: ReadonlySet<string>,
-): Map<number, string> {
-  const matchedResourceOf = new Map<string, number>();
-  const nonCostlyOnly = resourceEligiblePeople.map((people) => people.filter((person) => !costly.has(person)));
-
-  const matchedResourceIndexes = new Set<number>();
-  for (let resourceIndex = 0; resourceIndex < nonCostlyOnly.length; resourceIndex += 1) {
-    if (augmentFrom(nonCostlyOnly, matchedResourceOf, resourceIndex)) matchedResourceIndexes.add(resourceIndex);
-  }
-  for (let resourceIndex = 0; resourceIndex < resourceEligiblePeople.length; resourceIndex += 1) {
-    if (matchedResourceIndexes.has(resourceIndex)) continue;
-    if (augmentFrom(resourceEligiblePeople, matchedResourceOf, resourceIndex)) matchedResourceIndexes.add(resourceIndex);
-  }
-
-  const personByResource = new Map<number, string>();
-  for (const [person, resourceIndex] of matchedResourceOf) personByResource.set(resourceIndex, person);
-  return personByResource;
 }
