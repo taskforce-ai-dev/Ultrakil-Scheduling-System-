@@ -617,7 +617,7 @@ export class VisitGenerationService {
       });
       await this.audit.record({
         entityType: 'RepairBunchingBatch',
-        entityId: input.idempotencyKey,
+        entityId: batchId,
         action: 'visit_generation.repair_bunching_failed',
         actor,
         after: {
@@ -672,7 +672,7 @@ export class VisitGenerationService {
 
     await this.audit.record({
       entityType: 'RepairBunchingBatch',
-      entityId: input.idempotencyKey,
+      entityId: batchId,
       action: 'visit_generation.repair_bunching_applied',
       actor,
       after: {

@@ -381,7 +381,11 @@ it('plans, then applies, moving an agreement\'s own unbooked visits off a day th
   const applied = await request(http)
     .post('/api/visit-generation/repair-bunching/apply')
     .set(auth())
-    .send(applyBodyFor(scope, planned.body.planHash as string));
+    .send(
+      applyBodyFor(scope, planned.body.planHash as string, {
+        idempotencyKey: `repair-bunching-human-key-${suffix}`,
+      }),
+    );
   expect(applied.status).toBe(200);
   expect(applied.body.replayed).toBe(false);
 
@@ -675,7 +679,7 @@ async function bunchedScopeFor(dayOffset: number, visitMinutes = 180) {
 it('records what a part-way failure already moved, instead of leaving it unrecorded', async () => {
   const { scope, planHash, moves } = await bunchedScopeFor(28);
   const service = app.get(VisitGenerationService);
-  const idempotencyKey = randomUUID();
+  const idempotencyKey = `repair-bunching-failure-key-${suffix}`;
 
   // Fail the apply mid-loop, after the first agreement has genuinely moved.
   // This is the case the review named: the ledger used to be written only
