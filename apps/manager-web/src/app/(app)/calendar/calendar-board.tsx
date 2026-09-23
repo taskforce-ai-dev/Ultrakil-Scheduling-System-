@@ -44,6 +44,7 @@ import {
   visitTileAccessibleName,
   visitTileTime,
   NO_CREW_LABEL,
+  unstaffedVisitStage,
   type VisitTileFacts,
 } from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
@@ -138,6 +139,7 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
   const style = STAGE_STYLES[stage];
   const facts = tileFacts(entry);
   const crewCount = facts.crewCount;
+  const unstaffedStage = unstaffedVisitStage(entry.visitStatus);
 
   return (
     <button
@@ -168,6 +170,7 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
         <span className="flex shrink-0 items-center gap-0.5 font-medium">
           <UserX className="h-3 w-3" aria-hidden="true" />
           {NO_CREW_LABEL}
+          {unstaffedStage && <span className="text-[10px] opacity-80">— {unstaffedStage}</span>}
         </span>
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (

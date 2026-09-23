@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -36,6 +36,11 @@ vi.mock("@/lib/api-client", async () => {
       frequencyUnits: {},
       errorCodes: [],
     }),
+    fetchOperationsDay: vi.fn().mockResolvedValue({
+      date: "2026-09-23",
+      summary: { total: 0, ready: 0, proposed: 0, awaitingStaffing: 0, staffingFailed: 0, exceptions: 0, hoursUnconfirmed: 0 },
+      items: [],
+    }),
     fetchHealth: vi.fn(),
     fetchVisits: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 500 }),
     fetchCustomers: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 }),
@@ -64,6 +69,7 @@ import UnassignedVisitsPage from "../unassigned-visits/page";
 import ScheduleHistoryPage from "../schedule-history/page";
 import VisitsPage from "../visits/page";
 import PublishedAssignmentRepairsPage from "../published-assignment-repairs/page";
+import { ApiError, fetchOperationsDay } from "@/lib/api-client";
 
 describe("route smoke tests", () => {
   it.each([
@@ -81,5 +87,22 @@ describe("route smoke tests", () => {
   ])("renders the %s page without throwing", async (heading, Page) => {
     render(<Page />);
     expect(await screen.findByRole("heading", { name: heading as string })).toBeInTheDocument();
+  });
+
+  it("keeps an operations failure visible and retryable when metadata succeeds", async () => {
+    let rejectOperations!: (reason: Error) => void;
+    const operationsDeferred = new Promise<never>((_, reject) => {
+      rejectOperations = reject;
+    });
+    vi.mocked(fetchOperationsDay).mockReturnValueOnce(operationsDeferred);
+
+    render(<DashboardPage />);
+
+    await act(async () => {
+      rejectOperations(new ApiError({ code: "SERVICE_UNAVAILABLE", message: "offline" }));
+    });
+
+    expect(await screen.findByText("Operational status unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry operational status/i })).toBeEnabled();
   });
 });

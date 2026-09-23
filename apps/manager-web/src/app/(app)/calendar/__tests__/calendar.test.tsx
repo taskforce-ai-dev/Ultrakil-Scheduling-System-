@@ -17,6 +17,7 @@ const unassigned = buildCalendarEntry({
   visitDate: todayIso(),
   customerName: "Grandview Hotel",
   branchCode: "KANDY",
+  visitStatus: "UNASSIGNED",
   assignment: null,
 });
 
@@ -106,6 +107,7 @@ describe("CalendarPage", () => {
 
     const tile = screen.getByText("Grandview Hotel").closest("button")!;
     expect(within(tile).getByText("No crew")).toBeInTheDocument();
+    expect(tile).toHaveTextContent("Assignment required");
   });
 
   it("says that the overflow link changes the view", async () => {

@@ -7,6 +7,7 @@ interface ErrorStateProps {
   description?: string;
   code?: string;
   onRetry?: () => void;
+  retryLabel?: string;
 }
 
 /**
@@ -19,6 +20,7 @@ export function ErrorState({
   description,
   code,
   onRetry,
+  retryLabel = "Try again",
 }: ErrorStateProps) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-10 text-center">
@@ -28,7 +30,7 @@ export function ErrorState({
       {code && <p className="font-mono text-xs text-muted-foreground">{code}</p>}
       {onRetry && (
         <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>
-          Try again
+          {retryLabel}
         </Button>
       )}
     </div>

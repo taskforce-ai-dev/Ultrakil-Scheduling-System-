@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { CrewBadge } from "@/components/shared/visit-badges";
+import { CrewBadge, VisitStatusBadge } from "@/components/shared/visit-badges";
 import { buildVisit } from "@/test/fixtures";
 
 /**
@@ -30,5 +30,19 @@ describe("CrewBadge", () => {
     render(<CrewBadge visit={buildVisit({ assignmentCount: 3, assignedCrewCount: 0 })} />);
 
     expect(screen.getByText("No crew yet")).toBeInTheDocument();
+  });
+});
+
+describe("VisitStatusBadge", () => {
+  it("uses calm, actionable labels for planned and assignment-required visits", () => {
+    const { rerender } = render(<VisitStatusBadge status="PENDING" />);
+
+    expect(screen.getByText("Planned")).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting staffing|staffing failed|no crew yet/i)).not.toBeInTheDocument();
+
+    rerender(<VisitStatusBadge status="UNASSIGNED" />);
+
+    expect(screen.getByText("Action required")).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting staffing|staffing failed|no crew yet/i)).not.toBeInTheDocument();
   });
 });

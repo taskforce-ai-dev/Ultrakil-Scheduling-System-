@@ -31,8 +31,8 @@ import type { Visit, VisitStatus } from "@/lib/api-client";
  * believing the month was covered. The two facts now have two names.
  */
 export const VISIT_STATUS_LABEL: Record<VisitStatus, string> = {
-  PENDING: "Awaiting staffing",
-  UNASSIGNED: "Staffing failed",
+  PENDING: "Planned",
+  UNASSIGNED: "Action required",
   SCHEDULED: "Crew assigned",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",

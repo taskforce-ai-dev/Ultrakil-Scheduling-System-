@@ -76,25 +76,25 @@ const unstaffedDay = parseOperationsDay({
 });
 
 describe("the queue strip's vocabulary", () => {
-  it("names the two kinds of unstaffed work instead of calling both Unassigned", () => {
+  it("names planned work and assignment-required work without staffing jargon", () => {
     render(<OperationsDayPanel data={unstaffedDay} />);
 
     const untried = screen.getByText("Untried customer").closest("li")!;
-    expect(within(untried).getByText("Awaiting staffing")).toBeInTheDocument();
+    expect(within(untried).getByText("Planned")).toBeInTheDocument();
 
     const refused = screen.getByText("Refused customer").closest("li")!;
-    expect(within(refused).getByText("Staffing failed")).toBeInTheDocument();
+    expect(within(refused).getByText("Action required")).toBeInTheDocument();
 
-    expect(screen.queryByText("Unassigned")).not.toBeInTheDocument();
+    expect(screen.queryByText(/awaiting staffing|staffing failed|no crew yet/i)).not.toBeInTheDocument();
   });
 
   it("counts them apart on the summary strip, in the same words as the rows", () => {
     render(<OperationsDayPanel data={unstaffedDay} />);
 
     const strip = screen.getByText("Total").closest("dl")!;
-    expect(within(strip).getByText("Awaiting staffing").nextElementSibling).toHaveTextContent("1");
-    expect(within(strip).getByText("Staffing failed").nextElementSibling).toHaveTextContent("1");
-    expect(within(strip).queryByText("Unassigned")).not.toBeInTheDocument();
+    expect(within(strip).getByText("Planned").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).getByText("Action required").nextElementSibling).toHaveTextContent("1");
+    expect(within(strip).queryByText(/awaiting staffing|staffing failed|no crew yet/i)).not.toBeInTheDocument();
   });
 
   it("does not guess which kind it is when the server named no visit status", () => {

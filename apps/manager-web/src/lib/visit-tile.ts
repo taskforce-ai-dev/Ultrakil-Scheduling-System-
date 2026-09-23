@@ -1,4 +1,5 @@
 import { formatMinuteOfDay } from "@/lib/calendar";
+import type { VisitStatus } from "@/lib/api-client";
 
 /**
  * The facts a calendar tile is allowed to say about a visit.
@@ -57,6 +58,13 @@ export function visitTileTime(facts: VisitTileFacts): string {
 
 /** The word "No crew", said rather than left blank. */
 export const NO_CREW_LABEL = "No crew";
+
+/** The next operational stage for an unstaffed visit, without changing its API status. */
+export function unstaffedVisitStage(status: VisitStatus): string | null {
+  if (status === "PENDING") return "Planning stage";
+  if (status === "UNASSIGNED") return "Assignment required";
+  return null;
+}
 
 /**
  * Spoken as a sentence in both cases: "at 60 min · time not set on

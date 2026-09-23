@@ -63,6 +63,7 @@ import {
   visitTileAccessibleName,
   visitTileTime,
   NO_CREW_LABEL,
+  unstaffedVisitStage,
   type VisitTileFacts,
 } from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
@@ -175,6 +176,7 @@ function VisitChip({
   const supportingTextTone =
     visit.status === "SCHEDULED" ? "text-foreground" : "text-muted-foreground";
   const facts = tileFacts(visit);
+  const unstaffedStage = unstaffedVisitStage(visit.status);
 
   return (
     <div
@@ -223,6 +225,7 @@ function VisitChip({
             <span className="flex shrink-0 items-center gap-0.5 font-medium">
               <UserX className="h-3 w-3" aria-hidden="true" />
               {NO_CREW_LABEL}
+              {unstaffedStage && <span className="text-[10px] opacity-80">— {unstaffedStage}</span>}
             </span>
           )}
         </span>
@@ -668,7 +671,7 @@ export default function VisitsPage() {
                 same number, and the filter returned 6 of the 38. */}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
-                {unstaffedCount} with no crew yet — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
+                {unstaffedCount} visits need a crew — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
                 {VISIT_STATUS_LABEL.UNASSIGNED.toLowerCase()}
               </span>
             )}
