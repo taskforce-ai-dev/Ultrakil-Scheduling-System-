@@ -7,9 +7,8 @@
 > [`VERCEL_RELEASE_CHECKLIST.md`](VERCEL_RELEASE_CHECKLIST.md) covers a
 > separate Vercel path that is **not** the staging runtime.
 >
-> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction; the previous
-> banner claimed the current deployment had no dedicated staging server and
-> used Vercel.
+> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction, which
+> superseded the earlier banner here.
 
 Record links/results against the exact release SHA; unchecked items remain open.
 This C08 checklist complements Oshadi's separate O08 guide, screenshots and demo
