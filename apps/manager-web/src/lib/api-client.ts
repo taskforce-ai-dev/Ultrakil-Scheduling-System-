@@ -75,6 +75,10 @@ export type AssignmentStatus = Assignment["status"];
 export type UnassignedVisit = components["schemas"]["UnassignedVisitDto"];
 export type PaginatedUnassignedVisits = components["schemas"]["PaginatedUnassignedVisitsDto"];
 export type EligibilityResult = components["schemas"]["EligibilityResultDto"];
+export type AssignmentCandidateWindow = components["schemas"]["AssignmentCandidateWindowDto"];
+export type AssignmentCandidates = components["schemas"]["AssignmentCandidatesDto"];
+export type EmployeeAssignmentCandidate = components["schemas"]["EmployeeAssignmentCandidateDto"];
+export type VehicleAssignmentCandidate = components["schemas"]["VehicleAssignmentCandidateDto"];
 export type CrewRole = Assignment["crew"][number]["role"];
 
 /* -------------------------------------------------------------------------
@@ -1078,6 +1082,21 @@ export function checkAssignment(
   dto: AssignCrewRequest,
 ): Promise<EligibilityResult> {
   return request<EligibilityResult>(`/visits/${visitId}/assignment/check`, {
+    method: "POST",
+    body: dto,
+  });
+}
+
+/**
+ * Lists the individual employees and vehicles that can be selected for one
+ * proposed time. This is advisory UI data only: the full eligibility check
+ * and assignment write remain authoritative for collective crew rules.
+ */
+export function fetchAssignmentCandidates(
+  visitId: string,
+  dto: AssignmentCandidateWindow,
+): Promise<AssignmentCandidates> {
+  return request<AssignmentCandidates>(`/visits/${visitId}/assignment/candidates`, {
     method: "POST",
     body: dto,
   });
