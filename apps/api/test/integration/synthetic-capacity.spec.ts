@@ -393,3 +393,90 @@ it('serializes with an assignment writer and keeps the entire live-referenced su
   expect(await prisma.employee.count({ where: { id: { in: teamTwoEmployees.map(({ id }) => id) }, isActive: true } })).toBe(4);
   expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: teamTwoVehicle.id } })).isActive).toBe(true);
 });
+
+it('does not narrow skills, seats, or members beneath a future live assignment', async () => {
+  await apply(1);
+  const employees = await prisma.employee.findMany({
+    where: { sourceKey: { startsWith: `${sourcePrefix}team:01:` } },
+    orderBy: { sourceKey: 'asc' },
+  });
+  const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { code: `${vehiclePrefix}01` } });
+  const visit = await prisma.generatedVisit.create({
+    data: {
+      serviceAgreementId: agreementId,
+      branchId,
+      branchCode: BranchCode.KANDY,
+      visitDate: new Date('2035-02-02T00:00:00.000Z'),
+      windowStartMinute: 480,
+      windowEndMinute: 540,
+      durationMinutes: 60,
+      requiredCrewSize: 4,
+      status: VisitStatus.PENDING,
+    },
+  });
+  const assignment = await prisma.assignment.create({
+    data: {
+      generatedVisitId: visit.id,
+      branchId,
+      branchCode: BranchCode.KANDY,
+      status: AssignmentStatus.PUBLISHED,
+      plannedStart: new Date('2035-02-02T08:00:00.000Z'),
+      plannedEnd: new Date('2035-02-02T09:00:00.000Z'),
+      crewMembers: {
+        create: employees.map((employee, index) => ({
+          employeeId: employee.id,
+          role: index === 0 ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
+          isPmsSupervisor: index === 0,
+        })),
+      },
+      vehicles: {
+        create: { vehicleId: vehicle.id, driverEmployeeId: employees[0].id },
+      },
+    },
+  });
+
+  await prisma.$transaction([
+    prisma.serviceAgreement.update({ where: { id: agreementId }, data: { crewSize: 2 } }),
+    prisma.serviceAgreementRequiredSkill.deleteMany({
+      where: { serviceAgreementId: agreementId, skillCode: 'GPC' },
+    }),
+  ]);
+  try {
+    const protectedResult = await apply(1);
+    expect(protectedResult.teamSize).toBe(2);
+    expect(protectedResult.employees.blockedLive).toBe(2);
+    expect(await prisma.employee.count({
+      where: { id: { in: employees.map(({ id }) => id) }, isActive: true },
+    })).toBe(4);
+    expect(await prisma.employeeSkill.count({
+      where: {
+        employeeId: { in: employees.map(({ id }) => id) },
+        skillCode: 'GPC',
+      },
+    })).toBe(4);
+    expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).seatCapacity).toBe(4);
+
+    await prisma.assignment.update({
+      where: { id: assignment.id },
+      data: { status: AssignmentStatus.COMPLETED },
+    });
+    const narrowed = await apply(1);
+    expect(narrowed.employees.deactivated).toBe(2);
+    expect(await prisma.employeeSkill.count({
+      where: {
+        employeeId: { in: employees.slice(0, 2).map(({ id }) => id) },
+        skillCode: 'GPC',
+      },
+    })).toBe(0);
+    expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).seatCapacity).toBe(2);
+  } finally {
+    await prisma.$transaction([
+      prisma.serviceAgreement.update({ where: { id: agreementId }, data: { crewSize: 4 } }),
+      prisma.serviceAgreementRequiredSkill.upsert({
+        where: { serviceAgreementId_skillCode: { serviceAgreementId: agreementId, skillCode: 'GPC' } },
+        create: { serviceAgreementId: agreementId, skillCode: 'GPC' },
+        update: {},
+      }),
+    ]);
+  }
+});

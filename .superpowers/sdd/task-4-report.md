@@ -49,3 +49,25 @@ The dry-run result reports planned resource counts. Apply/deactivate results
 report actual created, reactivated, unchanged, blocked-live, and deactivated
 resource counts. An operator must still run the documented read-only shortage
 measurement and approve the minimum team count before any staging apply.
+
+## Independent-review follow-up
+
+Actual-source review found that an apply with smaller current agreement
+requirements could remove an old skill or reduce vehicle seats before surplus
+deactivation noticed that the team still had a future live assignment. A new
+PostgreSQL regression reproduced that failure first: a four-person team with
+two skills and four seats was narrowed to two people, one skill, and two seats
+while its published future assignment remained live.
+
+The apply transaction now snapshots live references only after taking the
+shared employee-then-vehicle locks. It retains existing skills for referenced
+employees and never reduces a referenced vehicle's existing seat capacity.
+Surplus team members remain active through the existing whole-team protection.
+Once the assignment becomes historical, a subsequent deterministic apply
+removes the obsolete skill from retained members, deactivates surplus members,
+and reduces the vehicle to the current required capacity.
+
+Follow-up evidence: the regression failed before the fix (`GPC` remained on
+only 2 of 4 live crew members), then passed after it. The full focused
+PostgreSQL suite passes 7/7; focused unit tests pass 23/23; API typecheck and
+lint pass; `git diff --check` passes.

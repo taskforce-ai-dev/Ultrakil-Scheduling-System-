@@ -519,6 +519,16 @@ async function mutateSyntheticCapacity(
     resources.employees.map(({ id }) => id),
     resources.vehicles.map(({ id }) => id),
   );
+  // Snapshot live references only after acquiring the same employee→vehicle
+  // row locks used by assignment writers. Retained resources must not lose a
+  // skill or seat that an already-live assignment still relies on merely
+  // because the source agreement's future requirement became smaller.
+  const liveReferences = await liveReferencedIds(
+    tx,
+    resources.employees.map(({ id }) => id),
+    resources.vehicles.map(({ id }) => id),
+    asOf,
+  );
 
   const expectedEmployees = new Map(
     plan.teams.flatMap(({ employees }) => employees).map((row) => [row.sourceKey, row]),
@@ -573,9 +583,11 @@ async function mutateSyntheticCapacity(
         else if (!existing.isActive) counts.employees.reactivated += 1;
         else counts.employees.unchanged += 1;
 
-        await tx.employeeSkill.deleteMany({
-          where: { employeeId: record.id, skillCode: { notIn: employee.skillCodes.length ? employee.skillCodes : ['__none__'] } },
-        });
+        if (!liveReferences.employees.has(record.id)) {
+          await tx.employeeSkill.deleteMany({
+            where: { employeeId: record.id, skillCode: { notIn: employee.skillCodes.length ? employee.skillCodes : ['__none__'] } },
+          });
+        }
         for (const skillCode of employee.skillCodes) {
           await tx.employeeSkill.upsert({
             where: { employeeId_skillCode: { employeeId: record.id, skillCode } },
@@ -595,7 +607,9 @@ async function mutateSyntheticCapacity(
             data: {
               label: team.vehicle.label,
               branchId: team.vehicle.branchId,
-              seatCapacity: team.vehicle.seatCapacity,
+              seatCapacity: liveReferences.vehicles.has(existing.id)
+                ? Math.max(existing.seatCapacity ?? 0, team.vehicle.seatCapacity)
+                : team.vehicle.seatCapacity,
               ownershipGroup: team.vehicle.ownershipGroup,
               isActive: true,
             },
