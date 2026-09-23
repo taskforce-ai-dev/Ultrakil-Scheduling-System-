@@ -8,11 +8,14 @@ import { ConflictList } from "@/components/shared/conflict-list";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -21,23 +24,23 @@ import {
   ApiError,
   assignCrew,
   checkAssignment,
+  fetchAssignmentCandidates,
   fetchAuthorizedDrivers,
-  fetchEmployees,
-  fetchVehicles,
   fetchVisit,
   fetchVisitAssignment,
   lockAssignment,
   unassignVisit,
   unlockAssignment,
   type Assignment,
+  type AssignmentCandidates,
   type AssignmentLock,
   type AuthorizedDrivers,
   type Conflict,
   type CrewRole,
-  type Employee,
+  type EmployeeAssignmentCandidate,
   type EligibilityResult,
   type LockScope,
-  type Vehicle,
+  type VehicleAssignmentCandidate,
   type VisitDetail,
 } from "@/lib/api-client";
 import { formatLongDate } from "@/lib/calendar";
@@ -93,6 +96,78 @@ interface VehicleRow {
   driverEmployeeId: string;
 }
 
+type TimeCandidate = EmployeeAssignmentCandidate | VehicleAssignmentCandidate;
+
+function employeeCandidateName(candidate: TimeCandidate): string {
+  return "isPmsGrade" in candidate && candidate.isPmsGrade
+    ? `${candidate.displayName} (PMS)`
+    : candidate.displayName;
+}
+
+function CandidateSelectOptions({
+  candidates,
+  nameFor,
+}: {
+  candidates: TimeCandidate[];
+  nameFor: (candidate: TimeCandidate) => string;
+}) {
+  const available = candidates.filter((candidate) => candidate.isAvailable);
+
+  return (
+    <SelectGroup>
+      <SelectLabel>Available</SelectLabel>
+      {available.map((candidate) => (
+        <SelectItem key={candidate.id} value={candidate.id}>
+          {nameFor(candidate)}
+        </SelectItem>
+      ))}
+    </SelectGroup>
+  );
+}
+
+function UnavailableCandidateDisclosure({
+  candidates,
+  nameFor,
+}: {
+  candidates: TimeCandidate[];
+  nameFor: (candidate: TimeCandidate) => string;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const listId = React.useId();
+  const unavailable = candidates.filter((candidate) => !candidate.isAvailable);
+
+  if (unavailable.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-border/60 px-2 py-1.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={listId}
+        className="w-full rounded-sm text-left text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => setExpanded((shown) => !shown)}
+      >
+        Unavailable for this time ({unavailable.length})
+      </button>
+      {expanded && (
+        <ul
+          id={listId}
+          aria-label="Unavailable for this time"
+          className="mt-1 space-y-1 border-t border-border/60 pt-1"
+        >
+          {unavailable.map((candidate) => (
+            <li key={candidate.id} className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{nameFor(candidate)}</span>
+              {" — "}
+              {candidate.unavailableReason?.message ?? "Unavailable for this time."}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function minuteToTimeInput(minute: number): string {
   const hours = Math.floor(minute / 60)
     .toString()
@@ -129,8 +204,13 @@ export function AssignmentEditorDrawer({
 }: AssignmentEditorDrawerProps) {
   const [visit, setVisit] = React.useState<VisitDetail | null>(null);
   const [assignment, setAssignment] = React.useState<Assignment | null>(null);
-  const [employees, setEmployees] = React.useState<Employee[]>([]);
-  const [vehicles, setVehicles] = React.useState<Vehicle[]>([]);
+  const [candidates, setCandidates] = React.useState<AssignmentCandidates | null>(null);
+  const [isLoadingCandidates, setIsLoadingCandidates] = React.useState(false);
+  const [candidateError, setCandidateError] = React.useState<ApiError | null>(null);
+  const [candidateRefreshVersion, setCandidateRefreshVersion] = React.useState(0);
+  const candidateRequestGenerationRef = React.useRef(0);
+  const [knownEmployeeLabels, setKnownEmployeeLabels] = React.useState<Record<string, string>>({});
+  const [knownVehicleLabels, setKnownVehicleLabels] = React.useState<Record<string, string>>({});
   const [driversByVehicle, setDriversByVehicle] = React.useState<
     Record<string, AuthorizedDrivers>
   >({});
@@ -139,6 +219,7 @@ export function AssignmentEditorDrawer({
 
   const [startMinute, setStartMinute] = React.useState(0);
   const [endMinute, setEndMinute] = React.useState(0);
+  const [formWindowVisitId, setFormWindowVisitId] = React.useState<string | null>(null);
   const [crewRows, setCrewRows] = React.useState<CrewRow[]>([]);
   const [vehicleRows, setVehicleRows] = React.useState<VehicleRow[]>([]);
   const [reason, setReason] = React.useState("");
@@ -179,6 +260,7 @@ export function AssignmentEditorDrawer({
     const generation = ++loadGenerationRef.current;
     const current = () => generation === loadGenerationRef.current;
     setIsLoading(true);
+    setFormWindowVisitId(null);
     setLoadError(null);
     setSaveConflicts(null);
     Promise.all([fetchVisit(visitId), fetchVisitAssignment(visitId)])
@@ -186,20 +268,7 @@ export function AssignmentEditorDrawer({
         if (!current()) return undefined;
         setVisit(visitDetail);
         setAssignment(currentAssignment);
-        return fetchEmployees({ branch: visitDetail.branchCode, pageSize: 200 }).then(
-          (page) => {
-            if (!current()) return undefined;
-            setEmployees(page.items);
-            // The engine treats a vehicle with no recorded branch as unknown,
-            // not wrong (the Technician Matrix never states one). Asking only
-            // for vehicles *of* this branch returned none on real data and left
-            // an enabled picker that opened onto nothing.
-            return fetchVehicles({ servesBranch: visitDetail.branchCode, pageSize: 200 });
-          }
-        );
-      })
-      .then((vehiclePage) => {
-        if (vehiclePage && current()) setVehicles(vehiclePage.items);
+        return undefined;
       })
       .catch((caught: unknown) => {
         if (!current()) return;
@@ -232,6 +301,8 @@ export function AssignmentEditorDrawer({
     // any refresh of the same visit erased what they were typing; a successful
     // save clears it explicitly instead, once the reason has been recorded.
     setReason("");
+    setKnownEmployeeLabels({});
+    setKnownVehicleLabels({});
   }, [visitId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -243,6 +314,21 @@ export function AssignmentEditorDrawer({
   React.useEffect(() => {
     if (!visit) return;
     if (assignment) {
+      setKnownEmployeeLabels((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          assignment.crew.map((member) => [
+            member.employeeId,
+            member.isPmsSupervisor ? `${member.fullName} (PMS)` : member.fullName,
+          ])
+        ),
+      }));
+      setKnownVehicleLabels((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          assignment.vehicles.map((entry) => [entry.vehicleId, entry.label])
+        ),
+      }));
       setStartMinute(assignment.plannedStartMinute);
       setEndMinute(assignment.plannedEndMinute);
       setCrewRows(
@@ -273,8 +359,90 @@ export function AssignmentEditorDrawer({
       setCrewRows([]);
       setVehicleRows([]);
     }
+    setFormWindowVisitId(visit.id);
     setSaveConflicts(null);
   }, [visit, assignment]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const isPublicationHistory =
+    assignment !== null && PUBLICATION_HISTORY_STATUSES.has(assignment.status);
+
+  // Candidate availability is advisory and time-specific. It has its own
+  // generation fence: a slow success, failure, or finally from an older
+  // visit/window must never replace the newest list or clear its pending UI.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  React.useEffect(() => {
+    const generation = candidateRequestGenerationRef.current + 1;
+    candidateRequestGenerationRef.current = generation;
+    const current = () => candidateRequestGenerationRef.current === generation;
+
+    setCandidates(null);
+    setCandidateError(null);
+    if (
+      !visitId ||
+      !visit ||
+      visit.id !== visitId ||
+      formWindowVisitId !== visitId ||
+      isPublicationHistory ||
+      endMinute <= startMinute
+    ) {
+      setIsLoadingCandidates(false);
+      return;
+    }
+
+    setIsLoadingCandidates(true);
+    fetchAssignmentCandidates(visitId, {
+      plannedStartMinute: startMinute,
+      plannedEndMinute: endMinute,
+    })
+      .then((result) => {
+        if (!current()) return;
+        setCandidates(result);
+        setKnownEmployeeLabels((labels) => ({
+          ...labels,
+          ...Object.fromEntries(
+            result.employees.map((candidate) => [
+              candidate.id,
+              candidate.isPmsGrade
+                ? `${candidate.displayName} (PMS)`
+                : candidate.displayName,
+            ])
+          ),
+        }));
+        setKnownVehicleLabels((labels) => ({
+          ...labels,
+          ...Object.fromEntries(
+            result.vehicles.map((candidate) => [candidate.id, candidate.displayName])
+          ),
+        }));
+      })
+      .catch((caught: unknown) => {
+        if (!current()) return;
+        setCandidateError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({
+                code: "UNKNOWN_ERROR",
+                message: "Could not check who is free for this time.",
+              })
+        );
+      })
+      .finally(() => {
+        if (current()) setIsLoadingCandidates(false);
+      });
+
+    return () => {
+      if (current()) candidateRequestGenerationRef.current += 1;
+    };
+  }, [
+    visitId,
+    visit,
+    formWindowVisitId,
+    startMinute,
+    endMinute,
+    isPublicationHistory,
+    candidateRefreshVersion,
+  ]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Base UI's <SelectValue> renders the raw value unless the root is given a
@@ -287,7 +455,8 @@ export function AssignmentEditorDrawer({
   // Nothing to choose from once loading is done. Rows an assignment already
   // has still render (their names come from the assignment), but no new one
   // can be added and no picker is offered that would open onto nothing.
-  const noVehicleCanServe = !isLoading && visit !== null && vehicles.length === 0;
+  const noVehicleCanServe =
+    !isLoadingCandidates && candidates !== null && candidates.vehicles.length === 0;
 
   // Same rule for people: the assignment names its own crew and drivers, and
   // a published assignment may name someone the branch list or the authorized
@@ -299,12 +468,9 @@ export function AssignmentEditorDrawer({
           member.employeeId,
           member.isPmsSupervisor ? `${member.fullName} (PMS)` : member.fullName,
         ]),
-        ...employees.map((employee) => [
-          employee.id,
-          employee.isPmsGrade ? `${employee.fullName} (PMS)` : employee.fullName,
-        ]),
+        ...Object.entries(knownEmployeeLabels),
       ]),
-    [assignment, employees]
+    [assignment, knownEmployeeLabels]
   );
   const assignedDriverLabels = React.useMemo(
     () =>
@@ -320,9 +486,9 @@ export function AssignmentEditorDrawer({
     () =>
       Object.fromEntries([
         ...(assignment?.vehicles ?? []).map((entry) => [entry.vehicleId, entry.label]),
-        ...vehicles.map((vehicle) => [vehicle.id, vehicle.label]),
+        ...Object.entries(knownVehicleLabels),
       ]),
-    [assignment, vehicles]
+    [assignment, knownVehicleLabels]
   );
 
   // Every employee currently on the crew, regardless of the role they're
@@ -392,8 +558,6 @@ export function AssignmentEditorDrawer({
     [startMinute, endMinute, crewRows, vehicleRows]
   );
 
-  const isPublicationHistory =
-    assignment !== null && PUBLICATION_HISTORY_STATUSES.has(assignment.status);
   // Only an editable assignment is told nothing can serve it; history is
   // read-only and the advice would be about a record nobody can act on here.
   const vehiclePickerBlocked = noVehicleCanServe && !isPublicationHistory;
@@ -677,18 +841,61 @@ export function AssignmentEditorDrawer({
               <input
                 id="assignment-end"
                 type="time"
-                value={minuteToTimeInput(endMinute)}
+                value={minuteToTimeInput(endMinute === 1440 ? 0 : endMinute)}
                 onChange={(event) => setEndMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublicationHistory}
+                disabled={isPublicationHistory || endMinute === 1440}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
+              <div className="flex items-center gap-1.5 pt-1">
+                <Checkbox
+                  id="assignment-end-next-midnight"
+                  checked={endMinute === 1440}
+                  onCheckedChange={(checked) => setEndMinute(checked === true ? 1440 : 1439)}
+                  disabled={isPublicationHistory}
+                />
+                <Label
+                  htmlFor="assignment-end-next-midnight"
+                  className="text-xs font-normal text-muted-foreground"
+                >
+                  Next midnight (24:00)
+                </Label>
+              </div>
             </div>
           </section>
+
+          {isLoadingCandidates ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              Checking who is free for this time…
+            </p>
+          ) : candidateError ? (
+            <div role="alert" className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 p-3 text-sm">
+              <span>Could not load availability: {candidateError.message}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCandidateRefreshVersion((version) => version + 1)}
+              >
+                Retry
+              </Button>
+            </div>
+          ) : null}
 
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Supervisor &amp; crew</h3>
-              <Button type="button" variant="outline" size="sm" onClick={addCrewRow} disabled={isPublicationHistory}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addCrewRow}
+                disabled={
+                  isPublicationHistory ||
+                  isLoadingCandidates ||
+                  candidates === null ||
+                  candidates.employees.length === 0
+                }
+              >
                 <Plus aria-hidden="true" />
                 Add crew member
               </Button>
@@ -697,32 +904,67 @@ export function AssignmentEditorDrawer({
               <p className="text-sm text-muted-foreground">No crew proposed yet.</p>
             )}
             <div className="space-y-2">
-              {crewRows.map((row) => (
+              {crewRows.map((row) => {
+                const selectedCandidate = candidates?.employees.find(
+                  (candidate) => candidate.id === row.employeeId
+                );
+                const selectedCanBeChosen = selectedCandidate?.isAvailable === true;
+                const showCurrentSelection = Boolean(row.employeeId) && !selectedCanBeChosen;
+                const rowCandidates = (candidates?.employees ?? []).filter(
+                  (candidate) => !showCurrentSelection || candidate.id !== row.employeeId
+                );
+                return (
                 <div key={row.key} className="flex items-center gap-2">
-                  <Select
-                    items={employeeLabels}
-                    value={row.employeeId}
-                    disabled={isPublicationHistory}
-                    onValueChange={(value) =>
-                      setCrewRows((rows) =>
-                        rows.map((entry) =>
-                          entry.key === row.key ? { ...entry, employeeId: value ?? "" } : entry
-                        )
-                      )
-                    }
-                  >
-                    <SelectTrigger aria-label="Employee" className="flex-1">
-                      <SelectValue placeholder="Choose an employee" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {employees.map((employee) => (
-                        <SelectItem key={employee.id} value={employee.id}>
-                          {employee.fullName}
-                          {employee.isPmsGrade ? " (PMS)" : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    {showCurrentSelection && (
+                      <p className="truncate text-xs text-muted-foreground">
+                        Current crew member: <span className="font-medium text-foreground">
+                          {employeeLabels[row.employeeId] ?? row.employeeId}
+                        </span>
+                        {selectedCandidate?.unavailableReason?.message
+                          ? ` — ${selectedCandidate.unavailableReason.message}`
+                          : null}
+                      </p>
+                    )}
+                    <Select
+                      key={`${row.key}-${selectedCanBeChosen ? row.employeeId : "replacement"}`}
+                      items={employeeLabels}
+                      value={selectedCanBeChosen ? row.employeeId : ""}
+                      disabled={isPublicationHistory || isLoadingCandidates || candidates === null}
+                      onValueChange={(value) => {
+                        // Base UI reports null when this controlled picker
+                        // changes from the current (now unavailable) value to
+                        // replacement mode. That transition must not silently
+                        // remove the assignment; only choosing another
+                        // available option replaces it.
+                        if (!value) return;
+                        setCrewRows((rows) =>
+                          rows.map((entry) =>
+                            entry.key === row.key ? { ...entry, employeeId: value } : entry
+                          )
+                        );
+                      }}
+                    >
+                      <SelectTrigger aria-label="Employee" className="w-full">
+                        <SelectValue
+                          placeholder={
+                            showCurrentSelection ? "Choose a replacement" : "Choose an employee"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <CandidateSelectOptions
+                          key={`${visitId}-${startMinute}-${endMinute}-employees`}
+                          candidates={rowCandidates}
+                          nameFor={employeeCandidateName}
+                        />
+                      </SelectContent>
+                    </Select>
+                    <UnavailableCandidateDisclosure
+                      candidates={rowCandidates}
+                      nameFor={employeeCandidateName}
+                    />
+                  </div>
                   <Select
                     items={ROLE_LABELS}
                     value={row.role}
@@ -757,7 +999,8 @@ export function AssignmentEditorDrawer({
                     <Trash2 aria-hidden="true" />
                   </Button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 
@@ -769,9 +1012,9 @@ export function AssignmentEditorDrawer({
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  if (!vehiclePickerBlocked) addVehicleRow();
+                  if (!vehiclePickerBlocked && candidates !== null) addVehicleRow();
                 }}
-                disabled={isPublicationHistory}
+                disabled={isPublicationHistory || isLoadingCandidates || candidates === null}
                 // aria-disabled rather than disabled: a natively disabled
                 // button leaves the tab order, so its reason could never be
                 // read by the people it is meant for.
@@ -801,6 +1044,14 @@ export function AssignmentEditorDrawer({
             <div className="space-y-2">
               {vehicleRows.map((row) => {
                 const drivers = row.vehicleId ? driversByVehicle[row.vehicleId] : undefined;
+                const selectedCandidate = candidates?.vehicles.find(
+                  (candidate) => candidate.id === row.vehicleId
+                );
+                const selectedCanBeChosen = selectedCandidate?.isAvailable === true;
+                const showCurrentSelection = Boolean(row.vehicleId) && !selectedCanBeChosen;
+                const rowCandidates = (candidates?.vehicles ?? []).filter(
+                  (candidate) => !showCurrentSelection || candidate.id !== row.vehicleId
+                );
                 // ULK-O09: offer a driver only if they're both authorized
                 // for this vehicle (a checkmark, per the workforce matrix)
                 // and actually on this visit's crew. Never just "authorized
@@ -817,26 +1068,51 @@ export function AssignmentEditorDrawer({
                 };
                 return (
                   <div key={row.key} className="flex items-center gap-2">
-                    <Select
-                      items={vehicleLabels}
-                      value={row.vehicleId}
-                      // With nothing to choose from, the trigger still names
-                      // the vehicle this row holds but never opens onto an
-                      // empty list.
-                      disabled={isPublicationHistory || noVehicleCanServe}
-                      onValueChange={(value) => onVehicleChosen(row.key, value ?? "")}
-                    >
-                      <SelectTrigger aria-label="Vehicle" className="flex-1">
-                        <SelectValue placeholder="Choose a vehicle" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {vehicles.map((vehicle) => (
-                          <SelectItem key={vehicle.id} value={vehicle.id}>
-                            {vehicle.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="min-w-0 flex-1 space-y-1">
+                      {showCurrentSelection && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          Current vehicle: <span className="font-medium text-foreground">
+                            {vehicleLabels[row.vehicleId] ?? row.vehicleId}
+                          </span>
+                          {selectedCandidate?.unavailableReason?.message
+                            ? ` — ${selectedCandidate.unavailableReason.message}`
+                            : null}
+                        </p>
+                      )}
+                      <Select
+                        key={`${row.key}-${selectedCanBeChosen ? row.vehicleId : "replacement"}`}
+                        items={vehicleLabels}
+                        value={selectedCanBeChosen ? row.vehicleId : ""}
+                        disabled={
+                          isPublicationHistory ||
+                          isLoadingCandidates ||
+                          candidates === null ||
+                          noVehicleCanServe
+                        }
+                        onValueChange={(value) => {
+                          if (value) onVehicleChosen(row.key, value);
+                        }}
+                      >
+                        <SelectTrigger aria-label="Vehicle" className="w-full">
+                          <SelectValue
+                            placeholder={
+                              showCurrentSelection ? "Choose a replacement" : "Choose a vehicle"
+                            }
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <CandidateSelectOptions
+                            key={`${visitId}-${startMinute}-${endMinute}-vehicles`}
+                            candidates={rowCandidates}
+                            nameFor={(candidate) => candidate.displayName}
+                          />
+                        </SelectContent>
+                      </Select>
+                      <UnavailableCandidateDisclosure
+                        candidates={rowCandidates}
+                        nameFor={(candidate) => candidate.displayName}
+                      />
+                    </div>
                     <Select
                       items={driverLabels}
                       value={row.driverEmployeeId}

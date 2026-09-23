@@ -992,6 +992,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/visits/{id}/assignment/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Available individual employees and vehicles for a proposed time */
+        post: operations["AssignmentsController_candidates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/visits/{id}/assignment": {
         parameters: {
             query?: never;
@@ -2296,6 +2313,44 @@ export interface components {
             isEligible: boolean;
             /** @description Every applicable conflict, not just the first, in a stable order. */
             conflicts: components["schemas"]["ConflictDto"][];
+        };
+        AssignmentCandidateWindowDto: {
+            /**
+             * Format: int32
+             * @example 540
+             */
+            plannedStartMinute: number;
+            /**
+             * Format: int32
+             * @example 660
+             */
+            plannedEndMinute: number;
+        };
+        AssignmentCandidateReasonDto: {
+            /** @enum {string} */
+            code: "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_PERMANENTLY_STATIONED" | "EMPLOYEE_DOUBLE_BOOKED" | "VEHICLE_DOUBLE_BOOKED";
+            message: string;
+        };
+        EmployeeAssignmentCandidateDto: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+            isPmsGrade: boolean;
+            isAvailable: boolean;
+            unavailableReason: components["schemas"]["AssignmentCandidateReasonDto"] | null;
+        };
+        VehicleAssignmentCandidateDto: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+            /** Format: int32 */
+            seatCapacity: number | null;
+            isAvailable: boolean;
+            unavailableReason: components["schemas"]["AssignmentCandidateReasonDto"] | null;
+        };
+        AssignmentCandidatesDto: {
+            employees: components["schemas"]["EmployeeAssignmentCandidateDto"][];
+            vehicles: components["schemas"]["VehicleAssignmentCandidateDto"][];
         };
         AssignedCrewMemberDto: {
             /** Format: uuid */
@@ -4842,6 +4897,59 @@ export interface operations {
                 content?: never;
             };
             /** @description RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    AssignmentsController_candidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignmentCandidateWindowDto"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignmentCandidatesDto"];
+                };
+            };
+            /** @description VALIDATION_FAILED — invalid visit UUID, non-integer/out-of-range minutes, or an equal/reversed window. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description RESOURCE_CONFLICT — published assignment lineage or multiple editable assignments make this visit non-editable. */
             409: {
                 headers: {
                     [name: string]: unknown;

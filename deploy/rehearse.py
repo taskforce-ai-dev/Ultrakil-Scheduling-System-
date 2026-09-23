@@ -39,6 +39,11 @@ STRICT_BROWSER_AXE_RULES = {
     'listitem', 'nested-interactive', 'scrollable-region-focusable', 'select-name',
     'svg-img-alt', 'tabindex', 'table-duplicate-name', 'td-headers-attr', 'th-has-data-cells',
 }
+COMPOSE_SERVICES = {
+    'postgres', 'redis', 'scheduler', 'migrate', 'import', 'api', 'web', 'backup', 'backup-export',
+}
+COMPOSE_STATES = {'created', 'running', 'restarting', 'exited', 'paused', 'dead', 'removing'}
+COMPOSE_HEALTH_STATES = {'', 'healthy', 'unhealthy', 'starting'}
 
 
 class HostReadinessResponseError(Exception):
@@ -135,6 +140,52 @@ def run(label, command, env=None, expected=0, stdin=None):
         raise RuntimeError(f'{label} failed (exit {result.returncode}); raw diagnostics withheld')
     print(json.dumps({'step': label, 'passed': 1}), flush=True)
     return result.stdout.strip()
+
+
+def safe_compose_status(raw):
+    fallback = {'status': 'unavailable', 'services': []}
+    try:
+        stripped = raw.strip()
+        if not stripped:
+            return fallback
+        payload = json.loads(stripped) if stripped.startswith('[') else [json.loads(line) for line in stripped.splitlines()]
+    except (AttributeError, json.JSONDecodeError):
+        return fallback
+    if not isinstance(payload, list) or not payload or len(payload) > len(COMPOSE_SERVICES):
+        return fallback
+
+    services = []
+    for row in payload:
+        if not isinstance(row, dict):
+            return fallback
+        service = row.get('Service')
+        state = row.get('State')
+        health = row.get('Health', '')
+        exit_code = row.get('ExitCode')
+        if (service not in COMPOSE_SERVICES or state not in COMPOSE_STATES
+                or health not in COMPOSE_HEALTH_STATES or type(exit_code) is not int):
+            return fallback
+        services.append({
+            'service': service,
+            'state': state,
+            'health': health or 'none',
+            'exitCode': exit_code,
+        })
+    if len({row['service'] for row in services}) != len(services):
+        return fallback
+    return {'status': 'available', 'services': sorted(services, key=lambda row: row['service'])}
+
+
+def report_compose_status(compose, env, execute=subprocess.run):
+    try:
+        result = execute([*compose, 'ps', '-a', '--format', 'json'], cwd=ROOT, env=env,
+                         text=True, capture_output=True)
+        diagnostic = safe_compose_status(result.stdout) if result.returncode == 0 else {
+            'status': 'unavailable', 'services': [],
+        }
+    except OSError:
+        diagnostic = {'status': 'unavailable', 'services': []}
+    print(json.dumps({'step': 'complete stack state', 'passed': 0, **diagnostic}), flush=True)
 
 
 def unavailable_strict_browser_diagnostic():
@@ -385,7 +436,11 @@ grep -Eqi 'connection refused|network is unreachable|connection closed' /tmp/sft
         dc('seed isolated browser fixtures', 'run', '--rm', '--no-deps', '-T', '-v',
            f'{ROOT / "deploy/test/rehearsal-fixture.mjs"}:/workspace/deploy/test/rehearsal-fixture.mjs:ro',
            'migrate', 'node', 'deploy/test/rehearsal-fixture.mjs', 'seed')
-        dc('start complete stack', 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'web', 'backup')
+        try:
+            dc('start complete stack', 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'web', 'backup')
+        except RuntimeError:
+            report_compose_status(compose, child_env)
+            raise
         api_container = inspect_host_probe_container('api')
         web_container = inspect_host_probe_container('web')
         backup_export_container_id = dc('backup exporter remains inactive', '--profile', 'offhost', 'ps', '-aq',

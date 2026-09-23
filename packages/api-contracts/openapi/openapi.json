@@ -2544,6 +2544,65 @@
         ]
       }
     },
+    "/api/visits/{id}/assignment/candidates": {
+      "post": {
+        "operationId": "AssignmentsController_candidates",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentCandidateWindowDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentCandidatesDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_FAILED — invalid visit UUID, non-integer/out-of-range minutes, or an equal/reversed window."
+          },
+          "401": {
+            "description": "Missing or invalid token."
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND"
+          },
+          "409": {
+            "description": "RESOURCE_CONFLICT — published assignment lineage or multiple editable assignments make this visit non-editable."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Available individual employees and vehicles for a proposed time",
+        "tags": [
+          "assignments"
+        ]
+      }
+    },
     "/api/visits/{id}/assignment": {
       "get": {
         "operationId": "AssignmentsController_get",
@@ -6329,6 +6388,141 @@
         "required": [
           "isEligible",
           "conflicts"
+        ]
+      },
+      "AssignmentCandidateWindowDto": {
+        "type": "object",
+        "properties": {
+          "plannedStartMinute": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "maximum": 1440,
+            "example": 540
+          },
+          "plannedEndMinute": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "maximum": 1440,
+            "example": 660
+          }
+        },
+        "required": [
+          "plannedStartMinute",
+          "plannedEndMinute"
+        ]
+      },
+      "AssignmentCandidateReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "EMPLOYEE_UNAVAILABLE",
+              "EMPLOYEE_PERMANENTLY_STATIONED",
+              "EMPLOYEE_DOUBLE_BOOKED",
+              "VEHICLE_DOUBLE_BOOKED"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "EmployeeAssignmentCandidateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "isPmsGrade": {
+            "type": "boolean"
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentCandidateReasonDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "isPmsGrade",
+          "isAvailable",
+          "unavailableReason"
+        ]
+      },
+      "VehicleAssignmentCandidateDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "seatCapacity": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "isAvailable": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "nullable": true,
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AssignmentCandidateReasonDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "seatCapacity",
+          "isAvailable",
+          "unavailableReason"
+        ]
+      },
+      "AssignmentCandidatesDto": {
+        "type": "object",
+        "properties": {
+          "employees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmployeeAssignmentCandidateDto"
+            }
+          },
+          "vehicles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VehicleAssignmentCandidateDto"
+            }
+          }
+        },
+        "required": [
+          "employees",
+          "vehicles"
         ]
       },
       "AssignedCrewMemberDto": {

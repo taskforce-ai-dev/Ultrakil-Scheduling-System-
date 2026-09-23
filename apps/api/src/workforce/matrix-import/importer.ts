@@ -1,6 +1,7 @@
 import { BranchCode, DeploymentType, Prisma, PrismaClient } from '@prisma/client';
 import { lockScheduleResources } from '../../scheduling/optimizer/schedule-visit-lock';
-import { normalizeHeader } from './mapping';
+import { normalizeVehicleIdentity } from './mapping';
+import { assertNoReservedSyntheticVehicles } from './synthetic-capacity-reservations';
 import { ParsedMatrix } from './types';
 
 export interface ImportSummary {
@@ -22,10 +23,6 @@ const BRANCH_NAMES: Record<BranchCode, string> = {
   [BranchCode.COLOMBO]: 'Colombo Branch',
   [BranchCode.KANDY]: 'Kandy Branch',
 };
-
-function vehicleIdentity(code: string): string {
-  return normalizeHeader(code).replace(/ /g, '');
-}
 
 async function mergeVehicleAliases(
   tx: Prisma.TransactionClient,
@@ -95,6 +92,7 @@ export async function importMatrix(
   prisma: PrismaClient,
   parsed: ParsedMatrix,
 ): Promise<ImportSummary> {
+  assertNoReservedSyntheticVehicles(parsed.vehicles ?? []);
   const summary: ImportSummary = {
     branchesEnsured: 0,
     vehiclesCreated: 0,
@@ -113,7 +111,7 @@ export async function importMatrix(
   await prisma.$transaction(
     async (tx) => {
       const parsedVehicleIdentities = new Set(
-        parsed.vehicles.map((vehicle) => vehicleIdentity(vehicle.code)),
+        parsed.vehicles.map((vehicle) => normalizeVehicleIdentity(vehicle.code)),
       );
       const [existingEmployees, existingVehicles] = await Promise.all([
         tx.employee.findMany({
@@ -129,7 +127,7 @@ export async function importMatrix(
         tx,
         existingEmployees.map(({ id }) => id),
         existingVehicles
-          .filter(({ code }) => parsedVehicleIdentities.has(vehicleIdentity(code)))
+          .filter(({ code }) => parsedVehicleIdentities.has(normalizeVehicleIdentity(code)))
           .map(({ id }) => id),
       );
 
@@ -146,14 +144,14 @@ export async function importMatrix(
 
       const vehiclesByIdentity = new Map<string, typeof existingVehicles>();
       for (const existing of existingVehicles) {
-        const identity = vehicleIdentity(existing.code);
+        const identity = normalizeVehicleIdentity(existing.code);
         const group = vehiclesByIdentity.get(identity) ?? [];
         group.push(existing);
         vehiclesByIdentity.set(identity, group);
       }
       const parsedCodesByIdentity = new Map<string, string>();
       for (const vehicle of parsed.vehicles) {
-        const identity = vehicleIdentity(vehicle.code);
+        const identity = normalizeVehicleIdentity(vehicle.code);
         const previous = parsedCodesByIdentity.get(identity);
         if (previous && previous !== vehicle.code) {
           throw new Error('MATRIX_VEHICLE_IDENTITY_DUPLICATE');
@@ -169,7 +167,7 @@ export async function importMatrix(
 
       const vehicleIds = new Map<string, string>();
       for (const vehicle of parsed.vehicles) {
-        const identity = vehicleIdentity(vehicle.code);
+        const identity = normalizeVehicleIdentity(vehicle.code);
         const matches = [...(vehiclesByIdentity.get(identity) ?? [])].sort(
           (left, right) => left.code.localeCompare(right.code) || left.id.localeCompare(right.id),
         );

@@ -16,7 +16,7 @@ import type { Visit, VisitStatus } from "@/lib/api-client";
  *
  * And nothing here may suggest a visit is staffed before an assignment
  * exists. `SCHEDULED` is the API's word for "has a crew"; every other status
- * gets the explicit "No crew yet" marker rather than neutral silence, because
+ * gets the explicit "No assigned crew" marker rather than neutral silence, because
  * silence on a calendar reads as "fine".
  */
 
@@ -31,8 +31,8 @@ import type { Visit, VisitStatus } from "@/lib/api-client";
  * believing the month was covered. The two facts now have two names.
  */
 export const VISIT_STATUS_LABEL: Record<VisitStatus, string> = {
-  PENDING: "Awaiting staffing",
-  UNASSIGNED: "Staffing failed",
+  PENDING: "Planned",
+  UNASSIGNED: "Action required",
   SCHEDULED: "Crew assigned",
   COMPLETED: "Completed",
   CANCELLED: "Cancelled",
@@ -73,7 +73,7 @@ export function CrewBadge({ visit }: { visit: Visit }) {
   return (
     <Badge variant="outline" className="text-muted-foreground">
       <UserX aria-hidden="true" />
-      No crew yet
+      No assigned crew
     </Badge>
   );
 }

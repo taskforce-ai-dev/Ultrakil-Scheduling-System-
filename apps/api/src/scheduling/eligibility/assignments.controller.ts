@@ -11,7 +11,15 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { BranchCode, UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -25,6 +33,8 @@ import {
 } from './conflict-groups';
 import {
   AssignCrewDto,
+  AssignmentCandidatesDto,
+  AssignmentCandidateWindowDto,
   AssignmentDto,
   EligibilityResultDto,
   EmployeeAssignmentQueryDto,
@@ -58,6 +68,30 @@ export class AssignmentsController {
     @Body() dto: AssignCrewDto,
   ): Promise<EligibilityResultDto> {
     return this.assignments.check(id, dto);
+  }
+
+  @Post('visits/:id/assignment/candidates')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Available individual employees and vehicles for a proposed time' })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiBody({ type: AssignmentCandidateWindowDto })
+  @ApiResponse({ status: 200, type: AssignmentCandidatesDto })
+  @ApiResponse({
+    status: 400,
+    description:
+      'VALIDATION_FAILED — invalid visit UUID, non-integer/out-of-range minutes, or an equal/reversed window.',
+  })
+  @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'RESOURCE_CONFLICT — published assignment lineage or multiple editable assignments make this visit non-editable.',
+  })
+  candidates(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignmentCandidateWindowDto,
+  ): Promise<AssignmentCandidatesDto> {
+    return this.assignments.candidates(id, dto);
   }
 
   @Get('visits/:id/assignment')

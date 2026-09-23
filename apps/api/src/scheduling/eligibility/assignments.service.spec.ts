@@ -1,5 +1,56 @@
 import { ErrorCode } from '../../common/errors/error-codes';
 import { AssignmentsService } from './assignments.service';
+describe('AssignmentsService candidates', () => {
+  it('rejects an invalid candidate window before reading the visit', async () => {
+    const prisma = { assignment: { findMany: jest.fn() } };
+    const service = new AssignmentsService(prisma as never, {} as never, {} as never);
+
+    await expect(service.candidates('visit', { plannedStartMinute: 1440, plannedEndMinute: 1440 }))
+      .rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(prisma.assignment.findMany).not.toHaveBeenCalled();
+  });
+  it('uses the same editability gate as check and delegates availability to EligibilityService', async () => {
+    const prisma = {
+      assignment: { findMany: jest.fn().mockResolvedValue([
+        { id: 'draft', status: 'DRAFT', publishedAt: null, _count: { notificationOutboxEntries: 0 } },
+      ]) },
+    };
+    const eligibility = { candidates: jest.fn().mockResolvedValue({ employees: [], vehicles: [] }) };
+    const service = new AssignmentsService(prisma as never, eligibility as never, {} as never);
+
+    await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }))
+      .resolves.toEqual({ employees: [], vehicles: [] });
+    expect(eligibility.candidates).toHaveBeenCalledWith('visit', {
+      plannedStartMinute: 540,
+      plannedEndMinute: 660,
+    }, 'draft');
+  });
+
+  it('refuses multiple editable assignments with the same 409 as check', async () => {
+    const prisma = {
+      assignment: { findMany: jest.fn().mockResolvedValue([
+        { id: 'draft-a', status: 'DRAFT', publishedAt: null, _count: { notificationOutboxEntries: 0 } },
+        { id: 'draft-b', status: 'PROPOSED', publishedAt: null, _count: { notificationOutboxEntries: 0 } },
+      ]) },
+    };
+    const service = new AssignmentsService(prisma as never, { candidates: jest.fn() } as never, {} as never);
+
+    await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT', message: 'This visit has multiple assignments. Refresh and resolve the conflicting schedule before changing its crew.' });
+  });
+
+  it('refuses published history before calling EligibilityService.candidates', async () => {
+    const prisma = { assignment: { findMany: jest.fn().mockResolvedValue([
+      { id: 'published', status: 'PUBLISHED', publishedAt: new Date(), _count: { notificationOutboxEntries: 1 } },
+    ]) } };
+    const eligibility = { candidates: jest.fn() };
+    const service = new AssignmentsService(prisma as never, eligibility as never, {} as never);
+
+    await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(eligibility.candidates).not.toHaveBeenCalled();
+  });
+});
 
 describe('AssignmentsService unassignedQueue', () => {
   it('keeps checked and conflict filters conjunctive and returns stable conflict facets', async () => {

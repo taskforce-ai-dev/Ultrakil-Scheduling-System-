@@ -168,7 +168,7 @@ describe("dispatch board", () => {
 
     const row = screen.getByText("Union Bank Kadawatha").closest("tr")!;
     expect(within(row).getByText("No PMS supervisor")).toBeInTheDocument();
-    expect(within(row).getByText("No crew yet")).toBeInTheDocument();
+    expect(within(row).getByText("No assigned crew")).toBeInTheDocument();
     expect(within(row).getByText("No vehicle")).toBeInTheDocument();
     // No round trip was made for a visit the API already said has nobody on it.
     expect(fetchVisitAssignment).not.toHaveBeenCalledWith("visit-unassigned");
@@ -359,7 +359,7 @@ describe("dispatch board", () => {
     // The new visit list has landed — proven by the assignment round trip it
     // triggers — but the board stays on its loading skeleton and the
     // assignment itself hasn't arrived. Share must keep waiting through this
-    // gap, or it could be clicked while "No crew yet" would be wrong for a
+    // gap, or it could be clicked while "No assigned crew" would be wrong for a
     // visit that does have one.
     await waitFor(() => expect(fetchVisitAssignment).toHaveBeenCalledWith("visit-kandy-reloaded"));
     expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();

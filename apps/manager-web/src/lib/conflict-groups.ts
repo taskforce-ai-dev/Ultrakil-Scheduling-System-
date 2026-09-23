@@ -30,8 +30,8 @@ export const CONFLICT_GROUP_LABEL: Record<ConflictGroup, string> = {
   BRANCH_RESTRICTION: "Branch restriction",
   PERMANENT_STAFF_RESTRICTION: "Permanent-staff restriction",
   SERVICE_WINDOW_CONFLICT: "Service-window conflict",
-  EMPLOYEE_OVERLAP: "Employee overlap",
-  VEHICLE_OVERLAP: "Vehicle overlap",
+  EMPLOYEE_OVERLAP: "Employee booking conflict",
+  VEHICLE_OVERLAP: "Vehicle booking conflict",
   CREW_CANNOT_TRAVEL: "No way to get there",
   OTHER: "Other",
 };

@@ -19,6 +19,8 @@ import {
 } from './conflict-groups';
 import {
   AssignCrewDto,
+  AssignmentCandidatesDto,
+  AssignmentCandidateWindowDto,
   AssignmentDto,
   ConflictDto,
   EligibilityResultDto,
@@ -101,12 +103,7 @@ export class AssignmentsService {
     // than promise an eligible replacement that the write path must refuse.
     const replaceable = await assertUnpublishedVisit(this.prisma, visitId);
     if (replaceable.length > 1) {
-      throw new AppException(
-        'RESOURCE_CONFLICT',
-        'This visit has multiple assignments. Refresh and resolve the conflicting schedule before changing its crew.',
-        HttpStatus.CONFLICT,
-        { visitId },
-      );
+      this.throwMultipleEditableAssignments(visitId);
     }
     const result = await this.eligibility.evaluate(visitId, toProposal(dto), {
       excludeAssignmentId: replaceable[0]?.id,
@@ -115,6 +112,45 @@ export class AssignmentsService {
       isEligible: result.isEligible,
       conflicts: result.conflicts.map(toConflictDto),
     };
+  }
+
+  /**
+   * Individual availability only. This is deliberately not a feasibility
+   * verdict: composition rules (skills, PMS, drivers and seats) remain with
+   * the authoritative check/assign paths.
+   */
+  async candidates(
+    visitId: string,
+    dto: AssignmentCandidateWindowDto,
+  ): Promise<AssignmentCandidatesDto> {
+    if (
+      !Number.isInteger(dto.plannedStartMinute) ||
+      !Number.isInteger(dto.plannedEndMinute) ||
+      dto.plannedStartMinute < 0 || dto.plannedStartMinute > 1440 ||
+      dto.plannedEndMinute < 0 || dto.plannedEndMinute > 1440 ||
+      dto.plannedEndMinute <= dto.plannedStartMinute
+    ) {
+      throw new AppException(
+        'VALIDATION_FAILED',
+        'plannedEndMinute must be after plannedStartMinute, and both must be between 0 and 1440.',
+        HttpStatus.BAD_REQUEST,
+        { plannedStartMinute: dto.plannedStartMinute, plannedEndMinute: dto.plannedEndMinute },
+      );
+    }
+
+    const replaceable = await assertUnpublishedVisit(this.prisma, visitId);
+    if (replaceable.length > 1) this.throwMultipleEditableAssignments(visitId);
+    return this.eligibility.candidates(visitId, dto, replaceable[0]?.id);
+
+  }
+
+  private throwMultipleEditableAssignments(visitId: string): never {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'This visit has multiple assignments. Refresh and resolve the conflicting schedule before changing its crew.',
+      HttpStatus.CONFLICT,
+      { visitId },
+    );
   }
 
   /**

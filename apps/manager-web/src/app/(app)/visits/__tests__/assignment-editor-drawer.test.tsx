@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
@@ -8,8 +8,7 @@ vi.mock("@/lib/api-client", async () => {
     ...actual,
     fetchVisit: vi.fn(),
     fetchVisitAssignment: vi.fn(),
-    fetchEmployees: vi.fn(),
-    fetchVehicles: vi.fn(),
+    fetchAssignmentCandidates: vi.fn(),
     fetchAuthorizedDrivers: vi.fn(),
     checkAssignment: vi.fn(),
     assignCrew: vi.fn(),
@@ -24,13 +23,12 @@ import {
   ApiError,
   assignCrew,
   checkAssignment,
+  fetchAssignmentCandidates,
   fetchAuthorizedDrivers,
-  fetchEmployees,
-  fetchVehicles,
   fetchVisit,
   fetchVisitAssignment,
   lockAssignment,
-  type Employee,
+  type AssignmentCandidates,
 } from "@/lib/api-client";
 import {
   buildAssignment,
@@ -39,7 +37,6 @@ import {
   buildConflict,
   buildEligibilityResult,
   buildEmployee,
-  buildVehicle,
   buildVisitDetail,
 } from "@/test/fixtures";
 
@@ -56,6 +53,49 @@ const technician = buildEmployee({
   branchCode: "COLOMBO",
 });
 
+const availableCandidates: AssignmentCandidates = {
+  employees: [
+    {
+      id: supervisor.id,
+      displayName: supervisor.fullName,
+      isPmsGrade: true,
+      isAvailable: true,
+      unavailableReason: null,
+    },
+    {
+      id: technician.id,
+      displayName: technician.fullName,
+      isPmsGrade: false,
+      isAvailable: true,
+      unavailableReason: null,
+    },
+  ],
+  vehicles: [
+    {
+      id: "vehicle-1",
+      displayName: "Van 253-4289",
+      seatCapacity: 4,
+      isAvailable: true,
+      unavailableReason: null,
+    },
+  ],
+};
+
+function namedCandidates(id: string, displayName: string): AssignmentCandidates {
+  return {
+    employees: [
+      {
+        id,
+        displayName,
+        isPmsGrade: false,
+        isAvailable: true,
+        unavailableReason: null,
+      },
+    ],
+    vehicles: [],
+  };
+}
+
 // Kept in sync with the API's PUBLISHED_HISTORY in
 // apps/api/src/scheduling/optimizer/schedule-visit-lock.ts. The assignment
 // editor must not offer actions the API will reject for publication history.
@@ -66,10 +106,6 @@ const publicationHistoryStatuses = [
   "COMPLETED",
   "SUPERSEDED",
 ] as const;
-
-function mockEmployeeList(items: Employee[] = [supervisor, technician]) {
-  vi.mocked(fetchEmployees).mockResolvedValue({ items, total: items.length, page: 1, pageSize: 200 });
-}
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -84,13 +120,7 @@ beforeEach(() => {
     })
   );
   vi.mocked(fetchVisitAssignment).mockResolvedValue(null);
-  mockEmployeeList();
-  vi.mocked(fetchVehicles).mockResolvedValue({
-    items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289" })],
-    total: 1,
-    page: 1,
-    pageSize: 200,
-  });
+  vi.mocked(fetchAssignmentCandidates).mockResolvedValue(availableCandidates);
   // Default: no authorized drivers for anyone, for any vehicle. The drawer
   // now fetches this eagerly for every vehicle row it renders (not just one
   // the manager just picked), so every test needs a resolvable default —
@@ -113,36 +143,312 @@ async function openDrawer() {
 }
 
 async function addCrewMember(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(screen.getByRole("button", { name: "Add crew member" }));
+  const addButton = screen.getByRole("button", { name: "Add crew member" });
+  await waitFor(() => expect(addButton).not.toBeDisabled());
+  await user.click(addButton);
   await user.click(screen.getByLabelText("Employee"));
   await user.click(await screen.findByRole("option", { name: new RegExp(name) }));
 }
 
 describe("AssignmentEditorDrawer", () => {
-  // UAT on staging: every imported vehicle has no recorded branch, because the
-  // Technician Matrix never states one. The drawer asked the API for vehicles
-  // *of* the visit's branch and got none, so "Choose a vehicle" opened an
-  // empty popup — an enabled control that silently did nothing. The engine's
-  // rule is that an unknown branch is unknown, not wrong, and the picker must
-  // ask the same question the engine answers.
-  it("asks for vehicles that can serve the visit's branch, not only those recorded in it", async () => {
+  it("loads time-aware candidates for the visit's proposed window", async () => {
     await openDrawer();
 
-    expect(fetchVehicles).toHaveBeenCalledWith(
-      expect.objectContaining({ servesBranch: "COLOMBO" })
+    await waitFor(() =>
+      expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-1", {
+        plannedStartMinute: 540,
+        plannedEndMinute: 630,
+      })
     );
-    expect(vi.mocked(fetchVehicles).mock.calls[0][0]).not.toHaveProperty("branch");
+  });
+
+  it("preserves an assignment ending at minute 1440 as the next midnight", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult());
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "DRAFT",
+        plannedStartMinute: 23 * 60,
+        plannedEndMinute: 1440,
+      })
+    );
+    const { user } = await openDrawer();
+
+    const nextMidnight = await screen.findByRole("checkbox", {
+      name: "Next midnight (24:00)",
+    });
+    const leavesBy = screen.getByLabelText("Leaves by");
+    expect(nextMidnight).toBeChecked();
+    expect(leavesBy).toHaveValue("00:00");
+    expect(leavesBy).toBeDisabled();
+    await waitFor(() =>
+      expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-1", {
+        plannedStartMinute: 23 * 60,
+        plannedEndMinute: 1440,
+      })
+    );
+
+    await user.click(nextMidnight);
+    expect(nextMidnight).not.toBeChecked();
+    expect(leavesBy).not.toBeDisabled();
+    expect(leavesBy).toHaveValue("23:59");
+  });
+
+  it("keeps booked people in a keyboard-accessible static disclosure outside the listbox", async () => {
+    vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
+      ...availableCandidates,
+      employees: [
+        availableCandidates.employees[0],
+        {
+          ...availableCandidates.employees[1],
+          isAvailable: false,
+          unavailableReason: {
+            code: "EMPLOYEE_DOUBLE_BOOKED",
+            message: "Booked 09:00–11:00 on another visit.",
+          },
+        },
+      ],
+    });
+    const { user } = await openDrawer();
+
+    const addButton = screen.getByRole("button", { name: "Add crew member" });
+    await waitFor(() => expect(addButton).not.toBeDisabled());
+    await user.click(addButton);
+    await user.click(screen.getByLabelText("Employee"));
+
+    expect(await screen.findByRole("option", { name: /A Perera \(PMS\)/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Booked 09:00–11:00/ })).not.toBeInTheDocument();
+
+    const disclosure = screen.getByRole("button", { name: "Unavailable for this time (1)" });
+    expect(disclosure.closest('[role="listbox"]')).toBeNull();
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    await user.keyboard("{Escape}");
+    screen.getByLabelText("Employee").focus();
+    await user.tab();
+    expect(disclosure).toHaveFocus();
+    await user.keyboard(" ");
+
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const unavailableList = screen.getByRole("list", { name: "Unavailable for this time" });
+    expect(unavailableList).toHaveTextContent("N Fernando");
+    expect(unavailableList).toHaveTextContent("Booked 09:00–11:00 on another visit.");
+    expect(screen.queryByRole("option", { name: /N Fernando/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Employee")).toHaveTextContent("Choose an employee");
+  });
+
+  it("shows a direct candidate failure and retries the current visit window", async () => {
+    vi.mocked(fetchAssignmentCandidates)
+      .mockRejectedValueOnce(
+        new ApiError({ code: "CANDIDATES_UNAVAILABLE", message: "Availability lookup failed." })
+      )
+      .mockResolvedValueOnce(availableCandidates);
+    const { user } = await openDrawer();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could not load availability: Availability lookup failed.");
+    expect(screen.getByRole("button", { name: "Add crew member" })).toBeDisabled();
+
+    const callsBeforeRetry = vi.mocked(fetchAssignmentCandidates).mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchAssignmentCandidates).mock.calls.length).toBeGreaterThan(
+        callsBeforeRetry
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add crew member" })).not.toBeDisabled()
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps a selected employee named while refreshed candidates are pending and then unavailable", async () => {
+    let resolveRefresh: ((value: AssignmentCandidates) => void) | undefined;
+    const { user } = await openDrawer();
+    await waitFor(() =>
+      expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-1", {
+        plannedStartMinute: 540,
+        plannedEndMinute: 630,
+      })
+    );
+    await addCrewMember(user, "N Fernando");
+
+    vi.mocked(fetchAssignmentCandidates).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRefresh = resolve; })
+    );
+
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "10:00" } });
+
+    expect(await screen.findByText("Checking who is free for this time…")).toBeInTheDocument();
+    expect(screen.getByText(/Current crew member:/)).toHaveTextContent("N Fernando");
+    expect(screen.getByLabelText("Employee")).toHaveTextContent("Choose a replacement");
+
+    await act(async () => {
+      resolveRefresh?.({
+        ...availableCandidates,
+        employees: availableCandidates.employees.map((candidate) =>
+          candidate.id === technician.id
+            ? {
+                ...candidate,
+                isAvailable: false,
+                unavailableReason: {
+                  code: "EMPLOYEE_DOUBLE_BOOKED",
+                  message: "Booked 10:00–11:30 on another visit.",
+                },
+              }
+            : candidate
+        ),
+      });
+    });
+
+    expect(screen.getByText(/Current crew member:/)).toHaveTextContent(
+      "N Fernando — Booked 10:00–11:30 on another visit."
+    );
+    await waitFor(() => expect(screen.getByLabelText("Employee")).not.toBeDisabled());
+    await user.click(screen.getByLabelText("Employee"));
+    expect(await screen.findByRole("option", { name: /A Perera \(PMS\)/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /N Fernando/ })).not.toBeInTheDocument();
+  });
+
+  it("ignores an older time window's success after the newer window succeeds", async () => {
+    let resolveOlder: ((value: AssignmentCandidates) => void) | undefined;
+    let resolveNewer: ((value: AssignmentCandidates) => void) | undefined;
+    const { user } = await openDrawer();
+    const addButton = screen.getByRole("button", { name: "Add crew member" });
+    await waitFor(() => expect(addButton).not.toBeDisabled());
+    await user.click(addButton);
+
+    vi.mocked(fetchAssignmentCandidates).mockClear();
+    vi.mocked(fetchAssignmentCandidates)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewer = resolve; }));
+
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "09:15" } });
+    await waitFor(() => expect(fetchAssignmentCandidates).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "09:30" } });
+    await waitFor(() => expect(fetchAssignmentCandidates).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveNewer?.(namedCandidates("employee-newer", "Newer window employee"));
+    });
+    await user.click(screen.getByLabelText("Employee"));
+    expect(await screen.findByRole("option", { name: "Newer window employee" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlder?.(namedCandidates("employee-older", "Older window employee"));
+    });
+    expect(screen.getByRole("option", { name: "Newer window employee" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Older window employee" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the newer request pending when an older request rejects and finishes", async () => {
+    let rejectOlder: ((reason: unknown) => void) | undefined;
+    let resolveNewer: ((value: AssignmentCandidates) => void) | undefined;
+    await openDrawer();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add crew member" })).not.toBeDisabled()
+    );
+
+    vi.mocked(fetchAssignmentCandidates).mockClear();
+    vi.mocked(fetchAssignmentCandidates)
+      .mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectOlder = reject; })
+      )
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewer = resolve; }));
+
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "09:15" } });
+    await waitFor(() => expect(fetchAssignmentCandidates).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "09:30" } });
+    await waitFor(() => expect(fetchAssignmentCandidates).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      rejectOlder?.(new Error("old request failed"));
+    });
+    expect(screen.getByText("Checking who is free for this time…")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveNewer?.(availableCandidates);
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("Checking who is free for this time…")).not.toBeInTheDocument()
+    );
+  });
+
+  it("ignores a candidate response from the visit that was just closed", async () => {
+    let resolveOldVisit: ((value: AssignmentCandidates) => void) | undefined;
+    let resolveNewVisit: ((value: AssignmentCandidates) => void) | undefined;
+    const onChanged = vi.fn();
+    const view = render(
+      <AssignmentEditorDrawer visitId="visit-1" onOpenChange={() => {}} onChanged={onChanged} />
+    );
+    await screen.findByText("Edit crew — Cinnamon Grand Colombo");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add crew member" })).not.toBeDisabled()
+    );
+
+    vi.mocked(fetchAssignmentCandidates).mockClear();
+    vi.mocked(fetchAssignmentCandidates)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOldVisit = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveNewVisit = resolve; }));
+    vi.mocked(fetchVisit).mockImplementation(async (id) =>
+      buildVisitDetail({
+        id,
+        customerName: id === "visit-2" ? "New visit customer" : "Cinnamon Grand Colombo",
+        windowStartMinute: 600,
+        windowEndMinute: 900,
+        durationMinutes: 60,
+      })
+    );
+
+    fireEvent.change(screen.getByLabelText("Arrives"), { target: { value: "09:15" } });
+    await waitFor(() => expect(fetchAssignmentCandidates).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <AssignmentEditorDrawer visitId="visit-2" onOpenChange={() => {}} onChanged={onChanged} />
+    );
+    await screen.findByText("Edit crew — New visit customer");
+    await waitFor(() =>
+      expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-2", {
+        plannedStartMinute: 600,
+        plannedEndMinute: 660,
+      })
+    );
+
+    await act(async () => {
+      resolveNewVisit?.(namedCandidates("employee-new-visit", "New visit employee"));
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Add crew member" }));
+    await user.click(screen.getByLabelText("Employee"));
+    expect(await screen.findByRole("option", { name: "New visit employee" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveOldVisit?.(namedCandidates("employee-old-visit", "Old visit employee"));
+    });
+    expect(screen.getByRole("option", { name: "New visit employee" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Old visit employee" })).not.toBeInTheDocument();
+  });
+  it("uses the assignment-candidate endpoint instead of composing broad resource queries", async () => {
+    await openDrawer();
+
+    expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-1", {
+      plannedStartMinute: 540,
+      plannedEndMinute: 630,
+    });
   });
 
   it("opens the vehicle picker by mouse, lists vehicles by name, and selects one", async () => {
-    vi.mocked(fetchVehicles).mockResolvedValue({
-      items: [
-        buildVehicle({ id: "vehicle-1", label: "Van 253-4289", branchCode: "COLOMBO" }),
-        buildVehicle({ id: "vehicle-2", label: "Bolero DAC-2485", branchCode: null }),
+    vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
+      ...availableCandidates,
+      vehicles: [
+        availableCandidates.vehicles[0],
+        {
+          id: "vehicle-2",
+          displayName: "Bolero DAC-2485",
+          seatCapacity: 4,
+          isAvailable: true,
+          unavailableReason: null,
+        },
       ],
-      total: 2,
-      page: 1,
-      pageSize: 200,
     });
     vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(
       buildAuthorizedDrivers({
@@ -175,12 +481,6 @@ describe("AssignmentEditorDrawer", () => {
   });
 
   it("opens the vehicle picker from the keyboard as well", async () => {
-    vi.mocked(fetchVehicles).mockResolvedValue({
-      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289", branchCode: null })],
-      total: 1,
-      page: 1,
-      pageSize: 200,
-    });
     const { user } = await openDrawer();
     await addCrewMember(user, "A Perera");
 
@@ -191,7 +491,10 @@ describe("AssignmentEditorDrawer", () => {
   });
 
   it("explains an empty vehicle list instead of offering a picker that does nothing", async () => {
-    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
+    vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
+      ...availableCandidates,
+      vehicles: [],
+    });
     const { user } = await openDrawer();
     await addCrewMember(user, "A Perera");
 
@@ -217,11 +520,15 @@ describe("AssignmentEditorDrawer", () => {
         ],
       })
     );
-    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
+    vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
+      ...availableCandidates,
+      vehicles: [],
+    });
     const { user } = await openDrawer();
 
     const vehicleControl = await screen.findByLabelText("Vehicle");
-    expect(vehicleControl).toHaveTextContent("Van HV-0001");
+    expect(screen.getByText(/Current vehicle:/)).toHaveTextContent("Van HV-0001");
+    expect(vehicleControl).toHaveTextContent("Choose a replacement");
     expect(vehicleControl).toBeDisabled();
     await user.click(vehicleControl);
     expect(screen.queryByRole("option")).not.toBeInTheDocument();
@@ -230,7 +537,6 @@ describe("AssignmentEditorDrawer", () => {
 
   it("keeps the explanation out of read-only publication history", async () => {
     vi.mocked(fetchVisitAssignment).mockResolvedValue(buildAssignment({ status: "PUBLISHED" }));
-    vi.mocked(fetchVehicles).mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 });
     await openDrawer();
     await screen.findByLabelText("Vehicle");
 
@@ -254,11 +560,11 @@ describe("AssignmentEditorDrawer", () => {
         ],
       })
     );
-    mockEmployeeList([supervisor, technician]);
     vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(buildAuthorizedDrivers({ drivers: [] }));
     await openDrawer();
 
-    expect(await screen.findByLabelText("Employee")).toHaveTextContent("R Silva (PMS)");
+    await screen.findByLabelText("Employee");
+    expect(screen.getByText(/Current crew member:/)).toHaveTextContent("R Silva (PMS)");
     expect(screen.getByLabelText("Driver")).toHaveTextContent("R Silva");
     expect(screen.queryByText(/employee-gone/)).not.toBeInTheDocument();
   });
@@ -280,17 +586,11 @@ describe("AssignmentEditorDrawer", () => {
         ],
       })
     );
-    vi.mocked(fetchVehicles).mockResolvedValue({
-      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289" })],
-      total: 1,
-      page: 1,
-      pageSize: 200,
-    });
     await openDrawer();
 
     const vehicleControl = await screen.findByLabelText("Vehicle");
-    expect(vehicleControl).toHaveTextContent("Lorry KX-1010");
-    expect(vehicleControl).not.toHaveTextContent("fea4792a");
+    expect(screen.getByText(/Current vehicle:/)).toHaveTextContent("Lorry KX-1010");
+    expect(vehicleControl).toHaveTextContent("Choose a replacement");
     expect(screen.queryByText(/fea4792a-c979/)).not.toBeInTheDocument();
   });
 
@@ -308,16 +608,11 @@ describe("AssignmentEditorDrawer", () => {
         ],
       })
     );
-    vi.mocked(fetchVehicles).mockResolvedValue({
-      items: [buildVehicle({ id: "vehicle-1", label: "Van 253-4289" })],
-      total: 1,
-      page: 1,
-      pageSize: 200,
-    });
     const { user } = await openDrawer();
 
     const vehicleControl = await screen.findByLabelText("Vehicle");
-    expect(vehicleControl).toHaveTextContent("Retired Van RX-0001");
+    expect(screen.getByText(/Current vehicle:/)).toHaveTextContent("Retired Van RX-0001");
+    expect(vehicleControl).toHaveTextContent("Choose a replacement");
     await user.click(vehicleControl);
     expect(await screen.findByRole("option", { name: "Van 253-4289" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Retired Van RX-0001" })).not.toBeInTheDocument();
@@ -458,7 +753,7 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.getByText("Required")).toBeInTheDocument();
   });
 
-  it("says which step is missing when there is no crew yet", async () => {
+  it("says which step is missing when no crew has been selected", async () => {
     await openDrawer();
 
     expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(

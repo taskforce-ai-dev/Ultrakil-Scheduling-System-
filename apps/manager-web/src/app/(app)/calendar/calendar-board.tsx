@@ -44,6 +44,7 @@ import {
   visitTileAccessibleName,
   visitTileTime,
   NO_CREW_LABEL,
+  unstaffedVisitStage,
   type VisitTileFacts,
 } from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
@@ -138,12 +139,14 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
   const style = STAGE_STYLES[stage];
   const facts = tileFacts(entry);
   const crewCount = facts.crewCount;
+  const unstaffedStage = unstaffedVisitStage(entry.visitStatus);
+  const accessibleStage = unstaffedStage ?? style.label.toLowerCase();
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={visitTileAccessibleName(facts, style.label.toLowerCase())}
+      aria-label={visitTileAccessibleName(facts, accessibleStage)}
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,
@@ -168,6 +171,7 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
         <span className="flex shrink-0 items-center gap-0.5 font-medium">
           <UserX className="h-3 w-3" aria-hidden="true" />
           {NO_CREW_LABEL}
+          {unstaffedStage && <span className="text-[10px] opacity-80">— {unstaffedStage}</span>}
         </span>
       )}
       {(entry.assignment?.vehicles.length ?? 0) > 0 && (
@@ -271,7 +275,7 @@ function DetailDialog({
                 </div>
               ) : (
                 <div className="border-t border-border pt-3 text-sm text-muted-foreground">
-                  No crew on this visit yet. It belongs in the Unassigned Visits queue.
+                  No assigned crew on this visit. It belongs in the Unassigned Visits queue.
                 </div>
               )}
             </DialogBody>

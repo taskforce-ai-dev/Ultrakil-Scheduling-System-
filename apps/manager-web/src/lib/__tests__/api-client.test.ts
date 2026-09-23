@@ -9,6 +9,7 @@ import {
   fetchOperationsDay,
   fetchPublishedAssignmentRepairFindings,
   fetchScheduleRuns,
+  fetchAssignmentCandidates,
   fetchVisitAssignment,
   publishScheduleRun,
 } from "../api-client";
@@ -83,6 +84,44 @@ describe("api-client", () => {
     }) as unknown as typeof fetch;
 
     await expect(fetchVisitAssignment("visit-1")).resolves.toBeNull();
+  });
+
+  it("posts the proposed time window to the generated assignment-candidates endpoint", async () => {
+    const payload = {
+      employees: [
+        {
+          id: "employee-1",
+          displayName: "A Perera",
+          isPmsGrade: true,
+          isAvailable: true,
+          unavailableReason: null,
+        },
+      ],
+      vehicles: [],
+    };
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify(payload)),
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchAssignmentCandidates("visit-1", {
+        plannedStartMinute: 540,
+        plannedEndMinute: 660,
+      }),
+    ).resolves.toEqual(payload);
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/api/visits/visit-1/assignment/candidates",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          plannedStartMinute: 540,
+          plannedEndMinute: 660,
+        }),
+      }),
+    );
   });
 
   it("sends the operational day contract query and parses the server read model", async () => {

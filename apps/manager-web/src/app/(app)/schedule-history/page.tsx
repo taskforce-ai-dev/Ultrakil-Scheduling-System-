@@ -615,7 +615,7 @@ export default function ScheduleHistoryPage() {
                             which on every other screen now names two
                             different things. What this number counts is the
                             work this run tried to staff and could not. */}
-                        <dt className="inline">Staffing failed: </dt>
+                        <dt className="inline">Assignment required: </dt>
                         <dd className="inline font-medium text-foreground">
                           {run.visitsUnassigned}
                         </dd>

@@ -17,6 +17,7 @@ const unassigned = buildCalendarEntry({
   visitDate: todayIso(),
   customerName: "Grandview Hotel",
   branchCode: "KANDY",
+  visitStatus: "UNASSIGNED",
   assignment: null,
 });
 
@@ -106,6 +107,33 @@ describe("CalendarPage", () => {
 
     const tile = screen.getByText("Grandview Hotel").closest("button")!;
     expect(within(tile).getByText("No crew")).toBeInTheDocument();
+    expect(tile).toHaveTextContent("Assignment required");
+  });
+
+  it("names planned and assignment-required work distinctly for screen readers", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [
+        buildCalendarEntry({
+          visitId: "visit-planned",
+          customerName: "Planned customer",
+          visitDate: todayIso(),
+          visitStatus: "PENDING",
+          assignment: null,
+        }),
+        buildCalendarEntry({
+          visitId: "visit-assignment-required",
+          customerName: "Assignment-required customer",
+          visitDate: todayIso(),
+          visitStatus: "UNASSIGNED",
+          assignment: null,
+        }),
+      ],
+      total: 2,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByRole("button", { name: /Planned customer.*Planning stage/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Assignment-required customer.*Assignment required/i })).toBeInTheDocument();
   });
 
   it("says that the overflow link changes the view", async () => {
@@ -173,7 +201,7 @@ describe("CalendarPage", () => {
     // Ordered by the window it must fall in, but never *labelled* with it:
     // the window is a constraint, not a plan.
     const earlier = await screen.findByRole("button", {
-      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, needs a crew`,
+      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, Assignment required`,
     });
     const later = screen.getByRole("button", { name: /Cinnamon Grand Colombo at 11:00–12:30/ });
     expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -249,14 +277,14 @@ describe("CalendarPage", () => {
     expect(within(dialog).getByText("Focus on the kitchen and store room.")).toBeInTheDocument();
   });
 
-  it("tells the manager an unassigned visit has no crew yet", async () => {
+  it("tells the manager an unassigned visit has no assigned crew", async () => {
     const user = userEvent.setup();
     render(<CalendarPage />);
 
     await user.click(await screen.findByText("Grandview Hotel"));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/No crew on this visit yet/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/No assigned crew on this visit/i)).toBeInTheDocument();
   });
 
   it("filters to one branch, sending it to the API", async () => {

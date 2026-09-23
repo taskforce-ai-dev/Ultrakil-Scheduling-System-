@@ -30,6 +30,8 @@ export default function DashboardPage() {
   const [error, setError] = React.useState<ApiError | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
+  const [operationsError, setOperationsError] = React.useState<ApiError | null>(null);
+  const [isOperationsLoading, setIsOperationsLoading] = React.useState(true);
 
   const loadMeta = React.useCallback(() => {
     setIsLoading(true);
@@ -46,19 +48,31 @@ export default function DashboardPage() {
       .finally(() => setIsLoading(false));
   }, []);
 
+  const loadOperations = React.useCallback(() => {
+    setIsOperationsLoading(true);
+    fetchOperationsDay({ date: todayIso() })
+      .then((response) => {
+        setOperations(response);
+        setOperationsError(null);
+      })
+      .catch((caught: unknown) => {
+        setOperationsError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." }),
+        );
+      })
+      .finally(() => setIsOperationsLoading(false));
+  }, []);
+
   React.useEffect(() => {
     // Fetching from an external system (the API) on mount — the linter
     // can't see that loadMeta's own setState calls are gated behind an
     // async boundary, not synchronous derived state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadMeta();
-    fetchOperationsDay({ date: todayIso() })
-      .then(setOperations)
-      .catch(() => {
-        // The operational read model is additive while older API deployments
-        // roll forward; metadata remains useful when it is unavailable.
-      });
-  }, [loadMeta]);
+    loadOperations();
+  }, [loadMeta, loadOperations]);
 
   const tiles: StatTile[] = meta
     ? [
@@ -97,7 +111,23 @@ export default function DashboardPage() {
 
       {/* Content */}
       <div className="space-y-4 px-6">
-        {operations && <OperationsDayPanel data={operations} />}
+        {operationsError ? (
+          <ErrorState
+            title="Operational status unavailable"
+            description={operationsError.message}
+            code={operationsError.code}
+            onRetry={loadOperations}
+            retryLabel="Retry operational status"
+            isRetrying={isOperationsLoading}
+            retryingLabel="Retrying operational status"
+          />
+        ) : operations ? (
+          <OperationsDayPanel data={operations} />
+        ) : isOperationsLoading ? (
+          <section aria-label="Loading operational status">
+            <LoadingState rows={2} />
+          </section>
+        ) : null}
 
         <div className="flex items-center gap-2">
           <span className="h-1.5 w-1.5 rounded-full bg-brand-lime" aria-hidden="true" />
