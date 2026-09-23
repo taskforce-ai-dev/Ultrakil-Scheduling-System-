@@ -275,7 +275,7 @@ function DetailDialog({
                 </div>
               ) : (
                 <div className="border-t border-border pt-3 text-sm text-muted-foreground">
-                  No crew on this visit yet. It belongs in the Unassigned Visits queue.
+                  No assigned crew on this visit. It belongs in the Unassigned Visits queue.
                 </div>
               )}
             </DialogBody>

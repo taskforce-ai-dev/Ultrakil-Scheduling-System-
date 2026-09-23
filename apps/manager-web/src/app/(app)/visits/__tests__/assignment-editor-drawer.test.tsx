@@ -722,7 +722,7 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.getByText("Required")).toBeInTheDocument();
   });
 
-  it("says which step is missing when there is no crew yet", async () => {
+  it("says which step is missing when no crew has been selected", async () => {
     await openDrawer();
 
     expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAccessibleDescription(

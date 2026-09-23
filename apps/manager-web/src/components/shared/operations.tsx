@@ -27,7 +27,7 @@ import {
  * separately: a visit nobody has tried to staff, and one the scheduler tried
  * and could not. Calling both "Unassigned" here was the last place the old
  * vocabulary survived, and it sat on the same Dispatch Board screen as a table
- * saying "Awaiting staffing" and "Staffing failed" about the very same rows.
+ * using two different legacy staffing labels for the very same rows.
  * {@link unstaffedLabel} reads the visit's own status instead, from the one
  * map that names a visit status anywhere in this portal.
  */
@@ -44,14 +44,14 @@ const STATE_LABELS: Record<Exclude<OperationState, "UNASSIGNED">, string> = {
  *
  * A visit with no assignment whose status is neither of the two unstaffed
  * ones is a contradiction the read model should never produce — and if it
- * ever does, "No crew yet" is the one thing that is certainly true of it.
+ * ever does, "No assigned crew" is the one thing that is certainly true of it.
  * VISIT_STATUS_LABEL.SCHEDULED would read "Crew assigned" beside a row that
  * plainly has none.
  */
 function unstaffedLabel(status: OperationsVisit["status"]): string {
   if (status === "PENDING") return VISIT_STATUS_LABEL.PENDING;
   if (status === "UNASSIGNED") return VISIT_STATUS_LABEL.UNASSIGNED;
-  return "No crew yet";
+  return "No assigned crew";
 }
 
 function stateLabel(state: OperationState, status: OperationsVisit["status"]): string {

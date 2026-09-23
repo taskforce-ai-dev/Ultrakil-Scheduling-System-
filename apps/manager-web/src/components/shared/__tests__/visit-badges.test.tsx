@@ -25,11 +25,11 @@ describe("CrewBadge", () => {
     expect(screen.getByText("1 crew member")).toBeInTheDocument();
   });
 
-  it("says no crew yet when nobody is going, whatever history the visit has", () => {
+  it("states that no crew is assigned when nobody is going, whatever history the visit has", () => {
     // Superseded and cancelled assignments are records, not people.
     render(<CrewBadge visit={buildVisit({ assignmentCount: 3, assignedCrewCount: 0 })} />);
 
-    expect(screen.getByText("No crew yet")).toBeInTheDocument();
+    expect(screen.getByText("No assigned crew")).toBeInTheDocument();
   });
 });
 

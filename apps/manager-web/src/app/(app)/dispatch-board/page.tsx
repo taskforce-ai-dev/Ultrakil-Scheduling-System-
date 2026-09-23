@@ -165,7 +165,7 @@ export default function DispatchBoardPage() {
         ? `${formatMinuteOfDay(assignment.plannedStartMinute)}–${formatMinuteOfDay(assignment.plannedEndMinute)}`
         : "Not booked yet";
       const supervisor = assignment?.crew.find((member) => member.isPmsSupervisor);
-      const crew = assignment?.crew.map((member) => member.fullName).join(", ") || "No crew yet";
+      const crew = assignment?.crew.map((member) => member.fullName).join(", ") || "No assigned crew";
       const vehicle =
         assignment && assignment.vehicles.length > 0
           ? assignment.vehicles
@@ -236,7 +236,7 @@ export default function DispatchBoardPage() {
               // (see load() above) — Share must wait for both to finish for
               // the current date/branch, and for stale data left over from
               // the previous selection, or it can copy an old day's visits
-              // under the newly picked date, or say "No crew yet" for a
+              // under the newly picked date, or say "No assigned crew" for a
               // visit whose assignment just hasn't arrived yet. It also has
               // no calendar-view equivalent, so it never appears there.
               disabled={isLoading || Boolean(error) || sorted.length === 0}
@@ -424,7 +424,7 @@ export default function DispatchBoardPage() {
                       ) : (
                         <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
                           <UserX className="h-3.5 w-3.5" aria-hidden="true" />
-                          No crew yet
+                          No assigned crew
                         </span>
                       )}
                     </TableCell>

@@ -277,14 +277,14 @@ describe("CalendarPage", () => {
     expect(within(dialog).getByText("Focus on the kitchen and store room.")).toBeInTheDocument();
   });
 
-  it("tells the manager an unassigned visit has no crew yet", async () => {
+  it("tells the manager an unassigned visit has no assigned crew", async () => {
     const user = userEvent.setup();
     render(<CalendarPage />);
 
     await user.click(await screen.findByText("Grandview Hotel"));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/No crew on this visit yet/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/No assigned crew on this visit/i)).toBeInTheDocument();
   });
 
   it("filters to one branch, sending it to the API", async () => {

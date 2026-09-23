@@ -116,7 +116,7 @@ describe("the queue strip's vocabulary", () => {
     render(<OperationsDayPanel data={unknown} />);
 
     const row = screen.getByText("Mystery customer").closest("li")!;
-    expect(within(row).getByText("No crew yet")).toBeInTheDocument();
+    expect(within(row).getByText("No assigned crew")).toBeInTheDocument();
   });
 });
 

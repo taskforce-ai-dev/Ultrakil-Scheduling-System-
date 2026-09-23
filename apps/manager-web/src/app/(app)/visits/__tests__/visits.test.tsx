@@ -576,7 +576,7 @@ describe("state badges", () => {
     await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
-    expect(within(drawer).getByText("No crew yet")).toBeInTheDocument();
+    expect(within(drawer).getByText("No assigned crew")).toBeInTheDocument();
     expect(within(drawer).getByText("Action required")).toBeInTheDocument();
     expect(within(drawer).queryByText(/awaiting staffing|staffing failed|visits need a crew/i)).not.toBeInTheDocument();
     expect(within(drawer).queryByText("Crew assigned")).not.toBeInTheDocument();
