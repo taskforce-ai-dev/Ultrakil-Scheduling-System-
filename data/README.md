@@ -107,6 +107,43 @@ workbook later cannot slip through unnoticed.
 The import is idempotent — running it twice produces no duplicate employees and
 no duplicate vehicle authorizations.
 
+## Staging/test-only synthetic capacity
+
+When a read-only shortage report proves that an isolated staging or test
+dataset cannot demonstrate a compliant workflow, use the narrow synthetic
+capacity command. It never reads or changes the source workbooks and refuses
+database names that do not end in `_staging` or `_test`.
+
+```bash
+# Count-only preview; this is the default and makes no writes.
+pnpm db:synthetic-capacity -- --branch COLOMBO --teams 2
+
+# Explicitly create or reactivate the exact deterministic resources.
+pnpm db:synthetic-capacity -- --branch COLOMBO --teams 2 \
+  --apply --confirm-staging-synthetic-capacity
+
+# Deactivate that branch's unused synthetic resources without deleting history.
+pnpm db:synthetic-capacity -- --branch COLOMBO \
+  --deactivate --confirm-staging-synthetic-capacity
+```
+
+Employees have deterministic `synthetic-capacity:` source keys and names that
+begin `SYNTHETIC/TEST`. Vehicles use `SYN-TEST-` codes, `SYNTHETIC/TEST`
+labels, and the exact `__syntheticCapacity__` ownership marker. The ordinary
+Technician Matrix importer rejects those reserved vehicle identities so a
+workbook cannot claim or rewrite them.
+
+Each team covers the largest effective active agreement crew size in its
+branch (minimum two), includes a PMS supervisor and the union of required
+skills, has a large-enough branch vehicle, and gives two team members driving
+authorization. Inactive customers, sites and agreements do not influence the
+generated capacity. A smaller requested count deactivates only surplus
+resources; a current/future live assignment blocks deactivation. Skills,
+driver links, and historical assignments are retained.
+
+The command emits counts only. Synthetic results are demonstration capacity,
+never evidence that the real workforce is sufficient or production-ready.
+
 
 ## Importing the master schedule
 

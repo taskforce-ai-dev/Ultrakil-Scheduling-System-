@@ -1,4 +1,5 @@
 import { BranchCode, DeploymentType, Prisma, PrismaClient } from '@prisma/client';
+import { assertNoReservedSyntheticVehicles } from '../../../prisma/synthetic-capacity';
 import { lockScheduleResources } from '../../scheduling/optimizer/schedule-visit-lock';
 import { normalizeHeader } from './mapping';
 import { ParsedMatrix } from './types';
@@ -95,6 +96,7 @@ export async function importMatrix(
   prisma: PrismaClient,
   parsed: ParsedMatrix,
 ): Promise<ImportSummary> {
+  assertNoReservedSyntheticVehicles(parsed.vehicles ?? []);
   const summary: ImportSummary = {
     branchesEnsured: 0,
     vehiclesCreated: 0,

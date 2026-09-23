@@ -178,6 +178,58 @@ compose up -d --wait api web
 compose up -d --wait backup
 ```
 
+### Optional, authorized synthetic capacity
+
+This is separate from the broad demo seed. Use it only after a read-only
+shortage report proves that the isolated staging dataset lacks enough real
+capacity for the agreed UAT scenario. It is prohibited in a production
+database and the command fails closed unless the decoded database name ends in
+`_staging` or `_test`; after connecting it also verifies
+`current_database()`. Malformed URLs and encoded path separators are refused
+without echoing the URL or credentials.
+
+Run a count-only preview first:
+
+```bash
+compose run --rm --no-deps migrate node apps/api/node_modules/tsx/dist/cli.mjs \
+  apps/api/prisma/seed-synthetic-capacity.ts \
+  --branch COLOMBO --teams 2
+```
+
+Record and review only the returned counts. Apply the minimum approved number
+of teams with the exact confirmation flag:
+
+```bash
+compose run --rm --no-deps migrate node apps/api/node_modules/tsx/dist/cli.mjs \
+  apps/api/prisma/seed-synthetic-capacity.ts \
+  --branch COLOMBO --teams 2 --apply \
+  --confirm-staging-synthetic-capacity
+```
+
+Re-running is idempotent and reactivates only exact marker matches. Reducing
+`--teams` safely deactivates unused surplus capacity. To deactivate every
+synthetic team in one branch:
+
+```bash
+compose run --rm --no-deps migrate node apps/api/node_modules/tsx/dist/cli.mjs \
+  apps/api/prisma/seed-synthetic-capacity.ts \
+  --branch COLOMBO --deactivate \
+  --confirm-staging-synthetic-capacity
+```
+
+Synthetic employees are visibly labelled `SYNTHETIC/TEST` and use
+`synthetic-capacity:` source keys. Synthetic vehicles have `SYN-TEST-` codes
+and the `__syntheticCapacity__` marker. Identity collisions fail the entire
+transaction. Current/future live assignment references block deactivation;
+historical assignments, skills and driver links remain intact.
+
+After apply, rerun the optimizer only for the agreed staging horizon, review
+the proposed assignments, publish through the normal workflow, and rerun all
+overlap, crew, PMS, skills, seat and authorized-driver invariants. Keep the
+synthetic counts in the private staging release record. Synthetic results must
+never be presented as proof of real-workforce capacity or used for production
+readiness claims.
+
 The dedicated tooling image invokes packaged Prisma/tsx with Node directly;
 it never downloads pnpm on the private runtime network. API carries production
 dependencies and compiled code; web uses Next standalone output. All three
