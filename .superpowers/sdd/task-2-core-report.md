@@ -21,3 +21,11 @@ Result: 3 suites passed, 43 tests passed.
 `pnpm --filter @ultrakil/api lint` exited successfully.
 
 This core slice deliberately does not generate OpenAPI/client contracts and does not modify manager, data, or documentation paths.
+
+## Midnight-boundary correction
+
+Added a red regression test for a live 22:00–24:00 reservation. Before the fix,
+the authoritative employee and vehicle loaders mapped its end to minute `0`.
+They now calculate both endpoints relative to the visit date, preserving `1440`.
+The focused eligibility, rules, controller, and assignment run passed 4 suites / 97 tests,
+followed by API typecheck and lint.

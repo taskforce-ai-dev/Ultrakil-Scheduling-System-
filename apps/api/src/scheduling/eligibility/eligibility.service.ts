@@ -40,10 +40,17 @@ interface EligibilityOptions {
   };
 }
 
-/** Minutes from midnight, in the same UTC terms the visit window uses. */
-function minuteOfDay(moment: Date): number {
-  return moment.getUTCHours() * 60 + moment.getUTCMinutes();
+/** Minutes from the visit's midnight. This intentionally preserves 1440. */
+function minuteOfVisitDate(moment: Date, visitDate: Date): number {
+  return Math.round((moment.getTime() - visitDate.getTime()) / 60_000);
 }
+
+const absenceMessage: Record<string, string> = {
+  LEAVE: 'On leave',
+  SICK: 'Off sick',
+  TRAINING: 'In training',
+  OTHER: 'Unavailable',
+};
 
 /**
  * Gathers the facts a decision needs, then hands them to the pure engine.
@@ -197,21 +204,21 @@ export class EligibilityService {
     const employeeCandidates = employees.map((employee) => {
       const booking = employee.crewMemberships.map((member) => member.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
       const reason = employee.availability[0]
-        ? { code: AssignmentCandidateReasonCode.EMPLOYEE_UNAVAILABLE, message: `Unavailable (${employee.availability[0].kind})` }
+        ? { code: AssignmentCandidateReasonCode.EMPLOYEE_UNAVAILABLE, message: absenceMessage[employee.availability[0].kind] ?? 'Unavailable' }
         : employee.deploymentType === DeploymentType.PERMANENTLY_STATIONED && !employee.permanentAssignments.some((entry) => entry.serviceSiteId === visit.serviceAgreement.serviceSiteId)
           ? { code: AssignmentCandidateReasonCode.EMPLOYEE_PERMANENTLY_STATIONED, message: 'Permanently stationed elsewhere' }
           : booking ? { code: AssignmentCandidateReasonCode.EMPLOYEE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
-      return { employeeId: employee.id, displayName: employee.fullName, isPmsGrade: employee.isPmsGrade, isAvailable: !reason, unavailableReason: reason };
+      return { id: employee.id, displayName: employee.fullName, isPmsGrade: employee.isPmsGrade, isAvailable: !reason, unavailableReason: reason };
     });
     const vehicleCandidates = vehicles.map((vehicle) => {
       const booking = vehicle.assignmentVehicles.map((entry) => entry.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
       const reason = booking ? { code: AssignmentCandidateReasonCode.VEHICLE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
-      return { vehicleId: vehicle.id, displayName: vehicle.label, seatCapacity: vehicle.seatCapacity, isAvailable: !reason, unavailableReason: reason };
+      return { id: vehicle.id, displayName: vehicle.label, seatCapacity: vehicle.seatCapacity, isAvailable: !reason, unavailableReason: reason };
     });
     const compare = <T extends { isAvailable: boolean }>(name: (item: T) => string, id: (item: T) => string) => (left: T, right: T) => Number(right.isAvailable) - Number(left.isAvailable) || name(left).localeCompare(name(right)) || id(left).localeCompare(id(right));
     return {
-      employees: employeeCandidates.sort(compare((item) => item.displayName, (item) => item.employeeId)),
-      vehicles: vehicleCandidates.sort(compare((item) => item.displayName, (item) => item.vehicleId)),
+      employees: employeeCandidates.sort(compare((item) => item.displayName, (item) => item.id)),
+      vehicles: vehicleCandidates.sort(compare((item) => item.displayName, (item) => item.id)),
     };
   }
 
@@ -275,8 +282,8 @@ export class EligibilityService {
       busy: employee.crewMemberships
         .map((entry) => ({
           assignmentId: entry.assignment.id,
-          startMinute: minuteOfDay(entry.assignment.plannedStart),
-          endMinute: minuteOfDay(entry.assignment.plannedEnd),
+          startMinute: minuteOfVisitDate(entry.assignment.plannedStart, visitDate),
+          endMinute: minuteOfVisitDate(entry.assignment.plannedEnd, visitDate),
         }))
         .sort((left, right) => left.startMinute - right.startMinute),
     }));
@@ -319,8 +326,8 @@ export class EligibilityService {
       busy: vehicle.assignmentVehicles
         .map((entry) => ({
           assignmentId: entry.assignment.id,
-          startMinute: minuteOfDay(entry.assignment.plannedStart),
-          endMinute: minuteOfDay(entry.assignment.plannedEnd),
+          startMinute: minuteOfVisitDate(entry.assignment.plannedStart, visitDate),
+          endMinute: minuteOfVisitDate(entry.assignment.plannedEnd, visitDate),
         }))
         .sort((left, right) => left.startMinute - right.startMinute),
     }));

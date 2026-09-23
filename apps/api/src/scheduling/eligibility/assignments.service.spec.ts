@@ -29,7 +29,7 @@ describe('EligibilityService candidates', () => {
           {
             id: 'busy', fullName: 'Charlie Busy', availability: [], permanentAssignments: [],
             deploymentType: DeploymentType.MOBILE, isPmsGrade: false,
-            crewMemberships: [{ assignment: { id: 'busy-late', plannedStart: new Date('2026-09-23T11:00:00.000Z'), plannedEnd: new Date('2026-09-23T12:00:00.000Z') } }, { assignment: { id: 'busy-early', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z') } }],
+            crewMemberships: [{ assignment: { id: 'busy-late', plannedStart: new Date('2026-09-23T10:00:00.000Z'), plannedEnd: new Date('2026-09-23T12:00:00.000Z') } }, { assignment: { id: 'busy-early', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z') } }],
           },
           {
             id: 'self', fullName: 'Dina Self', availability: [],
@@ -66,12 +66,12 @@ describe('EligibilityService candidates', () => {
     const service = new EligibilityService(prisma as never);
 
     const result = await service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }, 'self-draft');
-    const byEmployeeId = new Map(result.employees.map((candidate) => [candidate.employeeId, candidate]));
-    const byVehicleId = new Map(result.vehicles.map((candidate) => [candidate.vehicleId, candidate]));
+    const byEmployeeId = new Map(result.employees.map((candidate) => [candidate.id, candidate]));
+    const byVehicleId = new Map(result.vehicles.map((candidate) => [candidate.id, candidate]));
 
     expect(byEmployeeId.get('absent')).toMatchObject({
       isAvailable: false,
-      unavailableReason: { code: 'EMPLOYEE_UNAVAILABLE' },
+      unavailableReason: { code: 'EMPLOYEE_UNAVAILABLE', message: 'On leave' },
     });
     expect(byEmployeeId.get('stationed')).toMatchObject({
       isAvailable: false,
@@ -93,7 +93,7 @@ describe('EligibilityService candidates', () => {
     expect(byVehicleId.get('self-vehicle')?.isAvailable).toBe(true);
     expect(byVehicleId.get('self-vehicle')).toMatchObject({ displayName: 'Van Self', seatCapacity: null, unavailableReason: null });
     expect(byVehicleId.get('adjacent-vehicle')?.isAvailable).toBe(true);
-    expect(result.employees.map((candidate) => candidate.employeeId)).toEqual(['self', 'adjacent', 'mobile-other', 'multi-target', 'absent', 'stationed', 'busy']);
+    expect(result.employees.map((candidate) => candidate.id)).toEqual(['self', 'adjacent', 'mobile-other', 'multi-target', 'absent', 'stationed', 'busy']);
     expect(prisma.vehicle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ isActive: true, OR: expect.any(Array) }),
     }));
@@ -104,6 +104,16 @@ describe('EligibilityService candidates', () => {
         }),
       }),
     }));
+
+    const late = await service.candidates('visit', { plannedStartMinute: 1410, plannedEndMinute: 1440 }, 'self-draft');
+    expect(late.employees.find((candidate) => candidate.id === 'adjacent')).toMatchObject({
+      isAvailable: false,
+      unavailableReason: { code: 'EMPLOYEE_DOUBLE_BOOKED', message: 'Booked 22:00–24:00' },
+    });
+    expect(late.vehicles.find((candidate) => candidate.id === 'adjacent-vehicle')).toMatchObject({
+      isAvailable: false,
+      unavailableReason: { code: 'VEHICLE_DOUBLE_BOOKED', message: 'Booked 22:00–24:00' },
+    });
   });
 
   it('rejects an invalid candidate window before reading the visit', async () => {
@@ -145,6 +155,18 @@ describe('AssignmentsService candidates', () => {
 
     await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }))
       .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT', message: 'This visit has multiple assignments. Refresh and resolve the conflicting schedule before changing its crew.' });
+  });
+
+  it('refuses published history before calling EligibilityService.candidates', async () => {
+    const prisma = { assignment: { findMany: jest.fn().mockResolvedValue([
+      { id: 'published', status: 'PUBLISHED', publishedAt: new Date(), _count: { notificationOutboxEntries: 1 } },
+    ]) } };
+    const eligibility = { candidates: jest.fn() };
+    const service = new AssignmentsService(prisma as never, eligibility as never, {} as never);
+
+    await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }))
+      .rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(eligibility.candidates).not.toHaveBeenCalled();
   });
 });
 

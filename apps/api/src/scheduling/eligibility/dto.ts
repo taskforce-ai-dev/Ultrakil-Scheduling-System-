@@ -116,7 +116,7 @@ export class AssignmentCandidateReasonDto {
 }
 
 export class EmployeeAssignmentCandidateDto {
-  @ApiProperty({ format: 'uuid' }) employeeId!: string;
+  @ApiProperty({ format: 'uuid' }) id!: string;
   @ApiProperty() displayName!: string;
   @ApiProperty() isPmsGrade!: boolean;
   @ApiProperty() isAvailable!: boolean;
@@ -125,7 +125,7 @@ export class EmployeeAssignmentCandidateDto {
 }
 
 export class VehicleAssignmentCandidateDto {
-  @ApiProperty({ format: 'uuid' }) vehicleId!: string;
+  @ApiProperty({ format: 'uuid' }) id!: string;
   @ApiProperty() displayName!: string;
   @ApiProperty({ type: Number, nullable: true }) seatCapacity!: number | null;
   @ApiProperty() isAvailable!: boolean;
