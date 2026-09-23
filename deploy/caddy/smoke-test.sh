@@ -4,8 +4,21 @@ set -eu
 
 PORTAL_URL="${PORTAL_URL:-https://ultrakil.taskforceai.tech/login}"
 API_URL="${API_URL:-https://ultrakil-api.taskforceai.tech/api/health/ready}"
+CURL_BIN="${CURL_BIN:-curl}"
+all_headers="$(mktemp)"
 headers="$(mktemp)"
-trap 'rm -f "$headers"' EXIT
+trap 'rm -f "$all_headers" "$headers"' EXIT
+
+final_header_block() {
+  # curl writes every response while following redirects. Only the final
+  # response is relevant: a hardened redirect cannot compensate for an
+  # unprotected response that actually renders portal/API content.
+  awk '
+    /^HTTP\/[0-9.]+ [0-9][0-9][0-9]/ { block = $0 ORS; seen = 1; next }
+    seen { block = block $0 ORS }
+    END { printf "%s", block }
+  ' "$1" > "$2"
+}
 
 require_header() {
   name="$1"
@@ -17,7 +30,9 @@ require_header() {
 }
 
 for url in "$PORTAL_URL" "$API_URL"; do
-  curl --fail --silent --show-error --location --dump-header "$headers" --output /dev/null "$url"
+  : > "$all_headers"
+  "$CURL_BIN" --fail --silent --show-error --location --dump-header "$all_headers" --output /dev/null "$url"
+  final_header_block "$all_headers" "$headers"
   require_header 'strict-transport-security' 'max-age=31536000'
   require_header 'x-content-type-options' 'nosniff'
   require_header 'referrer-policy' 'strict-origin-when-cross-origin'
