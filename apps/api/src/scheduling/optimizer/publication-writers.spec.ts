@@ -93,7 +93,7 @@ function fixture() {
       vehicle: { label: string; branchId: string | null };
       driverEmployeeId: string | null;
     }[],
-    locks: [],
+    locks: [] as Array<{ scope: LockScope; reason: string; releasedAt: Date | null }>,
   };
   const assignments = [original];
   const outbox: { assignmentId: string }[] = [];
@@ -448,6 +448,34 @@ describe('standard writers preserve publication', () => {
       { excludeAssignmentId: 'draft' },
       f.prisma,
     );
+  });
+
+  it('preserves a draft and its lock reason when a lock arrives before replacement takes the visit lock', async () => {
+    const f = fixture();
+    f.beforeTransaction(async () => {
+      f.original.locks.push({
+        scope: LockScope.CREW,
+        reason: 'Keep this crew for the client',
+        releasedAt: null,
+      });
+    });
+
+    await expect(f.manual.assign('visit', proposal, actor)).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT',
+      status: 409,
+      details: { visitId: 'visit', assignmentId: 'draft' },
+    });
+    expect(f.assignments).toEqual([f.original]);
+    expect(f.original.locks).toEqual([{
+      scope: LockScope.CREW,
+      reason: 'Keep this crew for the client',
+      releasedAt: null,
+    }]);
+    expect(f.prisma.assignment.deleteMany).not.toHaveBeenCalled();
+    expect(f.prisma.assignment.create).not.toHaveBeenCalled();
+    expect(f.eligibility.evaluate).not.toHaveBeenCalled();
+    expect(f.audit.record).not.toHaveBeenCalled();
+    expect(f.visit.status).toBe(VisitStatus.SCHEDULED);
   });
 
   it('moves draft timing with an eligible visit adjustment', async () => {

@@ -105,6 +105,12 @@ export class AssignmentsService {
     if (replaceable.length > 1) {
       this.throwMultipleEditableAssignments(visitId);
     }
+    if (replaceable[0] && await this.prisma.assignmentLock.findFirst({
+      where: { assignmentId: replaceable[0].id, releasedAt: null },
+      select: { id: true },
+    })) {
+      this.throwLockedAssignment(visitId, replaceable[0].id);
+    }
     const result = await this.eligibility.evaluate(visitId, toProposal(dto), {
       excludeAssignmentId: replaceable[0]?.id,
     });
@@ -153,6 +159,15 @@ export class AssignmentsService {
     );
   }
 
+  private throwLockedAssignment(visitId: string, assignmentId: string): never {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'A manager has pinned this crew. Release the lock before changing it.',
+      HttpStatus.CONFLICT,
+      { visitId, assignmentId },
+    );
+  }
+
   /**
    * Assigns a crew, or refuses with every reason.
    *
@@ -168,15 +183,18 @@ export class AssignmentsService {
     const saved = await this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [visitId]);
       await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      const existing = await tx.assignment.findFirst({
+        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+        include: ASSIGNMENT_INCLUDE,
+      });
+      if (existing?.locks.length) {
+        this.throwLockedAssignment(visitId, existing.id);
+      }
       await lockScheduleResources(
         tx,
         proposal.crew.map((member) => member.employeeId),
         proposal.vehicles.map((vehicle) => vehicle.vehicleId),
       );
-      const existing = await tx.assignment.findFirst({
-        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
-        include: ASSIGNMENT_INCLUDE,
-      });
       const result = await this.eligibility.evaluate(visitId, proposal, {
         excludeAssignmentId: existing?.id,
       }, tx);
