@@ -31,6 +31,7 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = React.useState(true);
   const [operations, setOperations] = React.useState<OperationsDayResponse | null>(null);
   const [operationsError, setOperationsError] = React.useState<ApiError | null>(null);
+  const [isOperationsLoading, setIsOperationsLoading] = React.useState(true);
 
   const loadMeta = React.useCallback(() => {
     setIsLoading(true);
@@ -48,17 +49,20 @@ export default function DashboardPage() {
   }, []);
 
   const loadOperations = React.useCallback(() => {
-    setOperations(null);
-    setOperationsError(null);
+    setIsOperationsLoading(true);
     fetchOperationsDay({ date: todayIso() })
-      .then(setOperations)
+      .then((response) => {
+        setOperations(response);
+        setOperationsError(null);
+      })
       .catch((caught: unknown) => {
         setOperationsError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." }),
         );
-      });
+      })
+      .finally(() => setIsOperationsLoading(false));
   }, []);
 
   React.useEffect(() => {
@@ -114,9 +118,15 @@ export default function DashboardPage() {
             code={operationsError.code}
             onRetry={loadOperations}
             retryLabel="Retry operational status"
+            isRetrying={isOperationsLoading}
+            retryingLabel="Retrying operational status"
           />
         ) : operations ? (
           <OperationsDayPanel data={operations} />
+        ) : isOperationsLoading ? (
+          <section aria-label="Loading operational status">
+            <LoadingState rows={2} />
+          </section>
         ) : null}
 
         <div className="flex items-center gap-2">

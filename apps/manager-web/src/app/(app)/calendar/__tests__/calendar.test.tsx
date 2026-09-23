@@ -110,6 +110,32 @@ describe("CalendarPage", () => {
     expect(tile).toHaveTextContent("Assignment required");
   });
 
+  it("names planned and assignment-required work distinctly for screen readers", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [
+        buildCalendarEntry({
+          visitId: "visit-planned",
+          customerName: "Planned customer",
+          visitDate: todayIso(),
+          visitStatus: "PENDING",
+          assignment: null,
+        }),
+        buildCalendarEntry({
+          visitId: "visit-assignment-required",
+          customerName: "Assignment-required customer",
+          visitDate: todayIso(),
+          visitStatus: "UNASSIGNED",
+          assignment: null,
+        }),
+      ],
+      total: 2,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByRole("button", { name: /Planned customer.*Planning stage/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Assignment-required customer.*Assignment required/i })).toBeInTheDocument();
+  });
+
   it("says that the overflow link changes the view", async () => {
     const busy = Array.from({ length: 6 }, (_, index) =>
       buildCalendarEntry({
@@ -175,7 +201,7 @@ describe("CalendarPage", () => {
     // Ordered by the window it must fall in, but never *labelled* with it:
     // the window is a constraint, not a plan.
     const earlier = await screen.findByRole("button", {
-      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, needs a crew`,
+      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, Assignment required`,
     });
     const later = screen.getByRole("button", { name: /Cinnamon Grand Colombo at 11:00–12:30/ });
     expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

@@ -140,12 +140,13 @@ function EntryChip({ entry, onOpen }: { entry: CalendarEntry; onOpen: () => void
   const facts = tileFacts(entry);
   const crewCount = facts.crewCount;
   const unstaffedStage = unstaffedVisitStage(entry.visitStatus);
+  const accessibleStage = unstaffedStage ?? style.label.toLowerCase();
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={visitTileAccessibleName(facts, style.label.toLowerCase())}
+      aria-label={visitTileAccessibleName(facts, accessibleStage)}
       className={cn(
         "flex w-full flex-wrap items-center gap-x-1 gap-y-0.5 rounded border px-1.5 py-1 text-left text-xs transition-colors",
         style.chip,

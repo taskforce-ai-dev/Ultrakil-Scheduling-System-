@@ -8,6 +8,8 @@ interface ErrorStateProps {
   code?: string;
   onRetry?: () => void;
   retryLabel?: string;
+  isRetrying?: boolean;
+  retryingLabel?: string;
 }
 
 /**
@@ -21,18 +23,21 @@ export function ErrorState({
   code,
   onRetry,
   retryLabel = "Try again",
+  isRetrying = false,
+  retryingLabel = "Retrying",
 }: ErrorStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-10 text-center">
+    <div role="alert" className="flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-10 text-center">
       <AlertOctagon className="h-8 w-8 text-destructive" aria-hidden="true" />
       <p className="font-medium">{title}</p>
       {description && <p className="text-sm text-muted-foreground">{description}</p>}
       {code && <p className="font-mono text-xs text-muted-foreground">{code}</p>}
       {onRetry && (
-        <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>
+        <Button size="sm" variant="outline" className="mt-2" onClick={onRetry} disabled={isRetrying}>
           {retryLabel}
         </Button>
       )}
+      {isRetrying && <p role="status">{retryingLabel}</p>}
     </div>
   );
 }

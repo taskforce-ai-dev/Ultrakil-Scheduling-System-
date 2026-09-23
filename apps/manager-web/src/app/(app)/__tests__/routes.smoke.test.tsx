@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
@@ -89,20 +90,48 @@ describe("route smoke tests", () => {
     expect(await screen.findByRole("heading", { name: heading as string })).toBeInTheDocument();
   });
 
-  it("keeps an operations failure visible and retryable when metadata succeeds", async () => {
-    let rejectOperations!: (reason: Error) => void;
-    const operationsDeferred = new Promise<never>((_, reject) => {
-      rejectOperations = reject;
-    });
-    vi.mocked(fetchOperationsDay).mockReturnValueOnce(operationsDeferred);
+  it("keeps an operations failure announced and understandable while its retry is pending", async () => {
+    const firstAttempt = deferred<Awaited<ReturnType<typeof fetchOperationsDay>>>();
+    const retryAttempt = deferred<Awaited<ReturnType<typeof fetchOperationsDay>>>();
+    vi.mocked(fetchOperationsDay)
+      .mockReturnValueOnce(firstAttempt.promise)
+      .mockReturnValueOnce(retryAttempt.promise);
+    const user = userEvent.setup();
 
     render(<DashboardPage />);
 
     await act(async () => {
-      rejectOperations(new ApiError({ code: "SERVICE_UNAVAILABLE", message: "offline" }));
+      firstAttempt.reject(new ApiError({ code: "SERVICE_UNAVAILABLE", message: "offline" }));
     });
 
     expect(await screen.findByText("Operational status unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /retry operational status/i })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Operational status unavailable");
+
+    await user.click(screen.getByRole("button", { name: /retry operational status/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("offline");
+    expect(screen.getByRole("button", { name: /retry operational status/i })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Retrying operational status");
+
+    await act(async () => {
+      retryAttempt.resolve({
+        date: "2026-09-23",
+        branchCode: null,
+        summary: { total: 0, ready: 0, proposed: 0, awaitingStaffing: 0, staffingFailed: 0, exceptions: 0, hoursUnconfirmed: 0 },
+        items: [],
+      });
+    });
+
+    expect(screen.queryByText("Retrying operational status")).not.toBeInTheDocument();
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
