@@ -29,3 +29,8 @@ the authoritative employee and vehicle loaders mapped its end to minute `0`.
 They now calculate both endpoints relative to the visit date, preserving `1440`.
 The focused eligibility, rules, controller, and assignment run passed 4 suites / 97 tests,
 followed by API typecheck and lint.
+
+## Test colocation
+
+Moved the full candidate eligibility behavior suite to `eligibility.service.spec.ts`.
+The affected eligibility and assignments suites passed (16 tests), followed by API typecheck and lint.
