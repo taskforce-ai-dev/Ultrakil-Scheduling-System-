@@ -1,10 +1,14 @@
-# C08 historical Docker release evidence and O08 handoff
+# C08 Docker release evidence and O08 handoff
 
-> Historical Docker-host checklist only. The current deployment has no
-> dedicated staging server and uses Vercel; use
-> [`VERCEL_RELEASE_CHECKLIST.md`](VERCEL_RELEASE_CHECKLIST.md) for current
-> evidence. The Docker/Compose path remains preserved and is documented in
-> [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md).
+> Docker-host checklist. Phase 1 staging runs on a dedicated DigitalOcean VPS
+> using the Docker/Compose path documented in
+> [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md), so this checklist describes the
+> current staging runtime.
+> [`VERCEL_RELEASE_CHECKLIST.md`](VERCEL_RELEASE_CHECKLIST.md) covers a
+> separate Vercel path that is **not** the staging runtime.
+>
+> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction, which
+> superseded the earlier banner here.
 
 Record links/results against the exact release SHA; unchecked items remain open.
 This C08 checklist complements Oshadi's separate O08 guide, screenshots and demo

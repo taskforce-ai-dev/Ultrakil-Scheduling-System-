@@ -1,9 +1,14 @@
 # UltraKIL staging runbook
 
-> Historical Docker-host procedure. The current project has no dedicated
-> staging server; use [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) for
-> Preview/Production deployments. Keep this runbook only for the preserved
-> Docker/Compose and recovery path.
+> **This is the current staging procedure.** Phase 1 staging runs on a
+> dedicated DigitalOcean VPS using the Docker/Compose stack described below;
+> PostgreSQL runs privately on that host and is not exposed publicly.
+> [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md) documents a separate Vercel
+> path that is **not** the staging runtime — do not gather release or
+> acceptance evidence from it.
+>
+> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction, which
+> superseded the earlier banner here.
 
 This is the repeatable C08 deployment path for the Phase 1 pilot. It deploys
 PostgreSQL, Redis, the scheduling service, API, manager portal, health checks,
@@ -13,7 +18,12 @@ all secrets stay on the staging host and are never committed.
 C08 is based on accepted C07 `8c1ba7738108ca8f47a444b4be8113b36a3670d5`.
 The sibling handoff was replayed separately; it is not evidence of a deployment.
 Thivarrakesh handles C07/C08 during the takeover. Oshadi retains O08 evidence
-and the separate UI work. No staging host is implied by this runbook.
+and the separate UI work.
+
+Phase 1 staging runs on a dedicated DigitalOcean VPS following this runbook.
+The canonical staging API is `https://ultrakil-api.taskforceai.tech` and the
+manager portal is `https://ultrakil.taskforceai.tech`. Use those hostnames for
+health checks and acceptance evidence.
 
 ## 1. Host prerequisites
 
