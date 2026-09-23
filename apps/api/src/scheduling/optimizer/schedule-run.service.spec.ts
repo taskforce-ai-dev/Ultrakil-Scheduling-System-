@@ -3,10 +3,12 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  DayRuleKind,
   LockScope,
   Prisma,
   ScheduleRunStatus,
   VisitStatus,
+  Weekday,
 } from '@prisma/client';
 import { Job } from 'bullmq';
 
@@ -58,6 +60,8 @@ function fixture(
     branchId: 'branch',
     branchCode: BranchCode.COLOMBO,
     visitDate: new Date('2027-03-03T00:00:00Z'),
+    isManuallyAdjusted: false,
+    lockedAt: null as Date | null,
     windowStartMinute: 540,
     windowEndMinute: 720,
     durationMinutes: 90,
@@ -648,19 +652,65 @@ describe('solver replacement lifecycle fence', () => {
     ]);
   });
 
-  it('sends the actual assignment minute for a hard time lock', () => {
-    const f = fixture();
-    const target = {
-      ...f.visit,
-      assignments: [
-        {
-          ...f.oldAssignment,
-          locks: [{ scope: LockScope.TIME }],
+  it.each([LockScope.TIME, LockScope.FULL])(
+    'sends the actual assignment minute for an assignment %s lock',
+    (scope) => {
+      const f = fixture();
+      const target = {
+        ...f.visit,
+        assignments: [
+          {
+            ...f.oldAssignment,
+            locks: [{ scope }],
+          },
+        ],
+      };
+      const request = (
+        f.service as unknown as {
+          buildSolveRequest: (
+            runId: string,
+            visits: unknown[],
+            employees: unknown[],
+            vehicles: unknown[],
+            options: { timeLimitSeconds: number; from: Date; to: Date },
+          ) => {
+            locks: { visit_id: string; scope: string; start_minute: number | null }[];
+          };
+        }
+      ).buildSolveRequest('run', [target], [], [], {
+        timeLimitSeconds: 20,
+        from: new Date('2027-03-03T00:00:00Z'),
+        to: new Date('2027-03-03T00:00:00Z'),
+      });
+
+      expect(request.locks).toEqual([
+        expect.objectContaining({
+          visit_id: target.id,
+          scope,
+          start_minute: 600,
+        }),
+      ]);
+    },
+  );
+
+  it.each(['manual', 'visit-lock'] as const)(
+    'pins a %s visit date without inventing an assignment time lock',
+    (protection) => {
+      const f = fixture();
+      const target = {
+        ...f.visit,
+        isManuallyAdjusted: protection === 'manual',
+        lockedAt: protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null,
+        assignments: [{ ...f.oldAssignment, locks: [] }],
+        serviceAgreement: {
+          ...f.visit.serviceAgreement,
+          dayRules: [
+            { weekday: Weekday.WEDNESDAY, kind: DayRuleKind.ALLOWED },
+            { weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },
+          ],
         },
-      ],
-    };
-    const request = (
-      f.service as unknown as {
+      };
+      const build = (f.service as unknown as {
         buildSolveRequest: (
           runId: string,
           visits: unknown[],
@@ -668,23 +718,67 @@ describe('solver replacement lifecycle fence', () => {
           vehicles: unknown[],
           options: { timeLimitSeconds: number; from: Date; to: Date },
         ) => {
-          locks: { visit_id: string; scope: string; start_minute: number | null }[];
+          visits: { candidate_slots: unknown[] }[];
+          locks: unknown[];
+          existing: { start_minute: number | null }[];
         };
-      }
-    ).buildSolveRequest('run', [target], [], [], {
-      timeLimitSeconds: 20,
-      from: new Date('2027-03-03T00:00:00Z'),
-      to: new Date('2027-03-03T00:00:00Z'),
-    });
+      }).buildSolveRequest.bind(f.service);
+      const options = {
+        timeLimitSeconds: 20,
+        from: new Date('2027-03-03T00:00:00Z'),
+        to: new Date('2027-03-07T00:00:00Z'),
+      };
 
-    expect(request.locks).toEqual([
-      expect.objectContaining({
-        visit_id: target.id,
-        scope: 'TIME',
-        start_minute: 600,
-      }),
-    ]);
-  });
+      expect(build('run', [{ ...target, isManuallyAdjusted: false, lockedAt: null }], [], [], options)
+        .visits[0].candidate_slots.length).toBeGreaterThan(0);
+      const request = build('run', [target], [], [], options);
+      expect(request.visits[0].candidate_slots).toEqual([]);
+      expect(request.locks).toEqual([]);
+      expect(request.existing[0].start_minute).toBe(600);
+    },
+  );
+
+  it.each(['manual', 'visit-lock'] as const)(
+    'rejects a solver date move for a %s visit without counting or writing it',
+    async (protection) => {
+      const f = fixture('2027-03-04');
+      f.visit.isManuallyAdjusted = protection === 'manual';
+      f.visit.lockedAt = protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null;
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      f.release();
+
+      await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.run).toMatchObject({
+        status: ScheduleRunStatus.FAILED,
+        errorCode: 'RESOURCE_CONFLICT',
+      });
+      expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+      expect(f.assignment.create).not.toHaveBeenCalled();
+      expect(f.generatedVisit.update).not.toHaveBeenCalled();
+      expect(f.reasons.createMany).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['manual', 'visit-lock'] as const)(
+    're-reads a newly %s protected visit inside persistence before accepting a stale date move',
+    async (protection) => {
+      const f = fixture('2027-03-04');
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      // Model an older writer whose protection change has the same timestamp
+      // precision as the solve snapshot: revision alone cannot prove safety.
+      f.visit.isManuallyAdjusted = protection === 'manual';
+      f.visit.lockedAt = protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null;
+      f.release();
+
+      await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+      expect(f.assignment.create).not.toHaveBeenCalled();
+      expect(f.generatedVisit.update).not.toHaveBeenCalled();
+    },
+  );
 
   it('maps a final Prisma unique collision to a safe resource conflict', async () => {
     const f = fixture();

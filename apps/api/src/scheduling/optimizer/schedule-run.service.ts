@@ -719,6 +719,12 @@ export class ScheduleRunService {
     const reservations: NonNullable<SolveRequest['reservations']> = [];
 
     const solvable = visits.filter((visit) => {
+      // A manager's visit-level decision fixes the date even when no draft
+      // assignment exists. Assignment locks below retain their own time/crew
+      // semantics; a visit-level pin does not invent a TIME or FULL lock.
+      if (visit.isManuallyAdjusted || visit.lockedAt !== null) {
+        pinned.add(visit.id);
+      }
       const live = visit.assignments.find((a) =>
         LIVE_STATUSES.includes(a.status),
       );
@@ -891,6 +897,11 @@ export class ScheduleRunService {
         { runId },
       );
     }
+    const movedVisitIds = new Set(
+      proposals
+        .filter((proposal) => proposal.proposedVisit !== undefined)
+        .map((proposal) => proposal.visitId),
+    );
     return this.prisma.$transaction(
       async (tx) => {
         // One solver response is one atomic change. Lock the entire affected set
@@ -938,7 +949,7 @@ export class ScheduleRunService {
           );
           const visit = await tx.generatedVisit.findUniqueOrThrow({
             where: { id: entry.visitId },
-            select: { updatedAt: true },
+            select: { updatedAt: true, isManuallyAdjusted: true, lockedAt: true },
           });
           // Lock/unlock decisions also advance this revision under the same
           // visit lock, so a stale lock snapshot rejects the complete response.
@@ -947,6 +958,17 @@ export class ScheduleRunService {
             entry.expectedUpdatedAt,
             visit.updatedAt,
           );
+          if (
+            movedVisitIds.has(entry.visitId) &&
+            (visit.isManuallyAdjusted || visit.lockedAt !== null)
+          ) {
+            throw new AppException(
+              'RESOURCE_CONFLICT',
+              'A manager protected this visit date. Refresh and run the scheduler again.',
+              HttpStatus.CONFLICT,
+              { runId, visitId: entry.visitId },
+            );
+          }
         }
         // What every branch-day this run would move work between carries
         // right now, read inside the transaction that commits the moves, and
