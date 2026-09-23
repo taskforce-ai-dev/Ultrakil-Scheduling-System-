@@ -99,7 +99,7 @@ type OnboardingPlan = NonNullable<ServiceAgreement["onboardingPlan"]>;
  */
 const ONBOARDING_STATUS_LABEL: Record<OnboardingPlan["status"], string> = {
   PLANNED: "Visits placed on calendar",
-  PLANNED_WITH_SHORTFALLS: "Visits placed with shortfalls",
+  PLANNED_WITH_SHORTFALLS: "Visits placed with warnings",
   FAILED: "Date placement failed",
 };
 

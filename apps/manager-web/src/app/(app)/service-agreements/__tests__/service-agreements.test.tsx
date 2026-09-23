@@ -313,7 +313,7 @@ describe("ServiceAgreementsPage", () => {
     await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
-    expect(await screen.findByRole("heading", { name: "Visits placed with shortfalls" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Visits placed with warnings" })).toBeInTheDocument();
     expect(screen.getByText(/20 visits placed on the calendar between/)).toBeInTheDocument();
     expect(
       screen.getByText(/crew and vehicle assignment is still pending/)
@@ -348,7 +348,7 @@ describe("ServiceAgreementsPage", () => {
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Visits placed with shortfalls" })
+      await screen.findByRole("heading", { name: "Visits placed with warnings" })
     ).toBeInTheDocument();
     expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
     expect(screen.queryByText(/0 periods could not fit all requested visit dates/)).not.toBeInTheDocument();
