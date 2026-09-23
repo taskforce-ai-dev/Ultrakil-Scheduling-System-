@@ -93,16 +93,14 @@ const WEEKDAY_SHORT: Record<Weekday, string> = {
 type OnboardingPlan = NonNullable<ServiceAgreement["onboardingPlan"]>;
 
 /**
- * The automatic onboarding plan's own outcome, in words rather than an enum.
- * `AgreementsService.create()` already scheduled the agreement for its
- * rolling twelve-month horizon by the time the create response comes back —
- * this heading says what that run actually did, not what a manager might do
- * next.
+ * The automatic onboarding date-placement outcome, in words rather than an
+ * enum. Creating an agreement places visits on the calendar within its
+ * rolling twelve-month horizon; crew and vehicle assignment happens later.
  */
 const ONBOARDING_STATUS_LABEL: Record<OnboardingPlan["status"], string> = {
-  PLANNED: "Scheduled",
-  PLANNED_WITH_SHORTFALLS: "Scheduled, with shortfalls",
-  FAILED: "Scheduling failed",
+  PLANNED: "Visits placed on calendar",
+  PLANNED_WITH_SHORTFALLS: "Visits placed with shortfalls",
+  FAILED: "Date placement failed",
 };
 
 const STATUS_LABEL: Record<ServiceAgreement["status"], string> = {
@@ -195,13 +193,11 @@ const defaultValues: ServiceAgreementFormValues = {
  * enforced by the API, which rejects a genuinely-impossible agreement outright
  * (400/422 with a stable code) rather than the UI second-guessing it.
  *
- * Saving an agreement is the whole scheduling operation: `POST
- * /service-agreements` already runs the agreement's automatic onboarding —
- * a scoped, rolling twelve-month plan — before the response comes back, and
- * returns its outcome as `onboardingPlan`. There is no separate preview or
- * confirm step here to run afterwards, and no second "Schedule now" action
- * that could trigger a duplicate planning run: the create response is read
- * straight into the drawer.
+ * Saving an agreement also places that agreement's visit dates on the calendar
+ * over a rolling twelve-month horizon. The API returns the placement outcome
+ * as `onboardingPlan`. Crew and vehicle assignment is not part of this step.
+ * There is no separate preview or confirm step here; the create response is
+ * read straight into the drawer.
  */
 export default function ServiceAgreementsPage() {
   const [agreements, setAgreements] = React.useState<ServiceAgreement[]>([]);
@@ -383,9 +379,8 @@ export default function ServiceAgreementsPage() {
     setIsSubmitting(true);
     setSubmitError(null);
 
-    // Creating the agreement is the whole operation: the response already
-    // carries `onboardingPlan`, the outcome of the automatic scoped plan the
-    // API ran before answering. Nothing further to request or confirm.
+    // The response carries the result of placing this agreement's visit dates
+    // on the calendar. Staffing and vehicle assignment happen later.
     try {
       const agreement = await createServiceAgreement({
         serviceSiteId: values.serviceSiteId,
@@ -609,7 +604,7 @@ export default function ServiceAgreementsPage() {
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? "Automatic onboarding has already scheduled it — here's what that run did."
+            ? "This agreement's visit dates are placed on the calendar where capacity allows."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
         // The created-agreement view is a read-only onboarding summary (no
@@ -651,16 +646,11 @@ export default function ServiceAgreementsPage() {
                   {ONBOARDING_STATUS_LABEL[createdAgreement.onboardingPlan.status]}
                 </h3>
 
-                {/*
-                  Stated unconditionally, not only when planning succeeded:
-                  the guarantee holds whether this run planned everything,
-                  part of it, or nothing at all, and a manager reading a
-                  shortfall or a failure below still needs to know nobody
-                  else's calendar moved.
-                */}
+                {/* State this for success, shortfall, and failure alike. */}
                 <p className="text-xs text-muted-foreground">
-                  This only plans {createdAgreement.customerName}&apos;s own visits — every
-                  other customer&apos;s existing schedule is untouched.
+                  This only places dates for {createdAgreement.customerName}&apos;s own visits;
+                  crew and vehicle assignment is still pending. Every other customer&apos;s
+                  existing schedule is untouched.
                 </p>
 
                 {createdAgreement.onboardingPlan.status === "FAILED" ? (
@@ -672,7 +662,7 @@ export default function ServiceAgreementsPage() {
                     <p className="text-sm">
                       {createdAgreement.onboardingPlan.visitsPlanned}{" "}
                       {createdAgreement.onboardingPlan.visitsPlanned === 1 ? "visit" : "visits"}{" "}
-                      scheduled between{" "}
+                      placed on the calendar between{" "}
                       {formatLongDate(createdAgreement.onboardingPlan.from)} and{" "}
                       {formatLongDate(createdAgreement.onboardingPlan.to)}.
                     </p>
@@ -684,7 +674,7 @@ export default function ServiceAgreementsPage() {
                           {createdAgreement.onboardingPlan.shortfallPeriods === 1
                             ? "period"
                             : "periods"}{" "}
-                          could not hold everything requested.
+                          could not fit all requested visit dates.
                           {createdAgreement.onboardingPlan.overCapacityDays > 0 &&
                             ` ${createdAgreement.onboardingPlan.overCapacityDays} ${
                               createdAgreement.onboardingPlan.overCapacityDays === 1
