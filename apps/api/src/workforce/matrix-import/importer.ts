@@ -1,7 +1,7 @@
 import { BranchCode, DeploymentType, Prisma, PrismaClient } from '@prisma/client';
-import { assertNoReservedSyntheticVehicles } from '../../../prisma/synthetic-capacity';
 import { lockScheduleResources } from '../../scheduling/optimizer/schedule-visit-lock';
 import { normalizeHeader } from './mapping';
+import { assertNoReservedSyntheticVehicles } from './synthetic-capacity-reservations';
 import { ParsedMatrix } from './types';
 
 export interface ImportSummary {

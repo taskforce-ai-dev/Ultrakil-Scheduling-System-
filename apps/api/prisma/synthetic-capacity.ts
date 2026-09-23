@@ -8,11 +8,20 @@ import {
 } from '@prisma/client';
 
 import { lockScheduleResources } from '../src/scheduling/optimizer/schedule-visit-lock';
+import {
+  assertNoReservedSyntheticVehicles,
+  SYNTHETIC_CAPACITY_MARKER,
+  SYNTHETIC_VEHICLE_PREFIX,
+  SYNTHETIC_VISIBLE_PREFIX,
+} from '../src/workforce/matrix-import/synthetic-capacity-reservations';
 
-export const SYNTHETIC_CAPACITY_MARKER = '__syntheticCapacity__';
 export const SYNTHETIC_SOURCE_PREFIX = 'synthetic-capacity:';
-export const SYNTHETIC_VEHICLE_PREFIX = 'SYN-TEST-';
-export const SYNTHETIC_VISIBLE_PREFIX = 'SYNTHETIC/TEST ';
+export {
+  assertNoReservedSyntheticVehicles,
+  SYNTHETIC_CAPACITY_MARKER,
+  SYNTHETIC_VEHICLE_PREFIX,
+  SYNTHETIC_VISIBLE_PREFIX,
+};
 
 const MAX_SYNTHETIC_TEAMS = 50;
 const LIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
@@ -259,18 +268,6 @@ function vehicleMarkerMatches(
     vehicle.branchId === expected.branchId;
 }
 
-export function assertNoReservedSyntheticVehicles(
-  vehicles: Array<{ code: string; label: string; ownershipGroup: string | null }>,
-): void {
-  if (vehicles.some((vehicle) =>
-    vehicle.code.startsWith(SYNTHETIC_VEHICLE_PREFIX) ||
-    vehicle.label.startsWith(SYNTHETIC_VISIBLE_PREFIX) ||
-    vehicle.ownershipGroup === SYNTHETIC_CAPACITY_MARKER,
-  )) {
-    throw refused('MATRIX_RESERVED_SYNTHETIC_VEHICLE_IDENTITY');
-  }
-}
-
 export async function verifyCurrentDatabase(
   prisma: Pick<PrismaClient, '$queryRaw'>,
   expectedDatabaseName: string,
@@ -366,7 +363,6 @@ async function liveReferencedIds(
   tx: PrismaClient | Prisma.TransactionClient,
   employeeIds: string[],
   vehicleIds: string[],
-  asOf: Date,
 ): Promise<{ employees: Set<string>; vehicles: Set<string> }> {
   if (employeeIds.length === 0 && vehicleIds.length === 0) {
     return { employees: new Set(), vehicles: new Set() };
@@ -374,7 +370,6 @@ async function liveReferencedIds(
   const assignments = await tx.assignment.findMany({
     where: {
       status: { in: LIVE_ASSIGNMENT_STATUSES },
-      plannedEnd: { gte: asOf },
       OR: [
         { crewMembers: { some: { employeeId: { in: employeeIds } } } },
         { vehicles: { some: { vehicleId: { in: vehicleIds } } } },
@@ -462,14 +457,18 @@ function assertSyntheticResourceIdentities(
   }
 }
 
-async function deactivateResources(
-  tx: Prisma.TransactionClient,
-  resources: Awaited<ReturnType<typeof findSyntheticResources>>,
+type SyntheticResources = Awaited<ReturnType<typeof findSyntheticResources>>;
+type DeactivationOutcome = 'blockedLive' | 'deactivated' | 'unchanged';
+
+async function classifySurplusResources(
+  tx: PrismaClient | Prisma.TransactionClient,
+  resources: SyntheticResources,
   desiredEmployeeSourceKeys: Set<string>,
   desiredVehicleCodes: Set<string>,
-  counts: { employees: SyntheticMutationCounts; vehicles: SyntheticMutationCounts },
-  asOf: Date,
-): Promise<void> {
+): Promise<{
+  employees: Array<{ resource: SyntheticResources['employees'][number]; outcome: DeactivationOutcome }>;
+  vehicles: Array<{ resource: SyntheticResources['vehicles'][number]; outcome: DeactivationOutcome }>;
+}> {
   const employees = resources.employees.filter(
     ({ sourceKey }) => !desiredEmployeeSourceKeys.has(sourceKey),
   );
@@ -480,7 +479,6 @@ async function deactivateResources(
     tx,
     employees.map(({ id }) => id),
     vehicles.map(({ id }) => id),
-    asOf,
   );
   const blockedTeams = new Set<number>();
   for (const employee of employees) {
@@ -495,31 +493,104 @@ async function deactivateResources(
       if (team) blockedTeams.add(team);
     }
   }
-  for (const employee of employees) {
-    const team = teamNumberFromIdentity(employee.sourceKey);
-    if (team && blockedTeams.has(team)) {
-      counts.employees.blockedLive += 1;
-    } else if (employee.isActive) {
-      await tx.employee.update({ where: { id: employee.id }, data: { isActive: false } });
-      counts.employees.deactivated += 1;
-    } else counts.employees.unchanged += 1;
+  return {
+    employees: employees.map((resource) => {
+      const team = teamNumberFromIdentity(resource.sourceKey);
+      const outcome: DeactivationOutcome = team && blockedTeams.has(team)
+        ? 'blockedLive'
+        : resource.isActive ? 'deactivated' : 'unchanged';
+      return { resource, outcome };
+    }),
+    vehicles: vehicles.map((resource) => {
+      const team = teamNumberFromIdentity(resource.code);
+      const outcome: DeactivationOutcome = team && blockedTeams.has(team)
+        ? 'blockedLive'
+        : resource.isActive ? 'deactivated' : 'unchanged';
+      return { resource, outcome };
+    }),
+  };
+}
+
+async function deactivateResources(
+  tx: Prisma.TransactionClient,
+  resources: SyntheticResources,
+  desiredEmployeeSourceKeys: Set<string>,
+  desiredVehicleCodes: Set<string>,
+  counts: { employees: SyntheticMutationCounts; vehicles: SyntheticMutationCounts },
+): Promise<void> {
+  const classified = await classifySurplusResources(
+    tx,
+    resources,
+    desiredEmployeeSourceKeys,
+    desiredVehicleCodes,
+  );
+  for (const { resource, outcome } of classified.employees) {
+    counts.employees[outcome] += 1;
+    if (outcome === 'deactivated') {
+      await tx.employee.update({ where: { id: resource.id }, data: { isActive: false } });
+    }
   }
-  for (const vehicle of vehicles) {
-    const team = teamNumberFromIdentity(vehicle.code);
-    if (team && blockedTeams.has(team)) {
-      counts.vehicles.blockedLive += 1;
-    } else if (vehicle.isActive) {
-      await tx.vehicle.update({ where: { id: vehicle.id }, data: { isActive: false } });
-      counts.vehicles.deactivated += 1;
-    } else counts.vehicles.unchanged += 1;
+  for (const { resource, outcome } of classified.vehicles) {
+    counts.vehicles[outcome] += 1;
+    if (outcome === 'deactivated') {
+      await tx.vehicle.update({ where: { id: resource.id }, data: { isActive: false } });
+    }
   }
+}
+
+async function previewSyntheticCapacity(
+  prisma: PrismaClient,
+  plan: SyntheticCapacityPlan,
+): Promise<SyntheticCapacityResult> {
+  const counts = { employees: emptyCounts(), vehicles: emptyCounts() };
+  const resources = await findSyntheticResources(prisma, plan.branchId, plan.branchCode);
+  const expectedEmployees = new Map(
+    plan.teams.flatMap(({ employees }) => employees).map((row) => [row.sourceKey, row]),
+  );
+  const expectedVehicles = new Map(plan.teams.map(({ vehicle }) => [vehicle.code, vehicle]));
+  assertSyntheticResourceIdentities(resources, plan, expectedEmployees, expectedVehicles);
+
+  const employeesBySource = new Map(resources.employees.map((row) => [row.sourceKey, row]));
+  const vehiclesByCode = new Map(resources.vehicles.map((row) => [row.code, row]));
+  for (const employee of expectedEmployees.values()) {
+    const existing = employeesBySource.get(employee.sourceKey);
+    if (!existing) counts.employees.created += 1;
+    else if (!existing.isActive) counts.employees.reactivated += 1;
+    else counts.employees.unchanged += 1;
+  }
+  for (const vehicle of expectedVehicles.values()) {
+    const existing = vehiclesByCode.get(vehicle.code);
+    if (!existing) counts.vehicles.created += 1;
+    else if (!existing.isActive) counts.vehicles.reactivated += 1;
+    else counts.vehicles.unchanged += 1;
+  }
+
+  const classified = await classifySurplusResources(
+    prisma,
+    resources,
+    new Set(expectedEmployees.keys()),
+    new Set(expectedVehicles.keys()),
+  );
+  for (const { outcome } of classified.employees) {
+    counts.employees[outcome] += 1;
+  }
+  for (const { outcome } of classified.vehicles) {
+    counts.vehicles[outcome] += 1;
+  }
+
+  return {
+    mode: 'dry-run',
+    teams: plan.teams.length,
+    teamSize: plan.teamSize,
+    skillCount: plan.skillCount,
+    ...counts,
+  };
 }
 
 async function mutateSyntheticCapacity(
   tx: Prisma.TransactionClient,
   plan: SyntheticCapacityPlan,
   mode: Exclude<SyntheticCapacityMode, 'dry-run'>,
-  asOf: Date,
   hooks: SyntheticCapacityHooks,
 ): Promise<SyntheticCapacityResult> {
   const counts = { employees: emptyCounts(), vehicles: emptyCounts() };
@@ -537,7 +608,6 @@ async function mutateSyntheticCapacity(
     tx,
     resources.employees.map(({ id }) => id),
     resources.vehicles.map(({ id }) => id),
-    asOf,
   );
 
   const expectedEmployees = new Map(
@@ -547,7 +617,7 @@ async function mutateSyntheticCapacity(
   assertSyntheticResourceIdentities(resources, plan, expectedEmployees, expectedVehicles);
 
   if (mode === 'deactivate') {
-    await deactivateResources(tx, resources, new Set(), new Set(), counts, asOf);
+    await deactivateResources(tx, resources, new Set(), new Set(), counts);
   } else {
     const employeesBySource = new Map(resources.employees.map((row) => [row.sourceKey, row]));
     const vehiclesByCode = new Map(resources.vehicles.map((row) => [row.code, row]));
@@ -653,7 +723,6 @@ async function mutateSyntheticCapacity(
       new Set(expectedEmployees.keys()),
       new Set(expectedVehicles.keys()),
       counts,
-      asOf,
     );
   }
   return {
@@ -673,18 +742,11 @@ export async function executeSyntheticCapacity(
   const asOf = options.asOf ?? new Date();
   const plan = await buildPlan(prisma, args.branchCode, args.teams, asOf);
   if (args.mode === 'dry-run') {
-    return {
-      mode: args.mode,
-      teams: plan.teams.length,
-      teamSize: plan.teamSize,
-      skillCount: plan.skillCount,
-      employees: { ...emptyCounts(), created: plan.teams.length * plan.teamSize },
-      vehicles: { ...emptyCounts(), created: plan.teams.length },
-    };
+    return previewSyntheticCapacity(prisma, plan);
   }
   const mode = args.mode;
   return prisma.$transaction(
-    (tx) => mutateSyntheticCapacity(tx, plan, mode, asOf, options.hooks ?? {}),
+    (tx) => mutateSyntheticCapacity(tx, plan, mode, options.hooks ?? {}),
     { timeout: 60_000 },
   );
 }

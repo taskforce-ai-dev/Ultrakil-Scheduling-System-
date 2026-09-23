@@ -240,6 +240,8 @@ it('keeps the default dry run count-only and write-free', async () => {
   );
 
   expect(result).toMatchObject({ mode: 'dry-run', teams: 1, teamSize: 4, skillCount: 2 });
+  expect(result.employees).toMatchObject({ created: 4, reactivated: 0, unchanged: 0 });
+  expect(result.vehicles).toMatchObject({ created: 1, reactivated: 0, unchanged: 0 });
   expect(await prisma.employee.count({ where: { sourceKey: { startsWith: sourcePrefix } } })).toBe(0);
   expect(await prisma.vehicle.count({ where: { code: { startsWith: vehiclePrefix } } })).toBe(0);
 });
@@ -309,8 +311,23 @@ it('creates exact capacity and relations idempotently, then reactivates exact ma
   expect(await prisma.employeeSkill.count({ where: { employeeId: { in: employees.map(({ id }) => id) } } })).toBe(8);
   expect(await prisma.vehicleAuthorization.count({ where: { vehicleId: vehicle.id } })).toBe(2);
 
+  const rerunPreview = await executeSyntheticCapacity(
+    prisma,
+    { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+    { asOf },
+  );
+  expect(rerunPreview.employees).toMatchObject({ created: 0, reactivated: 0, unchanged: 4 });
+  expect(rerunPreview.vehicles).toMatchObject({ created: 0, reactivated: 0, unchanged: 1 });
+
   await prisma.employee.update({ where: { id: employees[0].id }, data: { isActive: false } });
   await prisma.vehicle.update({ where: { id: vehicle.id }, data: { isActive: false } });
+  const reactivationPreview = await executeSyntheticCapacity(
+    prisma,
+    { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+    { asOf },
+  );
+  expect(reactivationPreview.employees).toMatchObject({ reactivated: 1, unchanged: 3 });
+  expect(reactivationPreview.vehicles).toMatchObject({ reactivated: 1, unchanged: 0 });
   const reactivated = await apply(1);
   expect(reactivated.employees.reactivated).toBe(1);
   expect(reactivated.vehicles.reactivated).toBe(1);
@@ -340,6 +357,18 @@ it('shrinks surplus teams without deleting their relationships or history', asyn
     skills: await prisma.employeeSkill.count({ where: { employeeId: { in: teamTwoEmployees.map(({ id }) => id) } } }),
     authorizations: await prisma.vehicleAuthorization.count({ where: { vehicleId: teamTwoVehicle.id } }),
   };
+
+  const shrinkPreview = await executeSyntheticCapacity(
+    prisma,
+    { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+    { asOf },
+  );
+  expect(shrinkPreview.employees.deactivated).toBe(4);
+  expect(shrinkPreview.vehicles.deactivated).toBe(1);
+  expect(await prisma.employee.count({
+    where: { id: { in: teamTwoEmployees.map(({ id }) => id) }, isActive: true },
+  })).toBe(4);
+  expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: teamTwoVehicle.id } })).isActive).toBe(true);
 
   const shrunk = await apply(1);
   expect(shrunk.employees.deactivated).toBe(4);
@@ -376,6 +405,11 @@ it('refuses a reserved vehicle identity collision and rolls back would-be employ
     },
   });
 
+  await expect(executeSyntheticCapacity(
+    prisma,
+    { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+    { asOf },
+  )).rejects.toThrow('SYNTHETIC_VEHICLE_IDENTITY_COLLISION');
   await expect(apply(1)).rejects.toThrow('SYNTHETIC_VEHICLE_IDENTITY_COLLISION');
   expect(await prisma.employee.count({ where: { sourceKey: { startsWith: sourcePrefix } } })).toBe(0);
 });
@@ -450,7 +484,7 @@ it('serializes with an assignment writer and keeps the entire live-referenced su
   expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: teamTwoVehicle.id } })).isActive).toBe(true);
 });
 
-it('does not narrow skills, seats, or members beneath a future live assignment', async () => {
+it('does not narrow skills, seats, or members beneath an overdue live assignment', async () => {
   await apply(1);
   const employees = await prisma.employee.findMany({
     where: { sourceKey: { startsWith: `${sourcePrefix}team:01:` } },
@@ -462,7 +496,7 @@ it('does not narrow skills, seats, or members beneath a future live assignment',
       serviceAgreementId: agreementId,
       branchId,
       branchCode: BranchCode.KANDY,
-      visitDate: new Date('2035-02-02T00:00:00.000Z'),
+      visitDate: new Date('2033-12-02T00:00:00.000Z'),
       windowStartMinute: 480,
       windowEndMinute: 540,
       durationMinutes: 60,
@@ -476,8 +510,8 @@ it('does not narrow skills, seats, or members beneath a future live assignment',
       branchId,
       branchCode: BranchCode.KANDY,
       status: AssignmentStatus.PUBLISHED,
-      plannedStart: new Date('2035-02-02T08:00:00.000Z'),
-      plannedEnd: new Date('2035-02-02T09:00:00.000Z'),
+      plannedStart: new Date('2033-12-02T08:00:00.000Z'),
+      plannedEnd: new Date('2033-12-02T09:00:00.000Z'),
       crewMembers: {
         create: employees.map((employee, index) => ({
           employeeId: employee.id,
@@ -498,19 +532,34 @@ it('does not narrow skills, seats, or members beneath a future live assignment',
     }),
   ]);
   try {
-    const protectedResult = await apply(1);
-    expect(protectedResult.teamSize).toBe(2);
-    expect(protectedResult.employees.blockedLive).toBe(2);
-    expect(await prisma.employee.count({
-      where: { id: { in: employees.map(({ id }) => id) }, isActive: true },
-    })).toBe(4);
-    expect(await prisma.employeeSkill.count({
-      where: {
-        employeeId: { in: employees.map(({ id }) => id) },
-        skillCode: 'GPC',
-      },
-    })).toBe(4);
-    expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).seatCapacity).toBe(4);
+    for (const status of [
+      AssignmentStatus.PUBLISHED,
+      AssignmentStatus.ACKNOWLEDGED,
+      AssignmentStatus.IN_PROGRESS,
+    ]) {
+      await prisma.assignment.update({ where: { id: assignment.id }, data: { status } });
+      const preview = await executeSyntheticCapacity(
+        prisma,
+        { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+        { asOf },
+      );
+      expect(preview.teamSize).toBe(2);
+      expect(preview.employees.blockedLive).toBe(2);
+
+      const protectedResult = await apply(1);
+      expect(protectedResult.teamSize).toBe(2);
+      expect(protectedResult.employees.blockedLive).toBe(2);
+      expect(await prisma.employee.count({
+        where: { id: { in: employees.map(({ id }) => id) }, isActive: true },
+      })).toBe(4);
+      expect(await prisma.employeeSkill.count({
+        where: {
+          employeeId: { in: employees.map(({ id }) => id) },
+          skillCode: 'GPC',
+        },
+      })).toBe(4);
+      expect((await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicle.id } })).seatCapacity).toBe(4);
+    }
 
     await prisma.assignment.update({
       where: { id: assignment.id },
