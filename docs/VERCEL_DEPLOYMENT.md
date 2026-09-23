@@ -1,9 +1,20 @@
 # Vercel deployment contract
 
-UltraKIL deploys as three Vercel Projects connected to this monorepo. The
-manager portal, Nest API and FastAPI scheduler each have their own build and
-stable URL; the API uses QStash for durable, request-driven schedule execution.
-The Docker/Compose deployment remains supported separately for self-hosting.
+> **Not the staging runtime.** Phase 1 staging runs on a dedicated DigitalOcean
+> VPS using the Docker/Compose stack in
+> [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md), with PostgreSQL private to that
+> host. This document describes a separate Vercel deployment target. Do not
+> gather release or acceptance evidence from it, and do not treat a live Vercel
+> deployment as the pilot.
+>
+> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction; this file
+> previously presented Vercel as the deployment and the Docker/Compose path as
+> self-hosting only.
+
+On this path UltraKIL deploys as three Vercel Projects connected to this
+monorepo. The manager portal, Nest API and FastAPI scheduler each have their
+own build and stable URL; the API uses QStash for durable, request-driven
+schedule execution.
 
 Use a dedicated Neon project for staging and record its identity in the private
 operator configuration. Provision production PostgreSQL separately.

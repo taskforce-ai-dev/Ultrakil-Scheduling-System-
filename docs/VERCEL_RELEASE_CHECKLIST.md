@@ -1,7 +1,15 @@
 # Vercel C08 release evidence
 
-This is the active C08 checklist for the Vercel path. The historical
-Docker-host checklist remains in [`C08_RELEASE_CHECKLIST.md`](C08_RELEASE_CHECKLIST.md).
+> **Not the staging runtime.** Phase 1 staging runs on a dedicated DigitalOcean
+> VPS; its checklist is [`C08_RELEASE_CHECKLIST.md`](C08_RELEASE_CHECKLIST.md)
+> and its procedure is [`STAGING_RUNBOOK.md`](STAGING_RUNBOOK.md). Do not
+> gather release or acceptance evidence from a Vercel deployment.
+>
+> Corrected 2026-09-23 on Thivarrakesh Parthipan's instruction; this file
+> previously described itself as the active checklist and the Docker-host one
+> as historical.
+
+This is the checklist for the Vercel path, kept for that deployment target.
 Record every result against an exact commit SHA; unchecked items remain open.
 
 ## Platform and project gates
