@@ -232,6 +232,97 @@ const apply = (teams: number, options: Parameters<typeof executeSyntheticCapacit
     { asOf, ...options },
   );
 
+async function waitForContendingTransaction(): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const [row] = await prisma.$queryRaw<Array<{ waiting: bigint }>>`
+      SELECT count(*) AS waiting FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND wait_event_type = 'Lock'
+        AND pid <> pg_backend_pid()
+    `;
+    if (row.waiting > 0n) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('Second synthetic-capacity transaction did not contend');
+}
+
+it('serializes two first applies before either synthetic row exists', async () => {
+  let firstReachedEmployeeWrites!: () => void;
+  let releaseFirst!: () => void;
+  const reachedEmployeeWrites = new Promise<void>((resolve) => { firstReachedEmployeeWrites = resolve; });
+  const holdFirst = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondClient = new PrismaClient();
+  await secondClient.$connect();
+
+  try {
+    const first = apply(1, {
+      hooks: { afterEmployeeWrites: async () => {
+        firstReachedEmployeeWrites();
+        await holdFirst;
+      } },
+    });
+    await reachedEmployeeWrites;
+    const second = executeSyntheticCapacity(
+      secondClient,
+      { branchCode: BranchCode.KANDY, teams: 1, mode: 'apply' },
+      { asOf },
+    );
+    try {
+      await waitForContendingTransaction();
+    } finally {
+      releaseFirst();
+    }
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.employees.created).toBe(4);
+    expect(secondResult.employees.unchanged).toBe(4);
+    expect(await prisma.employee.count({ where: { sourceKey: { startsWith: sourcePrefix } } })).toBe(4);
+    expect(await prisma.vehicle.count({ where: { code: { startsWith: vehiclePrefix } } })).toBe(1);
+  } finally {
+    await secondClient.$disconnect();
+  }
+});
+
+it('applies a concurrent deactivate after the first create commits', async () => {
+  let firstReachedEmployeeWrites!: () => void;
+  let releaseFirst!: () => void;
+  const reachedEmployeeWrites = new Promise<void>((resolve) => { firstReachedEmployeeWrites = resolve; });
+  const holdFirst = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondClient = new PrismaClient();
+  await secondClient.$connect();
+
+  try {
+    const first = apply(1, {
+      hooks: { afterEmployeeWrites: async () => {
+        firstReachedEmployeeWrites();
+        await holdFirst;
+      } },
+    });
+    await reachedEmployeeWrites;
+    const deactivate = executeSyntheticCapacity(
+      secondClient,
+      { branchCode: BranchCode.KANDY, teams: 0, mode: 'deactivate' },
+      { asOf },
+    );
+    let contentionError: unknown;
+    try {
+      await waitForContendingTransaction();
+    } catch (error) {
+      contentionError = error;
+    } finally {
+      releaseFirst();
+    }
+    const [, deactivation] = await Promise.all([first, deactivate]);
+    if (contentionError) throw contentionError;
+    expect(deactivation.employees.deactivated).toBe(4);
+    expect(deactivation.vehicles.deactivated).toBe(1);
+    expect(await prisma.employee.count({ where: { sourceKey: { startsWith: sourcePrefix }, isActive: true } })).toBe(0);
+    expect(await prisma.vehicle.count({ where: { code: { startsWith: vehiclePrefix }, isActive: true } })).toBe(0);
+  } finally {
+    await secondClient.$disconnect();
+  }
+});
+
 it('keeps the default dry run count-only and write-free', async () => {
   const result = await executeSyntheticCapacity(
     prisma,

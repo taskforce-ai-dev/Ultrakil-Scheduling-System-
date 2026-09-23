@@ -119,6 +119,13 @@ which reaches somebody as a 500 on a button they pressed for a good reason.
 4. **branch-days**, ascending by key, through `lockBranchDays`
    (`scheduling/optimizer/branch-day-lock.ts`).
 
+The staging synthetic-capacity CLI takes its own transaction-scoped,
+branch-specific advisory lock before reading a mutation plan or synthetic
+resources. Its `UKSC` two-integer lock namespace is distinct from the `UKLD`
+branch-day namespace. This also serializes a branch's first apply, when there
+are no employee or vehicle rows to lock yet; resource row locks still follow
+the normal employee-then-vehicle order.
+
 A writer skipping a level is fine; a writer inverting two is not. The rule is
 written as code in those four helpers, and the only way to keep it is to reach
 for them rather than to lock by hand — which is how each of the three deadlocks
