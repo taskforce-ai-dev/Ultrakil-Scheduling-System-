@@ -671,7 +671,7 @@ export default function VisitsPage() {
                 same number, and the filter returned 6 of the 38. */}
             {unstaffedCount > 0 && (
               <span className="text-muted-foreground">
-                {unstaffedCount} visits need a crew — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
+                {unstaffedCount} without a committed crew — {VISIT_STATUS_LABEL.PENDING.toLowerCase()} or{" "}
                 {VISIT_STATUS_LABEL.UNASSIGNED.toLowerCase()}
               </span>
             )}

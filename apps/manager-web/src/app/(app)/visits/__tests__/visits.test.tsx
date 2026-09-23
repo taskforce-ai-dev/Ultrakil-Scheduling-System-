@@ -286,12 +286,11 @@ describe("filters", () => {
     await user.click(screen.getByLabelText("Visit state"));
     // Nothing in the list may be read as "everything with no crew".
     expect(screen.queryByRole("option", { name: "Unassigned" })).not.toBeInTheDocument();
-    expect(
-      await screen.findByRole("option", { name: "Staffing failed" })
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Action required" })).toBeInTheDocument();
     // And the visits nobody has tried to staff are reachable at all, which is
     // where the missing 32 were.
-    expect(screen.getByRole("option", { name: "Awaiting staffing" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Planned" })).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting staffing|staffing failed|visits need a crew/i)).not.toBeInTheDocument();
   });
 
   it("separates how a visit got here from where it has got to", async () => {
@@ -312,10 +311,12 @@ describe("filters", () => {
     ]);
     await renderCalendar();
 
-    // Not "with no crew assigned yet", which reads as the filter's word.
+    // This counts the factual absence of a committed crew, without treating
+    // planned work as a staffing failure.
     expect(
-      screen.getByText("2 with no crew yet — awaiting staffing or staffing failed")
+      screen.getByText("2 without a committed crew — planned or action required")
     ).toBeInTheDocument();
+    expect(screen.queryByText(/awaiting staffing|staffing failed|visits need a crew/i)).not.toBeInTheDocument();
   });
 
   it("names the run that generated a visit by its weeks, never by its id", async () => {
@@ -569,14 +570,15 @@ describe("state badges", () => {
     const user = await renderCalendar();
 
     expect(
-      screen.getByText("2 with no crew yet — awaiting staffing or staffing failed")
+      screen.getByText("2 without a committed crew — planned or action required")
     ).toBeInTheDocument();
 
     await user.click(chip("Cinnamon Grand Colombo", "2026-09-09"));
 
     const drawer = await screen.findByRole("dialog");
     expect(within(drawer).getByText("No crew yet")).toBeInTheDocument();
-    expect(within(drawer).getByText("Staffing failed")).toBeInTheDocument();
+    expect(within(drawer).getByText("Action required")).toBeInTheDocument();
+    expect(within(drawer).queryByText(/awaiting staffing|staffing failed|visits need a crew/i)).not.toBeInTheDocument();
     expect(within(drawer).queryByText("Crew assigned")).not.toBeInTheDocument();
   });
 
