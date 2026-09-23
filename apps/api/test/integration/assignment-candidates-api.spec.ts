@@ -23,6 +23,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuthService } from '../../src/auth/auth.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
+import { cleanupCapturedIds } from '../support/fixture-cleanup';
 
 const prisma = new PrismaClient();
 const suffix = Math.random().toString(36).slice(2, 10);
@@ -33,12 +34,18 @@ const ADMIN = {
 const at = (date: string, minute = 0) =>
   new Date(new Date(`${date}T00:00:00.000Z`).getTime() + minute * 60_000);
 
-let app: INestApplication;
+let app: INestApplication | undefined;
+let appInitialized = false;
+let prismaConnected = false;
 let http: string;
 let token: string;
 let colomboId: string;
 let kandyId: string;
-let agreementId: string;
+const agreementIds: string[] = [];
+const customerIds: string[] = [];
+const siteIds: string[] = [];
+const jobTypeIds: string[] = [];
+const userIds: string[] = [];
 const employeeIds: string[] = [];
 const vehicleIds: string[] = [];
 const visitIds: string[] = [];
@@ -75,6 +82,8 @@ async function vehicle(label: string, branchId: string | null = colomboId) {
 }
 
 async function visit(date: string, windowStartMinute: number) {
+  const agreementId = agreementIds[0];
+  if (!agreementId) throw new Error('Candidate fixture agreement was not created.');
   const row = await prisma.generatedVisit.create({
     data: {
       serviceAgreementId: agreementId,
@@ -132,10 +141,11 @@ async function reservation(options: {
 
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  app = moduleRef.createNestApplication();
-  app.setGlobalPrefix('api');
-  app.useGlobalFilters(new AllExceptionsFilter());
-  app.useGlobalPipes(
+  const createdApp = moduleRef.createNestApplication();
+  app = createdApp;
+  createdApp.setGlobalPrefix('api');
+  createdApp.useGlobalFilters(new AllExceptionsFilter());
+  createdApp.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
@@ -143,10 +153,12 @@ beforeAll(async () => {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
-  await app.init();
-  await app.listen(0);
-  http = await app.getUrl().then((url) => url.replace('[::1]', '127.0.0.1'));
+  await createdApp.init();
+  appInitialized = true;
+  await createdApp.listen(0);
+  http = await createdApp.getUrl().then((url) => url.replace('[::1]', '127.0.0.1'));
   await prisma.$connect();
+  prismaConnected = true;
 
   const [colombo, kandy] = await Promise.all(
     [BranchCode.COLOMBO, BranchCode.KANDY].map((code) =>
@@ -160,7 +172,7 @@ beforeAll(async () => {
   colomboId = colombo.id;
   kandyId = kandy.id;
 
-  await prisma.user.create({
+  const user = await prisma.user.create({
     data: {
       email: ADMIN.email,
       fullName: `Candidate API Admin ${suffix}`,
@@ -168,6 +180,7 @@ beforeAll(async () => {
       passwordHash: await AuthService.hashPassword(ADMIN.password),
     },
   });
+  userIds.push(user.id);
   const login = await request(http).post('/api/auth/login').send(ADMIN);
   expect(login.status).toBe(200);
   token = login.body.accessToken as string;
@@ -179,6 +192,7 @@ beforeAll(async () => {
       branchCode: BranchCode.COLOMBO,
     },
   });
+  customerIds.push(customer.id);
   const site = await prisma.serviceSite.create({
     data: {
       customerId: customer.id,
@@ -187,6 +201,7 @@ beforeAll(async () => {
       branchCode: BranchCode.COLOMBO,
     },
   });
+  siteIds.push(site.id);
   const jobType = await prisma.jobType.create({
     data: {
       code: `CANDIDATE_${suffix.toUpperCase()}`,
@@ -195,6 +210,7 @@ beforeAll(async () => {
       defaultCrewSize: 1,
     },
   });
+  jobTypeIds.push(jobType.id);
   const agreement = await prisma.serviceAgreement.create({
     data: {
       customerId: customer.id,
@@ -212,23 +228,44 @@ beforeAll(async () => {
       status: AgreementStatus.ACTIVE,
     },
   });
-  agreementId = agreement.id;
+  agreementIds.push(agreement.id);
 });
 
 afterAll(async () => {
-  await prisma.assignment.deleteMany({ where: { generatedVisitId: { in: visitIds } } });
-  await prisma.generatedVisit.deleteMany({ where: { id: { in: visitIds } } });
-  await prisma.serviceAgreement.deleteMany({ where: { id: agreementId } });
-  await prisma.serviceSite.deleteMany({
-    where: { customer: { name: `Candidate Customer ${suffix}` } },
-  });
-  await prisma.customer.deleteMany({ where: { name: `Candidate Customer ${suffix}` } });
-  await prisma.jobType.deleteMany({ where: { code: `CANDIDATE_${suffix.toUpperCase()}` } });
-  await prisma.vehicle.deleteMany({ where: { id: { in: vehicleIds } } });
-  await prisma.employee.deleteMany({ where: { id: { in: employeeIds } } });
-  await prisma.user.deleteMany({ where: { email: ADMIN.email } });
-  await prisma.$disconnect();
-  await app.close();
+  try {
+    if (prismaConnected) {
+      await cleanupCapturedIds(visitIds, (ids) =>
+        prisma.assignment.deleteMany({ where: { generatedVisitId: { in: ids } } }),
+      );
+      await cleanupCapturedIds(visitIds, (ids) =>
+        prisma.generatedVisit.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(agreementIds, (ids) =>
+        prisma.serviceAgreement.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(siteIds, (ids) =>
+        prisma.serviceSite.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(customerIds, (ids) =>
+        prisma.customer.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(jobTypeIds, (ids) =>
+        prisma.jobType.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(vehicleIds, (ids) =>
+        prisma.vehicle.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(employeeIds, (ids) =>
+        prisma.employee.deleteMany({ where: { id: { in: ids } } }),
+      );
+      await cleanupCapturedIds(userIds, (ids) =>
+        prisma.user.deleteMany({ where: { id: { in: ids } } }),
+      );
+    }
+  } finally {
+    if (prismaConnected) await prisma.$disconnect();
+    if (appInitialized && app) await app.close();
+  }
 });
 
 it('returns persisted live reservations as unavailable, ignores history and self, and scopes vehicles', async () => {

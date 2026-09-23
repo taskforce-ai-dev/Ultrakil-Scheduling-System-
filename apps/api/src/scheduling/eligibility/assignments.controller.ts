@@ -76,6 +76,7 @@ export class AssignmentsController {
   @ApiParam({ name: 'id', type: String, format: 'uuid' })
   @ApiBody({ type: AssignmentCandidateWindowDto })
   @ApiResponse({ status: 200, type: AssignmentCandidatesDto })
+  @ApiResponse({ status: 400, description: 'VALIDATION_FAILED — invalid or reversed time window.' })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   @ApiResponse({ status: 409, description: 'RESOURCE_CONFLICT — this visit is no longer editable.' })
   candidates(

@@ -63,15 +63,23 @@ candidate DTOs. After adding those types and explicit candidate endpoint path/bo
 the generated client contains a UUID `id` path parameter, required
 `AssignmentCandidateWindowDto` request body, and typed `AssignmentCandidatesDto` response.
 
-`pnpm contracts:generate` completed twice. The first and second final passes produced identical
-hashes:
+Review hardening changed the integration fixture cleanup to record every created row by ID and
+route every delete through `cleanupCapturedIds`. Partial setup therefore executes no delete for an
+uncaptured resource, and Prisma/application shutdown only runs for initialized resources. The
+existing cleanup-helper unit tests prove both the zero-ID no-op and partial-ID filtering cases.
+The candidate endpoint contract now also documents its `400 VALIDATION_FAILED` response.
 
-- OpenAPI: `c215e00b2c0e456c288cb734d886beda986a202f9bf3e3d705d139215e47de74`
-- generated TypeScript: `18968b43ba50380dcd53d9f2552c3233cbfe2bfea8afdc2997b763324f0eb1e9`
+`pnpm contracts:generate` completed twice after the review changes. The first and second final
+passes produced identical hashes:
+
+- OpenAPI: `a45ff70434cc81fc6c82d29dacaaeeedf35a3a1d62bd899481cb216bd873068b`
+- generated TypeScript: `ec528443084e12103af980de8b24009324d6bb8d160f504cc3610fd62657f7c4`
 
 Additional verification:
 
 - focused candidate unit suites: 3 suites / 45 tests passed;
+- fixture-cleanup plus assignment-controller unit verification: 2 suites / 31 tests passed;
+- focused candidate PostgreSQL integration: 1 suite / 3 tests passed;
 - API typecheck passed;
 - API-contracts typecheck and build passed;
 - focused API ESLint passed with zero warnings; and

@@ -4921,6 +4921,13 @@ export interface operations {
                     "application/json": components["schemas"]["AssignmentCandidatesDto"];
                 };
             };
+            /** @description VALIDATION_FAILED — invalid or reversed time window. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Missing or invalid token. */
             401: {
                 headers: {
