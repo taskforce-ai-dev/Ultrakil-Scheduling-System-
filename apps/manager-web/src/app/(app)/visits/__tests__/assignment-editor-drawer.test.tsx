@@ -162,7 +162,7 @@ describe("AssignmentEditorDrawer", () => {
     );
   });
 
-  it("keeps booked people behind a collapsed disclosure and exposes the server reason", async () => {
+  it("keeps booked people in a keyboard-accessible static disclosure outside the listbox", async () => {
     vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
       ...availableCandidates,
       employees: [
@@ -188,13 +188,46 @@ describe("AssignmentEditorDrawer", () => {
     expect(screen.queryByRole("option", { name: /Booked 09:00–11:00/ })).not.toBeInTheDocument();
 
     const disclosure = screen.getByRole("button", { name: "Unavailable for this time (1)" });
+    expect(disclosure.closest('[role="listbox"]')).toBeNull();
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    await user.click(disclosure);
+    await user.keyboard("{Escape}");
+    screen.getByLabelText("Employee").focus();
+    await user.tab();
+    expect(disclosure).toHaveFocus();
+    await user.keyboard(" ");
 
-    const booked = await screen.findByRole("option", { name: /N Fernando.*Booked 09:00–11:00/ });
-    expect(booked).toHaveAttribute("aria-disabled", "true");
-    await user.click(booked);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const unavailableList = screen.getByRole("list", { name: "Unavailable for this time" });
+    expect(unavailableList).toHaveTextContent("N Fernando");
+    expect(unavailableList).toHaveTextContent("Booked 09:00–11:00 on another visit.");
+    expect(screen.queryByRole("option", { name: /N Fernando/ })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Employee")).toHaveTextContent("Choose an employee");
+  });
+
+  it("shows a direct candidate failure and retries the current visit window", async () => {
+    vi.mocked(fetchAssignmentCandidates)
+      .mockRejectedValueOnce(
+        new ApiError({ code: "CANDIDATES_UNAVAILABLE", message: "Availability lookup failed." })
+      )
+      .mockResolvedValueOnce(availableCandidates);
+    const { user } = await openDrawer();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Could not load availability: Availability lookup failed.");
+    expect(screen.getByRole("button", { name: "Add crew member" })).toBeDisabled();
+
+    const callsBeforeRetry = vi.mocked(fetchAssignmentCandidates).mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(fetchAssignmentCandidates).mock.calls.length).toBeGreaterThan(
+        callsBeforeRetry
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add crew member" })).not.toBeDisabled()
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("keeps a selected employee named while refreshed candidates are pending and then unavailable", async () => {

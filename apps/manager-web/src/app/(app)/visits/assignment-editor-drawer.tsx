@@ -97,6 +97,12 @@ interface VehicleRow {
 
 type TimeCandidate = EmployeeAssignmentCandidate | VehicleAssignmentCandidate;
 
+function employeeCandidateName(candidate: TimeCandidate): string {
+  return "isPmsGrade" in candidate && candidate.isPmsGrade
+    ? `${candidate.displayName} (PMS)`
+    : candidate.displayName;
+}
+
 function CandidateSelectOptions({
   candidates,
   nameFor,
@@ -104,56 +110,60 @@ function CandidateSelectOptions({
   candidates: TimeCandidate[];
   nameFor: (candidate: TimeCandidate) => string;
 }) {
-  const [showUnavailable, setShowUnavailable] = React.useState(false);
   const available = candidates.filter((candidate) => candidate.isAvailable);
-  const unavailable = candidates.filter((candidate) => !candidate.isAvailable);
 
   return (
-    <>
-      <SelectGroup>
-        <SelectLabel>Available</SelectLabel>
-        {available.map((candidate) => (
-          <SelectItem key={candidate.id} value={candidate.id}>
-            {nameFor(candidate)}
-          </SelectItem>
-        ))}
-      </SelectGroup>
-      {unavailable.length > 0 && (
-        <SelectGroup>
-          <div className="p-1">
-            <button
-              type="button"
-              aria-expanded={showUnavailable}
-              className="w-full rounded-md px-1.5 py-1 text-left text-xs font-medium text-muted-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setShowUnavailable((shown) => !shown);
-              }}
-            >
-              Unavailable for this time ({unavailable.length})
-            </button>
-          </div>
-          {showUnavailable &&
-            unavailable.map((candidate) => {
-              const reason = candidate.unavailableReason?.message ?? "Unavailable for this time.";
-              const name = nameFor(candidate);
-              return (
-                <SelectItem
-                  key={candidate.id}
-                  value={candidate.id}
-                  disabled
-                  aria-label={`${name} — ${reason}`}
-                >
-                  <span>{name}</span>
-                  <span className="text-xs text-muted-foreground">— {reason}</span>
-                </SelectItem>
-              );
-            })}
-        </SelectGroup>
+    <SelectGroup>
+      <SelectLabel>Available</SelectLabel>
+      {available.map((candidate) => (
+        <SelectItem key={candidate.id} value={candidate.id}>
+          {nameFor(candidate)}
+        </SelectItem>
+      ))}
+    </SelectGroup>
+  );
+}
+
+function UnavailableCandidateDisclosure({
+  candidates,
+  nameFor,
+}: {
+  candidates: TimeCandidate[];
+  nameFor: (candidate: TimeCandidate) => string;
+}) {
+  const [expanded, setExpanded] = React.useState(false);
+  const listId = React.useId();
+  const unavailable = candidates.filter((candidate) => !candidate.isAvailable);
+
+  if (unavailable.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-border/60 px-2 py-1.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={listId}
+        className="w-full rounded-sm text-left text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={() => setExpanded((shown) => !shown)}
+      >
+        Unavailable for this time ({unavailable.length})
+      </button>
+      {expanded && (
+        <ul
+          id={listId}
+          aria-label="Unavailable for this time"
+          className="mt-1 space-y-1 border-t border-border/60 pt-1"
+        >
+          {unavailable.map((candidate) => (
+            <li key={candidate.id} className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{nameFor(candidate)}</span>
+              {" — "}
+              {candidate.unavailableReason?.message ?? "Unavailable for this time."}
+            </li>
+          ))}
+        </ul>
       )}
-    </>
+    </div>
   );
 }
 
@@ -885,6 +895,9 @@ export function AssignmentEditorDrawer({
                 );
                 const selectedCanBeChosen = selectedCandidate?.isAvailable === true;
                 const showCurrentSelection = Boolean(row.employeeId) && !selectedCanBeChosen;
+                const rowCandidates = (candidates?.employees ?? []).filter(
+                  (candidate) => !showCurrentSelection || candidate.id !== row.employeeId
+                );
                 return (
                 <div key={row.key} className="flex items-center gap-2">
                   <div className="min-w-0 flex-1 space-y-1">
@@ -927,17 +940,15 @@ export function AssignmentEditorDrawer({
                       <SelectContent>
                         <CandidateSelectOptions
                           key={`${visitId}-${startMinute}-${endMinute}-employees`}
-                          candidates={(candidates?.employees ?? []).filter(
-                            (candidate) => !showCurrentSelection || candidate.id !== row.employeeId
-                          )}
-                          nameFor={(candidate) =>
-                            "isPmsGrade" in candidate && candidate.isPmsGrade
-                              ? `${candidate.displayName} (PMS)`
-                              : candidate.displayName
-                          }
+                          candidates={rowCandidates}
+                          nameFor={employeeCandidateName}
                         />
                       </SelectContent>
                     </Select>
+                    <UnavailableCandidateDisclosure
+                      candidates={rowCandidates}
+                      nameFor={employeeCandidateName}
+                    />
                   </div>
                   <Select
                     items={ROLE_LABELS}
@@ -1023,6 +1034,9 @@ export function AssignmentEditorDrawer({
                 );
                 const selectedCanBeChosen = selectedCandidate?.isAvailable === true;
                 const showCurrentSelection = Boolean(row.vehicleId) && !selectedCanBeChosen;
+                const rowCandidates = (candidates?.vehicles ?? []).filter(
+                  (candidate) => !showCurrentSelection || candidate.id !== row.vehicleId
+                );
                 // ULK-O09: offer a driver only if they're both authorized
                 // for this vehicle (a checkmark, per the workforce matrix)
                 // and actually on this visit's crew. Never just "authorized
@@ -1074,13 +1088,15 @@ export function AssignmentEditorDrawer({
                         <SelectContent>
                           <CandidateSelectOptions
                             key={`${visitId}-${startMinute}-${endMinute}-vehicles`}
-                            candidates={(candidates?.vehicles ?? []).filter(
-                              (candidate) => !showCurrentSelection || candidate.id !== row.vehicleId
-                            )}
+                            candidates={rowCandidates}
                             nameFor={(candidate) => candidate.displayName}
                           />
                         </SelectContent>
                       </Select>
+                      <UnavailableCandidateDisclosure
+                        candidates={rowCandidates}
+                        nameFor={(candidate) => candidate.displayName}
+                      />
                     </div>
                     <Select
                       items={driverLabels}
