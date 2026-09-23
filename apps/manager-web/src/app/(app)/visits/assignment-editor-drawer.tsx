@@ -8,6 +8,7 @@ import { ConflictList } from "@/components/shared/conflict-list";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -840,11 +841,25 @@ export function AssignmentEditorDrawer({
               <input
                 id="assignment-end"
                 type="time"
-                value={minuteToTimeInput(endMinute)}
+                value={minuteToTimeInput(endMinute === 1440 ? 0 : endMinute)}
                 onChange={(event) => setEndMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublicationHistory}
+                disabled={isPublicationHistory || endMinute === 1440}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
+              <div className="flex items-center gap-1.5 pt-1">
+                <Checkbox
+                  id="assignment-end-next-midnight"
+                  checked={endMinute === 1440}
+                  onCheckedChange={(checked) => setEndMinute(checked === true ? 1440 : 1439)}
+                  disabled={isPublicationHistory}
+                />
+                <Label
+                  htmlFor="assignment-end-next-midnight"
+                  className="text-xs font-normal text-muted-foreground"
+                >
+                  Next midnight (24:00)
+                </Label>
+              </div>
             </div>
           </section>
 

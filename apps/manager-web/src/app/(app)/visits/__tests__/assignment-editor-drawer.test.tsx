@@ -162,6 +162,37 @@ describe("AssignmentEditorDrawer", () => {
     );
   });
 
+  it("preserves an assignment ending at minute 1440 as the next midnight", async () => {
+    vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult());
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({
+        status: "DRAFT",
+        plannedStartMinute: 23 * 60,
+        plannedEndMinute: 1440,
+      })
+    );
+    const { user } = await openDrawer();
+
+    const nextMidnight = await screen.findByRole("checkbox", {
+      name: "Next midnight (24:00)",
+    });
+    const leavesBy = screen.getByLabelText("Leaves by");
+    expect(nextMidnight).toBeChecked();
+    expect(leavesBy).toHaveValue("00:00");
+    expect(leavesBy).toBeDisabled();
+    await waitFor(() =>
+      expect(fetchAssignmentCandidates).toHaveBeenCalledWith("visit-1", {
+        plannedStartMinute: 23 * 60,
+        plannedEndMinute: 1440,
+      })
+    );
+
+    await user.click(nextMidnight);
+    expect(nextMidnight).not.toBeChecked();
+    expect(leavesBy).not.toBeDisabled();
+    expect(leavesBy).toHaveValue("23:59");
+  });
+
   it("keeps booked people in a keyboard-accessible static disclosure outside the listbox", async () => {
     vi.mocked(fetchAssignmentCandidates).mockResolvedValue({
       ...availableCandidates,
