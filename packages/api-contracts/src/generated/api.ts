@@ -2315,9 +2315,15 @@ export interface components {
             conflicts: components["schemas"]["ConflictDto"][];
         };
         AssignmentCandidateWindowDto: {
-            /** @example 540 */
+            /**
+             * Format: int32
+             * @example 540
+             */
             plannedStartMinute: number;
-            /** @example 660 */
+            /**
+             * Format: int32
+             * @example 660
+             */
             plannedEndMinute: number;
         };
         AssignmentCandidateReasonDto: {
@@ -2337,6 +2343,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             displayName: string;
+            /** Format: int32 */
             seatCapacity: number | null;
             isAvailable: boolean;
             unavailableReason: components["schemas"]["AssignmentCandidateReasonDto"] | null;
@@ -4921,7 +4928,7 @@ export interface operations {
                     "application/json": components["schemas"]["AssignmentCandidatesDto"];
                 };
             };
-            /** @description VALIDATION_FAILED — invalid or reversed time window. */
+            /** @description VALIDATION_FAILED — invalid visit UUID, non-integer/out-of-range minutes, or an equal/reversed window. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4942,7 +4949,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description RESOURCE_CONFLICT — this visit is no longer editable. */
+            /** @description RESOURCE_CONFLICT — published assignment lineage or multiple editable assignments make this visit non-editable. */
             409: {
                 headers: {
                     [name: string]: unknown;

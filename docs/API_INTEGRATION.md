@@ -69,12 +69,51 @@ Every other endpoint below requires `Authorization: Bearer <token>`.
 | `GET /api/visits`, `GET/PATCH /api/visits/{id}`                                        | Visit list and hand-edit dialog.                     |
 | `POST /api/visits/{id}/lock`, `POST /api/visits/{id}/unlock`                           | Pinning a visit so regeneration leaves it alone.     |
 | `GET/PUT/DELETE /api/visits/{id}/assignment`, `POST /api/visits/{id}/assignment/check` | Dispatch board: check eligibility, assign, unassign. |
+| `POST /api/visits/{id}/assignment/candidates`                                          | Time-aware employee and vehicle choices in the assignment editor. |
 | `GET /api/unassigned-visits`                                                           | The Unassigned queue.                                |
 | `POST/GET /api/schedule-runs`, `GET /api/schedule-runs/{id}`                           | Starting the optimizer and polling a run.            |
 | `POST /api/schedule-runs/{id}/cancel`                                                  | Cancelling a queued/running solve.                   |
 | `POST /api/schedule-runs/{id}/publish`                                                 | Publishing a schedule.                               |
 | `POST /api/assignments/{id}/lock`, `POST /api/assignments/{id}/unlock`                 | Manager pins on the dispatch board.                  |
 | `GET /api/schedule/calendar` **(new, ULK-C07)**                                        | The unified calendar — see below.                    |
+
+## Time-aware assignment candidates
+
+`POST /api/visits/{visitId}/assignment/candidates` accepts
+`plannedStartMinute` and `plannedEndMinute` as integer offsets from the visit
+date. Both values are inclusive of the `0..1440` bounds, so `1440` preserves an
+end at the following midnight; the end must be strictly later than the start.
+
+The response contains two arrays:
+
+- Each employee has `id`, `displayName`, `isPmsGrade`, `isAvailable`, and a
+  nullable `unavailableReason` (`code` and manager-readable `message`).
+- Each vehicle has `id`, `displayName`, nullable integer `seatCapacity`,
+  `isAvailable`, and the same nullable reason shape.
+
+Employee reason codes are `EMPLOYEE_UNAVAILABLE`,
+`EMPLOYEE_PERMANENTLY_STATIONED`, and `EMPLOYEE_DOUBLE_BOOKED`; the vehicle
+reason is `VEHICLE_DOUBLE_BOOKED`. The read model returns active employees from
+the visit's branch and active vehicles from that branch or with no branch. Its
+overlap check considers live resource-holding assignments (`DRAFT`, `PROPOSED`,
+`PUBLISHED`, `ACKNOWLEDGED`, and `IN_PROGRESS`) but excludes the visit's own
+single editable draft/proposed assignment, so reopening an assignment does not
+conflict with itself. Published lineage or multiple editable assignments make
+the visit non-editable and return `409 RESOURCE_CONFLICT`.
+
+This endpoint judges individual time availability only. It does not prove that
+the proposed combination satisfies crew size, skills, PMS supervision, vehicle
+capacity, driver authorization, public-transport, or other collective rules.
+The assignment check and save endpoints remain authoritative and revalidate the
+complete proposal.
+
+The manager assignment drawer calls this endpoint whenever its visit or planned
+window changes. Only available candidates are offered by the employee and
+vehicle selectors; unavailable candidates remain visible with their reasons in
+an adjacent disclosure. Existing selections that have become unavailable stay
+visible until the manager explicitly chooses an available replacement. A
+request-generation fence prevents an older response from replacing the newest
+visit/window result.
 
 ## The unified calendar
 

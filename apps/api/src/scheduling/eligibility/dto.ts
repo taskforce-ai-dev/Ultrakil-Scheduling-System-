@@ -99,11 +99,11 @@ export enum AssignmentCandidateReasonCode {
 }
 
 export class AssignmentCandidateWindowDto {
-  @ApiProperty({ type: Number, minimum: 0, maximum: 1440, example: 540 })
+  @ApiProperty({ type: 'integer', format: 'int32', minimum: 0, maximum: 1440, example: 540 })
   @IsInt() @Min(0) @Max(1440)
   plannedStartMinute!: number;
 
-  @ApiProperty({ type: Number, minimum: 0, maximum: 1440, example: 660 })
+  @ApiProperty({ type: 'integer', format: 'int32', minimum: 0, maximum: 1440, example: 660 })
   @IsInt() @Min(0) @Max(1440)
   plannedEndMinute!: number;
 }
@@ -127,7 +127,7 @@ export class EmployeeAssignmentCandidateDto {
 export class VehicleAssignmentCandidateDto {
   @ApiProperty({ type: String, format: 'uuid' }) id!: string;
   @ApiProperty({ type: String }) displayName!: string;
-  @ApiProperty({ type: Number, nullable: true }) seatCapacity!: number | null;
+  @ApiProperty({ type: 'integer', format: 'int32', nullable: true }) seatCapacity!: number | null;
   @ApiProperty({ type: Boolean }) isAvailable!: boolean;
   @ApiProperty({ type: AssignmentCandidateReasonDto, nullable: true })
   unavailableReason!: AssignmentCandidateReasonDto | null;

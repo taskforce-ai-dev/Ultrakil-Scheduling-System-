@@ -54,4 +54,40 @@ describe('AppModule bootstrap contract', () => {
       ),
     ).toBe(false);
   });
+
+  it('describes the assignment-candidate window and refusal cases precisely', async () => {
+    const { AppModule } = await import('./app.module');
+    app = await NestFactory.create(AppModule, {
+      abortOnError: false,
+      logger: false,
+      preview: true,
+    });
+    app.setGlobalPrefix(process.env.API_GLOBAL_PREFIX ?? 'api');
+
+    const document = buildOpenApiDocument(app);
+    const windowSchema = document.components?.schemas?.AssignmentCandidateWindowDto;
+    const vehicleSchema = document.components?.schemas?.VehicleAssignmentCandidateDto;
+    const operation = document.paths['/api/visits/{id}/assignment/candidates']?.post;
+    const responses = operation?.responses as
+      | Record<string, { description?: string }>
+      | undefined;
+
+    expect(windowSchema).toMatchObject({
+      properties: {
+        plannedStartMinute: { type: 'integer', format: 'int32', minimum: 0, maximum: 1440 },
+        plannedEndMinute: { type: 'integer', format: 'int32', minimum: 0, maximum: 1440 },
+      },
+    });
+    expect(vehicleSchema).toMatchObject({
+      properties: {
+        seatCapacity: { type: 'integer', format: 'int32', nullable: true },
+      },
+    });
+    expect(responses?.['400']?.description).toContain(
+      'VALIDATION_FAILED — invalid visit UUID, non-integer/out-of-range minutes, or an equal/reversed window',
+    );
+    expect(responses?.['409']?.description).toContain(
+      'published assignment lineage or multiple editable assignments',
+    );
+  });
 });
