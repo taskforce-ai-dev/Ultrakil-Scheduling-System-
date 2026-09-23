@@ -84,11 +84,13 @@ Response:
 }
 ```
 
-The API owns every availability decision. It returns active employees from the visit branch and active vehicles allowed to serve the visit branch. It accounts for date absence, permanent stationing, and live time-window reservations. When editing a draft/proposed assignment, it excludes that assignment from its own reservations. `SUPERSEDED` and `CANCELLED` remain historical and never reserve a candidate.
+The API owns every availability decision. It returns active employees from the visit branch and active vehicles allowed to serve the visit branch. A serving vehicle is active and either belongs to the visit branch or has no recorded branch. It accounts for date absence, permanent stationing, and live time-window reservations. Assignment windows remain within the visit day (`0…1440` minutes), with `1440` denoting the following midnight; back-to-back windows at that boundary are adjacent rather than overlapping. When editing, the endpoint uses the same unpublished-visit gate as check/save and excludes exactly the sole editable draft/proposal returned by that gate. Published or otherwise historical lineage is never excluded merely to make a candidate appear free. `SUPERSEDED` and `CANCELLED` remain historical and never reserve a candidate.
+
+`isAvailable` means that the individual resource is selectable for the requested visit and time. It does not claim that a proposed crew is collectively feasible. PMS coverage, combined skills, driver-in-crew authorization, seat capacity, public-transport eligibility, and every other proposal-level rule remain in the authoritative check/save path. Unavailable reasons use a stable enum and deterministic precedence: absence, permanent stationing, then the earliest overlapping live booking.
 
 This response is advisory UX, not authorization. The existing full-proposal eligibility check and locked transactional save remain authoritative, so two managers cannot commit the same resource after both saw it available.
 
-The portal requests candidates whenever the visit or proposed time changes. Available resources appear first. Unavailable resources are placed in an expandable, disabled section with a concise reason such as `Booked 09:00–11:00`. Request-generation fencing prevents an older response from repopulating a newer visit/time.
+The portal requests candidates whenever the visit or proposed time changes. Available resources appear first. Unavailable resources are placed in an accessible expandable, disabled section with a count and a concise reason such as `Booked 09:00–11:00`. Candidate state clears while the current request is pending. Request-generation fencing covers success, failure, and completion so an older request cannot replace or reset a newer visit/time. A previously selected resource that has become unavailable remains visibly selected for explanation; the full eligibility check blocks save instead of silently dropping the choice.
 
 ### Staging-only synthetic capacity
 
@@ -107,10 +109,13 @@ Safety and behavior:
 - Apply requires the explicit confirmation flag.
 - Employees use deterministic `sourceKey` and `employeeCode` prefixes and a JSON marker.
 - Names and vehicle labels begin with `SYNTHETIC/TEST` so nobody can mistake them for real workforce.
-- Each team has one PMS-grade supervisor, mobile technicians, a correctly sized vehicle, and at least two authorized drivers who are members of that team.
-- Synthetic employees receive the union of skill codes currently required by active job types/agreements in their branch.
+- Each team size is `max(2, the largest crewSize on an active effective agreement in the branch)`, including one PMS-grade supervisor. Its vehicle has at least that seat capacity, and at least two members of the generated team are authorized to drive it.
+- Synthetic employees receive the union of skill codes required by active branch agreements only. Inactive customers, sites, and agreements do not contribute requirements.
 - Re-running upserts the same resources and reactivates them; it never duplicates them.
-- Cleanup deactivates the marked employees and vehicles rather than deleting rows referenced by audit or assignment history.
+- Synthetic vehicles use an exact reserved identity tuple in addition to the `SYN-TEST-` prefix. The command refuses an identity collision unless the complete stored marker matches, and workbook import refuses reserved synthetic identities.
+- Re-running with a smaller `--teams` value reconciles to the requested cardinality. It deactivates only unused surplus teams; it refuses and reports any surplus resource referenced by a current/future live assignment.
+- Cleanup locks employees and vehicles in the same order as assignment writers, then refuses to deactivate any resource referenced by a current/future live assignment. It preserves completed, superseded, and cancelled history and retains skill/authorization links.
+- The database guard parses the complete `DATABASE_URL`, rejects malformed or encoded unsafe paths without printing credentials, and verifies `current_database()` after connecting.
 - The source workbooks and imported real rows are never changed.
 
 After deployment, staging capacity is added only when a read-only shortage report proves it is needed. The optimizer is rerun for the agreed operational horizon, the result is reviewed and published, and all business invariants are rechecked. Synthetic capacity is explicitly excluded from real-workforce readiness claims.
@@ -126,11 +131,10 @@ After deployment, staging capacity is added only when a read-only shortage repor
 ## Verification gates
 
 1. Focused UI tests prove the prohibited phrases do not appear in normal dashboard, calendar, visit-detail, dispatch, and assignment-editor states.
-2. API unit and PostgreSQL integration tests prove busy candidates, back-to-back windows, different dates, self-exclusion, historical exclusion, and concurrent save revalidation.
-3. UI race tests prove a stale candidate response cannot overwrite a newer visit/time.
+2. API unit and PostgreSQL integration tests prove busy candidates, back-to-back windows including the midnight boundary, different dates, self-exclusion, historical exclusion, and concurrent save revalidation.
+3. UI race tests prove stale success, failure, or completion cannot overwrite or reset a newer visit/time.
 4. Contract generation is clean and the manager client consumes generated types.
-5. Synthetic capacity tests prove database-name refusal, dry-run default, explicit apply confirmation, deterministic idempotency, valid PMS/skills/vehicle/driver links, and reversible deactivation.
+5. Synthetic capacity unit and PostgreSQL tests prove full database-URL refusal, dry-run default, explicit apply confirmation, deterministic idempotency, exact identity collision refusal, correct maximum crew capacity, valid PMS/skills/vehicle/driver links, rollback, safe cardinality reduction, live-reference deactivation refusal, and assignment-writer serialization.
 6. Full API, manager-web, scheduler, lint, typecheck, build, contract, secret-scan, and strict browser checks pass on the exact PR head.
 7. Staging verification proves zero live overlap, at most one vehicle per assignment, required crew size, PMS/skills, authorized driver in crew, public-transport validity, historical preservation, and visibly labelled synthetic resources.
 8. Browser acceptance uses the exact deployed SHA and checks dashboard, calendar, dispatch board, Edit crew, Repair Center, and recovery/error states.
-

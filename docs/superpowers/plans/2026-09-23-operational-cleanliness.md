@@ -97,10 +97,13 @@ git commit -m "fix(manager): distinguish planned work from staffing exceptions"
 - Test: `apps/api/src/scheduling/eligibility/assignments.controller.spec.ts`
 - Test: `apps/api/src/scheduling/eligibility/assignments.service.spec.ts`
 - Test: `apps/api/src/scheduling/eligibility/eligibility.service.spec.ts`
+- Test: PostgreSQL eligibility/assignment integration tests for midnight adjacency and concurrent writes
+- Modify: `packages/api-contracts/openapi/openapi.json`
+- Modify: generated client files under `packages/api-contracts/src/`
 
 **Interfaces:**
 - Consumes: visit ID and `{ plannedStartMinute, plannedEndMinute }`.
-- Produces: `POST /visits/:id/assignment/candidates` returning typed employee and vehicle candidates with availability and one manager-readable reason.
+- Produces: `POST /visits/:id/assignment/candidates` returning typed employee and vehicle candidates with individual time availability and one manager-readable reason.
 - Preserves: `AssignmentsService.check` and transactional `assign` as authoritative validation.
 
 - [ ] **Step 1: Add failing DTO/controller tests**
@@ -126,6 +129,8 @@ expect(byEmployeeId.get(HISTORICAL_EMPLOYEE_ID)?.isAvailable).toBe(true);
 expect(byVehicleId.get(BUSY_VEHICLE_ID)?.isAvailable).toBe(false);
 ```
 
+Add timestamp-boundary cases for employees and vehicles: a reservation ending at minute `1440` and one beginning at minute `0` on the following visit date are adjacent, not overlapping. The public DTO and writers must continue to reject windows outside `0…1440`.
+
 - [ ] **Step 3: Run focused API tests and confirm the endpoint is absent**
 
 ```bash
@@ -148,11 +153,11 @@ export class AssignmentCandidateReasonDto {
 }
 ```
 
-Add employee/vehicle candidate DTOs and `AssignmentCandidatesDto`. The service loads the visit, resolves the one editable draft/proposal for self-exclusion, and delegates to one batched eligibility query. Validate `end > start` at the service boundary using the existing error shape.
+Add employee/vehicle candidate DTOs and `AssignmentCandidatesDto`. Candidate reason codes are a stable enum with precedence: absence, permanent stationing, earliest overlapping live booking. The service loads the visit and calls the same unpublished-visit gate used by check/assign; it returns the same 409 for published lineage or multiple editable assignments and excludes exactly the sole draft/proposal returned by that gate. Validate `end > start` at the service boundary using the existing error shape.
 
 - [ ] **Step 5: Implement batched candidate availability**
 
-Query active branch employees and serving vehicles once. Include date absences, permanent assignments, and live-status reservations; exclude the editable current assignment. Convert busy windows to `Booked HH:MM–HH:MM`. Sort available candidates first and then by display name/id. Never derive collective crew skills or PMS coverage in the frontend.
+Query active branch employees and serving vehicles once. Serving vehicles satisfy `active AND (vehicle.branchCode = visit.branchCode OR vehicle.branchId IS NULL)`; cover same-branch, null-branch, and other-branch cases. Include date absences, permanent assignments, and live-status reservations on the visit date; exclude only the editable current assignment. Convert the earliest busy window to `Booked HH:MM–HH:MM`. Sort available candidates first and then by display name/id. `isAvailable` means individually selectable for this time only; never derive collective crew skills, PMS coverage, driver feasibility, seat capacity, or public-transport feasibility in the frontend.
 
 - [ ] **Step 6: Run focused tests and API typecheck**
 
@@ -163,10 +168,20 @@ pnpm --filter @ultrakil/api typecheck
 
 Expected: focused tests and typecheck pass.
 
-- [ ] **Step 7: Commit the slice**
+- [ ] **Step 7: Generate the OpenAPI/client contract immediately**
 
 ```bash
-git add apps/api/src/scheduling/eligibility
+pnpm contracts:generate
+pnpm --filter @ultrakil/api-contracts typecheck
+pnpm --filter @ultrakil/api-contracts build
+```
+
+The manager task consumes these generated candidate types. Task 5 later proves regeneration is idempotent.
+
+- [ ] **Step 8: Commit the slice**
+
+```bash
+git add apps/api/src/scheduling/eligibility packages/api-contracts
 git commit -m "feat(api): expose time-aware assignment candidates"
 ```
 
@@ -195,7 +210,7 @@ expect(screen.getByRole("option", { name: /Booked 09:00–11:00/ })).toHaveAttri
 expect(screen.queryByText(/overlap/i)).not.toBeInTheDocument();
 ```
 
-Add a deferred-response test: change time, resolve the newer request first, then the older request; assert the older candidates never replace the current list.
+Add deferred-response tests for an older success after a newer success, an older rejection after a newer success, a visit switch, and a time change. Assert stale `.then`, `.catch`, and `.finally` paths never replace or reset the current candidates/pending state.
 
 - [ ] **Step 2: Run the focused tests and confirm failure**
 
@@ -205,7 +220,7 @@ pnpm --filter @ultrakil/manager-web test -- src/lib/__tests__/api-client.test.ts
 
 - [ ] **Step 3: Implement contract parsing and drawer integration**
 
-Use generated component types. Add a candidate-request generation ref separate from proposal eligibility. Reload candidates on visit/start/end. Keep selected historical names visible but nonselectable. Render an `Available` group and a collapsed `Unavailable for this time` group.
+Use generated component types. Add a candidate-request generation ref separate from proposal eligibility. Clear candidate state while the current request is pending and fence success, failure, and completion. Reload candidates on visit/start/end. Keep selected historical or newly unavailable names visible but nonselectable; do not silently drop them, and let the authoritative proposal check block Save. Render an `Available` group and an accessible collapsed `Unavailable for this time (N)` disclosure. Disabled option names include the server-provided reason.
 
 - [ ] **Step 4: Run focused tests, typecheck, and accessibility assertions**
 
@@ -230,6 +245,7 @@ git commit -m "feat(manager): prevent selection of booked resources"
 - Modify: `package.json`
 - Modify: `data/README.md`
 - Modify: `docs/STAGING_RUNBOOK.md`
+- Modify: workforce matrix importer validation for reserved synthetic vehicle identities
 
 **Interfaces:**
 - Produces: `db:synthetic-capacity` dry-run/apply/deactivate CLI.
@@ -248,7 +264,7 @@ expect(new Set(secondRun.map((row) => row.sourceKey))).toEqual(
 );
 ```
 
-Verify every generated team has a PMS supervisor, enough mobile crew, one branch vehicle, and two team-member driver authorizations.
+Verify every generated team size is `max(2, maximum crewSize among active effective agreements for the branch)`, includes a PMS supervisor, covers the union of active branch agreement required skills, has one branch vehicle with sufficient seats, and has two team-member driver authorizations. Inactive customers/sites/agreements do not contribute requirements.
 
 - [ ] **Step 2: Run the focused test and confirm the implementation is absent**
 
@@ -264,9 +280,15 @@ export const SYNTHETIC_SOURCE_PREFIX = "synthetic-capacity:";
 export const SYNTHETIC_VEHICLE_PREFIX = "SYN-TEST-";
 ```
 
-Parse `--branch`, `--teams`, `--apply`, `--deactivate`, and `--confirm-staging-synthetic-capacity`. Dry-run prints counts only. Apply runs one transaction, upserts labelled employees, skills, vehicles, and driver links, and reactivates matching rows. Deactivate sets marked resources inactive and leaves assignments/history intact.
+Parse and validate the complete `DATABASE_URL` before Prisma I/O, rejecting malformed URLs, encoded path separators, and any database whose decoded name does not end `_staging` or `_test`; never log credentials. After connection, verify `current_database()` is the validated database. Parse `--branch`, a bounded positive `--teams`, mutually exclusive `--apply`/`--deactivate`, and `--confirm-staging-synthetic-capacity`; require an existing branch and write both branch ID and code. Dry-run prints counts only.
 
-- [ ] **Step 4: Add scripts and operator documentation**
+Apply/reactivation/deactivation uses the same employee-then-vehicle row lock order as assignment writers. Apply upserts labelled employees, skills, vehicles, and driver links, and reactivates only exact marker matches. Vehicles use an exact reserved identity tuple; refuse mismatched pre-existing identities, and make the workbook importer reject reserved synthetic vehicle identities. A smaller team count deactivates unused surplus teams only. Deactivation refuses resources referenced by any current/future live assignment, preserves completed/superseded/cancelled history, and retains skills/authorizations. Report counts for created, reactivated, unchanged, blocked-live, and deactivated resources.
+
+- [ ] **Step 4: Add PostgreSQL persistence and concurrency tests**
+
+Prove transaction rollback after an injected mid-write failure, idempotent relation creation, exact reactivation, desired-cardinality shrink, collision refusal, deactivation refusal for live references, and assign-vs-deactivate serialization. Include a branch whose effective agreement crew size exceeds the default.
+
+- [ ] **Step 5: Add scripts and operator documentation**
 
 ```json
 {
@@ -276,11 +298,11 @@ Parse `--branch`, `--teams`, `--apply`, `--deactivate`, and `--confirm-staging-s
 
 Document dry-run, explicit apply, deactivation, identity markers, count-only evidence, optimizer rerun, and the prohibition on using synthetic results as real-workforce proof.
 
-- [ ] **Step 5: Run focused tests and typecheck**
+- [ ] **Step 6: Run focused unit/integration tests and typecheck**
 
 Expected: guard, idempotency, relationship, and deactivation tests pass.
 
-- [ ] **Step 6: Commit the slice**
+- [ ] **Step 7: Commit the slice**
 
 ```bash
 git add apps/api/prisma apps/api/package.json package.json data/README.md docs/STAGING_RUNBOOK.md
@@ -289,7 +311,7 @@ git commit -m "feat(staging): add reversible synthetic capacity seed"
 
 ---
 
-### Task 5: Regenerate and verify the cross-workspace contract
+### Task 5: Verify contract regeneration is idempotent and document the interface
 
 **Files:**
 - Modify: `packages/api-contracts/openapi/openapi.json`
@@ -297,9 +319,9 @@ git commit -m "feat(staging): add reversible synthetic capacity seed"
 - Modify: `docs/API_INTEGRATION.md`
 
 **Interfaces:**
-- Produces: generated candidate endpoint types consumed by manager-web.
+- Verifies: the generated candidate endpoint types committed with Task 2 are reproducible and consumed by manager-web.
 
-- [ ] **Step 1: Generate the contract**
+- [ ] **Step 1: Generate the contract again**
 
 ```bash
 pnpm contracts:generate
@@ -386,4 +408,3 @@ Do not weaken hard rules. Verify current/future live overlap count zero, max one
 - [ ] **Step 8: Complete browser acceptance on the exact deployed SHA**
 
 Cover dashboard success/error, calendar, dispatch, Edit crew candidate availability and races, action-required work, historical repair lineage, and synthetic labels. Post the final ClickUp handover and remaining limitations.
-
