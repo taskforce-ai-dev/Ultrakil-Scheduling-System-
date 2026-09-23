@@ -4,7 +4,12 @@ import { VisitStatus } from '@prisma/client';
 
 import { AssignmentsController } from './assignments.controller';
 import { AssignmentsService } from './assignments.service';
-import { PaginatedUnassignedVisitsDto, UnassignedVisitQueryDto } from './dto';
+import {
+  AssignmentCandidatesDto,
+  AssignmentCandidateWindowDto,
+  PaginatedUnassignedVisitsDto,
+  UnassignedVisitQueryDto,
+} from './dto';
 
 /**
  * The real HTTP boundary, not a stand-in for it.
@@ -27,6 +32,28 @@ const asQuery: ArgumentMetadata = {
   metatype: UnassignedVisitQueryDto,
   data: '',
 };
+
+describe('POST /visits/:id/assignment/candidates', () => {
+  it('forwards the requested window and returns the candidate read model', async () => {
+    const response: AssignmentCandidatesDto = {
+      employees: [],
+      vehicles: [],
+    };
+    const assignments = { candidates: jest.fn().mockResolvedValue(response) };
+    const controller = new AssignmentsController(assignments as never);
+    const window: AssignmentCandidateWindowDto = {
+      plannedStartMinute: 540,
+      plannedEndMinute: 660,
+    };
+
+    await expect(controller.candidates('00000000-0000-4000-8000-000000000001', window))
+      .resolves.toEqual(response);
+    expect(assignments.candidates).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      window,
+    );
+  });
+});
 
 /** What the API would tell the caller it refused, and why. */
 async function refusalMessages(query: Record<string, unknown>): Promise<string[]> {

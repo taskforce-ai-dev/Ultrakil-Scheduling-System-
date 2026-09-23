@@ -100,3 +100,25 @@ it('loads availability and bookings for the proposed visit date without writing 
     }),
   );
 });
+
+it('loads active same-branch and branchless candidate resources with live reservations only', async () => {
+  const visitDate = new Date('2027-03-04T00:00:00.000Z');
+  const prisma = {
+    generatedVisit: { findUnique: jest.fn().mockResolvedValue({ id: 'visit', branchCode: BranchCode.COLOMBO, visitDate, serviceAgreement: { serviceSiteId: 'site' } }) },
+    employee: { findMany: jest.fn().mockResolvedValue([]) },
+    vehicle: { findMany: jest.fn().mockResolvedValue([]) },
+  };
+  const service = new EligibilityService(prisma as never);
+
+  await expect(service.candidates('visit', { plannedStartMinute: 540, plannedEndMinute: 660 }, 'draft'))
+    .resolves.toEqual({ employees: [], vehicles: [] });
+  expect(prisma.employee.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { isActive: true, branchCode: BranchCode.COLOMBO },
+    include: expect.objectContaining({ crewMemberships: expect.objectContaining({
+      where: { assignment: expect.objectContaining({ id: { not: 'draft' } }) },
+    }) }),
+  }));
+  expect(prisma.vehicle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: { isActive: true, OR: [{ branch: { is: { code: BranchCode.COLOMBO } } }, { branchId: null }] },
+  }));
+});

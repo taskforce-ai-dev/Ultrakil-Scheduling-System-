@@ -25,6 +25,8 @@ import {
 } from './conflict-groups';
 import {
   AssignCrewDto,
+  AssignmentCandidatesDto,
+  AssignmentCandidateWindowDto,
   AssignmentDto,
   EligibilityResultDto,
   EmployeeAssignmentQueryDto,
@@ -58,6 +60,19 @@ export class AssignmentsController {
     @Body() dto: AssignCrewDto,
   ): Promise<EligibilityResultDto> {
     return this.assignments.check(id, dto);
+  }
+
+  @Post('visits/:id/assignment/candidates')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Available individual employees and vehicles for a proposed time' })
+  @ApiResponse({ status: 200, type: AssignmentCandidatesDto })
+  @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
+  @ApiResponse({ status: 409, description: 'RESOURCE_CONFLICT — this visit is no longer editable.' })
+  candidates(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignmentCandidateWindowDto,
+  ): Promise<AssignmentCandidatesDto> {
+    return this.assignments.candidates(id, dto);
   }
 
   @Get('visits/:id/assignment')

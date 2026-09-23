@@ -90,6 +90,56 @@ export class AssignCrewDto {
   reason?: string;
 }
 
+/** The only reasons this read model may expose for an individual candidate. */
+export enum AssignmentCandidateReasonCode {
+  EMPLOYEE_UNAVAILABLE = 'EMPLOYEE_UNAVAILABLE',
+  EMPLOYEE_PERMANENTLY_STATIONED = 'EMPLOYEE_PERMANENTLY_STATIONED',
+  EMPLOYEE_DOUBLE_BOOKED = 'EMPLOYEE_DOUBLE_BOOKED',
+  VEHICLE_DOUBLE_BOOKED = 'VEHICLE_DOUBLE_BOOKED',
+}
+
+export class AssignmentCandidateWindowDto {
+  @ApiProperty({ type: Number, minimum: 0, maximum: 1440, example: 540 })
+  @IsInt() @Min(0) @Max(1440)
+  plannedStartMinute!: number;
+
+  @ApiProperty({ type: Number, minimum: 0, maximum: 1440, example: 660 })
+  @IsInt() @Min(0) @Max(1440)
+  plannedEndMinute!: number;
+}
+
+export class AssignmentCandidateReasonDto {
+  @ApiProperty({ enum: AssignmentCandidateReasonCode })
+  code!: AssignmentCandidateReasonCode;
+
+  @ApiProperty() message!: string;
+}
+
+export class EmployeeAssignmentCandidateDto {
+  @ApiProperty({ format: 'uuid' }) employeeId!: string;
+  @ApiProperty() displayName!: string;
+  @ApiProperty() isPmsGrade!: boolean;
+  @ApiProperty() isAvailable!: boolean;
+  @ApiProperty({ type: AssignmentCandidateReasonDto, nullable: true })
+  unavailableReason!: AssignmentCandidateReasonDto | null;
+}
+
+export class VehicleAssignmentCandidateDto {
+  @ApiProperty({ format: 'uuid' }) vehicleId!: string;
+  @ApiProperty() displayName!: string;
+  @ApiProperty({ type: Number, nullable: true }) seatCapacity!: number | null;
+  @ApiProperty() isAvailable!: boolean;
+  @ApiProperty({ type: AssignmentCandidateReasonDto, nullable: true })
+  unavailableReason!: AssignmentCandidateReasonDto | null;
+}
+
+export class AssignmentCandidatesDto {
+  @ApiProperty({ type: [EmployeeAssignmentCandidateDto] })
+  employees!: EmployeeAssignmentCandidateDto[];
+  @ApiProperty({ type: [VehicleAssignmentCandidateDto] })
+  vehicles!: VehicleAssignmentCandidateDto[];
+}
+
 export class ConflictResourcesDto {
   @ApiProperty({ type: String, nullable: true, format: 'uuid' }) visitId!: string | null;
   @ApiProperty({ type: [String] }) employeeIds!: string[];

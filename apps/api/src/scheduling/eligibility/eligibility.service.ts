@@ -1,8 +1,13 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { AssignmentStatus, BranchCode, Prisma } from '@prisma/client';
+import { AssignmentStatus, BranchCode, DeploymentType, Prisma } from '@prisma/client';
 
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  AssignmentCandidatesDto,
+  AssignmentCandidateReasonCode,
+  AssignmentCandidateWindowDto,
+} from './dto';
 import {
   AssignmentProposal,
   EligibilityContext,
@@ -149,6 +154,65 @@ export class EligibilityService {
     // earlier accepted replacements and all retained/external assignments.
     const context = await this.buildContext(visitId, proposal, options, client);
     return evaluateAssignment(proposal, context);
+  }
+
+  /** Loads and judges individual candidate availability, not crew feasibility. */
+  async candidates(
+    visitId: string,
+    dto: AssignmentCandidateWindowDto,
+    excludeAssignmentId?: string,
+  ): Promise<AssignmentCandidatesDto> {
+    const visit = await this.prisma.generatedVisit.findUnique({
+      where: { id: visitId },
+      include: { serviceAgreement: { select: { serviceSiteId: true } } },
+    });
+    if (!visit) {
+      throw new AppException('RESOURCE_NOT_FOUND', `Visit "${visitId}" was not found. Refresh the calendar — it may have been removed by a regeneration.`, HttpStatus.NOT_FOUND, { visitId });
+    }
+    const assignment = {
+      status: { in: LIVE_ASSIGNMENT_STATUSES },
+      generatedVisit: { visitDate: visit.visitDate },
+      ...(excludeAssignmentId ? { id: { not: excludeAssignmentId } } : {}),
+    };
+    const [employees, vehicles] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: { isActive: true, branchCode: visit.branchCode },
+        include: {
+          availability: { where: { startDate: { lte: visit.visitDate }, endDate: { gte: visit.visitDate } }, select: { kind: true }, orderBy: [{ startDate: 'asc' }, { endDate: 'asc' }, { id: 'asc' }] },
+          permanentAssignments: { where: { effectiveFrom: { lte: visit.visitDate }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: visit.visitDate } }] }, select: { serviceSiteId: true } },
+          crewMemberships: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true } } } },
+        },
+      }),
+      this.prisma.vehicle.findMany({
+        where: { isActive: true, OR: [{ branch: { is: { code: visit.branchCode } } }, { branchId: null }] },
+        include: { assignmentVehicles: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true } } } } },
+      }),
+    ]);
+    const minutes = (time: Date) => Math.round((time.getTime() - visit.visitDate.getTime()) / 60_000);
+    const overlaps = (booking: { plannedStart: Date; plannedEnd: Date }) => dto.plannedStartMinute < minutes(booking.plannedEnd) && minutes(booking.plannedStart) < dto.plannedEndMinute;
+    const bookedMessage = (booking: { plannedStart: Date; plannedEnd: Date }) => {
+      const show = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+      return `Booked ${show(minutes(booking.plannedStart))}–${show(minutes(booking.plannedEnd))}`;
+    };
+    const employeeCandidates = employees.map((employee) => {
+      const booking = employee.crewMemberships.map((member) => member.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const reason = employee.availability[0]
+        ? { code: AssignmentCandidateReasonCode.EMPLOYEE_UNAVAILABLE, message: `Unavailable (${employee.availability[0].kind})` }
+        : employee.deploymentType === DeploymentType.PERMANENTLY_STATIONED && !employee.permanentAssignments.some((entry) => entry.serviceSiteId === visit.serviceAgreement.serviceSiteId)
+          ? { code: AssignmentCandidateReasonCode.EMPLOYEE_PERMANENTLY_STATIONED, message: 'Permanently stationed elsewhere' }
+          : booking ? { code: AssignmentCandidateReasonCode.EMPLOYEE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
+      return { employeeId: employee.id, displayName: employee.fullName, isPmsGrade: employee.isPmsGrade, isAvailable: !reason, unavailableReason: reason };
+    });
+    const vehicleCandidates = vehicles.map((vehicle) => {
+      const booking = vehicle.assignmentVehicles.map((entry) => entry.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const reason = booking ? { code: AssignmentCandidateReasonCode.VEHICLE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
+      return { vehicleId: vehicle.id, displayName: vehicle.label, seatCapacity: vehicle.seatCapacity, isAvailable: !reason, unavailableReason: reason };
+    });
+    const compare = <T extends { isAvailable: boolean }>(name: (item: T) => string, id: (item: T) => string) => (left: T, right: T) => Number(right.isAvailable) - Number(left.isAvailable) || name(left).localeCompare(name(right)) || id(left).localeCompare(id(right));
+    return {
+      employees: employeeCandidates.sort(compare((item) => item.displayName, (item) => item.employeeId)),
+      vehicles: vehicleCandidates.sort(compare((item) => item.displayName, (item) => item.vehicleId)),
+    };
   }
 
   private async loadEmployees(
