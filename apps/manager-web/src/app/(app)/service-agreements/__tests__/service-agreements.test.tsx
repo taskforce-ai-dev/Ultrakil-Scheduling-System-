@@ -325,6 +325,38 @@ describe("ServiceAgreementsPage", () => {
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
+  it("shows over-capacity days without claiming zero placement shortfalls", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-over-capacity-only",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED_WITH_SHORTFALLS",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 24,
+        shortfallPeriods: 0,
+        overCapacityDays: 2,
+        message: null,
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Visits placed with shortfalls" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 periods could not fit all requested visit dates/)).not.toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+
   it("shows why date placement failed, without losing the created agreement", async () => {
     const created = buildServiceAgreement({
       id: "agreement-failed",
@@ -350,6 +382,12 @@ describe("ServiceAgreementsPage", () => {
     // The agreement was still created, even though no visit dates were placed.
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Date placement failed" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/the result below shows whether visit dates could be placed on the calendar/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/this agreement's visit dates are placed on the calendar/i)
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("Every allowed day is already at branch capacity for the next twelve months.")
     ).toBeInTheDocument();

@@ -604,7 +604,7 @@ export default function ServiceAgreementsPage() {
         title={createdAgreement ? "Service agreement created" : "Add service agreement"}
         description={
           createdAgreement
-            ? "This agreement's visit dates are placed on the calendar where capacity allows."
+            ? "The result below shows whether visit dates could be placed on the calendar."
             : "Allowed days are mandatory boundaries; preferred days only influence optimization within them."
         }
         // The created-agreement view is a read-only onboarding summary (no
@@ -670,13 +670,17 @@ export default function ServiceAgreementsPage() {
                       <p className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-300">
                         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                         <span>
-                          {createdAgreement.onboardingPlan.shortfallPeriods}{" "}
-                          {createdAgreement.onboardingPlan.shortfallPeriods === 1
-                            ? "period"
-                            : "periods"}{" "}
-                          could not fit all requested visit dates.
+                          {createdAgreement.onboardingPlan.shortfallPeriods > 0 && (
+                            <>
+                              {createdAgreement.onboardingPlan.shortfallPeriods}{" "}
+                              {createdAgreement.onboardingPlan.shortfallPeriods === 1
+                                ? "period"
+                                : "periods"}{" "}
+                              could not fit all requested visit dates.
+                            </>
+                          )}
                           {createdAgreement.onboardingPlan.overCapacityDays > 0 &&
-                            ` ${createdAgreement.onboardingPlan.overCapacityDays} ${
+                            `${createdAgreement.onboardingPlan.shortfallPeriods > 0 ? " " : ""}${createdAgreement.onboardingPlan.overCapacityDays} ${
                               createdAgreement.onboardingPlan.overCapacityDays === 1
                                 ? "day is"
                                 : "days are"
