@@ -3,6 +3,7 @@ import { BranchCode } from '@prisma/client';
 import {
   assertSyntheticDatabaseUrl,
   buildSyntheticTeams,
+  normalizeAgreementEffectiveDate,
   parseSyntheticCapacityArgs,
   verifyCurrentDatabase,
 } from './synthetic-capacity';
@@ -75,6 +76,13 @@ describe('synthetic capacity arguments', () => {
     ['--branch', 'COLOMBO', '--teams', '1', '--apply', '--deactivate'],
   ])('rejects invalid or ambiguous arguments: %s', (...args) => {
     expect(() => parseSyntheticCapacityArgs(args)).toThrow('SYNTHETIC_ARGUMENTS_REFUSED');
+  });
+});
+
+describe('agreement effective date', () => {
+  it('normalizes a wall-clock instant to the UTC date boundary', () => {
+    expect(normalizeAgreementEffectiveDate(new Date('2034-01-01T15:30:45.678Z')))
+      .toEqual(new Date('2034-01-01T00:00:00.000Z'));
   });
 });
 

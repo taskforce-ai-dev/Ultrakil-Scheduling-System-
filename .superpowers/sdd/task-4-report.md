@@ -71,3 +71,17 @@ Follow-up evidence: the regression failed before the fix (`GPC` remained on
 only 2 of 4 live crew members), then passed after it. The full focused
 PostgreSQL suite passes 7/7; focused unit tests pass 23/23; API typecheck and
 lint pass; `git diff --check` passes.
+
+### Inclusive agreement end-date follow-up
+
+Agreement `startDate` and `endDate` are inclusive PostgreSQL `date` columns.
+The source now explicitly normalizes only their comparison instant to the UTC
+date boundary before querying effective agreements. The original precise
+wall-clock `asOf` remains unchanged for current/future assignment
+`plannedEnd` checks.
+
+A PostgreSQL regression uses a midday instant on an agreement's final
+effective date and proves its six-person crew and final-day skill still
+contribute to the synthetic plan. A focused unit test also pins the UTC
+normalization. Updated evidence: PostgreSQL 8/8 and unit 24/24 pass, along with
+API typecheck, lint, and `git diff --check`.

@@ -220,6 +220,38 @@ it('keeps the default dry run count-only and write-free', async () => {
   expect(await prisma.vehicle.count({ where: { code: { startsWith: vehiclePrefix } } })).toBe(0);
 });
 
+it('includes an agreement throughout its inclusive final effective date', async () => {
+  const finalDayAgreement = await prisma.serviceAgreement.create({
+    data: {
+      customerId,
+      serviceSiteId: siteId,
+      jobTypeId,
+      branchId,
+      branchCode: BranchCode.KANDY,
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      crewSize: 6,
+      durationMinutes: 60,
+      startDate: new Date('2030-01-01T00:00:00.000Z'),
+      endDate: new Date('2034-01-01T00:00:00.000Z'),
+      status: AgreementStatus.ACTIVE,
+      requiredSkills: { create: [{ skillCode: 'FINAL_DAY_SKILL' }] },
+    },
+  });
+  try {
+    const result = await executeSyntheticCapacity(
+      prisma,
+      { branchCode: BranchCode.KANDY, teams: 1, mode: 'dry-run' },
+      { asOf: new Date('2034-01-01T15:30:00.000Z') },
+    );
+
+    expect(result.teamSize).toBe(6);
+    expect(result.skillCount).toBe(3);
+  } finally {
+    await prisma.serviceAgreement.delete({ where: { id: finalDayAgreement.id } });
+  }
+});
+
 it('rolls back the whole transaction after an injected mid-write failure', async () => {
   await expect(apply(1, {
     hooks: { afterEmployeeWrites: () => { throw new Error('INJECTED_SYNTHETIC_FAILURE'); } },

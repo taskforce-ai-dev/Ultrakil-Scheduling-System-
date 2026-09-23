@@ -283,6 +283,15 @@ export async function verifyCurrentDatabase(
   }
 }
 
+/** Agreement start/end columns are calendar dates and both bounds are inclusive. */
+export function normalizeAgreementEffectiveDate(asOf: Date): Date {
+  return new Date(Date.UTC(
+    asOf.getUTCFullYear(),
+    asOf.getUTCMonth(),
+    asOf.getUTCDate(),
+  ));
+}
+
 async function buildPlan(
   prisma: PrismaClient | Prisma.TransactionClient,
   branchCode: BranchCode,
@@ -291,13 +300,14 @@ async function buildPlan(
 ): Promise<SyntheticCapacityPlan> {
   const branch = await prisma.branch.findUnique({ where: { code: branchCode } });
   if (!branch) throw refused('SYNTHETIC_BRANCH_NOT_FOUND');
+  const effectiveDate = normalizeAgreementEffectiveDate(asOf);
   const agreements = await prisma.serviceAgreement.findMany({
     where: {
       branchId: branch.id,
       branchCode,
       status: AgreementStatus.ACTIVE,
-      startDate: { lte: asOf },
-      OR: [{ endDate: null }, { endDate: { gte: asOf } }],
+      startDate: { lte: effectiveDate },
+      OR: [{ endDate: null }, { endDate: { gte: effectiveDate } }],
       customer: { isActive: true },
       serviceSite: { isActive: true },
     },
