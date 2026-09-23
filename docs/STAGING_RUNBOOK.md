@@ -364,7 +364,6 @@ sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil.next /etc/cad
 sudoedit /etc/caddy/Caddyfile.next
 # Replace only that directive with: import /etc/caddy/Caddyfile.ultrakil
 sudo caddy validate --config /etc/caddy/Caddyfile.next --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile /etc/caddy/Caddyfile.ultrakil.previous
 sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.next /etc/caddy/Caddyfile
 sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 ```

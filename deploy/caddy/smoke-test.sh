@@ -20,6 +20,17 @@ final_header_block() {
   ' "$1" > "$2"
 }
 
+require_final_success() {
+  status="$(awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/ { code = $2 } END { print code }' "$headers")"
+  case "$status" in
+    2??) ;;
+    *)
+      echo "final response must be 2xx, got ${status:-no HTTP status}" >&2
+      exit 1
+      ;;
+  esac
+}
+
 require_header() {
   name="$1"
   value="$2"
@@ -33,6 +44,7 @@ for url in "$PORTAL_URL" "$API_URL"; do
   : > "$all_headers"
   "$CURL_BIN" --fail --silent --show-error --location --dump-header "$all_headers" --output /dev/null "$url"
   final_header_block "$all_headers" "$headers"
+  require_final_success
   require_header 'strict-transport-security' 'max-age=31536000'
   require_header 'x-content-type-options' 'nosniff'
   require_header 'referrer-policy' 'strict-origin-when-cross-origin'

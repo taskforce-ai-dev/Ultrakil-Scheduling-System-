@@ -43,7 +43,14 @@ test('Caddy template preserves the current portal and both API proxy routes', ()
 });
 
 test('global Caddy template imports the isolated UltraKIL site fragment', () => {
-  assert.match(config(), /import Caddyfile\.ultrakil/);
+  const global = config();
+  assert.match(global, /import Caddyfile\.ultrakil/);
+  for (const hostname of ['ultrakil.taskforceai.tech', 'api.ultrakil.taskforceai.tech', 'ultrakil-api.taskforceai.tech']) {
+    const siteDeclaration = new RegExp(`^${hostname.replaceAll('.', '\\.')}\\s*\\{`, 'gm');
+    assert.doesNotMatch(global, siteDeclaration);
+    assert.equal([...ultrakilFragment().matchAll(siteDeclaration)].length, 1,
+      `${hostname} must be defined exactly once in the fragment`);
+  }
 });
 
 test('Caddy template supplies host-only security headers and strips implementation headers', () => {
@@ -102,6 +109,10 @@ test('Caddy smoke test validates the final redirect response rather than an earl
   const onlyFinalHopHasHeaders = `HTTP/2 302\nlocation: https://portal.example.test/login\n\nHTTP/2 200\n${finalHeaders}\n\n`;
   const passed = runSmokeWithHeaders(onlyFinalHopHasHeaders);
   assert.equal(passed.status, 0, passed.stdout + passed.stderr);
+
+  const finalRedirect = `HTTP/2 302\n${finalHeaders}\nlocation: https://portal.example.test/login\n\n`;
+  const redirectFailed = runSmokeWithHeaders(finalRedirect);
+  assert.notEqual(redirectFailed.status, 0, redirectFailed.stdout + redirectFailed.stderr);
 });
 
 test('Caddy template starts CSP in report-only mode without changing authentication or throttling', () => {
