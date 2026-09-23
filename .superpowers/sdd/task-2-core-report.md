@@ -52,10 +52,11 @@ The focused integration command was attempted against the configured disposable 
 
 `node /home/dev/worktrees/ultrakil-perfect/apps/api/scripts/with-env.mjs corepack pnpm --filter @ultrakil/api exec jest --config jest.config.js --selectProjects integration --runInBand test/integration/assignment-candidates-api.spec.ts`
 
-The database name passed the `_test` safety guard (`ultrakil_ops_code_test`), but the PostgreSQL
-server was not running at its configured local Unix socket (`/tmp/ultrakil-pgsocket:5432`). Jest
-therefore failed during Prisma application initialization, before any fixture or assertion ran.
-No integration pass is claimed from this environment.
+The first attempt passed the `_test` safety guard (`ultrakil_ops_code_test`) but could not connect
+because the local PostgreSQL process was not running at its configured Unix socket. After starting
+the existing isolated test instance, the same focused command was rerun with socket access outside
+the restricted sandbox. Result: 1 suite passed, 3 tests passed. The tests exercised the Nest HTTP
+boundary and persisted PostgreSQL fixtures; cleanup completed successfully.
 
 Contract generation initially failed on missing explicit Swagger runtime types in the new
 candidate DTOs. After adding those types and explicit candidate endpoint path/body metadata,
