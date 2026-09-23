@@ -284,6 +284,72 @@ if curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3001/api/health/live
 fi
 ```
 
+### Source-controlled Caddy ingress hardening
+
+`deploy/caddy/Caddyfile` is the reviewed Caddy v2 template for the current
+staging ingress. It preserves the existing routes exactly:
+
+- `ultrakil.taskforceai.tech` -> `127.0.0.1:3000`
+- `api.ultrakil.taskforceai.tech` -> `127.0.0.1:3001`
+- `ultrakil-api.taskforceai.tech` -> `127.0.0.1:3001`
+
+Keep both API hostnames until the release record confirms that no approved
+portal build still uses the legacy alias. The template adds HSTS with a
+one-year `max-age` only. It deliberately omits `includeSubDomains` and
+`preload`, so it cannot make an unrelated sibling hostname unreachable. It
+also sets nosniff, strict referrer policy, DENY/frame-ancestors protection, a
+restrictive Permissions-Policy, and asks Caddy to remove `Server` and
+`X-Powered-By` after proxying.
+
+The CSP is explicitly **Report-Only**. The current Next bundle uses inline
+styles and evaluator-backed runtime compatibility, so enforcing a new CSP
+without browser evidence could block the manager portal. Confirm the browser
+console has no policy violations across login, manager navigation and an API
+write flow before proposing an enforcement-only change. Do not add a CSP report
+collector or alter authentication, CORS, sessions or rate limits as part of
+this ingress template.
+
+On the authorized host, install and reload only during a release window. These
+commands are a deployment procedure, not a substitute for source review:
+
+```bash
+cd /opt/ultrakil/app
+sudo install -d -m 0755 /etc/caddy
+sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile /etc/caddy/Caddyfile.ultrakil.next
+sudo caddy validate --config /etc/caddy/Caddyfile.ultrakil.next --adapter caddyfile
+sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile /etc/caddy/Caddyfile.ultrakil.previous
+sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil.next /etc/caddy/Caddyfile
+sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl is-active --quiet caddy
+```
+
+Run the read-only smoke test from an approved peer. It follows redirects but
+does not authenticate or issue a state-changing request:
+
+```bash
+PORTAL_URL=https://ultrakil.taskforceai.tech/login \
+API_URL=https://ultrakil-api.taskforceai.tech/api/health/ready \
+  deploy/caddy/smoke-test.sh
+```
+
+The smoke test checks the portal and API TLS responses for every required
+header, the report-only CSP and absence of `Server`/`X-Powered-By`. If the
+installed Caddy version still emits its own `Server` header, record that
+version/output as a release blocker and reconcile the live module behavior
+before claiming the header is removed. Do not silence the check.
+
+If validation, reload, health, portal navigation or the smoke test fails,
+restore the exact pre-change file and verify it before reloading. This rollback
+does not rebuild containers, change DNS, mutate Cloudflare or touch application
+data:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile.ultrakil.previous --adapter caddyfile
+sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil.previous /etc/caddy/Caddyfile
+sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl is-active --quiet caddy
+```
+
 Every service must be healthy. API readiness must report database, queue and
 scheduler as `up`. Container logs rotate at 10 MB with five files per service.
 Treat any unhandled exception, restart loop, migration warning or failed health
