@@ -129,7 +129,7 @@ expect(byEmployeeId.get(HISTORICAL_EMPLOYEE_ID)?.isAvailable).toBe(true);
 expect(byVehicleId.get(BUSY_VEHICLE_ID)?.isAvailable).toBe(false);
 ```
 
-Add timestamp-boundary cases for employees and vehicles: a reservation ending at minute `1440` and one beginning at minute `0` on the following visit date are adjacent, not overlapping. The public DTO and writers must continue to reject windows outside `0…1440`.
+Add timestamp-boundary cases for employees and vehicles against both candidates and authoritative evaluation: a live `22:00–24:00` reservation conflicts with `23:00–24:00`, while `20:00–22:00` is adjacent and allowed. Calculate stored assignment minutes relative to the visit date so an end at the following midnight remains `1440` instead of wrapping to `0`. The public DTO and writers continue to reject windows outside `0…1440`.
 
 - [ ] **Step 3: Run focused API tests and confirm the endpoint is absent**
 
