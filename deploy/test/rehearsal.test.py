@@ -103,6 +103,51 @@ class CleanupTests(unittest.TestCase):
             self.assertTrue(any('teardown' in note for note in caught.__notes__))
 
 
+class ComposeStatusDiagnosticsTests(unittest.TestCase):
+    def test_reconstructs_only_allowlisted_service_state(self):
+        raw = '\n'.join(json.dumps(row) for row in [
+            {'Service': 'api', 'State': 'exited', 'Health': '', 'ExitCode': 1,
+             'Command': 'PRIVATE_TOKEN', 'Mounts': '/private/customer'},
+            {'Service': 'postgres', 'State': 'running', 'Health': 'healthy', 'ExitCode': 0,
+             'Labels': 'PRIVATE_TOKEN'},
+        ])
+
+        self.assertEqual(rehearse.safe_compose_status(raw), {
+            'status': 'available',
+            'services': [
+                {'service': 'api', 'state': 'exited', 'health': 'none', 'exitCode': 1},
+                {'service': 'postgres', 'state': 'running', 'health': 'healthy', 'exitCode': 0},
+            ],
+        })
+        self.assertNotIn('PRIVATE_TOKEN', json.dumps(rehearse.safe_compose_status(raw)))
+
+    def test_invalid_or_unexpected_status_fails_closed(self):
+        fallback = {'status': 'unavailable', 'services': []}
+        for raw in [
+            'PRIVATE_TOKEN',
+            json.dumps({'Service': 'api'}),
+            json.dumps([{'Service': 'unknown', 'State': 'running', 'Health': 'healthy', 'ExitCode': 0}]),
+            json.dumps([{'Service': 'api', 'State': 'PRIVATE_TOKEN', 'Health': '', 'ExitCode': 0}]),
+            json.dumps([{'Service': 'api', 'State': 'running', 'Health': 'healthy', 'ExitCode': '0'}]),
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(rehearse.safe_compose_status(raw), fallback)
+
+    def test_reporter_withholds_child_output_and_emits_safe_state(self):
+        raw = json.dumps([{'Service': 'migrate', 'State': 'exited', 'Health': '', 'ExitCode': 1,
+                           'Command': 'PRIVATE_TOKEN'}])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rehearse.report_compose_status(
+                ['docker', 'compose'],
+                {},
+                execute=lambda *args, **kwargs: subprocess.CompletedProcess(
+                    args[0], 0, stdout=raw, stderr='PRIVATE_TOKEN'),
+            )
+        self.assertIn('"service": "migrate"', output.getvalue())
+        self.assertNotIn('PRIVATE_TOKEN', output.getvalue())
+
+
 class StrictBrowserDiagnosticsTests(unittest.TestCase):
     def test_missing_or_invalid_report_falls_back_without_private_content(self):
         with tempfile.TemporaryDirectory() as directory:
