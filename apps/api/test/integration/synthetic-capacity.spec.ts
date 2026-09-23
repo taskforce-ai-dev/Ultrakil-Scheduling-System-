@@ -28,6 +28,7 @@ let customerId: string;
 let siteId: string;
 let jobTypeId: string;
 let inactiveCustomerId: string;
+let isolatedAgreementIds: string[] = [];
 
 async function clearAssignmentsAndSynthetic(): Promise<void> {
   const employees = await prisma.employee.findMany({
@@ -67,6 +68,20 @@ beforeAll(async () => {
     update: {},
   });
   branchId = branch.id;
+  // Other integration suites intentionally leave imported agreements behind.
+  // Suspend only that pre-existing capacity so this suite measures its own
+  // fixtures, then restore it in afterAll; the shared database remains intact.
+  const existingActiveAgreements = await prisma.serviceAgreement.findMany({
+    where: { branchId, status: AgreementStatus.ACTIVE },
+    select: { id: true },
+  });
+  isolatedAgreementIds = existingActiveAgreements.map(({ id }) => id);
+  if (isolatedAgreementIds.length) {
+    await prisma.serviceAgreement.updateMany({
+      where: { id: { in: isolatedAgreementIds } },
+      data: { status: AgreementStatus.PAUSED },
+    });
+  }
   await clearAssignmentsAndSynthetic();
   const customer = await prisma.customer.create({
     data: {
@@ -197,7 +212,16 @@ afterAll(async () => {
     await prisma.customer.deleteMany({ where: { id: { in: [customerId, inactiveCustomerId] } } });
     await prisma.jobType.delete({ where: { id: jobTypeId } });
   } finally {
-    await prisma.$disconnect();
+    try {
+      if (isolatedAgreementIds.length) {
+        await prisma.serviceAgreement.updateMany({
+          where: { id: { in: isolatedAgreementIds } },
+          data: { status: AgreementStatus.ACTIVE },
+        });
+      }
+    } finally {
+      await prisma.$disconnect();
+    }
   }
 });
 
