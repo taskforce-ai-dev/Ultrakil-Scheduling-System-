@@ -2530,7 +2530,7 @@
             "description": "RESOURCE_NOT_FOUND"
           },
           "409": {
-            "description": "RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check."
+            "description": "RESOURCE_CONFLICT — a manager lock, published assignment history, or multiple active assignments prevents a draft eligibility check."
           }
         },
         "security": [
@@ -2651,7 +2651,7 @@
             "description": "Missing or invalid token."
           },
           "409": {
-            "description": "ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason."
+            "description": "ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every eligibility reason; or RESOURCE_CONFLICT — an active manager lock or non-editable assignment history prevents replacement."
           }
         },
         "security": [

@@ -61,7 +61,8 @@ export class AssignmentsController {
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   @ApiResponse({
     status: 409,
-    description: 'RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check.',
+    description:
+      'RESOURCE_CONFLICT — a manager lock, published assignment history, or multiple active assignments prevents a draft eligibility check.',
   })
   check(
     @Param('id', ParseUUIDPipe) id: string,
@@ -111,7 +112,8 @@ export class AssignmentsController {
   @ApiResponse({ status: 200, type: AssignmentDto })
   @ApiResponse({
     status: 409,
-    description: 'ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason.',
+    description:
+      'ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every eligibility reason; or RESOURCE_CONFLICT — an active manager lock or non-editable assignment history prevents replacement.',
   })
   assign(
     @Param('id', ParseUUIDPipe) id: string,

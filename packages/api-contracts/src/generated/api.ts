@@ -4896,7 +4896,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check. */
+            /** @description RESOURCE_CONFLICT — a manager lock, published assignment history, or multiple active assignments prevents a draft eligibility check. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5008,7 +5008,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason. */
+            /** @description ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every eligibility reason; or RESOURCE_CONFLICT — an active manager lock or non-editable assignment history prevents replacement. */
             409: {
                 headers: {
                     [name: string]: unknown;
