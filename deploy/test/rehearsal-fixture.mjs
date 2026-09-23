@@ -6,9 +6,12 @@ const require = createRequire(new URL('../../apps/api/package.json', import.meta
 const { PrismaClient } = require('@prisma/client');
 const ExcelJS = require('exceljs');
 const day = '2026-09-07';
-const names = ['T M Supun Tharaka Wijeweera', 'S Tharilingam', 'P Selvaraj', 'R O Elders',
-  'Hasitha Bandara', 'Raj Kumar', 'Ruwan Sampath', 'Ajith Alwis'];
-const publicTransport = new Set(['T M Supun Tharaka Wijeweera', 'Ajith Alwis']);
+const names = [
+  'Fixture Supervisor Alpha', 'Fixture Technician Bravo', 'Fixture Technician Charlie',
+  'Fixture Technician Delta', 'Fixture Technician Echo', 'Fixture Technician Foxtrot',
+  'Fixture Technician Golf', 'Fixture Supervisor Hotel',
+];
+const publicTransport = new Set(['Fixture Supervisor Alpha', 'Fixture Supervisor Hotel']);
 const codes = ['DAG-3284', 'ABE-7244', 'PJ-6796', 'DAI-0191', 'DAC-2485'];
 const checked = [[0, 1, 2], [3, 4, 5, 6], [7, 0], [1, 2], [0, 1, 2]];
 

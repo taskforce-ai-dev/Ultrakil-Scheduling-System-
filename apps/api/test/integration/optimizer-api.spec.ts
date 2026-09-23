@@ -898,7 +898,7 @@ describe('standard writer publication protocol', () => {
     const refusing = { evaluate: async () => ({
       isEligible: false,
       conflicts: [
-        { code: 'EMPLOYEE_DOUBLE_BOOKED', message: 'S Tharilingam is already on another job.', remediation: 'Pick a different technician.', resources: {} },
+        { code: 'EMPLOYEE_DOUBLE_BOOKED', message: 'Fixture Employee is already on another job.', remediation: 'Pick a different technician.', resources: {} },
         { code: 'OUTSIDE_SERVICE_HOURS', message: 'The site is shut at that hour.', remediation: 'Move the visit inside opening hours.', resources: {} },
       ],
     }) } as unknown as EligibilityService;
@@ -911,7 +911,7 @@ describe('standard writer publication protocol', () => {
     });
 
     expect(rows.map((row) => [row.code, row.message])).toEqual([
-      ['EMPLOYEE_DOUBLE_BOOKED', 'S Tharilingam is already on another job.'],
+      ['EMPLOYEE_DOUBLE_BOOKED', 'Fixture Employee is already on another job.'],
       ['OUTSIDE_SERVICE_HOURS', 'The site is shut at that hour.'],
     ]);
     // And "What to do" is answered per reason, not left blank.

@@ -43,31 +43,31 @@ describe("VehicleDetailView", () => {
   });
 
   it("shows DAC-2485's three drivers equally, in a stable order that can't read as a priority (ULK-O09 acceptance scenario)", () => {
-    // Real names from the ticket's required test scenarios, in scrambled
+    // Synthetic rehearsal identities, in scrambled
     // API-return order — the point is that the page doesn't just echo
     // whatever order the backend happened to return, which someone could
     // otherwise misread as "first = primary driver".
-    const supun: AuthorizedDrivers["drivers"][number] = {
-      id: "emp-supun",
-      fullName: "T M Supun Tharaka Wijeweera",
+    const alpha: AuthorizedDrivers["drivers"][number] = {
+      id: "emp-alpha",
+      fullName: "Fixture Supervisor Alpha",
       gradeLabel: "PMS",
       isPmsGrade: true,
       branchCode: "COLOMBO",
       deploymentType: "MOBILE",
       isActive: true,
     };
-    const tharilingam: AuthorizedDrivers["drivers"][number] = {
-      id: "emp-tharilingam",
-      fullName: "S Tharilingam",
+    const bravo: AuthorizedDrivers["drivers"][number] = {
+      id: "emp-bravo",
+      fullName: "Fixture Technician Bravo",
       gradeLabel: "Technician",
       isPmsGrade: false,
       branchCode: "COLOMBO",
       deploymentType: "MOBILE",
       isActive: true,
     };
-    const selvaraj: AuthorizedDrivers["drivers"][number] = {
-      id: "emp-selvaraj",
-      fullName: "P Selvaraj",
+    const charlie: AuthorizedDrivers["drivers"][number] = {
+      id: "emp-charlie",
+      fullName: "Fixture Technician Charlie",
       gradeLabel: "Technician",
       isPmsGrade: false,
       branchCode: "COLOMBO",
@@ -79,13 +79,17 @@ describe("VehicleDetailView", () => {
       <VehicleDetailView
         vehicle={buildVehicle({ code: "DAC-2485", label: "Bolero DAC-2485" })}
         authorized={buildAuthorizedDrivers({
-          drivers: [supun, tharilingam, selvaraj],
+          drivers: [charlie, alpha, bravo],
           total: 3,
         })}
       />
     );
 
-    const names = ["T M Supun Tharaka Wijeweera", "S Tharilingam", "P Selvaraj"];
+    const names = [
+      "Fixture Supervisor Alpha",
+      "Fixture Technician Bravo",
+      "Fixture Technician Charlie",
+    ];
     for (const name of names) {
       expect(screen.getByText(name)).toBeInTheDocument();
     }
@@ -102,9 +106,9 @@ describe("VehicleDetailView", () => {
     // Alphabetical, regardless of the scrambled input order above.
     const rows = screen.getAllByRole("link", { name: new RegExp(names.join("|")) });
     expect(rows.map((row) => row.textContent)).toEqual([
-      "P Selvaraj",
-      "S Tharilingam",
-      "T M Supun Tharaka Wijeweera",
+      "Fixture Supervisor Alpha",
+      "Fixture Technician Bravo",
+      "Fixture Technician Charlie",
     ]);
   });
 

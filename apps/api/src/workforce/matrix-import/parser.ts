@@ -481,7 +481,7 @@ function resolveBranch(input: {
     if (section.includes(normalizeHeader(label))) return branch;
   }
 
-  // Some rows carry the branch in the name itself, e.g. "P Praveenan Kandy".
+  // Some rows carry the branch in the name itself, e.g. "Fixture Employee Kandy".
   const normalizedName = normalizeHeader(fullName);
   for (const [label, branch] of Object.entries(mapping.sections.branches)) {
     if (normalizedName.includes(normalizeHeader(label))) return branch;

@@ -79,7 +79,7 @@ function fixture(row = source()) {
   const prisma = {
     assignment: { findMany: jest.fn(async () => [row]), ...writes },
     employee: {
-      findMany: jest.fn(async () => [{ id: employeeId, fullName: 'S Tharilingam' }]),
+      findMany: jest.fn(async () => [{ id: employeeId, fullName: 'Fixture Employee' }]),
     },
     vehicle: { findMany: jest.fn(async () => []) },
   };
@@ -161,7 +161,7 @@ describe('PublishedAssignmentRepairPlannerService', () => {
         { sourceAssignmentId: sourceId, fingerprint: 'b'.repeat(64) },
       ],
       resourceLabels: {
-        employees: [{ employeeId, fullName: 'S Tharilingam' }],
+        employees: [{ employeeId, fullName: 'Fixture Employee' }],
         vehicles: [],
       },
       ...f.preview,
@@ -185,7 +185,7 @@ describe('PublishedAssignmentRepairPlannerService', () => {
     );
     expect(f.prisma.vehicle.findMany).not.toHaveBeenCalled();
     expect(plan.resourceLabels.employees).toEqual([
-      { employeeId, fullName: 'S Tharilingam' },
+      { employeeId, fullName: 'Fixture Employee' },
     ]);
   });
 

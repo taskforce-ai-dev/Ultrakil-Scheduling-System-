@@ -5,8 +5,8 @@ import { test, expect } from "./fixtures";
  * imports explicitly synthetic workbooks and fails if any case skips. An
  * operator's real-data UAT remains separate evidence owned by Oshadi.
  *
- * These scenarios name real vehicle codes and driver names from the actual
- * workforce matrix, not hardcoded application business rules. Every test looks
+ * These scenarios retain regression vehicle codes but use identities from the
+ * isolated synthetic rehearsal fixture. Every test looks
  * the record up first and skips itself, rather than failing, if this
  * environment hasn't imported it yet — same pattern as the dialog checks in
  * 05-accessibility.spec.ts. Missing records always fail strict acceptance.
@@ -47,12 +47,16 @@ for (const { code, driverCount } of MULTI_DRIVER_VEHICLES) {
   });
 }
 
-test("DAC-2485 shows T M Supun Tharaka Wijeweera, S Tharilingam and P Selvaraj equally (ULK-O09)", async ({
+test("DAC-2485 shows all three synthetic authorized drivers equally (ULK-O09)", async ({
   page,
 }) => {
   await openVehicleByCode(page, "DAC-2485");
 
-  for (const name of ["T M Supun Tharaka Wijeweera", "S Tharilingam", "P Selvaraj"]) {
+  for (const name of [
+    "Fixture Supervisor Alpha",
+    "Fixture Technician Bravo",
+    "Fixture Technician Charlie",
+  ]) {
     await expect(page.getByText(name)).toBeVisible();
   }
   const driverRows = page.locator("li", { has: page.getByText("Authorized to drive") });

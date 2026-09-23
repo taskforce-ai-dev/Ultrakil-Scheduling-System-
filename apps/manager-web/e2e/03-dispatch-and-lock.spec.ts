@@ -18,7 +18,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
   const strict = process.env.E2E_STRICT === '1';
   const seededRow = page.getByRole('row').filter({
     has: page.getByRole('button', { name: 'Synthetic Active', exact: true }),
-  }).filter({ hasText: 'T M Supun Tharaka Wijeweera' });
+  }).filter({ hasText: 'Fixture Supervisor Alpha' });
   if (strict) await expect(seededRow).toHaveCount(1);
   const editCrewButton = strict
     ? seededRow.getByRole('button', { name: 'Edit crew', exact: true })
@@ -52,7 +52,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     && response.request().postDataJSON().crew?.length === 2) : undefined;
   if (strict) {
     expect(existingCrew).toBe(1);
-    await page.getByRole('option', { name: 'Ajith Alwis (PMS)', exact: true }).click();
+    await page.getByRole('option', { name: 'Fixture Supervisor Hotel (PMS)', exact: true }).click();
     const result = await checked!;
     expect(result.ok()).toBe(true);
     expect((await result.json()).isEligible).toBe(true);
@@ -75,12 +75,13 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     await expect(vehicleControl).toContainText(/DAC-?\s?2485/);
     await expect(vehicleControl).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-/);
 
-    // Driver choices are the checked crew members only. T M Supun is on this
-    // crew and is checked for the Bolero; Ajith Alwis is on the crew but is
-    // not checked for it, so he must not be offered.
+    // Driver choices are the checked crew members only. Fixture Supervisor
+    // Alpha is on this crew and is checked for the Bolero; Fixture Supervisor
+    // Hotel is on the crew but is not checked for it, so they must not be
+    // offered.
     const driverControl = drawer.getByLabel('Driver', { exact: true });
     await driverControl.click();
-    await expect(page.getByRole('option', { name: 'T M Supun Tharaka Wijeweera', exact: true })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Fixture Supervisor Alpha', exact: true })).toBeVisible();
     // Exactly one driver is offered: the crew member who is checked for
     // this vehicle. Counting options is stronger than asserting one name is
     // absent, which would also pass if the wrong popup were open.
@@ -90,7 +91,7 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     const vehicleChecked = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname.endsWith('/assignment/check')
       && Boolean(response.request().postDataJSON().vehicles?.[0]?.driverEmployeeId));
-    await page.getByRole('option', { name: 'T M Supun Tharaka Wijeweera', exact: true }).click();
+    await page.getByRole('option', { name: 'Fixture Supervisor Alpha', exact: true }).click();
     const vehicleResult = await vehicleChecked;
     expect(vehicleResult.ok()).toBe(true);
     expect((await vehicleResult.json()).isEligible).toBe(true);
@@ -110,8 +111,8 @@ test("dispatch board: overrides a crew with a reason, and shows every ineligibil
     // free to improve without this acceptance run failing over wording.
     await expect(page.getByText(/^Assignment saved\./)).toBeVisible({ timeout: 10_000 });
     await page.reload();
-    await expect(seededRow.getByRole('cell').nth(4)).toContainText('Ajith Alwis', { timeout: 10_000 });
-    await expect(seededRow.getByRole('cell').nth(4)).toContainText('T M Supun Tharaka Wijeweera');
+    await expect(seededRow.getByRole('cell').nth(4)).toContainText('Fixture Supervisor Hotel', { timeout: 10_000 });
+    await expect(seededRow.getByRole('cell').nth(4)).toContainText('Fixture Supervisor Alpha');
     // Reopen once more: persistent two-person crew, the saved vehicle shown by
     // name rather than by id (it is still selectable here — the unit test
     // covers the read-model label for a vehicle that is not), and no
