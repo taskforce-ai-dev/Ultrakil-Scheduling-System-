@@ -11,7 +11,15 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { BranchCode, UserRole } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/auth.types';
@@ -65,6 +73,8 @@ export class AssignmentsController {
   @Post('visits/:id/assignment/candidates')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Available individual employees and vehicles for a proposed time' })
+  @ApiParam({ name: 'id', type: String, format: 'uuid' })
+  @ApiBody({ type: AssignmentCandidateWindowDto })
   @ApiResponse({ status: 200, type: AssignmentCandidatesDto })
   @ApiResponse({ status: 404, description: 'RESOURCE_NOT_FOUND' })
   @ApiResponse({ status: 409, description: 'RESOURCE_CONFLICT — this visit is no longer editable.' })

@@ -112,23 +112,23 @@ export class AssignmentCandidateReasonDto {
   @ApiProperty({ enum: AssignmentCandidateReasonCode })
   code!: AssignmentCandidateReasonCode;
 
-  @ApiProperty() message!: string;
+  @ApiProperty({ type: String }) message!: string;
 }
 
 export class EmployeeAssignmentCandidateDto {
-  @ApiProperty({ format: 'uuid' }) id!: string;
-  @ApiProperty() displayName!: string;
-  @ApiProperty() isPmsGrade!: boolean;
-  @ApiProperty() isAvailable!: boolean;
+  @ApiProperty({ type: String, format: 'uuid' }) id!: string;
+  @ApiProperty({ type: String }) displayName!: string;
+  @ApiProperty({ type: Boolean }) isPmsGrade!: boolean;
+  @ApiProperty({ type: Boolean }) isAvailable!: boolean;
   @ApiProperty({ type: AssignmentCandidateReasonDto, nullable: true })
   unavailableReason!: AssignmentCandidateReasonDto | null;
 }
 
 export class VehicleAssignmentCandidateDto {
-  @ApiProperty({ format: 'uuid' }) id!: string;
-  @ApiProperty() displayName!: string;
+  @ApiProperty({ type: String, format: 'uuid' }) id!: string;
+  @ApiProperty({ type: String }) displayName!: string;
   @ApiProperty({ type: Number, nullable: true }) seatCapacity!: number | null;
-  @ApiProperty() isAvailable!: boolean;
+  @ApiProperty({ type: Boolean }) isAvailable!: boolean;
   @ApiProperty({ type: AssignmentCandidateReasonDto, nullable: true })
   unavailableReason!: AssignmentCandidateReasonDto | null;
 }
