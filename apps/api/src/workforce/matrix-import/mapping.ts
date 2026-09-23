@@ -115,6 +115,11 @@ export function normalizeHeader(raw: string): string {
     .toUpperCase();
 }
 
+/** The importer's punctuation-insensitive vehicle identity comparison key. */
+export function normalizeVehicleIdentity(raw: string): string {
+  return normalizeHeader(raw).replace(/ /g, '');
+}
+
 /** Turns a skill label into a stable code, e.g. "MBr Fumigation" -> MBR_FUMIGATION. */
 export function toSkillCode(label: string): string {
   return normalizeHeader(label).replace(/ /g, '_');

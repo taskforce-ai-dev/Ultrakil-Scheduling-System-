@@ -15,14 +15,24 @@ describe('importMatrix transaction boundary', () => {
     });
   });
 
-  it('refuses reserved synthetic vehicle identities before opening a transaction', async () => {
+  it.each([
+    ['code case variant', 'syn-test-colombo-01', 'Ordinary vehicle', 'COMPANY'],
+    ['code punctuation variant', 'SYN_TEST_COLOMBO_01', 'Ordinary vehicle', 'COMPANY'],
+    ['label case variant', 'ABC-1234', 'synthetic/test collision', 'COMPANY'],
+    ['ownership marker variant', 'ABC-1234', 'Ordinary vehicle', '__SYNTHETIC_CAPACITY__'],
+  ])('refuses reserved synthetic vehicle identities before opening a transaction: %s', async (
+    _case,
+    code,
+    label,
+    ownershipGroup,
+  ) => {
     const prisma = { $transaction: jest.fn() };
     const parsed = {
       vehicles: [{
-        code: 'SYN-TEST-COLOMBO-01',
-        label: 'SYNTHETIC/TEST collision',
+        code,
+        label,
         seatCapacity: 2,
-        ownershipGroup: '__syntheticCapacity__',
+        ownershipGroup,
       }],
       employees: [],
       skillColumns: [],
