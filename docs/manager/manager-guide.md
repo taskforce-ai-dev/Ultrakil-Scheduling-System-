@@ -13,6 +13,14 @@ evidence retained only in the protected VPS release folder. Small visual
 details can differ from these examples, but the workflows and labels match the
 current release.
 
+**Release this guide describes: `main@13b2456`.** Its workflows and labels
+were exercised against that deployed build on 2026-09-22 and 2026-09-23
+across 33 scenarios — 30 pass, 0 fail, 3 not demonstrable against this
+dataset — recorded in
+`uat/ULK-O08-O09-deployed-uat-13b2456.md`. The conflict messages quoted
+throughout this guide were observed firing on real imported data during that
+pass, not written from the source.
+
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS
 supervisors don't have a mobile view. That's planned for Phase 2, described

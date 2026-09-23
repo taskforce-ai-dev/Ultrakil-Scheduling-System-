@@ -49,9 +49,14 @@ there is no UI for any of them today.
    immediately showed "This crew is eligible to take the visit" with no
    false `EMPLOYEE_DOUBLE_BOOKED`/`VEHICLE_DOUBLE_BOOKED` error. Full
    detail in `uat/ULK-O08-uat-results.md`. **Not release-blocking any
-   more.** Current DigitalOcean staging commit `b694823` passed a fresh
-   authenticated save, follow-up GET, and eligibility recheck with no
-   self-overlap conflict.
+   more.** Staging commit `b694823` passed a fresh authenticated save,
+   follow-up GET, and eligibility recheck with no self-overlap conflict.
+   **Reconfirmed on `main@13b2456`, 2026-09-22** — and this time through
+   the manager portal directly rather than at the API: scenario C1 of the
+   deployed UAT saved a real assignment and reopened it from the Dispatch
+   Board, with validation reading *"This crew is eligible to take the
+   visit."* and no save failure. See
+   `uat/ULK-O08-O09-deployed-uat-13b2456.md`.
 
 2. **[Fixed on current main, partially confirmed on deployed real data]
    Re-opening an already-assigned visit could show false "double-booked"
@@ -68,10 +73,18 @@ there is no UI for any of them today.
    `eligibility.service.ts`), tracing back to the ULK-C07 baseline. See
    `uat/ULK-O08-uat-results.md` for the original repro and the fix
    verification.
-   **Current staging confirmation, 2026-09-10:** a mutable assignment was
-   saved and immediately rechecked on deployed commit `b694823`. The API
-   returned HTTP 200 and no self-overlap conflict. Publication-history
-   assignments remain intentionally read-only.
+   **Staging confirmation, 2026-09-10:** a mutable assignment was saved and
+   immediately rechecked on deployed commit `b694823`. The API returned
+   HTTP 200 and no self-overlap conflict. Publication-history assignments
+   remain intentionally read-only.
+   **Confirmed again on `main@13b2456`, 2026-09-22, in the UI.** This closes
+   the "partially confirmed" qualifier in this item's heading: UAT scenario
+   C1 saved a real assignment (crew of two, one vehicle, its authorised
+   driver), then reopened that visit's Edit crew drawer from the Dispatch
+   Board. Validation read *"This crew is eligible to take the visit."* with
+   **no** `EMPLOYEE_DOUBLE_BOOKED` or `VEHICLE_DOUBLE_BOOKED` raised against
+   the visit's own crew member or its own vehicle. The historical defect
+   does not reproduce on this release.
 
 3. **Local pass used fabricated demo data; a deployed real-data pass has
    since covered part of this.** Per `data/README.md`, the real workbooks
@@ -116,6 +129,15 @@ there is no UI for any of them today.
    current release does not split a crew across multiple vehicles. This is
    documented in the manager guide and remains a possible Phase 2 workflow
    enhancement if multi-vehicle transport is later required.
+   **Observed on `main@13b2456`, 2026-09-22 (UAT C2), with one clarification
+   worth recording:** the vehicle picker *does* allow a second vehicle to be
+   attached — the rule is enforced at the **save boundary**, not in the
+   picker. Attempting to save two returned *"Unavailable vehicle — 2
+   vehicles are assigned to this visit (…); a crew travels in one."* with
+   the guidance *"Keep the one vehicle that seats the whole crew and release
+   the rest for other visits."* Permissive picker, strict validation — the
+   same pattern as driver authorisation. Nothing invalid can be saved, but a
+   manager can build an invalid selection before being told.
 
 8. **"Save assignment" silently stays disabled until "Reason for this
    change" is filled in**, even after every validation check passes and
@@ -141,19 +163,61 @@ there is no UI for any of them today.
     driver removal and selected-label regressions. GitHub CI is the
     authoritative release record.
 
-12. **[Confirmed on current staging] DAC-2485 is normalized once and has
+12. **[Confirmed on `main@13b2456`] DAC-2485 is normalized once and has
     exactly three equal driver authorizations.** No owner or primary-driver
     priority is represented. Individual names are omitted from this public
     report; the required count and rule passed the protected data audit.
+    **Re-verified directly on 2026-09-23 (UAT A5/A6).** The vehicle detail
+    page shows exactly three authorized-driver rows, none containing
+    "primary driver", "backup driver" or "owner". Normalisation was checked
+    two ways rather than one: searching `DAC-2485` returned a single row,
+    and searching the bare digits `2485` — which matches any separator
+    spelling — returned that **same single row**, ruling out a duplicate
+    stored as `DAC2485` or `DAC 2485` that a hyphenated search could not
+    have detected.
 
-13. **The current real import has 28 inactive sites, no inactive customers,
-    and no future visit referencing an inactive record.** It has no active
-    Kandy agreement or generated Kandy visit, so the no-PMS rule cannot be
-    demonstrated with a live row. The workforce audit still confirms zero
-    PMS-qualified Kandy supervisors; no bypass was introduced.
+13. **[Counts superseded — re-stated for `main@13b2456`]** The figure "28
+    inactive sites" belonged to the `b694823` import and **must not be
+    carried forward**; the dataset changed with the release. What the
+    2026-09-23 deployed pass established on `main@13b2456`:
 
-14. **[Confirmed, expected] DAC-2485's vehicle record shows "Unassigned
-    branch," while all three of its authorized drivers are tagged "Colombo."**
+    - **No inactive customers** — confirmed by hand, the `/customers`
+      Inactive filter returns *"No inactive customers — Every customer on
+      record is currently active."* (unchanged in kind from the previous
+      import).
+    - **Inactive *sites* exist in quantity**, and no exact total is claimed
+      here because none was counted exhaustively. Observed on individual
+      customers: CUST-03 *"48 active, 15 inactive"*, CUST-04 Main
+      Premises *"89 active, 5 inactive"*, CUST-05 *"31 active, 4
+      inactive"*, CUST-07 *"54 active, 3 inactive"*, CUST-06
+      *"7 active, 1 inactive"*, plus CUST-02 and CUST-08. A page-wide
+      find returned 33 matches on one page of the customer list alone, so
+      the true total exceeds the old 28 and is not established.
+    - **"No future visit referencing an inactive record" is sampled, not
+      proven.** Three customers holding seven inactive sites between them
+      were filtered across future months and returned zero visits — but
+      none of them has *any* future work, so the rule was never exercised.
+      Establishing the invariant needs a query over visits joined to site
+      status. Treat this line as an open backend item, not a confirmed
+      property.
+    - **No Kandy work exists in any state** — checked three ways
+      (unassigned queue with no date filter, dispatch board, and calendar
+      across September and October 2026), so the no-PMS rule still cannot
+      be demonstrated with a live row, and there is equally no wrongly
+      *assigned* Kandy visit. The workforce audit still confirms zero
+      PMS-qualified Kandy supervisors; no bypass was introduced.
+
+14. **[Superseded on `main@13b2456` — the branch is now recorded]** This
+    item previously read that DAC-2485's vehicle record showed *"Unassigned
+    branch"* while all three of its authorized drivers were tagged
+    *"Colombo"*. **That is no longer what the deployed portal shows.** On
+    2026-09-23 the `/vehicles` row for DAC-2485 reads *Bolero Truck (2
+    People) DAC-2485* with **Branch: Colombo**, Seats 2, Authorized drivers
+    3, Status Available — so a branch has since been recorded against it and
+    vehicle and drivers now agree. The explanation below is retained because
+    it still describes how imported vehicles arrive and why an unassigned
+    branch is expected before a manager records one; it is no longer a
+    statement about this particular vehicle.
     Not a defect. The Technician Matrix records who may drive a vehicle but
     never which branch the vehicle belongs to, so every imported vehicle
     arrives with no branch until a manager records one under **Vehicles**.
@@ -168,6 +232,14 @@ there is no UI for any of them today.
     authorized`. The API also rejects a vehicle without an authorized crew
     driver. A human may repeat the click-through during business acceptance,
     but this is no longer an untested release gap.
+    **That human click-through has now been done, on `main@13b2456`,
+    2026-09-22 (UAT C4).** Removing the selected driver from a saved crew
+    cleared the driver field immediately to *"No crew member is
+    authorized"* — it did not silently retain a driver who had left the
+    crew — and validation re-fired three rules at once. The guidance text
+    also adapted correctly, from naming a specific eligible person to
+    *"Add someone authorized for this vehicle to the crew, or use a vehicle
+    the crew can drive"*, since nobody remaining was authorised.
 
 ## Not a defect, but worth calling out to managers
 
