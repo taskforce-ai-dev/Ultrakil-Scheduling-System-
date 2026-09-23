@@ -34,3 +34,44 @@ followed by API typecheck and lint.
 
 Moved the full candidate eligibility behavior suite to `eligibility.service.spec.ts`.
 The affected eligibility and assignments suites passed (16 tests), followed by API typecheck and lint.
+
+## PostgreSQL integration and generated contract
+
+Added `test/integration/assignment-candidates-api.spec.ts`, a focused real-HTTP/real-Prisma
+suite covering:
+
+- live employee and vehicle reservations are unavailable;
+- completed history and the target visit's sole editable draft do not block;
+- same-branch and branchless vehicles are returned while another branch's vehicle is excluded;
+- a persisted 22:00–24:00 reservation blocks 23:00–24:00 for both employee and vehicle,
+  while 20:00–22:00 remains adjacent and assignable; and
+- a resource committed after the advisory candidate read is rejected by the authoritative
+  assignment mutation.
+
+The focused integration command was attempted against the configured disposable database:
+
+`node /home/dev/worktrees/ultrakil-perfect/apps/api/scripts/with-env.mjs corepack pnpm --filter @ultrakil/api exec jest --config jest.config.js --selectProjects integration --runInBand test/integration/assignment-candidates-api.spec.ts`
+
+The database name passed the `_test` safety guard (`ultrakil_ops_code_test`), but the PostgreSQL
+server was not running at its configured local Unix socket (`/tmp/ultrakil-pgsocket:5432`). Jest
+therefore failed during Prisma application initialization, before any fixture or assertion ran.
+No integration pass is claimed from this environment.
+
+Contract generation initially failed on missing explicit Swagger runtime types in the new
+candidate DTOs. After adding those types and explicit candidate endpoint path/body metadata,
+the generated client contains a UUID `id` path parameter, required
+`AssignmentCandidateWindowDto` request body, and typed `AssignmentCandidatesDto` response.
+
+`pnpm contracts:generate` completed twice. The first and second final passes produced identical
+hashes:
+
+- OpenAPI: `c215e00b2c0e456c288cb734d886beda986a202f9bf3e3d705d139215e47de74`
+- generated TypeScript: `18968b43ba50380dcd53d9f2552c3233cbfe2bfea8afdc2997b763324f0eb1e9`
+
+Additional verification:
+
+- focused candidate unit suites: 3 suites / 45 tests passed;
+- API typecheck passed;
+- API-contracts typecheck and build passed;
+- focused API ESLint passed with zero warnings; and
+- `git diff --check` passed.
