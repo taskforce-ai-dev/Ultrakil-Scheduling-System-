@@ -2368,6 +2368,18 @@ export interface components {
             driverEmployeeId: string | null;
             driverName: string | null;
         };
+        ActiveAssignmentLockDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            scope: "FULL" | "CREW" | "SUPERVISOR" | "VEHICLE" | "TIME";
+            reason: string | null;
+            /** Format: uuid */
+            lockedByUserId: string | null;
+            lockedByName: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
         AssignmentDto: {
             /** Format: uuid */
             id: string;
@@ -2384,6 +2396,8 @@ export interface components {
             crew: components["schemas"]["AssignedCrewMemberDto"][];
             vehicles: components["schemas"]["AssignedVehicleDto"][];
             isLocked: boolean;
+            /** @description Active manager pins; released scopes are excluded. */
+            locks: components["schemas"]["ActiveAssignmentLockDto"][];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */

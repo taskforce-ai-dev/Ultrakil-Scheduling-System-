@@ -33,7 +33,6 @@ import {
   unlockAssignment,
   type Assignment,
   type AssignmentCandidates,
-  type AssignmentLock,
   type AuthorizedDrivers,
   type Conflict,
   type CrewRole,
@@ -241,29 +240,24 @@ export function AssignmentEditorDrawer({
 
   const [lockBusyScope, setLockBusyScope] = React.useState<LockScope | null>(null);
   const lockBusyScopeRef = React.useRef<LockScope | null>(null);
-  // What this browser session has itself locked/unlocked, by scope. The API
-  // has no way to read back *which* scopes are locked on an existing
-  // assignment (see the note on `lockAssignment` in api-client.ts) — this is
-  // the honest subset of that answer: accurate for anything changed in this
-  // session, unknown for anything set before the drawer was opened.
-  const [sessionLocks, setSessionLocks] = React.useState<
-    Partial<Record<LockScope, AssignmentLock | null>>
-  >({});
-
   // A slow response for a previous visit must not repopulate the drawer once
   // a different visit is open — the picker would then offer another branch's
   // vehicles and employees for this one.
   const loadGenerationRef = React.useRef(0);
+  const currentVisitIdRef = React.useRef(visitId);
+  React.useLayoutEffect(() => {
+    currentVisitIdRef.current = visitId;
+  }, [visitId]);
 
   const load = React.useCallback(() => {
-    if (!visitId) return;
+    if (!visitId) return Promise.resolve();
     const generation = ++loadGenerationRef.current;
     const current = () => generation === loadGenerationRef.current;
     setIsLoading(true);
     setFormWindowVisitId(null);
     setLoadError(null);
     setSaveConflicts(null);
-    Promise.all([fetchVisit(visitId), fetchVisitAssignment(visitId)])
+    return Promise.all([fetchVisit(visitId), fetchVisitAssignment(visitId)])
       .then(([visitDetail, currentAssignment]) => {
         if (!current()) return undefined;
         setVisit(visitDetail);
@@ -289,13 +283,10 @@ export function AssignmentEditorDrawer({
     load();
   }, [load]);
 
-  // Reset only when a *different* visit is opened — not on every `load()`
-  // refresh within the same visit, which would erase the one honest record
-  // this drawer has of which scopes it locked/unlocked this session (see the
-  // note above `sessionLocks`) the moment it saves its own change.
+  // Reset form context only when a different visit opens. Server locks are
+  // part of the assignment read model and refresh with every load.
   /* eslint-disable react-hooks/set-state-in-effect */
   React.useEffect(() => {
-    setSessionLocks({});
     // The reason belongs to the change a manager is composing, not to whatever
     // the last fetch returned. Resetting it with the form prefill below meant
     // any refresh of the same visit erased what they were typing; a successful
@@ -366,6 +357,10 @@ export function AssignmentEditorDrawer({
 
   const isPublicationHistory =
     assignment !== null && PUBLICATION_HISTORY_STATUSES.has(assignment.status);
+  const activeLocks = assignment?.locks ?? [];
+  const hasActiveLock = assignment?.isLocked === true || activeLocks.length > 0;
+  const isEditBlocked = isPublicationHistory || hasActiveLock || isLoading ||
+    loadError !== null || lockBusyScope !== null;
 
   // Candidate availability is advisory and time-specific. It has its own
   // generation fence: a slow success, failure, or finally from an older
@@ -570,7 +565,7 @@ export function AssignmentEditorDrawer({
   React.useEffect(() => {
     const generation = eligibilityRequestGenerationRef.current + 1;
     eligibilityRequestGenerationRef.current = generation;
-    if (!visitId || !visit || isPublicationHistory || proposal.crew.length === 0) {
+    if (!visitId || !visit || isPublicationHistory || hasActiveLock || proposal.crew.length === 0) {
       setCheckResult(null);
       setIsChecking(false);
       return;
@@ -595,7 +590,7 @@ export function AssignmentEditorDrawer({
         eligibilityRequestGenerationRef.current += 1;
       }
     };
-  }, [visitId, visit, isPublicationHistory, proposal]);
+  }, [visitId, visit, isPublicationHistory, hasActiveLock, proposal]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   function addCrewRow() {
@@ -627,7 +622,7 @@ export function AssignmentEditorDrawer({
   }
 
   async function save() {
-    if (!visitId || isPublicationHistory) return;
+    if (!visitId || isEditBlocked) return;
     if (!reason.trim()) {
       notify.error("A reason is required for a manual override.");
       return;
@@ -660,7 +655,7 @@ export function AssignmentEditorDrawer({
   }
 
   async function removeCrew() {
-    if (!visitId || isPublicationHistory) return;
+    if (!visitId || isEditBlocked) return;
     if (isRemovingRef.current) return; // Collapses a double-click into one request.
     isRemovingRef.current = true;
     setIsRemoving(true);
@@ -681,26 +676,24 @@ export function AssignmentEditorDrawer({
     if (!assignment || isPublicationHistory) return;
     if (lockBusyScopeRef.current) return; // Collapses a double-click into one request.
     lockBusyScopeRef.current = scope;
-    const currentlyLocked = sessionLocks[scope] !== undefined ? sessionLocks[scope] !== null : null;
+    const currentlyLocked = activeLocks.some((lock) => lock.scope === scope);
     setLockBusyScope(scope);
     try {
       if (currentlyLocked) {
         await unlockAssignment(assignment.id, scope);
-        setSessionLocks((current) => ({ ...current, [scope]: null }));
         notify.success(`${LOCK_SCOPES.find((entry) => entry.scope === scope)?.label} released.`);
       } else {
         const lockReason = window.prompt(
           `Why pin the ${LOCK_SCOPES.find((entry) => entry.scope === scope)?.label.toLowerCase()}? (optional)`
         );
         if (lockReason === null) return; // Cancelled the prompt.
-        const lock = await lockAssignment(assignment.id, {
+        await lockAssignment(assignment.id, {
           scope,
           ...(lockReason.trim() ? { reason: lockReason.trim() } : {}),
         });
-        setSessionLocks((current) => ({ ...current, [scope]: lock }));
         notify.success(`${LOCK_SCOPES.find((entry) => entry.scope === scope)?.label} pinned.`);
       }
-      load();
+      if (currentVisitIdRef.current === visitId) await load();
       onChanged();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not change this lock.");
@@ -727,6 +720,10 @@ export function AssignmentEditorDrawer({
     ? null // Already under way; the button says "Saving…" for itself.
     : isPublicationHistory
       ? "Published history cannot be edited here."
+      : hasActiveLock
+        ? "Release every pinned part of this assignment before changing it."
+      : isLoading || loadError !== null || lockBusyScope !== null
+        ? "Wait for the current assignment to load before saving."
       : proposal.crew.length === 0
         ? "Add at least one crew member before saving."
         : isChecking
@@ -750,7 +747,7 @@ export function AssignmentEditorDrawer({
       void save();
       return;
     }
-    if (reason.trim().length === 0 && checkResult?.isEligible === true) {
+    if (saveBlockedReason === "Add a reason for this change before saving.") {
       notify.error("A reason is required for a manual override.");
       reasonRef.current?.focus();
       return;
@@ -773,7 +770,7 @@ export function AssignmentEditorDrawer({
                 type="button"
                 variant="outline"
                 onClick={removeCrew}
-                disabled={isRemoving || isPublicationHistory}
+                disabled={isRemoving || isEditBlocked}
               >
                 <UserX aria-hidden="true" />
                 Remove crew
@@ -785,7 +782,7 @@ export function AssignmentEditorDrawer({
               <Button
                 type="button"
                 onClick={attemptSave}
-                disabled={isSaving || isPublicationHistory}
+                disabled={isSaving || isEditBlocked}
                 aria-disabled={saveBlockedReason !== null || undefined}
                 aria-describedby={saveBlockedReason ? "save-blocked" : undefined}
               >
@@ -823,6 +820,11 @@ export function AssignmentEditorDrawer({
               schedule is kept as a record.
             </p>
           )}
+          {hasActiveLock && !isPublicationHistory && (
+            <p className="rounded-md border border-border bg-muted/40 p-3 text-sm" role="status">
+              This assignment is pinned. Release every pinned part below before editing or removing its crew.
+            </p>
+          )}
 
           <section className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -832,7 +834,7 @@ export function AssignmentEditorDrawer({
                 type="time"
                 value={minuteToTimeInput(startMinute)}
                 onChange={(event) => setStartMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublicationHistory}
+                disabled={isEditBlocked}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
             </div>
@@ -843,7 +845,7 @@ export function AssignmentEditorDrawer({
                 type="time"
                 value={minuteToTimeInput(endMinute === 1440 ? 0 : endMinute)}
                 onChange={(event) => setEndMinute(timeInputToMinute(event.target.value))}
-                disabled={isPublicationHistory || endMinute === 1440}
+                disabled={isEditBlocked || endMinute === 1440}
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
               />
               <div className="flex items-center gap-1.5 pt-1">
@@ -851,7 +853,7 @@ export function AssignmentEditorDrawer({
                   id="assignment-end-next-midnight"
                   checked={endMinute === 1440}
                   onCheckedChange={(checked) => setEndMinute(checked === true ? 1440 : 1439)}
-                  disabled={isPublicationHistory}
+                  disabled={isEditBlocked}
                 />
                 <Label
                   htmlFor="assignment-end-next-midnight"
@@ -890,7 +892,7 @@ export function AssignmentEditorDrawer({
                 size="sm"
                 onClick={addCrewRow}
                 disabled={
-                  isPublicationHistory ||
+                  isEditBlocked ||
                   isLoadingCandidates ||
                   candidates === null ||
                   candidates.employees.length === 0
@@ -930,7 +932,7 @@ export function AssignmentEditorDrawer({
                       key={`${row.key}-${selectedCanBeChosen ? row.employeeId : "replacement"}`}
                       items={employeeLabels}
                       value={selectedCanBeChosen ? row.employeeId : ""}
-                      disabled={isPublicationHistory || isLoadingCandidates || candidates === null}
+                      disabled={isEditBlocked || isLoadingCandidates || candidates === null}
                       onValueChange={(value) => {
                         // Base UI reports null when this controlled picker
                         // changes from the current (now unavailable) value to
@@ -968,7 +970,7 @@ export function AssignmentEditorDrawer({
                   <Select
                     items={ROLE_LABELS}
                     value={row.role}
-                    disabled={isPublicationHistory}
+                    disabled={isEditBlocked}
                     onValueChange={(value) =>
                       setCrewRows((rows) =>
                         rows.map((entry) =>
@@ -994,7 +996,7 @@ export function AssignmentEditorDrawer({
                     size="icon"
                     aria-label="Remove crew member"
                     onClick={() => removeCrewRow(row.key)}
-                    disabled={isPublicationHistory}
+                    disabled={isEditBlocked}
                   >
                     <Trash2 aria-hidden="true" />
                   </Button>
@@ -1014,7 +1016,7 @@ export function AssignmentEditorDrawer({
                 onClick={() => {
                   if (!vehiclePickerBlocked && candidates !== null) addVehicleRow();
                 }}
-                disabled={isPublicationHistory || isLoadingCandidates || candidates === null}
+                disabled={isEditBlocked || isLoadingCandidates || candidates === null}
                 // aria-disabled rather than disabled: a natively disabled
                 // button leaves the tab order, so its reason could never be
                 // read by the people it is meant for.
@@ -1084,7 +1086,7 @@ export function AssignmentEditorDrawer({
                         items={vehicleLabels}
                         value={selectedCanBeChosen ? row.vehicleId : ""}
                         disabled={
-                          isPublicationHistory ||
+                          isEditBlocked ||
                           isLoadingCandidates ||
                           candidates === null ||
                           noVehicleCanServe
@@ -1116,7 +1118,7 @@ export function AssignmentEditorDrawer({
                     <Select
                       items={driverLabels}
                       value={row.driverEmployeeId}
-                      disabled={isPublicationHistory}
+                      disabled={isEditBlocked}
                       onValueChange={(value) =>
                         setVehicleRows((rows) =>
                           rows.map((entry) =>
@@ -1148,7 +1150,7 @@ export function AssignmentEditorDrawer({
                       size="icon"
                       aria-label="Remove vehicle"
                       onClick={() => removeVehicleRow(row.key)}
-                      disabled={isPublicationHistory}
+                      disabled={isEditBlocked}
                     >
                       <Trash2 aria-hidden="true" />
                     </Button>
@@ -1175,7 +1177,7 @@ export function AssignmentEditorDrawer({
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               placeholder="Why is this being changed by hand?"
-              disabled={isPublicationHistory}
+              disabled={isEditBlocked}
               className="mt-1.5"
             />
             <p id="override-reason-hint" className="mt-1 text-xs text-muted-foreground">
@@ -1211,19 +1213,25 @@ export function AssignmentEditorDrawer({
               <h3 className="mb-1 text-sm font-semibold">Pin parts of this assignment</h3>
               <p className="mb-2 text-xs text-muted-foreground">
                 A pinned part is kept exactly as it is the next time the scheduler runs.
-                {assignment.isLocked && (
-                  <>
-                    {" "}
-                    This assignment currently has a pin somewhere — which part, we can only tell
-                    you for changes made in this session (below); anything pinned earlier isn&apos;t
-                    reported back by the API yet.
-                  </>
-                )}
+                {hasActiveLock && " Release every pinned part to edit or remove this assignment."}
               </p>
+              {activeLocks.length > 0 && (
+                <ul className="mb-3 list-inside list-disc space-y-1 text-xs text-muted-foreground">
+                  {activeLocks.map((lock) => (
+                    <li key={lock.id}>
+                      <span className="font-medium text-foreground">
+                        {LOCK_SCOPES.find((entry) => entry.scope === lock.scope)?.label ?? lock.scope}
+                      </span>
+                      {": "}
+                      <span>{lock.reason ?? "No reason given"}</span>
+                      {lock.lockedByName && <span> — pinned by {lock.lockedByName}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <div className="flex flex-wrap gap-2">
                 {LOCK_SCOPES.map(({ scope, label, help }) => {
-                  const known = sessionLocks[scope];
-                  const isLockedHere = known !== undefined && known !== null;
+                  const isLockedHere = activeLocks.some((lock) => lock.scope === scope);
                   return (
                     <Button
                       key={scope}
@@ -1232,7 +1240,8 @@ export function AssignmentEditorDrawer({
                       size="sm"
                       title={help}
                       onClick={() => toggleLock(scope)}
-                      disabled={lockBusyScope !== null || isPublicationHistory}
+                      disabled={lockBusyScope !== null || isLoading || isPublicationHistory ||
+                        (assignment.isLocked && activeLocks.length === 0)}
                     >
                       {isLockedHere ? (
                         <PinOff aria-hidden="true" />

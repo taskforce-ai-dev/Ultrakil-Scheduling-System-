@@ -6582,6 +6582,50 @@
           "driverName"
         ]
       },
+      "ActiveAssignmentLockDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "FULL",
+              "CREW",
+              "SUPERVISOR",
+              "VEHICLE",
+              "TIME"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "lockedByUserId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "lockedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "reason",
+          "lockedByUserId",
+          "lockedByName",
+          "createdAt"
+        ]
+      },
       "AssignmentDto": {
         "type": "object",
         "properties": {
@@ -6630,6 +6674,13 @@
           "isLocked": {
             "type": "boolean"
           },
+          "locks": {
+            "description": "Active manager pins; released scopes are excluded.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveAssignmentLockDto"
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -6651,6 +6702,7 @@
           "crew",
           "vehicles",
           "isLocked",
+          "locks",
           "createdAt",
           "updatedAt"
         ]

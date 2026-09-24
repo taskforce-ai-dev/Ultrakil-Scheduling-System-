@@ -1,5 +1,38 @@
 import { ErrorCode } from '../../common/errors/error-codes';
 import { AssignmentsService } from './assignments.service';
+
+describe('AssignmentsService assignment read model', () => {
+  it('returns active lock scopes, reasons, creation times and manager names in a stable order', async () => {
+    const assignment = {
+      id: 'assignment-1', generatedVisitId: 'visit-1', status: 'DRAFT', branchCode: 'COLOMBO',
+      supersedesAssignmentId: null, publishedByRepairId: null,
+      plannedStart: new Date('2026-09-09T09:00:00Z'),
+      plannedEnd: new Date('2026-09-09T10:00:00Z'),
+      createdAt: new Date('2026-09-08T00:00:00Z'),
+      updatedAt: new Date('2026-09-08T01:00:00Z'),
+      crewMembers: [], vehicles: [],
+      locks: [
+        { id: 'lock-vehicle', scope: 'VEHICLE', reason: null, lockedByUserId: null, createdAt: new Date('2026-09-08T11:00:00Z') },
+        { id: 'lock-crew', scope: 'CREW', reason: 'Requested crew', lockedByUserId: 'manager-1', createdAt: new Date('2026-09-08T10:00:00Z') },
+      ],
+    };
+    const prisma = {
+      assignment: { findFirst: jest.fn().mockResolvedValue(assignment) },
+      user: { findMany: jest.fn().mockResolvedValue([{ id: 'manager-1', fullName: 'Fixture Manager' }]) },
+    };
+    const service = new AssignmentsService(prisma as never, {} as never, {} as never);
+
+    const result = await service.get('visit-1');
+
+    expect(prisma.assignment.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({ locks: { where: { releasedAt: null } } }),
+    }));
+    expect(result).toMatchObject({ isLocked: true, locks: [
+      { id: 'lock-crew', scope: 'CREW', reason: 'Requested crew', lockedByUserId: 'manager-1', lockedByName: 'Fixture Manager', createdAt: '2026-09-08T10:00:00.000Z' },
+      { id: 'lock-vehicle', scope: 'VEHICLE', reason: null, lockedByUserId: null, lockedByName: null, createdAt: '2026-09-08T11:00:00.000Z' },
+    ] });
+  });
+});
 describe('AssignmentsService candidates', () => {
   it('rejects an invalid candidate window before reading the visit', async () => {
     const prisma = { assignment: { findMany: jest.fn() } };

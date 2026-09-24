@@ -77,6 +77,13 @@ Every other endpoint below requires `Authorization: Bearer <token>`.
 | `POST /api/assignments/{id}/lock`, `POST /api/assignments/{id}/unlock`                 | Manager pins on the dispatch board.                  |
 | `GET /api/schedule/calendar` **(new, ULK-C07)**                                        | The unified calendar — see below.                    |
 
+`GET /api/visits/{id}/assignment` returns `isLocked` and an authoritative
+`locks` array. Each active pin includes its scope, reason, manager ID/name,
+and creation time; released pins are excluded. The assignment editor reads
+these values on every load, shows every pinned scope and reason, and keeps
+crew, vehicle, time, removal, and Save controls unavailable until every scope
+has been released. Its unlock controls remain available for active scopes.
+
 ## Time-aware assignment candidates
 
 `POST /api/visits/{visitId}/assignment/candidates` accepts
