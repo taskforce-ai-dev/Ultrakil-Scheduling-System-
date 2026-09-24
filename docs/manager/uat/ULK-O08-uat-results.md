@@ -76,6 +76,63 @@ checks at 1366×768 and 768×1024, all five known multi-driver vehicles, and the
 active-customer/inactive-site exclusion flow. The generation dialog performed
 preview only; no create, confirm, assignment, publish or repair mutation ran.
 
+The deployed read-only browser pass used the following exact server-local
+invocation. `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` were read from the
+protected staging environment on the VPS and passed only into the ephemeral
+container; their values, the authenticated browser state and Playwright
+artifacts were not exported. Listing the three spec files explicitly is the
+load-bearing boundary that excludes the mutating customer, generation,
+assignment, publish and repair scenarios from shared staging.
+
+```bash
+ENV_FILE=/opt/ultrakil/app/deploy/staging.env
+RELEASE=/opt/ultrakil/releases/20260924T163842Z-main-500daf8
+
+set -a
+. "$ENV_FILE"
+set +a
+
+export E2E_EMAIL="$SEED_ADMIN_EMAIL"
+export E2E_PASSWORD="$SEED_ADMIN_PASSWORD"
+export E2E_BASE_URL=https://ultrakil.taskforceai.tech
+export E2E_PRIVATE_ARTIFACTS_DIR=/work/.playwright-artifacts
+
+docker run --rm \
+  --name ultrakil-readonly-browser-uat \
+  --init \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --pids-limit 512 \
+  --memory 4g \
+  --cpus 2 \
+  --shm-size 1g \
+  --tmpfs /root:size=1g,mode=0700 \
+  --env E2E_EMAIL \
+  --env E2E_PASSWORD \
+  --env E2E_BASE_URL \
+  --env E2E_PRIVATE_ARTIFACTS_DIR \
+  --mount type=bind,src="$RELEASE/apps/manager-web",dst=/source/manager-web,readonly \
+  --mount type=bind,src="$RELEASE/packages",dst=/source/packages,readonly \
+  --mount type=bind,src="$RELEASE/package.json",dst=/source/package.json,readonly \
+  --mount type=bind,src="$RELEASE/pnpm-lock.yaml",dst=/source/pnpm-lock.yaml,readonly \
+  --mount type=bind,src="$RELEASE/pnpm-workspace.yaml",dst=/source/pnpm-workspace.yaml,readonly \
+  mcr.microsoft.com/playwright:v1.62.1-noble \
+  bash -lc '
+    mkdir -p /work/apps /work/packages
+    cp -a /source/manager-web /work/apps/manager-web
+    cp -a /source/packages/. /work/packages/
+    cp /source/package.json /source/pnpm-lock.yaml /source/pnpm-workspace.yaml /work/
+    cd /work
+    corepack enable
+    pnpm install --frozen-lockfile --filter @ultrakil/manager-web...
+    pnpm --filter @ultrakil/manager-web exec playwright test \
+      e2e/05-accessibility.spec.ts \
+      e2e/06-responsive.spec.ts \
+      e2e/07-vehicle-drivers-and-inactive-clients.spec.ts \
+      --project=chromium
+  '
+```
+
 Post-run count-only SQL reproduced 74 live assignments, 1,506 pending visits,
 zero employee/vehicle overlap, short crew, missing PMS/skill, multi-vehicle,
 driver, transport, branch or vehicle-capacity violations, and a maximum future
