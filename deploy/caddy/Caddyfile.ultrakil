@@ -15,7 +15,7 @@
 		# Dispatch Board writes its share payload, and the browser acceptance path
 		# reads it back to prove the rendered payload. Keep both capabilities scoped
 		# to this origin rather than disabling clipboard reads globally.
-		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(self), clipboard-write=(self), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), web-share=(), xr-spatial-tracking=()"
+		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), clipboard-read=(self), clipboard-write=(self), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), xr-spatial-tracking=()"
 		# Next's current production bundle needs inline styles and evaluator-backed
 		# development/runtime compatibility. This reports violations first; it does
 		# not yet block requests until browser evidence supports enforcement.

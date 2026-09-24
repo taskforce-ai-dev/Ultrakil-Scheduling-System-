@@ -64,6 +64,7 @@ test('Caddy template supplies host-only security headers and strips implementati
   assert.match(caddyfile, /Permissions-Policy "/);
   assert.match(caddyfile, /clipboard-read=\(self\), clipboard-write=\(self\)/);
   assert.doesNotMatch(caddyfile, /clipboard-read=\(\)/);
+  assert.doesNotMatch(caddyfile, /web-share=/);
   assert.doesNotMatch(caddyfile, /clipboard-write=\(\)/);
   assert.match(caddyfile, /-Server/);
   assert.match(caddyfile, /-X-Powered-By/);
