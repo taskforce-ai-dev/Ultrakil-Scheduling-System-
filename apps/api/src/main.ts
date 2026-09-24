@@ -14,6 +14,7 @@ async function bootstrap(): Promise<void> {
     bufferLogs: false,
     rawBody: true,
   });
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
 
   const config = app.get(ConfigService);
   // The platform picks the port when it hosts the process; API_PORT is ours.

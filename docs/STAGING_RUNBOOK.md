@@ -284,6 +284,167 @@ if curl --connect-timeout 3 -fsS http://STAGING_HOST_LAN_IP:3001/api/health/live
 fi
 ```
 
+### Source-controlled Caddy ingress hardening
+
+`deploy/caddy/Caddyfile.ultrakil` is the reviewed Caddy v2.6.2+ UltraKIL site
+fragment. `deploy/caddy/Caddyfile` is a complete, UltraKIL-only global wrapper
+that imports it. The fragment preserves the current routes exactly:
+
+- `ultrakil.taskforceai.tech` -> `127.0.0.1:3000`
+- `api.ultrakil.taskforceai.tech` -> `127.0.0.1:3001`
+- `ultrakil-api.taskforceai.tech` -> `127.0.0.1:3001`
+
+Keep both API hostnames until the release record confirms that no approved
+portal build still uses the legacy alias. The template adds HSTS with a
+one-year `max-age` only. It deliberately omits `includeSubDomains` and
+`preload`, so it cannot make an unrelated sibling hostname unreachable. It
+also sets nosniff, strict referrer policy, DENY/frame-ancestors protection, a
+restrictive Permissions-Policy, and asks Caddy to remove `Server` and
+`X-Powered-By` after proxying. `clipboard-read=(self)` and
+`clipboard-write=(self)` are intentionally retained because Dispatch Board's
+Share action copies its payload and the browser acceptance path reads it back
+to verify the exact rendered payload. Both capabilities remain limited to the
+portal's own origin.
+
+The CSP is explicitly **Report-Only**. The current Next bundle uses inline
+styles and evaluator-backed runtime compatibility, so enforcing a new CSP
+without browser evidence could block the manager portal. Confirm the browser
+console has no policy violations across login, manager navigation and an API
+write flow before proposing an enforcement-only change. Do not add a CSP report
+collector or alter authentication, CORS, sessions or rate limits as part of
+this ingress template.
+
+The 2026-09-23 read-only staging inspection established Caddy `v2.6.2` and a
+global file containing only the email option plus these three UltraKIL proxy
+blocks (SHA-256 `17999a34c8de3fe8b141bfe0e87756b439d434f1e696eb2ae6c30463653c13b0`).
+The 2026-09-24 recheck returned Caddy `v2.6.2`, the same checksum, and the
+same email-plus-three-route configuration. This is evidence for those
+instants, not permission to overwrite the host later.
+On 2026-09-24, the author validated an explicit combined candidate over SSH to
+the authorized staging host. Locally, the candidate removed the single
+`import Caddyfile.ultrakil` line from `deploy/caddy/Caddyfile` and appended
+`deploy/caddy/Caddyfile.ultrakil`; that combined text was then streamed to
+`sudo -n caddy adapt --config /dev/stdin --adapter caddyfile` and `sudo -n
+caddy validate --config /dev/stdin --adapter caddyfile`. `sudo -n caddy
+version` returned `2.6.2` and both commands succeeded. This did not ask Caddy
+to resolve a relative import from `/dev`; it validated the wrapper's global
+options and all three site blocks as one effective candidate. This was a
+read-only author validation: it did not write a host file, reload Caddy, or
+deploy this change, and it is not an independent-reviewer attestation. It
+proves parser compatibility for that version only; repeat the candidate
+validation below immediately before a release.
+Before each release, repeat the read-only inspection:
+
+```bash
+sudo caddy version
+sudo sha256sum /etc/caddy/Caddyfile
+sudo sed -n '1,220p' /etc/caddy/Caddyfile
+```
+
+Only use the complete-wrapper replacement path below if the current file still
+contains exactly the global email option and the three expected UltraKIL host
+blocks. If it contains another site, import, snippet, matcher, or global option,
+**do not replace `/etc/caddy/Caddyfile`**. Stop for targeted configuration
+review; this runbook intentionally provides no automated mixed-host merge.
+
+For an UltraKIL-only host, install and reload only during a release window:
+
+```bash
+cd /opt/ultrakil/app
+sudo install -d -o root -g root -m 0755 /etc/caddy
+sudo install -d -o root -g root -m 0700 /etc/caddy/.ultrakil-candidate /etc/caddy/.ultrakil-previous
+sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile /etc/caddy/.ultrakil-candidate/Caddyfile
+sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile.ultrakil /etc/caddy/.ultrakil-candidate/Caddyfile.ultrakil
+sudo caddy validate --config /etc/caddy/.ultrakil-candidate/Caddyfile --adapter caddyfile
+# Snapshot a matching old wrapper/fragment pair. cp -a preserves the previous
+# owner, group and mode for rollback rather than applying the new-file defaults.
+sudo cp -a /etc/caddy/Caddyfile /etc/caddy/.ultrakil-previous/Caddyfile
+if sudo test -e /etc/caddy/Caddyfile.ultrakil; then
+  sudo test -f /etc/caddy/Caddyfile.ultrakil
+  sudo cp -a /etc/caddy/Caddyfile.ultrakil /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil
+  sudo rm -f /etc/caddy/.ultrakil-previous/fragment-absent
+else
+  sudo rm -f /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil
+  sudo install -o root -g root -m 0600 /dev/null /etc/caddy/.ultrakil-previous/fragment-absent
+fi
+sudo caddy validate --config /etc/caddy/.ultrakil-previous/Caddyfile --adapter caddyfile
+# Install both already-validated candidates, then validate and reload once. No
+# reload occurs between replacing the fragment and wrapper, so Caddy never loads
+# a mixed old/new pair.
+sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil
+sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl is-active --quiet caddy
+```
+
+No reload occurs between replacing the fragment and wrapper: the previous Caddy
+configuration remains active in memory until the single final reload accepts the
+validated matching candidate pair.
+
+The snapshot is intentionally one release deep. On a first rollout the marker
+records that no fragment existed, so rollback removes the newly introduced
+`Caddyfile.ultrakil`. On a later rollout, both previous files are restored with
+their original owner, group and mode. If any command after the snapshot fails,
+do not reload; use the rollback procedure below.
+
+For a host with unrelated Caddy configuration, do not use the wrapper
+replacement path or attempt an automated fragment merge. Automated mixed-host
+merge is intentionally unsupported: a direct block, imported file, snippet, or
+matcher can already define an UltraKIL hostname, and a second definition would
+make Caddy reject the candidate or route traffic unpredictably. This includes a
+host whose direct file appears to have no existing UltraKIL routes: that scan
+does not prove the effective configuration through every import and generated
+fragment.
+
+Do not use this path to replace existing UltraKIL blocks. Preserve the current
+global configuration and collect a read-only evidence bundle (`caddy version`,
+the global file checksum and contents, every transitive import, and `caddy
+adapt` output) for a targeted, separately reviewed configuration change. If any
+host appears other than exactly once in that effective configuration, stop. Do
+not infer a safe replacement from line numbers or a broad text substitution.
+
+Do not guess how to merge an unfamiliar Caddyfile; stop for an authorized
+configuration review instead.
+
+Run the read-only smoke test from an approved peer. It follows redirects but
+does not authenticate or issue a state-changing request:
+
+```bash
+PORTAL_URL=https://ultrakil.taskforceai.tech/login \
+API_URL=https://ultrakil-api.taskforceai.tech/api/health/ready \
+  deploy/caddy/smoke-test.sh
+```
+
+The smoke test checks only the final portal/API TLS response after any redirect,
+for every required header, the report-only CSP and absence of
+`Server`/`X-Powered-By`. An earlier hardened redirect does not make a final
+rendered response safe. If the installed Caddy version still emits its own
+`Server` header, record that version/output as a release blocker and reconcile
+the live module behavior before claiming the header is removed. Do not silence
+the check.
+
+If validation, reload, health, portal navigation or the smoke test fails,
+restore the matching pre-change wrapper/fragment snapshot and verify it before
+reloading. This rollback does not rebuild containers, change DNS, mutate
+Cloudflare or touch application data:
+
+```bash
+sudo caddy validate --config /etc/caddy/.ultrakil-previous/Caddyfile --adapter caddyfile
+if sudo test -f /etc/caddy/.ultrakil-previous/fragment-absent; then
+  sudo rm -f /etc/caddy/Caddyfile.ultrakil
+else
+  sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil
+fi
+sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo systemctl is-active --quiet caddy
+```
+
+Do not use the complete-wrapper rollback on a host with unrelated sites. A
+targeted mixed-host change must carry its own reviewed rollback procedure.
+
 Every service must be healthy. API readiness must report database, queue and
 scheduler as `up`. Container logs rotate at 10 MB with five files per service.
 Treat any unhandled exception, restart loop, migration warning or failed health

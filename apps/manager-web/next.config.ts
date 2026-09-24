@@ -3,6 +3,7 @@ import path from "node:path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  poweredByHeader: false,
   outputFileTracingRoot: path.join(__dirname, "../.."),
   typescript: {
     // A production build type-checks the product, not the test suite. Tests

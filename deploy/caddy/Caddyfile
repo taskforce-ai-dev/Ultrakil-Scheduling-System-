@@ -1,0 +1,9 @@
+# Source-controlled global staging entrypoint for an UltraKIL-only host. Import
+# the site fragment only after a configuration review proves none of its three
+# hostnames is defined in this file or any transitive import; otherwise use a
+# separately reviewed merge rather than creating duplicate Caddy site addresses.
+{
+	email admin@taskforceai.tech
+}
+
+import Caddyfile.ultrakil

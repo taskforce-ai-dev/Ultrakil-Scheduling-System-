@@ -16,6 +16,7 @@
 import { AgreementStatus, PrismaClient, UserRole } from '@prisma/client';
 
 import { AuthService } from '../src/auth/auth.service';
+import { assertDemoSeedAllowed } from './seed-guards';
 import { importMatrix } from '../src/workforce/matrix-import/importer';
 import {
   DEMO_CUSTOMERS,
@@ -274,6 +275,7 @@ async function seedCatalog(): Promise<{
 }
 
 async function main(): Promise<void> {
+  assertDemoSeedAllowed(process.env);
   const force = process.argv.slice(2).includes('--force');
 
   const realEmployees = await countRealEmployees();
