@@ -11,6 +11,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { AppException } from '../common/errors/app.exception';
+import { lockSiteRows } from '../common/locks/site-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CustomerWithRelations,
@@ -363,6 +364,10 @@ export class CustomersService {
         : normaliseOperatingHours(dto.operatingHours);
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Match the optimizer's site lock before touching the child hour rows.
+      // Without this, a replacement can commit while the optimizer persists
+      // a proposal based on the hours it read moments earlier.
+      await lockSiteRows(tx, [siteId]);
       // Opening hours are replaced wholesale, not merged: the client sends the
       // week it wants, and a weekday it omits means closed. Merging would make
       // "remove Saturday" impossible to express.

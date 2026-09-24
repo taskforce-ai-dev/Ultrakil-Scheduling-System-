@@ -16,6 +16,7 @@
 import { AgreementStatus, PrismaClient, UserRole } from '@prisma/client';
 
 import { AuthService } from '../src/auth/auth.service';
+import { lockSiteRows } from '../src/common/locks/site-lock';
 import { assertDemoSeedAllowed } from './seed-guards';
 import { importMatrix } from '../src/workforce/matrix-import/importer';
 import {
@@ -157,20 +158,23 @@ async function seedCatalog(): Promise<{
       });
 
       const siteRecord = existingSite
-        ? await prisma.serviceSite.update({
-            where: { id: existingSite.id },
-            data: {
-              addressLine: site.addressLine,
-              city: site.city,
-              branchId: branch.id,
-              branchCode: customer.branchCode,
-              isActive: true,
-              // Replaced wholesale, so a re-run cannot pile up windows.
-              operatingHours: {
-                deleteMany: {},
-                create: site.operatingHours,
+        ? await prisma.$transaction(async (tx) => {
+            await lockSiteRows(tx, [existingSite.id]);
+            return tx.serviceSite.update({
+              where: { id: existingSite.id },
+              data: {
+                addressLine: site.addressLine,
+                city: site.city,
+                branchId: branch.id,
+                branchCode: customer.branchCode,
+                isActive: true,
+                // Replaced wholesale, so a re-run cannot pile up windows.
+                operatingHours: {
+                  deleteMany: {},
+                  create: site.operatingHours,
+                },
               },
-            },
+            });
           })
         : await prisma.serviceSite.create({
             data: {

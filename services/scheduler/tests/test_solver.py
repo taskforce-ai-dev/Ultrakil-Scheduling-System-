@@ -1087,6 +1087,44 @@ class TestChoosingTheDayAndTime:
     that model — which is the point of them.
     """
 
+    def test_explicitly_empty_slots_leave_visit_unassigned_with_time_reason(self):
+        result = solve(request(visits=[visit(candidate_slots=[])]))
+
+        assert result.assignments == []
+        assert result.unassigned[0].reason_codes == ["NO_FEASIBLE_TIME"]
+
+    def test_one_closed_visit_does_not_block_another_legal_visit(self):
+        result = solve(request(visits=[
+            visit(id="closed", candidate_slots=[]),
+            visit(id="open", candidate_slots=[slot("2026-09-09")]),
+        ]))
+
+        assert [assignment.visit_id for assignment in result.assignments] == ["open"]
+        assert result.unassigned[0].visit_id == "closed"
+        assert "NO_FEASIBLE_TIME" in result.unassigned[0].reason_codes
+
+    def test_omitted_slots_keep_legacy_fixed_window_fallback(self):
+        result = solve(request(visits=[visit()]))
+
+        assert result.assignments[0].start_minute == 9 * 60
+
+    def test_omitted_slots_stay_legacy_fixed_in_a_multi_day_solve(self):
+        result = solve(request(visits=[
+            visit(id="legacy-fixed"),
+            visit(id="movable", candidate_slots=[slot("2026-09-09"), slot("2026-09-10")]),
+        ]))
+
+        assert "legacy-fixed" in {assignment.visit_id for assignment in result.assignments}
+
+    def test_time_lock_with_empty_slots_still_requires_the_exact_manager_time(self):
+        result = solve(request(
+            visits=[visit(candidate_slots=[])],
+            locks=[LockInput(visit_id="visit-1", scope="TIME", start_minute=10 * 60,
+                             end_minute=11 * 60 + 30)],
+        ))
+
+        assert result.assignments[0].start_minute == 10 * 60
+
     def test_two_booked_date_only_visits_share_one_crew_sequentially(self):
         booked_slot = CandidateSlot(
             date="2026-09-09", earliest_start_minute=9 * 60, latest_start_minute=17 * 60 - 90

@@ -20,6 +20,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { weekdayOf } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
+import { lockSiteRows } from '../../common/locks/site-lock';
 import { PrismaService } from '../../prisma/prisma.service';
 import { crewMinutesOf } from '../capacity';
 import { Conflict } from '../eligibility/conflict-codes';
@@ -633,7 +634,7 @@ export class ScheduleRunService {
     // and reported SCHEDULER_UNAVAILABLE — a service that was in fact answering.
     const solveDays = new Set(
       request.visits.flatMap((visit) =>
-        visit.candidate_slots.length > 0
+        visit.candidate_slots?.length
           ? visit.candidate_slots.map((slot) => slot.date)
           : [visit.visit_date],
       ),
@@ -998,6 +999,14 @@ export class ScheduleRunService {
           tx,
           entries.map((entry) => entry.serviceAgreementId),
         );
+        const agreementSites = await tx.serviceAgreement.findMany({
+          where: { id: { in: entries.map((entry) => entry.serviceAgreementId) } },
+          select: { serviceSiteId: true },
+        });
+        // Site parents guard every opening-hours child row, including an
+        // empty week where an editor may insert the first opening window.
+        // They follow agreements and precede visits/resources in every writer.
+        await lockSiteRows(tx, agreementSites.map((row) => row.serviceSiteId));
         await lockScheduleVisits(
           tx,
           entries.map((entry) => entry.visitId),

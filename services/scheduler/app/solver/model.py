@@ -75,6 +75,11 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
     if any(code not in held for code in visit.required_skill_codes):
         reasons.append("SKILL_NOT_HELD")
 
+    if visit.candidate_slots == [] and not any(
+        lock.visit_id == visit.id and lock.scope in ("FULL", "TIME")
+        for lock in request.locks
+    ):
+        reasons.append("NO_FEASIBLE_TIME")
     if visit.candidate_slots:
         # `latest_start_minute` is the last moment the job could begin and still
         # finish before the site closes, so a slot with no room left is one
@@ -160,7 +165,7 @@ def _may_take(visit, day: str, allowed_days: list[str]) -> bool:
     if day not in allowed_days:
         return False
 
-    preferred = {slot.date for slot in visit.candidate_slots if slot.is_preferred}
+    preferred = {slot.date for slot in visit.candidate_slots or [] if slot.is_preferred}
     if not preferred or day in preferred:
         return True
     return not any(candidate >= day for candidate in preferred)
@@ -206,7 +211,7 @@ def solve(request: SolveRequest) -> SolveResponse:
     def days_for(visit) -> list[str]:
         if visit.id in date_pinned:
             return [visit.visit_date]
-        if not visit.candidate_slots:
+        if visit.candidate_slots is None:
             return [visit.visit_date]
         return sorted({slot.date for slot in visit.candidate_slots})
 
@@ -239,8 +244,8 @@ def solve(request: SolveRequest) -> SolveResponse:
         narrowed = []
         for visit in todays:
             slots = (
-                [] if visit.id in date_pinned
-                else [slot for slot in visit.candidate_slots if slot.date == day]
+                None if visit.id in date_pinned or visit.candidate_slots is None
+                else [slot for slot in visit.candidate_slots or [] if slot.date == day]
             )
             narrowed.append(visit.model_copy(update={"visit_date": day, "candidate_slots": slots}))
 
@@ -415,12 +420,11 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     # and vehicle come out of one optimisation, which is what lets it trade a
     # day to cover another job.
     #
-    # A visit with no candidates is pinned where it is — a published or
-    # time-locked visit sends none — so this is strictly more freedom, never
-    # less.
+    # A null/omitted candidate list retains the legacy fixed-window fallback.
+    # An explicit empty list is impossible work, not permission to staff it.
     all_dates = sorted(
         {v.visit_date for v in visits}
-        | {slot.date for v in visits for slot in v.candidate_slots}
+        | {slot.date for v in visits for slot in v.candidate_slots or []}
         | {
             reservation.scheduled_date
             for reservation in request.reservations
@@ -442,13 +446,13 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         )
         if lock is not None and lock.scope in ("FULL", "TIME") and lock.start_minute is not None:
             return [day_index[v.visit_date] * 1440 + lock.start_minute]
-        if not v.candidate_slots:
+        if v.candidate_slots is None:
             base = day_index[v.visit_date] * 1440 + v.window_start_minute
             return [base]
 
         starts: list[int] = []
         occupied = {(key.date, key.start_minute) for key in v.occupied_start_keys}
-        for slot in v.candidate_slots:
+        for slot in v.candidate_slots or []:
             if slot.date not in day_index:
                 continue
             offset = day_index[slot.date] * 1440
@@ -502,7 +506,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     for v in visits:
         if not v.candidate_slots:
             continue
-        preferred_dates = {slot.date for slot in v.candidate_slots if slot.is_preferred}
+        preferred_dates = {slot.date for slot in v.candidate_slots or [] if slot.is_preferred}
         if not preferred_dates:
             continue
 
@@ -928,6 +932,10 @@ _MESSAGES = {
     "CREW_TOO_SMALL": "Not enough eligible people are free to make up the crew.",
     "SKILL_NOT_HELD": "Nobody eligible and free holds a skill this job requires.",
     "WINDOW_TOO_SHORT": "The customer's window is shorter than the job takes.",
+    "NO_FEASIBLE_TIME": (
+        "The visit has no legal start time on its current date or allowed days within "
+        "the site's opening hours. Confirm hours or adjust the visit."
+    ),
     "NO_AUTHORIZED_DRIVER": (
         "Nobody who could serve this visit is authorized to drive any available vehicle."
     ),

@@ -16,6 +16,7 @@ const GROUP_EXAMPLES: Array<{ group: string; code: ConflictCode; message: string
   { group: "BRANCH_RESTRICTION", code: "BRANCH_MISMATCH", message: "This employee's branch does not match the visit's branch." },
   { group: "PERMANENT_STAFF_RESTRICTION", code: "EMPLOYEE_PERMANENTLY_STATIONED", message: "This employee is permanently stationed elsewhere." },
   { group: "SERVICE_WINDOW_CONFLICT", code: "OUTSIDE_SERVICE_HOURS", message: "This visit falls outside the site's opening hours." },
+  { group: "SERVICE_WINDOW_CONFLICT", code: "NO_FEASIBLE_TIME", message: "The visit has no legal start time on its current date or allowed days within the site's opening hours. Confirm hours or adjust the visit." },
   { group: "EMPLOYEE_OVERLAP", code: "EMPLOYEE_DOUBLE_BOOKED", message: "This employee is already assigned to another visit at this time." },
   { group: "VEHICLE_OVERLAP", code: "VEHICLE_DOUBLE_BOOKED", message: "This vehicle is already assigned to another visit at this time." },
 ];

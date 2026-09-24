@@ -43,15 +43,11 @@ class VisitInput(BaseModel):
     """Set by ULK-C04 when the date fell on a preferred weekday, not merely an
     allowed one. A soft preference: worth a nudge, never a refusal."""
     is_preferred_day: bool = False
-    """Every legal date and time this visit could take, when the caller is
-    willing to let the solver move it.
-
-    Left empty the visit is pinned exactly where it is — which is what a
-    published or time-locked visit sends, and what keeps a caller that knows
-    nothing about slots behaving as it always did. Given candidates, the visit
-    lands on whichever one produces the best schedule overall, and the date it
-    was generated on carries no weight of its own."""
-    candidate_slots: list[CandidateSlot] = Field(default_factory=list)
+    """Omitted/null means the legacy fixed-window fallback. An explicit []
+    means the API found no legal date/time and the visit must be unassigned.
+    Time locks override slots with the manager's exact start/end. Nonempty
+    candidates let the solver choose a legal date and time."""
+    candidate_slots: list[CandidateSlot] | None = None
     occupied_start_keys: list[OccupiedStartKey] = Field(default_factory=list)
 
 

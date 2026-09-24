@@ -40,6 +40,7 @@ export const CONFLICT_CODES = [
   ErrorCode.CREW_CANNOT_TRAVEL,
   ErrorCode.TOO_MANY_VEHICLES,
   ErrorCode.NO_FEASIBLE_CREW,
+  ErrorCode.NO_FEASIBLE_TIME,
   ErrorCode.DAILY_VISIT_CAP_REACHED,
 ] as const;
 

@@ -33,7 +33,8 @@ import { AppException } from '../errors/app.exception';
  * touching any of them — an order kept only among the rows a writer happens to
  * lock first is not an order. Take it before the visit rows and before the
  * branch-day advisory locks, which is the sequence every schedule writer uses:
- * agreements, then visits, then resources, then branch-days.
+ * agreements, then site parents (when opening hours matter), then visits,
+ * then resources, then branch-days. See `site-lock.ts`.
  *
  * The lock is `FOR UPDATE`, the strongest row lock, for the same reason:
  * generated-visit uniqueness is scoped by agreement, so a writer changing a

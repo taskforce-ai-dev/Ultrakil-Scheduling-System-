@@ -411,6 +411,9 @@ function fixture(
     scheduleRunDispatchOutbox,
     assignment,
     assignmentLock: { updateMany: jest.fn() },
+    serviceAgreement: {
+      findMany: jest.fn(async () => [{ serviceSiteId: 'site' }]),
+    },
     generatedVisit,
     visitUnassignedReason: { deleteMany: jest.fn(), createMany: jest.fn() },
     // Read by `BranchDayCapacityService` inside the same transaction the
@@ -440,6 +443,8 @@ function fixture(
         ? [{ id: visit.id }]
         : query.sql.includes('service_agreements')
           ? [{ id: visit.serviceAgreementId }]
+          : query.sql.includes('service_sites')
+            ? [{ id: 'site' }]
           : query.sql.includes('employees')
             ? query.values.map((id) => ({ id }))
             : query.sql.includes('vehicles')
@@ -657,7 +662,7 @@ describe('solver replacement lifecycle fence', () => {
     const pending = f.service.execute(f.run.id);
     await f.started.promise;
     const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
-    expect(request.visits[0].candidate_slots).toEqual([]);
+    expect(request.visits[0].candidate_slots).toBeNull();
     f.release();
 
     await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
@@ -675,7 +680,7 @@ describe('solver replacement lifecycle fence', () => {
     const pending = f.service.execute(f.run.id);
     await f.started.promise;
     const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
-    expect(request.visits[0].candidate_slots.map((slot) => slot.date)).toContain('2027-03-04');
+    expect(request.visits[0].candidate_slots?.map((slot) => slot.date)).toContain('2027-03-04');
     f.release();
 
     await expect(pending).resolves.toMatchObject({ scheduled: 1 });
@@ -767,7 +772,7 @@ describe('solver replacement lifecycle fence', () => {
       to: new Date('2027-03-07T00:00:00Z'),
     });
 
-    expect(request.visits[0].candidate_slots.map((slot) => slot.date)).toEqual(['2027-03-03']);
+    expect(request.visits[0].candidate_slots?.map((slot) => slot.date)).toEqual(['2027-03-03']);
   });
 
   it('sends published reservations and sibling keys while retaining the target own date', () => {
@@ -1065,7 +1070,7 @@ describe('solver replacement lifecycle fence', () => {
         vehicle_drivers: [{ vehicle_id: 'van', driver_employee_id: 'employee' }],
       }),
     ]);
-    expect(request.visits[0].candidate_slots).toEqual([]);
+    expect(request.visits[0].candidate_slots).toBeNull();
   });
 
   it('maps a final Prisma unique collision to a safe resource conflict', async () => {

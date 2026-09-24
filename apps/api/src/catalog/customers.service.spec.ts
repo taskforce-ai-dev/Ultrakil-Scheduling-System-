@@ -102,6 +102,7 @@ function fixture(options: {
       })),
     },
     siteOperatingHours: { deleteMany: jest.fn() },
+    $queryRaw: jest.fn(async () => [{ id: SITE_ID }]),
   };
 
   const audit = { record: jest.fn() };

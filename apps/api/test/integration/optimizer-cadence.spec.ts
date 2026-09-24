@@ -1,6 +1,8 @@
-import { AssignmentStatus, BranchCode, CrewRole, DataProvenance, DayRuleKind, FrequencyUnit, LockScope, PrismaClient, VisitPlacement, VisitStatus, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, CrewRole, DataProvenance, DayRuleKind, FrequencyUnit, LockScope, Prisma, PrismaClient, UserRole, VisitPlacement, VisitStatus, Weekday } from '@prisma/client';
 
 import { AuditService } from '../../src/audit/audit.service';
+import { AuthenticatedUser } from '../../src/auth/auth.types';
+import { CustomersService } from '../../src/catalog/customers.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { EligibilityService } from '../../src/scheduling/eligibility/eligibility.service';
 import { BranchDayCapacityService } from '../../src/scheduling/visit-generation/branch-day-capacity.service';
@@ -10,6 +12,23 @@ import { SchedulerClient, SolveRequest, SolveResponse } from '../../src/scheduli
 const prisma = new PrismaClient();
 const suffix = Math.random().toString(36).slice(2, 10);
 const date = (value: string) => new Date(`${value}T00:00:00.000Z`);
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function waitForBlocked(waitingPid: number, holdingPid: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [state] = await prisma.$queryRaw<{ blockers: number[] }[]>`
+      SELECT pg_blocking_pids(${waitingPid}::integer) AS blockers
+    `;
+    if (state.blockers.includes(holdingPid)) return;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  throw new Error(`Optimizer backend ${waitingPid} did not wait for site writer ${holdingPid}`);
+}
 
 let branchId: string;
 let customerId: string;
@@ -186,6 +205,118 @@ async function fixture(options: {
 }
 
 describe('optimizer cadence persistence against PostgreSQL', () => {
+  it.each([VisitPlacement.ANCHORED, VisitPlacement.BOOKED])(
+    'leaves a pre-existing %s visit unassigned when there are no legal site-hour slots', async (placement) => {
+      const f = await fixture({
+        placement, allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07',
+        solverDate: '2027-03-03',
+      });
+      await prisma.siteOperatingHours.create({ data: {
+        serviceSiteId: siteId, weekday: Weekday.THURSDAY,
+        opensAtMinute: 540, closesAtMinute: 1020,
+      } });
+      f.solve.mockImplementation(async (request: SolveRequest) => ({
+        ...f.responseFor(request), assignments: [],
+        unassigned: [{ visit_id: f.visit.id, reason_codes: ['NO_FEASIBLE_TIME'],
+          message: 'No legal date and time' }],
+      }));
+
+      await expect(f.service.execute(f.run.id)).resolves.toMatchObject({ scheduled: 0, unassigned: 1 });
+      expect(f.solve.mock.calls[0][0].visits[0].candidate_slots).toEqual([]);
+      expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: f.visit.id } })).status)
+        .toBe(VisitStatus.UNASSIGNED);
+      expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+    },
+  );
+
+  it('serializes a site-hours edit started after persistence enters, then rechecks the changed hours', async () => {
+    const f = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    await prisma.siteOperatingHours.create({ data: {
+      serviceSiteId: siteId, weekday: Weekday.WEDNESDAY,
+      opensAtMinute: 540, closesAtMinute: 1020,
+    } });
+    const optimizerEntered = deferred();
+    const releaseOptimizer = deferred();
+    const writerHoldingSite = deferred();
+    const releaseWriter = deferred();
+    let optimizerPid = 0;
+    let writerPid = 0;
+    const optimizerClient = new Proxy(prisma, {
+      get(target, property) {
+        if (property !== '$transaction') return Reflect.get(target, property);
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options?: { timeout?: number }) =>
+          target.$transaction(async (tx) => work(new Proxy(tx, {
+            get(transaction, key) {
+              if (key !== '$queryRaw') return Reflect.get(transaction, key);
+              return async (statement: Prisma.Sql) => {
+                const result = await transaction.$queryRaw(statement);
+                if (statement.sql.includes('service_agreements') && statement.sql.includes('FOR UPDATE')) {
+                  const [backend] = await transaction.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+                  optimizerPid = backend.pid;
+                  optimizerEntered.resolve();
+                  await releaseOptimizer.promise;
+                }
+                return result;
+              };
+            },
+          })), options);
+      },
+    }) as unknown as PrismaService;
+    const writerClient = new Proxy(prisma, {
+      get(target, property) {
+        if (property !== '$transaction') return Reflect.get(target, property);
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          target.$transaction(async (tx) => work(new Proxy(tx, {
+            get(transaction, key) {
+              if (key !== 'siteOperatingHours') return Reflect.get(transaction, key);
+              return new Proxy(transaction.siteOperatingHours, {
+                get(hours, operation) {
+                  if (operation !== 'deleteMany') return Reflect.get(hours, operation);
+                  return async (args: Prisma.SiteOperatingHoursDeleteManyArgs) => {
+                    const [backend] = await transaction.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+                    writerPid = backend.pid;
+                    writerHoldingSite.resolve();
+                    await releaseWriter.promise;
+                    return hours.deleteMany(args);
+                  };
+                },
+              });
+            },
+          })), { timeout: 15_000 });
+      },
+    }) as unknown as PrismaService;
+    const optimizer = new ScheduleRunService(
+      optimizerClient, { solve: f.solve } as unknown as SchedulerClient,
+      new EligibilityService(optimizerClient), {} as AuditService,
+      new BranchDayCapacityService(optimizerClient, { get: () => undefined } as never),
+    );
+    const writer = new CustomersService(writerClient, { record: async () => undefined } as unknown as AuditService);
+    const actor = { id: employeeId, email: 'manager@example.test', fullName: 'Manager', role: UserRole.ADMIN } as AuthenticatedUser;
+    let optimizerWork: Promise<unknown> | undefined;
+    let writerWork: Promise<unknown> | undefined;
+    try {
+      optimizerWork = optimizer.execute(f.run.id);
+      await optimizerEntered.promise;
+      writerWork = writer.updateSite(siteId, { operatingHours: [{
+        weekday: Weekday.WEDNESDAY, opensAtMinute: 720, closesAtMinute: 1020,
+      }] }, actor);
+      await writerHoldingSite.promise;
+      releaseOptimizer.resolve();
+      await waitForBlocked(optimizerPid, writerPid);
+      releaseWriter.resolve();
+      await writerWork;
+      await expect(optimizerWork).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+      expect((await prisma.siteOperatingHours.findFirstOrThrow({ where: { serviceSiteId: siteId } })).opensAtMinute).toBe(720);
+    } finally {
+      releaseOptimizer.resolve();
+      releaseWriter.resolve();
+      await Promise.allSettled([optimizerWork, writerWork].filter((work): work is Promise<unknown> => work !== undefined));
+    }
+  }, 30_000);
+
   it('bounds post-solve rule-context queries as the result grows from 1 to 36 visits', async () => {
     const observed = new PrismaClient({ log: [{ emit: 'event', level: 'query' }] });
     let capture = false;
@@ -497,7 +628,7 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
     if (options.endDate) expect(f.agreement.endDate).toEqual(date(options.endDate));
     await expect(f.service.execute(f.run.id)).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
     const submitted = f.solve.mock.calls[0][0];
-    expect(submitted.visits.find((visit) => visit.id === f.visit.id)?.candidate_slots.map((slot) => slot.date))
+    expect(submitted.visits.find((visit) => visit.id === f.visit.id)?.candidate_slots?.map((slot) => slot.date))
       .not.toContain(options.solverDate);
     expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
     expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: f.visit.id } })).visitDate)
@@ -512,7 +643,7 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
       solverDate: '2027-03-04',
     });
     expect(await f.service.execute(f.run.id)).toMatchObject({ scheduled: 1 });
-    expect(f.solve.mock.calls[0][0].visits.find((visit) => visit.id === f.visit.id)?.candidate_slots.map((slot) => slot.date))
+    expect(f.solve.mock.calls[0][0].visits.find((visit) => visit.id === f.visit.id)?.candidate_slots?.map((slot) => slot.date))
       .toContain('2027-03-04');
     expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: f.visit.id } })).visitDate)
       .toEqual(date('2027-03-04'));
@@ -551,7 +682,7 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
     const pending = f.service.execute(f.run.id);
     await started;
     const request = f.solve.mock.calls[0][0];
-    expect(request.visits[0].candidate_slots.map((slot) => slot.date)).toContain('2027-03-04');
+    expect(request.visits[0].candidate_slots?.map((slot) => slot.date)).toContain('2027-03-04');
     await prisma.serviceAgreementDayRule.deleteMany({
       where: { serviceAgreementId: f.agreement.id, weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },
     });
