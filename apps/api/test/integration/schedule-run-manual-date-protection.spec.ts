@@ -218,8 +218,12 @@ describe('schedule-run protected visit dates (PostgreSQL)', () => {
       });
 
       await expect(runs.execute(run.id)).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
-      expect(request?.visits.find((visit) => visit.id === target.id)?.candidate_slots).toEqual([]);
-      expect(request?.visits.find((visit) => visit.id === other.id)?.candidate_slots.length)
+      const protectedSlots = request?.visits.find(
+        (visit) => visit.id === target.id,
+      )?.candidate_slots;
+      expect(protectedSlots?.length).toBeGreaterThan(0);
+      expect(protectedSlots?.every((slot) => slot.date === '2027-03-03')).toBe(true);
+      expect(request?.visits.find((visit) => visit.id === other.id)?.candidate_slots?.length)
         .toBeGreaterThan(0);
       expect(eligibility.evaluate).not.toHaveBeenCalled();
       await expectNoScheduleWrites(other.id, target.id, run.id);

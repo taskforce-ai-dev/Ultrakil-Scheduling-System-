@@ -973,7 +973,13 @@ describe('solver replacement lifecycle fence', () => {
           vehicles: unknown[],
           options: { timeLimitSeconds: number; from: Date; to: Date },
         ) => {
-          visits: { candidate_slots: unknown[] }[];
+          visits: {
+            candidate_slots: {
+              date: string;
+              earliest_start_minute: number;
+              latest_start_minute: number;
+            }[] | null;
+          }[];
           locks: unknown[];
           existing: { start_minute: number | null }[];
         };
@@ -985,11 +991,56 @@ describe('solver replacement lifecycle fence', () => {
       };
 
       expect(build('run', [{ ...target, isManuallyAdjusted: false, lockedAt: null }], [], [], options)
-        .visits[0].candidate_slots.length).toBeGreaterThan(0);
+        .visits[0].candidate_slots?.length).toBeGreaterThan(0);
       const request = build('run', [target], [], [], options);
-      expect(request.visits[0].candidate_slots).toEqual([]);
+      expect(request.visits[0].candidate_slots).toEqual([
+        expect.objectContaining({
+          date: '2027-03-03',
+          earliest_start_minute: 540,
+          latest_start_minute: 630,
+        }),
+      ]);
       expect(request.locks).toEqual([]);
       expect(request.existing[0].start_minute).toBe(600);
+    },
+  );
+
+  it.each(['manual', 'visit-lock'] as const)(
+    'keeps a %s visit on its protected date while allowing a legal time change',
+    async (protection) => {
+      const f = fixture();
+      f.visit.isManuallyAdjusted = protection === 'manual';
+      f.visit.lockedAt = protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null;
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+      expect(request.visits[0].candidate_slots).toEqual([
+        expect.objectContaining({ date: '2027-03-03', earliest_start_minute: 540 }),
+      ]);
+      f.answer.resolve({
+        run_id: f.run.id,
+        status: 'OPTIMAL',
+        assignments: [{
+          visit_id: f.visit.id,
+          employee_ids: ['employee'],
+          vehicles: [],
+          start_minute: 540,
+          scheduled_date: '2027-03-03',
+        }],
+        unassigned: [],
+        solve_seconds: 0,
+        objective_value: 0,
+        visits_considered: 1,
+      });
+
+      await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+      expect(f.assignment.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          plannedStart: new Date('2027-03-03T09:00:00.000Z'),
+        }),
+      }));
+      expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
     },
   );
 
