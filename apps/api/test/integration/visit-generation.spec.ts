@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import {
   BranchCode,
+  Prisma,
   PrismaClient,
   UserRole,
   VisitStatus,
@@ -21,6 +22,7 @@ import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { AuditService } from '../../src/audit/audit.service';
 import { AuthService } from '../../src/auth/auth.service';
+import { CustomersService } from '../../src/catalog/customers.service';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import { PublishingService } from '../../src/scheduling/optimizer/publishing.service';
@@ -161,6 +163,17 @@ function barrier() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => { release = resolve; });
   return { promise, release };
+}
+
+async function waitForBlocked(waitingPid: number, holdingPid: number) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const [state] = await prisma.$queryRaw<{ blockers: number[] }[]>`
+      SELECT pg_blocking_pids(${waitingPid}::integer) AS blockers
+    `;
+    if (state.blockers.includes(holdingPid)) return;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  throw new Error(`Generation backend ${waitingPid} did not wait for site writer ${holdingPid}`);
 }
 
 beforeAll(async () => {
@@ -658,6 +671,107 @@ describe('regeneration never loses manager-controlled work', () => {
       }
     },
   );
+
+  it('serializes a racing site-hours edit and refuses a generation plan built from the old hours', async () => {
+    const sourceSite = await prisma.serviceSite.findUniqueOrThrow({ where: { id: siteId } });
+    const raceSite = await prisma.serviceSite.create({ data: {
+      customerId: sourceSite.customerId,
+      branchId: sourceSite.branchId,
+      branchCode: sourceSite.branchCode,
+      name: `C04 generation-hours-race ${suffix}`,
+      operatingHours: { create: [{
+        weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 1020,
+      }] },
+    } });
+    const agreement = await createAgreement({ serviceSiteId: raceSite.id, crewSize: 1 });
+    const dto = { ...HORIZON, serviceAgreementIds: [agreement.id] };
+    const actor = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN.email } });
+    const generationEntered = barrier();
+    const releaseGeneration = barrier();
+    const writerHoldingSite = barrier();
+    const releaseWriter = barrier();
+    let generationPid = 0;
+    let writerPid = 0;
+    const generationClient = new Proxy(prisma, {
+      get(target, key) {
+        if (key !== '$transaction') return Reflect.get(target, key);
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>, options?: { timeout?: number }) =>
+          target.$transaction(async (tx) => work(new Proxy(tx, {
+            get(transaction, property) {
+              if (property !== '$queryRaw') return Reflect.get(transaction, property);
+              return async (statement: Prisma.Sql) => {
+                const result = await transaction.$queryRaw(statement);
+                if (statement.sql.includes('service_agreements') && statement.sql.includes('FOR UPDATE')) {
+                  const [backend] = await transaction.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+                  generationPid = backend.pid;
+                  generationEntered.release();
+                  await releaseGeneration.promise;
+                }
+                return result;
+              };
+            },
+          })), options);
+      },
+    }) as unknown as PrismaService;
+    const writerClient = new Proxy(prisma, {
+      get(target, key) {
+        if (key !== '$transaction') return Reflect.get(target, key);
+        return (work: (tx: Prisma.TransactionClient) => Promise<unknown>) =>
+          target.$transaction(async (tx) => work(new Proxy(tx, {
+            get(transaction, property) {
+              if (property !== 'siteOperatingHours') return Reflect.get(transaction, property);
+              return new Proxy(transaction.siteOperatingHours, {
+                get(hours, operation) {
+                  if (operation !== 'deleteMany') return Reflect.get(hours, operation);
+                  return async (args: Prisma.SiteOperatingHoursDeleteManyArgs) => {
+                    const [backend] = await transaction.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+                    writerPid = backend.pid;
+                    writerHoldingSite.release();
+                    await releaseWriter.promise;
+                    return hours.deleteMany(args);
+                  };
+                },
+              });
+            },
+          })), { timeout: 15_000 });
+      },
+    }) as unknown as PrismaService;
+    const generation = new VisitGenerationService(
+      generationClient, app.get(AuditService), app.get(ConfigService), fixedCapacity(100_000),
+    );
+    const writer = new CustomersService(writerClient, app.get(AuditService));
+    expect((await generation.preview(dto)).additions.length).toBeGreaterThan(0);
+    const runsBefore = await prisma.scheduleRun.count();
+    let generationWork: Promise<unknown> | undefined;
+    let writerWork: Promise<unknown> | undefined;
+    try {
+      generationWork = generation.confirm(dto, actor).then(
+        () => ({ completed: true }),
+        (error: unknown) => error,
+      );
+      await generationEntered.promise;
+      writerWork = writer.updateSite(raceSite.id, { operatingHours: [{
+        weekday: Weekday.WEDNESDAY, opensAtMinute: 720, closesAtMinute: 1020,
+      }] }, actor);
+      await writerHoldingSite.promise;
+      releaseGeneration.release();
+      await waitForBlocked(generationPid, writerPid);
+      releaseWriter.release();
+      await writerWork;
+      expect(await generationWork).toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(await prisma.generatedVisit.count({ where: { serviceAgreementId: agreement.id } })).toBe(0);
+      expect(await prisma.scheduleRun.count()).toBe(runsBefore);
+      expect((await prisma.siteOperatingHours.findFirstOrThrow({ where: { serviceSiteId: raceSite.id } })).opensAtMinute)
+        .toBe(720);
+    } finally {
+      releaseGeneration.release();
+      releaseWriter.release();
+      await Promise.allSettled([generationWork, writerWork].filter((work): work is Promise<unknown> => work !== undefined));
+      await prisma.generatedVisit.deleteMany({ where: { serviceAgreementId: agreement.id } });
+      await prisma.serviceAgreement.delete({ where: { id: agreement.id } });
+      await prisma.serviceSite.delete({ where: { id: raceSite.id } });
+    }
+  }, 30_000);
 
   it.each([VisitStatus.PENDING, VisitStatus.UNASSIGNED])('updates an untouched %s visit when the agreement changes', async (status) => {
     const agreement = await createAgreement();

@@ -79,8 +79,8 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
         findMany: jest.fn(async () => [
           {
             id: 'non-target',
-            plannedStart: new Date('2027-03-03T08:00:00.000Z'),
-            plannedEnd: new Date('2027-03-03T09:00:00.000Z'),
+            plannedStart: new Date('2027-03-03T23:00:00.000Z'),
+            plannedEnd: new Date('2027-03-04T00:00:00.000Z'),
             crewMembers: [{ employeeId: 'reserved-employee' }],
             vehicles: [{ vehicleId: 'reserved-vehicle' }],
           },
@@ -110,20 +110,20 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
           expect.objectContaining({
             id: 'visit-1',
             branch_code: BranchCode.COLOMBO,
-            candidate_slots: [],
+            candidate_slots: null,
           }),
           expect.objectContaining({
             id: 'visit-2',
             branch_code: BranchCode.COLOMBO,
-            candidate_slots: [],
+            candidate_slots: null,
           }),
         ],
         reservations: [
           {
             assignment_id: 'non-target',
             scheduled_date: '2027-03-03',
-            start_minute: 480,
-            end_minute: 540,
+            start_minute: 1380,
+            end_minute: 1440,
             employee_ids: ['reserved-employee'],
             vehicle_ids: ['reserved-vehicle'],
           },

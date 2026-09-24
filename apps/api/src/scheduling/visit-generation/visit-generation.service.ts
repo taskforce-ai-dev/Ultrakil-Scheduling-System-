@@ -30,6 +30,7 @@ import { hashCanonical } from '../../common/canonical-hash';
 import { AppException } from '../../common/errors/app.exception';
 import { DEFAULT_DAILY_CAPACITY_MINUTES } from '../../config/constants';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
+import { lockSiteRows } from '../../common/locks/site-lock';
 import { isUniqueConflict } from '../../common/prisma-errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { crewMinutesOf } from '../capacity';
@@ -144,6 +145,17 @@ const AGREEMENT_INCLUDE = {
 type AgreementForGeneration = Prisma.ServiceAgreementGetPayload<{
   include: typeof AGREEMENT_INCLUDE;
 }>;
+
+function siteHoursSignature(hours: ReadonlyArray<{
+  weekday: string;
+  opensAtMinute: number;
+  closesAtMinute: number;
+  provenance: string;
+}>): string {
+  return JSON.stringify(hours.map((row) => [
+    row.weekday, row.opensAtMinute, row.closesAtMinute, row.provenance,
+  ].join('|')).sort());
+}
 
 /** A booked date the site's own hours do not support, named for a manager. */
 interface BookingWarning {
@@ -1165,7 +1177,7 @@ export class VisitGenerationService {
 
     let scheduleRunId: string | null = null;
     if (actor) {
-      scheduleRunId = await this.apply(plan, dto, from, to, actor, range.loadByDay);
+      scheduleRunId = await this.apply(plan, dto, from, to, actor, range.loadByDay, agreements);
     }
 
     return this.toImpact(
@@ -1853,6 +1865,7 @@ export class VisitGenerationService {
     to: Date,
     actor: AuthenticatedUser,
     loadWhenPlanned: Map<string, number>,
+    agreementsWhenPlanned: AgreementForGeneration[],
   ): Promise<string> {
     const branchIds = new Map(
       (await this.prisma.branch.findMany()).map((branch) => [
@@ -1861,10 +1874,24 @@ export class VisitGenerationService {
       ]),
     );
     const currentVersions = await this.currentVersionIds(plan);
+    const affectedAgreementIds = [...new Set([
+      ...plan.additions.map((addition) => addition.required.serviceAgreementId),
+      ...plan.updates.map((update) => update.required.serviceAgreementId),
+      ...plan.removals.map((removal) => removal.serviceAgreementId),
+    ])].sort();
+    const affectedAgreementSet = new Set(affectedAgreementIds);
+    const expectedByAgreement = new Map(
+      agreementsWhenPlanned
+        .filter((agreement) => affectedAgreementSet.has(agreement.id))
+        .map((agreement) => [agreement.id, {
+          siteId: agreement.serviceSiteId,
+          hours: siteHoursSignature(agreement.serviceSite.operatingHours),
+        }]),
+    );
 
     return this.prisma.$transaction(async (tx) => {
       const changes = [...plan.updates, ...plan.removals];
-      // Agreements first, then visits, then — inside the cap check — the
+      // Agreements, site parents, visits, then — inside the cap check — the
       // branch-days. That is the order `ScheduleRunService.persistResult`
       // takes, and both writers have to take it or they deadlock instead of
       // queueing.
@@ -1880,11 +1907,43 @@ export class VisitGenerationService {
       // [… 1430998084 …]", and killed one of the two. Locking the agreement
       // here, before the day, means this run waits at the same place the
       // optimizer does instead of meeting it head on.
-      await lockAgreementRows(tx, [
-        ...plan.additions.map((addition) => addition.required.serviceAgreementId),
-        ...plan.updates.map((update) => update.required.serviceAgreementId),
-        ...plan.removals.map((removal) => removal.serviceAgreementId),
-      ]);
+      await lockAgreementRows(tx, affectedAgreementIds);
+      const currentAgreementSites = await tx.serviceAgreement.findMany({
+        where: { id: { in: affectedAgreementIds } },
+        select: { id: true, serviceSiteId: true },
+      });
+      if (currentAgreementSites.length !== affectedAgreementIds.length ||
+        currentAgreementSites.some((row) => row.serviceSiteId !== expectedByAgreement.get(row.id)?.siteId)) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'An agreement changed sites after generation was planned. Preview again before confirming.',
+          HttpStatus.CONFLICT,
+        );
+      }
+      const siteIds = [...new Set(currentAgreementSites.map((row) => row.serviceSiteId))];
+      await lockSiteRows(tx, siteIds);
+      const currentHours = await tx.siteOperatingHours.findMany({
+        where: { serviceSiteId: { in: siteIds } },
+        select: {
+          serviceSiteId: true, weekday: true, opensAtMinute: true,
+          closesAtMinute: true, provenance: true,
+        },
+      });
+      const hoursBySite = new Map<string, typeof currentHours>();
+      for (const hours of currentHours) {
+        const rows = hoursBySite.get(hours.serviceSiteId) ?? [];
+        rows.push(hours);
+        hoursBySite.set(hours.serviceSiteId, rows);
+      }
+      if (currentAgreementSites.some((row) =>
+        siteHoursSignature(hoursBySite.get(row.serviceSiteId) ?? []) !==
+          expectedByAgreement.get(row.id)?.hours)) {
+        throw new AppException(
+          'RESOURCE_CONFLICT',
+          'Site opening hours changed after generation was planned. Preview again before confirming.',
+          HttpStatus.CONFLICT,
+        );
+      }
       await lockScheduleVisits(
         tx,
         changes.map((change) => change.visitId),
