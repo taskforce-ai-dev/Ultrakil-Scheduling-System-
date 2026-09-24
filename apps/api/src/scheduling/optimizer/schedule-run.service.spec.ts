@@ -1179,6 +1179,66 @@ describe('solver replacement lifecycle fence', () => {
   );
 
   it.each(['manual', 'visit-lock'] as const)(
+    'intersects a %s protected date with current explicit site hours',
+    async (protection) => {
+      const f = fixture();
+      f.visit.isManuallyAdjusted = protection === 'manual';
+      f.visit.lockedAt = protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null;
+      f.visit.windowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceSite.operatingHours = [
+        { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 720 },
+      ];
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+      expect(request.visits[0].candidate_slots).toEqual([{
+        date: '2027-03-03',
+        earliest_start_minute: 540,
+        latest_start_minute: 630,
+        is_preferred: false,
+      }]);
+      f.release();
+
+      await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+    },
+  );
+
+  it('rechecks site hours narrowed during solve for a visit-level date pin', async () => {
+    const f = fixture();
+    f.visit.lockedAt = new Date('2027-02-02T00:00:00Z');
+    f.visit.windowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceSite.operatingHours = [
+      { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 1020 },
+    ];
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.visit.serviceAgreement.serviceSite.operatingHours[0].opensAtMinute = 720;
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks agreement hours narrowed during solve for a manual date pin', async () => {
+    const f = fixture();
+    f.visit.isManuallyAdjusted = true;
+    f.visit.windowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.visit.serviceAgreement.serviceWindowStartMinute = 720;
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual', 'visit-lock'] as const)(
     'keeps a %s protected date even when it is outside the agreement cadence',
     (protection) => {
       const f = fixture();
@@ -1190,6 +1250,11 @@ describe('solver replacement lifecycle fence', () => {
         serviceAgreement: {
           ...f.visit.serviceAgreement,
           dayRules: [{ weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED }],
+          serviceSite: {
+            operatingHours: [
+              { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 720 },
+            ],
+          },
         },
       };
       const request = (
