@@ -50,6 +50,7 @@ for url in "$PORTAL_URL" "$API_URL"; do
   require_header 'referrer-policy' 'strict-origin-when-cross-origin'
   require_header 'x-frame-options' 'DENY'
   require_header 'permissions-policy' 'geolocation=\(\)'
+  require_header 'permissions-policy' 'clipboard-read=\(self\), clipboard-write=\(self\)'
   require_header 'content-security-policy-report-only' "frame-ancestors 'none'"
   if grep -Eiq '^(server|x-powered-by):' "$headers"; then
     echo "implementation header unexpectedly exposed" >&2

@@ -61,18 +61,21 @@ test('Caddy template supplies host-only security headers and strips implementati
   assert.match(caddyfile, /Referrer-Policy "strict-origin-when-cross-origin"/);
   assert.match(caddyfile, /X-Frame-Options "DENY"/);
   assert.match(caddyfile, /Permissions-Policy "/);
-  assert.match(caddyfile, /clipboard-read=\(\), clipboard-write=\(self\)/);
+  assert.match(caddyfile, /clipboard-read=\(self\), clipboard-write=\(self\)/);
+  assert.doesNotMatch(caddyfile, /clipboard-read=\(\)/);
   assert.doesNotMatch(caddyfile, /clipboard-write=\(\)/);
   assert.match(caddyfile, /-Server/);
   assert.match(caddyfile, /-X-Powered-By/);
 });
+
+const expectedPermissionsPolicy = 'permissions-policy: clipboard-read=(self), clipboard-write=(self), geolocation=()';
 
 const finalHeaders = [
   'strict-transport-security: max-age=31536000',
   'x-content-type-options: nosniff',
   'referrer-policy: strict-origin-when-cross-origin',
   'x-frame-options: DENY',
-  'permissions-policy: geolocation=()',
+  expectedPermissionsPolicy,
   "content-security-policy-report-only: frame-ancestors 'none'",
 ].join('\n');
 
@@ -113,6 +116,15 @@ test('Caddy smoke test validates the final redirect response rather than an earl
   const finalRedirect = `HTTP/2 302\n${finalHeaders}\nlocation: https://portal.example.test/login\n\n`;
   const redirectFailed = runSmokeWithHeaders(finalRedirect);
   assert.notEqual(redirectFailed.status, 0, redirectFailed.stdout + redirectFailed.stderr);
+});
+
+test('Caddy smoke test refuses a final response that blocks the Share acceptance readback', () => {
+  const clipboardReadDenied = finalHeaders.replace(
+    expectedPermissionsPolicy,
+    'permissions-policy: clipboard-read=(), clipboard-write=(self), geolocation=()',
+  );
+  const failed = runSmokeWithHeaders(`HTTP/2 200\n${clipboardReadDenied}\n\n`);
+  assert.notEqual(failed.status, 0, failed.stdout + failed.stderr);
 });
 
 test('Caddy template starts CSP in report-only mode without changing authentication or throttling', () => {

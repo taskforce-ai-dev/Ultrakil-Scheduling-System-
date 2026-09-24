@@ -300,9 +300,11 @@ one-year `max-age` only. It deliberately omits `includeSubDomains` and
 `preload`, so it cannot make an unrelated sibling hostname unreachable. It
 also sets nosniff, strict referrer policy, DENY/frame-ancestors protection, a
 restrictive Permissions-Policy, and asks Caddy to remove `Server` and
-`X-Powered-By` after proxying. Clipboard reads stay disabled, but
-`clipboard-write=(self)` is intentionally retained because Dispatch Board's
-Share action copies its payload through the Clipboard API.
+`X-Powered-By` after proxying. `clipboard-read=(self)` and
+`clipboard-write=(self)` are intentionally retained because Dispatch Board's
+Share action copies its payload and the browser acceptance path reads it back
+to verify the exact rendered payload. Both capabilities remain limited to the
+portal's own origin.
 
 The CSP is explicitly **Report-Only**. The current Next bundle uses inline
 styles and evaluator-backed runtime compatibility, so enforcing a new CSP
