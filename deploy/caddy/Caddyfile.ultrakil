@@ -19,7 +19,7 @@
 		# Next's current production bundle needs inline styles and evaluator-backed
 		# development/runtime compatibility. This reports violations first; it does
 		# not yet block requests until browser evidence supports enforcement.
-		Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://ultrakil-api.taskforceai.tech https://api.ultrakil.taskforceai.tech; manifest-src 'self'; media-src 'self'; worker-src 'self' blob:; upgrade-insecure-requests"
+		Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://ultrakil-api.taskforceai.tech https://api.ultrakil.taskforceai.tech; manifest-src 'self'; media-src 'self'; worker-src 'self' blob:"
 	}
 }
 

@@ -134,6 +134,7 @@ test('Caddy template starts CSP in report-only mode without changing authenticat
   assert.match(caddyfile, /Content-Security-Policy-Report-Only "/);
   assert.match(caddyfile, /frame-ancestors 'none'/);
   assert.match(caddyfile, /connect-src 'self' https:\/\/ultrakil-api\.taskforceai\.tech https:\/\/api\.ultrakil\.taskforceai\.tech/);
+  assert.doesNotMatch(caddyfile, /upgrade-insecure-requests/);
   assert.doesNotMatch(caddyfile, /\n\s*Content-Security-Policy "/);
   assert.doesNotMatch(caddyfile, /rate_limit|basicauth|forward_auth/i);
 });
