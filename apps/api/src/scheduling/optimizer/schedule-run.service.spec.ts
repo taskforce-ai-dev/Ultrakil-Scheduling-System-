@@ -597,6 +597,65 @@ describe('solver replacement lifecycle fence', () => {
     expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
   });
 
+  it('does not use the BOOKED fallback when that weekday has explicit insufficient site hours', async () => {
+    const f = fixture();
+    f.visit.placement = VisitPlacement.BOOKED;
+    f.visit.serviceAgreement.serviceSite.operatingHours = [
+      { weekday: Weekday.WEDNESDAY, opensAtMinute: 720, closesAtMinute: 780 },
+      { weekday: Weekday.THURSDAY, opensAtMinute: 480, closesAtMinute: 1020 },
+    ];
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+    expect(request.visits[0].candidate_slots).toEqual([]);
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks a narrowed agreement window before persisting a BOOKED fallback slot', async () => {
+    const f = fixture();
+    f.visit.placement = VisitPlacement.BOOKED;
+    f.visit.windowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceSite.operatingHours = [
+      { weekday: Weekday.THURSDAY, opensAtMinute: 480, closesAtMinute: 1020 },
+    ];
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.visit.serviceAgreement.serviceWindowStartMinute = 720;
+    f.visit.serviceAgreement.serviceWindowEndMinute = 780;
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it.each([LockScope.TIME, LockScope.FULL])(
+    'rejects a longer BOOKED %s lock that ends after explicit site closing',
+    async (scope) => {
+      const f = fixture();
+      f.visit.placement = VisitPlacement.BOOKED;
+      f.visit.windowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceSite.operatingHours = [
+        { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 720 },
+      ];
+      f.oldAssignment.plannedEnd = new Date('2027-03-03T14:00:00Z');
+      f.oldAssignment.locks.push({ scope, releasedAt: null });
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      f.release();
+
+      await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.assignment.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('keeps SUPERVISOR distinct from CREW when composing active locks', async () => {
     const f = fixture();
     f.oldAssignment.locks.push(

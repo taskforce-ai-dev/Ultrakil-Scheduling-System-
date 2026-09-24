@@ -243,6 +243,38 @@ function protectedDateSlots(visit: SlotVisit) {
   }];
 }
 
+/**
+ * A workbook booking fixes its date and retains the generated fallback window
+ * only when that weekday has no recorded site hours. Once the site explicitly
+ * records hours for the booked weekday, those hours remain authoritative and
+ * may make the booking infeasible until a manager resolves it.
+ */
+function bookedDateSlots(
+  visit: SlotVisit,
+  durationMinutes = visit.durationMinutes,
+) {
+  if (durationMinutes <= 0) return [];
+  const bookedWeekday = weekdayOf(visit.visitDate);
+  const hasRecordedHours = visit.serviceAgreement.serviceSite.operatingHours
+    .some((hours) => hours.weekday === bookedWeekday);
+  const boundedVisit = {
+    ...visit,
+    durationMinutes,
+    windowStartMinute: Math.max(
+      visit.windowStartMinute,
+      visit.serviceAgreement.serviceWindowStartMinute ?? visit.windowStartMinute,
+    ),
+    windowEndMinute: Math.min(
+      visit.windowEndMinute,
+      visit.serviceAgreement.serviceWindowEndMinute ?? visit.windowEndMinute,
+    ),
+  };
+
+  return hasRecordedHours
+    ? candidateSlotsForVisit(boundedVisit, visit.visitDate, visit.visitDate)
+    : protectedDateSlots(boundedVisit);
+}
+
 interface ProposedAssignment extends SolveSnapshot {
   dto: {
     plannedStartMinute: number;
@@ -950,9 +982,11 @@ export class ScheduleRunService {
         // fallback (`null`). An explicit empty list remains "no legal slot".
         const protectedDate = datePinned.has(visit.id) ||
           visit.placement === VisitPlacement.BOOKED;
-        const allCandidates = protectedDate
-          ? protectedDateSlots(visit)
-          : candidateSlotsForVisit(visit, options.from, options.to);
+        const allCandidates = visit.placement === VisitPlacement.BOOKED
+          ? bookedDateSlots(visit)
+          : protectedDate
+            ? protectedDateSlots(visit)
+            : candidateSlotsForVisit(visit, options.from, options.to);
         const candidates = timePinned.has(visit.id)
           ? null
           : protectedDate
@@ -1233,14 +1267,16 @@ export class ScheduleRunService {
             const assignmentDatePinned = replaced?.locks.some(
               (lock) => lock.scope === LockScope.FULL || lock.scope === LockScope.TIME,
             ) ?? false;
-            const legalSlots = sameDate && (
-              visit.isManuallyAdjusted ||
-              visit.lockedAt !== null ||
-              visit.placement === VisitPlacement.BOOKED ||
-              assignmentDatePinned
-            )
-              ? protectedDateSlots(visit)
-              : candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd);
+            const proposedDuration = entry.dto.plannedEndMinute - entry.dto.plannedStartMinute;
+            const legalSlots = sameDate && visit.placement === VisitPlacement.BOOKED
+              ? bookedDateSlots(visit, proposedDuration)
+              : sameDate && (
+                visit.isManuallyAdjusted ||
+                visit.lockedAt !== null ||
+                assignmentDatePinned
+              )
+                ? protectedDateSlots(visit)
+                : candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd);
             const legal = validTarget &&
               (sameDate || visit.placement !== VisitPlacement.BOOKED) &&
               (!sameDate || (

@@ -206,14 +206,14 @@ async function fixture(options: {
 
 describe('optimizer cadence persistence against PostgreSQL', () => {
   it.each([VisitPlacement.ANCHORED, VisitPlacement.BOOKED])(
-    'leaves a pre-existing %s visit unassigned when there are no legal site-hour slots', async (placement) => {
+    'leaves a pre-existing %s visit unassigned when its explicit site hours are too short', async (placement) => {
       const f = await fixture({
         placement, allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07',
         solverDate: '2027-03-03',
       });
       await prisma.siteOperatingHours.create({ data: {
-        serviceSiteId: siteId, weekday: Weekday.THURSDAY,
-        opensAtMinute: 540, closesAtMinute: 1020,
+        serviceSiteId: siteId, weekday: Weekday.WEDNESDAY,
+        opensAtMinute: 540, closesAtMinute: 600,
       } });
       f.solve.mockImplementation(async (request: SolveRequest) => ({
         ...f.responseFor(request), assignments: [],
