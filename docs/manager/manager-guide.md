@@ -281,19 +281,19 @@ In the editor:
   stationed at a different site can still be selected here, but adding
   them produces a validation error explaining why (see section 5).
 - **Add vehicle** — vehicles that can serve the visit's branch are offered:
-  those recorded in that branch, plus those with no recorded branch. The
-  Technician Matrix never states a vehicle's branch, so imported vehicles
-  arrive without one; an unknown branch is unknown, not wrong, and the
-  eligibility check applies the same reading. A vehicle recorded in a
-  *different* branch is never offered. If no active vehicle can serve the
-  branch, the drawer says so instead of offering an empty list. Once a vehicle is chosen, the **Driver** dropdown next to it
+  those recorded in that branch, plus a manually created legacy vehicle with
+  no recorded branch. The Technician Matrix never states a vehicle's branch,
+  so the importer applies the approved Colombo default on both create and
+  update. A vehicle recorded in a *different* branch is never offered. If no
+  active vehicle can serve the branch, the drawer says so instead of offering
+  an empty list. Once a vehicle is chosen, the **Driver** dropdown next to it
   only offers people who are *both* already on this crew *and* individually
   checked as authorized to drive that specific vehicle — never anyone else,
   even if they're authorized for a different vehicle.
-- **Reason for this change** — fill this in before saving a manual
-  edit. **The Save button stays disabled until you do, even once every
-  validation check has passed** — if Save looks greyed out with no visible
-  error, this is usually why.
+- **Reason for this change** — fill this in before saving a manual edit. Until
+  then, the Save control says that it is waiting for a reason; selecting it
+  focuses this required box. Other blockers are described beside the same
+  control instead of leaving it silently unavailable.
 
 Once every check passes, the panel says *"This crew is eligible to take
 the visit"* and Save becomes available.

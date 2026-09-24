@@ -145,15 +145,13 @@ there is no UI for any of them today.
    has no active agreement or generated visit in this import, so the
    no-PMS outcome cannot be demonstrated with a live row.
 
-4. **[Resolved] Vehicles with no recorded branch were never offered.**
-   Imported vehicles have no branch (the Technician Matrix does not state
-   one), and the assignment editor's vehicle picker filtered by the visit's
-   exact branch, so on real data it opened onto nothing while the
-   eligibility engine would have accepted those vehicles. The picker now
-   asks the API which vehicles can serve the branch (`servesBranch`): those
-   recorded in it plus those with none recorded. A vehicle recorded in a
-   different branch is still never offered, and an empty result is now
-   explained on screen rather than presented as an enabled control.
+4. **[Resolved] Vehicle branch handling is now consistent.** The Technician
+   Matrix does not state vehicle branches, so the importer now assigns every
+   matrix vehicle to Colombo on both create and update; re-import also repairs
+   legacy null branches. The assignment editor asks the API which vehicles can
+   serve the visit branch (`servesBranch`). A manually created legacy vehicle
+   with no recorded branch remains usable, a vehicle recorded in a different
+   branch is never offered, and an empty result is explained on screen.
 
 5. **No inactive customer/site existed in demo data.** One site and one
    customer were deactivated directly in the local database to exercise
@@ -176,13 +174,12 @@ there is no UI for any of them today.
    documented in the manager guide and remains a possible Phase 2 workflow
    enhancement if multi-vehicle transport is later required.
 
-8. **"Save assignment" silently stays disabled until "Reason for this
-   change" is filled in**, even after every validation check passes and
-   the panel says the crew is eligible. There's no separate message
-   telling the manager this is why Save won't activate. Low severity (the
-   guide now documents the recovery step), but worth a small UX
-   improvement — surfacing it as a visible requirement, the same way every
-   other blocking condition is shown, rather than a silent disabled state.
+8. **[Fixed] "Save assignment" now explains what it is waiting for.** The
+   button carries a visible and accessible description for every blocker,
+   including the required reason, missing crew, eligibility validation,
+   loading and active locks. Clicking it while only the reason is missing
+   also focuses the required reason box. Deterministic manager tests cover
+   the visible message, accessible description and focus behavior.
 
 9. **Three screenshots in the original draft showed the historical
    self-overlap defect rather than a clean save.** They were removed from
@@ -195,10 +192,10 @@ there is no UI for any of them today.
     visible names, with an automated regression covering both fields. The
     obsolete screenshot was removed.
 
-11. **The previously-cited test count was stale.** The current manager suite
-    reports **180 passed**, 18 test files, 0 failed, including assignment
-    driver removal and selected-label regressions. GitHub CI is the
-    authoritative release record.
+11. **The previously-cited fixed test count was stale.** Test totals continue
+    to grow, so this handover no longer freezes a number in prose. Exact-head
+    GitHub CI is the authoritative release record, including assignment-driver
+    removal, selected-label and Save-blocker regressions.
 
 12. **[Confirmed on current staging] DAC-2485 is normalized once and has
     exactly three equal driver authorizations.** No owner or primary-driver
@@ -211,15 +208,12 @@ there is no UI for any of them today.
     demonstrated with a live row. The workforce audit still confirms zero
     PMS-qualified Kandy supervisors; no bypass was introduced.
 
-14. **[Confirmed, expected] DAC-2485's vehicle record shows "Unassigned
-    branch," while all three of its authorized drivers are tagged "Colombo."**
-    Not a defect. The Technician Matrix records who may drive a vehicle but
-    never which branch the vehicle belongs to, so every imported vehicle
-    arrives with no branch until a manager records one under **Vehicles**.
-    Driver authorizations come from the matrix checkmarks and are
-    independent of the vehicle's branch. Such a vehicle can be offered for
-    any branch's work (see item 4) and publication flags it as unconfirmed
-    source data until its branch is recorded.
+14. **[Resolved] DAC-2485 and every other matrix-imported vehicle now default
+    to Colombo.** The matrix still states only who may drive each vehicle, not
+    its branch; Colombo is the Technical Director's explicit operational
+    default. Driver authorizations remain independent checkmarks with no owner
+    or primary-driver priority. The current live audit found zero active
+    vehicles outside or unmapped from Colombo.
 
 15. **[Covered automatically] Driver removal/revalidation.** The manager UI
     regression removes the selected driver from the crew and verifies that
