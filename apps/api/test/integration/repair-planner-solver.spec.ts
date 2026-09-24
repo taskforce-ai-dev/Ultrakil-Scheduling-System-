@@ -106,4 +106,44 @@ describe('repair adapter through the real Python scheduler', () => {
       expect.objectContaining({ visit_id: 'repair-solver-visit' }),
     ]);
   });
+
+  it('stages same-day repairs within the customer window instead of manufacturing a shortage at opening time', async () => {
+    const first = target(480, 60);
+    first.id = 'repair-solver-source-a';
+    first.generatedVisitId = 'repair-solver-visit-a';
+    first.generatedVisit = {
+      ...first.generatedVisit,
+      id: first.generatedVisitId,
+      windowEndMinute: 660,
+      serviceAgreementId: 'repair-solver-agreement-a',
+      serviceAgreement: {
+        serviceSiteId: 'repair-solver-site-a',
+        requiredSkills: [],
+      },
+    };
+    const second = target(480, 60);
+    second.id = 'repair-solver-source-b';
+    second.generatedVisitId = 'repair-solver-visit-b';
+    second.generatedVisit = {
+      ...second.generatedVisit,
+      id: second.generatedVisitId,
+      windowEndMinute: 660,
+      serviceAgreementId: 'repair-solver-agreement-b',
+      serviceAgreement: {
+        serviceSiteId: 'repair-solver-site-b',
+        requiredSkills: [],
+      },
+    };
+
+    const result = await adapter().solve(
+      [first, second],
+      [first.id, second.id],
+    );
+
+    expect(result.response.unassigned).toEqual([]);
+    expect(result.response.assignments).toHaveLength(2);
+    expect(
+      result.response.assignments.map((assignment) => assignment.start_minute).sort(),
+    ).toEqual([480, 600]);
+  });
 });
