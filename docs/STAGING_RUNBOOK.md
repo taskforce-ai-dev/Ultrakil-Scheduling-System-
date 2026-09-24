@@ -351,17 +351,42 @@ For an UltraKIL-only host, install and reload only during a release window:
 
 ```bash
 cd /opt/ultrakil/app
-sudo install -d -m 0755 /etc/caddy
-sudo install -d -m 0755 /etc/caddy/.ultrakil-candidate
+sudo install -d -o root -g root -m 0755 /etc/caddy
+sudo install -d -o root -g root -m 0700 /etc/caddy/.ultrakil-candidate /etc/caddy/.ultrakil-previous
 sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile /etc/caddy/.ultrakil-candidate/Caddyfile
 sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile.ultrakil /etc/caddy/.ultrakil-candidate/Caddyfile.ultrakil
 sudo caddy validate --config /etc/caddy/.ultrakil-candidate/Caddyfile --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous
-sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil
-sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile /etc/caddy/Caddyfile
+# Snapshot a matching old wrapper/fragment pair. cp -a preserves the previous
+# owner, group and mode for rollback rather than applying the new-file defaults.
+sudo cp -a /etc/caddy/Caddyfile /etc/caddy/.ultrakil-previous/Caddyfile
+if sudo test -e /etc/caddy/Caddyfile.ultrakil; then
+  sudo test -f /etc/caddy/Caddyfile.ultrakil
+  sudo cp -a /etc/caddy/Caddyfile.ultrakil /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil
+  sudo rm -f /etc/caddy/.ultrakil-previous/fragment-absent
+else
+  sudo rm -f /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil
+  sudo install -o root -g root -m 0600 /dev/null /etc/caddy/.ultrakil-previous/fragment-absent
+fi
+sudo caddy validate --config /etc/caddy/.ultrakil-previous/Caddyfile --adapter caddyfile
+# Install both already-validated candidates, then validate and reload once. No
+# reload occurs between replacing the fragment and wrapper, so Caddy never loads
+# a mixed old/new pair.
+sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil
+sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl is-active --quiet caddy
 ```
+
+No reload occurs between replacing the fragment and wrapper: the previous Caddy
+configuration remains active in memory until the single final reload accepts the
+validated matching candidate pair.
+
+The snapshot is intentionally one release deep. On a first rollout the marker
+records that no fragment existed, so rollback removes the newly introduced
+`Caddyfile.ultrakil`. On a later rollout, both previous files are restored with
+their original owner, group and mode. If any command after the snapshot fails,
+do not reload; use the rollback procedure below.
 
 For a host with unrelated Caddy configuration, do not use the wrapper
 replacement path or attempt an automated fragment merge. Automated mixed-host
@@ -400,13 +425,19 @@ the live module behavior before claiming the header is removed. Do not silence
 the check.
 
 If validation, reload, health, portal navigation or the smoke test fails,
-restore the exact pre-change file and verify it before reloading. This rollback
-does not rebuild containers, change DNS, mutate Cloudflare or touch application
-data:
+restore the matching pre-change wrapper/fragment snapshot and verify it before
+reloading. This rollback does not rebuild containers, change DNS, mutate
+Cloudflare or touch application data:
 
 ```bash
-sudo caddy validate --config /etc/caddy/Caddyfile.previous --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.previous /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/.ultrakil-previous/Caddyfile --adapter caddyfile
+if sudo test -f /etc/caddy/.ultrakil-previous/fragment-absent; then
+  sudo rm -f /etc/caddy/Caddyfile.ultrakil
+else
+  sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil
+fi
+sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl is-active --quiet caddy
 ```

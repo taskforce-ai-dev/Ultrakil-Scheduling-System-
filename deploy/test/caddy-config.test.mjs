@@ -156,3 +156,16 @@ test('Caddy runbook records host validation as author evidence rather than revie
   assert.match(runbook, /caddy\s+validate --config \/dev\/stdin --adapter\s+caddyfile/);
   assert.match(runbook, /not an independent-reviewer\s+attestation/i);
 });
+
+test('Caddy runbook snapshots and restores a matching wrapper-fragment pair across first and later rollbacks', () => {
+  const runbook = readFileSync(stagingRunbookPath, 'utf8');
+  assert.match(runbook, /\.ultrakil-previous\/Caddyfile/);
+  assert.match(runbook, /\.ultrakil-previous\/Caddyfile\.ultrakil/);
+  assert.match(runbook, /\.ultrakil-previous\/fragment-absent/);
+  assert.match(runbook, /cp -a \/etc\/caddy\/Caddyfile \/etc\/caddy\/\.ultrakil-previous\/Caddyfile/);
+  assert.match(runbook, /cp -a \/etc\/caddy\/Caddyfile\.ultrakil \/etc\/caddy\/\.ultrakil-previous\/Caddyfile\.ultrakil/);
+  assert.match(runbook, /rm -f \/etc\/caddy\/Caddyfile\.ultrakil/);
+  assert.match(runbook, /No\s+reload occurs between replacing the fragment and wrapper/i);
+  assert.match(runbook, /cp -a \/etc\/caddy\/\.ultrakil-previous\/Caddyfile\.ultrakil \/etc\/caddy\/Caddyfile\.ultrakil/);
+  assert.match(runbook, /cp -a \/etc\/caddy\/\.ultrakil-previous\/Caddyfile \/etc\/caddy\/Caddyfile/);
+});
