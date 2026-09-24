@@ -311,6 +311,7 @@ export function buildAssignment(overrides: Partial<Assignment> = {}): Assignment
       },
     ],
     isLocked: false,
+    locks: [],
     createdAt: "2026-08-31T00:00:00.000Z",
     updatedAt: "2026-08-31T00:00:00.000Z",
     ...overrides,
@@ -376,12 +377,15 @@ export function buildScheduleRun(overrides: Partial<ScheduleRun> = {}): Schedule
   };
 }
 
-export function buildAssignmentLock(overrides: Partial<AssignmentLock> = {}): AssignmentLock {
+export function buildAssignmentLock(
+  overrides: Partial<AssignmentLock & Assignment["locks"][number]> = {},
+): AssignmentLock & Assignment["locks"][number] {
   return {
     id: "lock-1",
     assignmentId: "assignment-1",
     scope: "CREW",
     lockedByUserId: "user-1",
+    lockedByName: "Fixture Manager",
     reason: null,
     releasedAt: null,
     createdAt: "2026-08-31T00:00:00.000Z",

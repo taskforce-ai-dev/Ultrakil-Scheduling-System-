@@ -28,6 +28,8 @@ import {
   fetchVisit,
   fetchVisitAssignment,
   lockAssignment,
+  unlockAssignment,
+  unassignVisit,
   type AssignmentCandidates,
 } from "@/lib/api-client";
 import {
@@ -128,8 +130,11 @@ beforeEach(() => {
   // being exercised.
   vi.mocked(fetchAuthorizedDrivers).mockResolvedValue(buildAuthorizedDrivers({ drivers: [] }));
   vi.mocked(checkAssignment).mockReset();
+  vi.mocked(checkAssignment).mockResolvedValue(buildEligibilityResult());
   vi.mocked(assignCrew).mockReset();
   vi.mocked(lockAssignment).mockReset();
+  vi.mocked(unlockAssignment).mockReset();
+  vi.mocked(unassignVisit).mockReset();
 });
 
 async function openDrawer() {
@@ -943,13 +948,16 @@ describe("AssignmentEditorDrawer", () => {
     expect(driverTrigger).toHaveTextContent("No crew member is authorized");
   });
 
-  it("pins a scope for this session and shows it as pinned", async () => {
-    vi.mocked(fetchVisitAssignment).mockResolvedValue(
-      buildAssignment({ id: "assignment-9", isLocked: false })
+  it("pins a scope and reads it back from the server", async () => {
+    let activeLocks: ReturnType<typeof buildAssignmentLock>[] = [];
+    vi.mocked(fetchVisitAssignment).mockImplementation(async () =>
+      buildAssignment({ id: "assignment-9", status: "DRAFT", isLocked: activeLocks.length > 0, locks: activeLocks })
     );
-    vi.mocked(lockAssignment).mockResolvedValue(
-      buildAssignmentLock({ assignmentId: "assignment-9", scope: "CREW" })
-    );
+    vi.mocked(lockAssignment).mockImplementation(async () => {
+      const lock = buildAssignmentLock({ assignmentId: "assignment-9", scope: "CREW", reason: "Customer asked for this crew" });
+      activeLocks = [lock];
+      return lock;
+    });
     vi.spyOn(window, "prompt").mockReturnValue("Customer asked for this crew");
     const { user } = await openDrawer();
 
@@ -960,11 +968,100 @@ describe("AssignmentEditorDrawer", () => {
       scope: "CREW",
       reason: "Customer asked for this crew",
     });
-    // Pinned now shows the "unpin" icon instead of "pin" — the session's own
-    // record of what it just locked, since the API can't be asked which
-    // scopes are locked (see the note in api-client.ts).
     const pinnedButton = await screen.findByRole("button", { name: "Crew" });
-    expect(pinnedButton.querySelector("svg")).toHaveClass("lucide-pin-off");
+    await waitFor(() => expect(pinnedButton.querySelector("svg")).toHaveClass("lucide-pin-off"));
+    expect(await screen.findByText("Customer asked for this crew")).toBeInTheDocument();
+  });
+
+  it("shows pre-existing scopes and keeps editing blocked until the final scope is released", async () => {
+    let activeLocks = [
+      buildAssignmentLock({ id: "lock-crew", scope: "CREW", reason: "Customer requested this team" }),
+      buildAssignmentLock({ id: "lock-time", scope: "TIME", reason: "Fixed booking time" }),
+    ];
+    vi.mocked(fetchVisitAssignment).mockImplementation(async () =>
+      buildAssignment({ id: "assignment-9", status: "DRAFT", isLocked: activeLocks.length > 0, locks: activeLocks })
+    );
+    vi.mocked(unlockAssignment).mockImplementation(async (_id, scope) => {
+      const released = activeLocks.find((lock) => lock.scope === scope)!;
+      activeLocks = activeLocks.filter((lock) => lock.scope !== scope);
+      return { ...released, releasedAt: "2026-09-09T00:00:00.000Z" };
+    });
+    const { user } = await openDrawer();
+
+    expect(await screen.findByText("Customer requested this team")).toBeInTheDocument();
+    const initialReadCount = vi.mocked(fetchVisitAssignment).mock.calls.length;
+    expect(screen.getByText("Fixed booking time")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Crew" }).querySelector("svg")).toHaveClass("lucide-pin-off");
+    expect(screen.getByRole("button", { name: "Date & time" }).querySelector("svg")).toHaveClass("lucide-pin-off");
+    expect(screen.getByLabelText("Employee")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Remove crew" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save assignment" })).toHaveAttribute("aria-disabled", "true");
+
+    await user.click(screen.getByRole("button", { name: "Crew" }));
+    await waitFor(() => expect(fetchVisitAssignment).toHaveBeenCalledTimes(initialReadCount + 1));
+    expect(unlockAssignment).toHaveBeenCalledWith("assignment-9", "CREW");
+    expect(screen.getByLabelText("Employee")).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Date & time" }));
+    await waitFor(() => expect(fetchVisitAssignment).toHaveBeenCalledTimes(initialReadCount + 2));
+    await waitFor(() => expect(screen.getByLabelText("Employee")).not.toBeDisabled());
+    expect(unlockAssignment).toHaveBeenCalledWith("assignment-9", "TIME");
+    expect(screen.queryByText("Fixed booking time")).not.toBeInTheDocument();
+  });
+
+  it("preserves the server lock when release fails and does not send an edit", async () => {
+    const existing = buildAssignmentLock({ scope: "VEHICLE", reason: "Vehicle reserved" });
+    vi.mocked(fetchVisitAssignment).mockResolvedValue(
+      buildAssignment({ id: "assignment-9", status: "DRAFT", isLocked: true, locks: [existing] })
+    );
+    vi.mocked(unlockAssignment).mockRejectedValue(
+      new ApiError({ code: "RESOURCE_CONFLICT", message: "Assignment changed; refresh and retry." })
+    );
+    const { user } = await openDrawer();
+    await screen.findByText("Vehicle reserved");
+
+    await user.click(screen.getByRole("button", { name: "Vehicle" }));
+
+    expect(unlockAssignment).toHaveBeenCalledWith("assignment-9", "VEHICLE");
+    expect(screen.getByRole("button", { name: "Vehicle" }).querySelector("svg")).toHaveClass("lucide-pin-off");
+    expect(screen.getByLabelText("Employee")).toBeDisabled();
+    expect(unassignVisit).not.toHaveBeenCalled();
+    expect(assignCrew).not.toHaveBeenCalled();
+  });
+
+  it("does not reload an old visit after its pending pin completes", async () => {
+    let finishPin: ((lock: ReturnType<typeof buildAssignmentLock>) => void) | undefined;
+    vi.mocked(fetchVisit).mockImplementation(async (id) => buildVisitDetail({
+      id,
+      customerName: id === "visit-1" ? "First Customer" : "Next Customer",
+    }));
+    vi.mocked(fetchVisitAssignment).mockImplementation(async (id) =>
+      id === "visit-1" ? buildAssignment({ id: "assignment-9", status: "DRAFT" }) : null
+    );
+    vi.mocked(lockAssignment).mockImplementation(() => new Promise((resolve) => {
+      finishPin = resolve;
+    }));
+    vi.spyOn(window, "prompt").mockReturnValue("Keep this crew");
+    const onChanged = vi.fn();
+    const view = render(
+      <AssignmentEditorDrawer visitId="visit-1" onOpenChange={() => {}} onChanged={onChanged} />
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await screen.findByText("Edit crew — First Customer");
+    const oldVisitReads = vi.mocked(fetchVisitAssignment).mock.calls.filter(([id]) => id === "visit-1").length;
+    await user.click(screen.getByRole("button", { name: "Crew" }));
+    expect(lockAssignment).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <AssignmentEditorDrawer visitId="visit-2" onOpenChange={() => {}} onChanged={onChanged} />
+    );
+    await screen.findByText("Edit crew — Next Customer");
+    await act(async () => {
+      finishPin?.(buildAssignmentLock({ assignmentId: "assignment-9", reason: "Keep this crew" }));
+    });
+
+    expect(vi.mocked(fetchVisitAssignment).mock.calls.filter(([id]) => id === "visit-1")).toHaveLength(oldVisitReads);
+    expect(screen.getByText("Edit crew — Next Customer")).toBeInTheDocument();
   });
 
   it.each(publicationHistoryStatuses)(

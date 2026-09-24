@@ -105,6 +105,12 @@ export class AssignmentsService {
     if (replaceable.length > 1) {
       this.throwMultipleEditableAssignments(visitId);
     }
+    if (replaceable[0] && await this.prisma.assignmentLock.findFirst({
+      where: { assignmentId: replaceable[0].id, releasedAt: null },
+      select: { id: true },
+    })) {
+      this.throwLockedAssignment(visitId, replaceable[0].id);
+    }
     const result = await this.eligibility.evaluate(visitId, toProposal(dto), {
       excludeAssignmentId: replaceable[0]?.id,
     });
@@ -153,6 +159,15 @@ export class AssignmentsService {
     );
   }
 
+  private throwLockedAssignment(visitId: string, assignmentId: string): never {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'A manager has pinned this crew. Release the lock before changing it.',
+      HttpStatus.CONFLICT,
+      { visitId, assignmentId },
+    );
+  }
+
   /**
    * Assigns a crew, or refuses with every reason.
    *
@@ -168,15 +183,18 @@ export class AssignmentsService {
     const saved = await this.prisma.$transaction(async (tx) => {
       await lockScheduleVisits(tx, [visitId]);
       await assertScheduleSnapshot(tx, visitId, snapshot?.id);
+      const existing = await tx.assignment.findFirst({
+        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
+        include: ASSIGNMENT_INCLUDE,
+      });
+      if (existing?.locks.length) {
+        this.throwLockedAssignment(visitId, existing.id);
+      }
       await lockScheduleResources(
         tx,
         proposal.crew.map((member) => member.employeeId),
         proposal.vehicles.map((vehicle) => vehicle.vehicleId),
       );
-      const existing = await tx.assignment.findFirst({
-        where: { generatedVisitId: visitId, status: { in: LIVE_STATUSES } },
-        include: ASSIGNMENT_INCLUDE,
-      });
       const result = await this.eligibility.evaluate(visitId, proposal, {
         excludeAssignmentId: existing?.id,
       }, tx);
@@ -282,7 +300,7 @@ export class AssignmentsService {
         { conflicts: saved.conflicts.map(toConflictDto) },
       );
     }
-    return toAssignmentDto(saved.assignment);
+    return this.toAssignmentDto(saved.assignment);
   }
 
   /** Takes the crew off a visit and puts it back in the queue. */
@@ -349,14 +367,22 @@ export class AssignmentsService {
       include: ASSIGNMENT_INCLUDE,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     });
-    if (live) return toAssignmentDto(live);
+    if (live) return this.toAssignmentDto(live);
 
     const history = await this.prisma.assignment.findFirst({
       where: { generatedVisitId: visitId, status: { in: HISTORY_STATUSES } },
       include: ASSIGNMENT_INCLUDE,
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
     });
-    return history ? toAssignmentDto(history) : null;
+    return history ? this.toAssignmentDto(history) : null;
+  }
+
+  private async toAssignmentDto(assignment: AssignmentWithRelations): Promise<AssignmentDto> {
+    const managerIds = [...new Set(assignment.locks.map((lock) => lock.lockedByUserId).filter((id): id is string => id !== null))];
+    const managers = managerIds.length > 0
+      ? await this.prisma.user.findMany({ where: { id: { in: managerIds } }, select: { id: true, fullName: true } })
+      : [];
+    return toAssignmentDto(assignment, new Map(managers.map((manager) => [manager.id, manager.fullName])));
   }
 
   /**
@@ -841,7 +867,7 @@ function normaliseResources(raw: unknown) {
   };
 }
 
-function toAssignmentDto(assignment: AssignmentWithRelations): AssignmentDto {
+function toAssignmentDto(assignment: AssignmentWithRelations, managerNames: Map<string, string>): AssignmentDto {
   const midnight = new Date(
     Date.UTC(
       assignment.plannedStart.getUTCFullYear(),
@@ -875,6 +901,16 @@ function toAssignmentDto(assignment: AssignmentWithRelations): AssignmentDto {
       driverName: entry.driverEmployee?.fullName ?? null,
     })),
     isLocked: assignment.locks.length > 0,
+    locks: assignment.locks
+      .map((lock) => ({
+        id: lock.id,
+        scope: lock.scope,
+        reason: lock.reason,
+        lockedByUserId: lock.lockedByUserId,
+        lockedByName: lock.lockedByUserId ? managerNames.get(lock.lockedByUserId) ?? null : null,
+        createdAt: lock.createdAt.toISOString(),
+      }))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)),
     createdAt: assignment.createdAt.toISOString(),
     updatedAt: assignment.updatedAt.toISOString(),
   };

@@ -251,7 +251,7 @@ describe("ServiceAgreementsPage", () => {
   // regardless of which day the suite actually runs on.
   const FAR_FUTURE_START = "2099-01-06";
 
-  it("shows the automatic onboarding result when planning succeeds, with no second scheduling request", async () => {
+  it("shows calendar placement without implying staffing or publication", async () => {
     const created = buildServiceAgreement({
       id: "agreement-2",
       startDate: FAR_FUTURE_START,
@@ -274,21 +274,24 @@ describe("ServiceAgreementsPage", () => {
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Scheduled" })).toBeInTheDocument();
-    expect(screen.getByText(/24 visits scheduled between/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Visits placed on calendar" })).toBeInTheDocument();
+    expect(screen.getByText(/24 visits placed on the calendar between/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/crew and vehicle assignment is still pending/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/published/i)).not.toBeInTheDocument();
     // The "existing work" guarantee is stated unconditionally.
     expect(
-      screen.getByText(/every other customer's existing schedule is untouched/)
+      screen.getByText(/every other customer's existing schedule is untouched/i)
     ).toBeInTheDocument();
 
-    // The agreement was already fully scheduled by the create response
-    // itself — there is no second manual step, and none was requested.
+    // The create response placed visit dates, but did not staff or publish them.
     expect(screen.queryByRole("button", { name: "Schedule now" })).not.toBeInTheDocument();
     expect(previewVisitGeneration).not.toHaveBeenCalled();
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
-  it("shows shortfalls from automatic onboarding without hiding what was still scheduled", async () => {
+  it("shows placement shortfalls without implying that visits were staffed", async () => {
     const created = buildServiceAgreement({
       id: "agreement-shortfall",
       startDate: FAR_FUTURE_START,
@@ -310,16 +313,51 @@ describe("ServiceAgreementsPage", () => {
     await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
-    expect(await screen.findByRole("heading", { name: "Scheduled, with shortfalls" })).toBeInTheDocument();
-    expect(screen.getByText(/20 visits scheduled between/)).toBeInTheDocument();
-    expect(screen.getByText(/3 periods could not hold everything requested/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Visits placed with warnings" })).toBeInTheDocument();
+    expect(screen.getByText(/20 visits placed on the calendar between/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/crew and vehicle assignment is still pending/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/3 periods could not fit all requested visit dates/)).toBeInTheDocument();
     expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
 
     expect(previewVisitGeneration).not.toHaveBeenCalled();
     expect(confirmVisitGeneration).not.toHaveBeenCalled();
   });
 
-  it("shows why automatic onboarding failed, without losing the created agreement", async () => {
+  it("shows over-capacity days without claiming zero placement shortfalls", async () => {
+    const created = buildServiceAgreement({
+      id: "agreement-over-capacity-only",
+      startDate: FAR_FUTURE_START,
+      branchCode: "COLOMBO",
+      onboardingPlan: {
+        status: "PLANNED_WITH_SHORTFALLS",
+        from: FAR_FUTURE_START,
+        to: "2099-12-06",
+        visitsPlanned: 24,
+        shortfallPeriods: 0,
+        overCapacityDays: 2,
+        message: null,
+      },
+    });
+    vi.mocked(createServiceAgreement).mockResolvedValue(created);
+
+    const user = await openForm();
+    await user.click(screen.getByLabelText("Mon", { selector: "#allowed-MONDAY" }));
+    await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
+    await user.click(screen.getByRole("button", { name: "Save agreement" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Visits placed with warnings" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/2 days are already carrying more than the branch plans for/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 periods could not fit all requested visit dates/)).not.toBeInTheDocument();
+
+    expect(previewVisitGeneration).not.toHaveBeenCalled();
+    expect(confirmVisitGeneration).not.toHaveBeenCalled();
+  });
+
+  it("shows why date placement failed, without losing the created agreement", async () => {
     const created = buildServiceAgreement({
       id: "agreement-failed",
       startDate: FAR_FUTURE_START,
@@ -341,13 +379,19 @@ describe("ServiceAgreementsPage", () => {
     await user.type(screen.getByLabelText("Start date"), FAR_FUTURE_START);
     await user.click(screen.getByRole("button", { name: "Save agreement" }));
 
-    // The agreement itself was still created — only planning failed.
+    // The agreement was still created, even though no visit dates were placed.
     expect(await screen.findByText("Service agreement created")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Scheduling failed" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Date placement failed" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/the result below shows whether visit dates could be placed on the calendar/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/this agreement's visit dates are placed on the calendar/i)
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("Every allowed day is already at branch capacity for the next twelve months.")
     ).toBeInTheDocument();
-    expect(screen.queryByText(/visits scheduled between/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/visits placed on the calendar between/)).not.toBeInTheDocument();
 
     expect(previewVisitGeneration).not.toHaveBeenCalled();
     expect(confirmVisitGeneration).not.toHaveBeenCalled();

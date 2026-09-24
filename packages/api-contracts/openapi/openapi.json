@@ -2530,7 +2530,7 @@
             "description": "RESOURCE_NOT_FOUND"
           },
           "409": {
-            "description": "RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check."
+            "description": "RESOURCE_CONFLICT — a manager lock, published assignment history, or multiple active assignments prevents a draft eligibility check."
           }
         },
         "security": [
@@ -2651,7 +2651,7 @@
             "description": "Missing or invalid token."
           },
           "409": {
-            "description": "ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason."
+            "description": "ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every eligibility reason; or RESOURCE_CONFLICT — an active manager lock or non-editable assignment history prevents replacement."
           }
         },
         "security": [
@@ -2731,6 +2731,7 @@
                 "CREW_CANNOT_TRAVEL",
                 "TOO_MANY_VEHICLES",
                 "NO_FEASIBLE_CREW",
+                "NO_FEASIBLE_TIME",
                 "DAILY_VISIT_CAP_REACHED"
               ],
               "type": "string"
@@ -6349,6 +6350,7 @@
               "CREW_CANNOT_TRAVEL",
               "TOO_MANY_VEHICLES",
               "NO_FEASIBLE_CREW",
+              "NO_FEASIBLE_TIME",
               "DAILY_VISIT_CAP_REACHED"
             ]
           },
@@ -6582,6 +6584,50 @@
           "driverName"
         ]
       },
+      "ActiveAssignmentLockDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "FULL",
+              "CREW",
+              "SUPERVISOR",
+              "VEHICLE",
+              "TIME"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "lockedByUserId": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid"
+          },
+          "lockedByName": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "reason",
+          "lockedByUserId",
+          "lockedByName",
+          "createdAt"
+        ]
+      },
       "AssignmentDto": {
         "type": "object",
         "properties": {
@@ -6630,6 +6676,13 @@
           "isLocked": {
             "type": "boolean"
           },
+          "locks": {
+            "description": "Active manager pins; released scopes are excluded.",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveAssignmentLockDto"
+            }
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -6651,6 +6704,7 @@
           "crew",
           "vehicles",
           "isLocked",
+          "locks",
           "createdAt",
           "updatedAt"
         ]

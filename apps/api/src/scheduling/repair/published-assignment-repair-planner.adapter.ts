@@ -152,7 +152,9 @@ export class PublishedAssignmentRepairPlannerAdapter {
         service_site_id: source.generatedVisit.serviceAgreement.serviceSiteId,
         service_agreement_id: source.generatedVisit.serviceAgreementId,
         is_preferred_day: false,
-        candidate_slots: [],
+        // Repair keeps the published visit's existing appointment window.
+        // Null is the solver's fixed-window fallback; [] means no legal slot.
+        candidate_slots: null,
         occupied_start_keys: [],
       })),
       employees: employees.map((employee) => ({
@@ -188,7 +190,7 @@ export class PublishedAssignmentRepairPlannerAdapter {
         assignment_id: assignment.id,
         scheduled_date: dateOnly(assignment.plannedStart),
         start_minute: minuteOfDay(assignment.plannedStart),
-        end_minute: minuteOfDay(assignment.plannedEnd),
+        end_minute: minuteFromDayStart(assignment.plannedEnd, assignment.plannedStart),
         employee_ids: assignment.crewMembers
           .map((entry) => entry.employeeId)
           .sort(),
@@ -240,6 +242,11 @@ function dateOnly(value: Date): string {
 
 function minuteOfDay(value: Date): number {
   return value.getUTCHours() * 60 + value.getUTCMinutes();
+}
+
+function minuteFromDayStart(value: Date, day: Date): number {
+  const start = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+  return Math.round((value.getTime() - start) / 60_000);
 }
 
 function expandUnavailableDates(

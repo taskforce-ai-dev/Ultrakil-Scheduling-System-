@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-LockScope = Literal["FULL", "CREW", "VEHICLE", "TIME"]
+LockScope = Literal["FULL", "CREW", "SUPERVISOR", "VEHICLE", "TIME"]
 
 
 class OccupiedStartKey(BaseModel):
@@ -43,15 +43,11 @@ class VisitInput(BaseModel):
     """Set by ULK-C04 when the date fell on a preferred weekday, not merely an
     allowed one. A soft preference: worth a nudge, never a refusal."""
     is_preferred_day: bool = False
-    """Every legal date and time this visit could take, when the caller is
-    willing to let the solver move it.
-
-    Left empty the visit is pinned exactly where it is — which is what a
-    published or time-locked visit sends, and what keeps a caller that knows
-    nothing about slots behaving as it always did. Given candidates, the visit
-    lands on whichever one produces the best schedule overall, and the date it
-    was generated on carries no weight of its own."""
-    candidate_slots: list[CandidateSlot] = Field(default_factory=list)
+    """Omitted/null means the legacy fixed-window fallback. An explicit []
+    means the API found no legal date/time and the visit must be unassigned.
+    Time locks override slots with the manager's exact start/end. Nonempty
+    candidates let the solver choose a legal date and time."""
+    candidate_slots: list[CandidateSlot] | None = None
     occupied_start_keys: list[OccupiedStartKey] = Field(default_factory=list)
 
 
@@ -98,6 +94,11 @@ class VehicleInput(BaseModel):
     seat_capacity: int | None = None
 
 
+class LockedVehicleDriver(BaseModel):
+    vehicle_id: str
+    driver_employee_id: str | None
+
+
 class LockInput(BaseModel):
     """A manager's decision the solver must not overturn."""
 
@@ -105,7 +106,20 @@ class LockInput(BaseModel):
     scope: LockScope
     employee_ids: list[str] = Field(default_factory=list)
     vehicle_ids: list[str] = Field(default_factory=list)
+    vehicle_drivers: list[LockedVehicleDriver] = Field(default_factory=list)
     start_minute: int | None = None
+    end_minute: int | None = None
+
+    @model_validator(mode="after")
+    def validate_drivers(self) -> LockInput:
+        ids = [entry.vehicle_id for entry in self.vehicle_drivers]
+        if len(ids) != len(set(ids)) or any(
+            vehicle_id not in self.vehicle_ids for vehicle_id in ids
+        ):
+            raise ValueError("vehicle lock drivers must map each locked vehicle at most once")
+        if self.scope == "SUPERVISOR" and not self.employee_ids:
+            raise ValueError("supervisor lock requires a supervisor identity")
+        return self
 
 
 class ExistingAssignmentInput(BaseModel):
@@ -145,6 +159,41 @@ class SolveRequest(BaseModel):
     Managers rerun a schedule and compare; a different answer each time from
     identical inputs would make that comparison worthless."""
     random_seed: int = 0
+
+    @model_validator(mode="after")
+    def validate_locks(self) -> SolveRequest:
+        by_visit: dict[str, dict[LockScope, LockInput]] = {}
+        for lock in self.locks:
+            scopes = by_visit.setdefault(lock.visit_id, {})
+            if lock.scope in scopes:
+                raise ValueError(f"duplicate lock scope for visit {lock.visit_id}: {lock.scope}")
+            scopes[lock.scope] = lock
+        for visit_id, scopes in by_visit.items():
+            full = scopes.get("FULL")
+            supervisor = scopes.get("SUPERVISOR")
+            crew = scopes.get("CREW")
+            if supervisor and crew and not set(supervisor.employee_ids) <= set(crew.employee_ids):
+                raise ValueError(f"conflicting supervisor and crew locks for visit {visit_id}")
+            if full is None:
+                continue
+            time_lock = scopes.get("TIME")
+            if time_lock and (
+                full.start_minute != time_lock.start_minute
+                or full.end_minute != time_lock.end_minute
+            ):
+                raise ValueError(f"conflicting time locks for visit {visit_id}")
+            if crew and set(full.employee_ids) != set(crew.employee_ids):
+                raise ValueError(f"conflicting crew locks for visit {visit_id}")
+            if supervisor and not set(supervisor.employee_ids) <= set(full.employee_ids):
+                raise ValueError(f"conflicting supervisor and full locks for visit {visit_id}")
+            vehicle_lock = scopes.get("VEHICLE")
+            if vehicle_lock and (
+                set(full.vehicle_ids) != set(vehicle_lock.vehicle_ids)
+                or {row.vehicle_id: row.driver_employee_id for row in full.vehicle_drivers}
+                != {row.vehicle_id: row.driver_employee_id for row in vehicle_lock.vehicle_drivers}
+            ):
+                raise ValueError(f"conflicting vehicle locks for visit {visit_id}")
+        return self
 
 
 class VehicleAssignmentOutput(BaseModel):

@@ -21,7 +21,7 @@ export const QSTASH_MINIMUM_EXECUTION_SECONDS =
   SCHEDULE_MINIMUM_SOLVER_SECONDS_PER_DAY;
 
 export function qstashMaximumRangeDays(executionBudgetSeconds: number): number {
-  return Math.max(
+  const availableSolverPhases = Math.max(
     0,
     Math.floor(
       (executionBudgetSeconds -
@@ -32,6 +32,14 @@ export function qstashMaximumRangeDays(executionBudgetSeconds: number): number {
         SCHEDULE_MINIMUM_SOLVER_SECONDS_PER_DAY,
     ),
   );
+
+  // One-day solves stay in a single model. A locked multi-day solve first
+  // allocates all protected visits jointly, then spends one phase per day on
+  // ordinary work. Advertise a range that is safe before a run is queued,
+  // including that conditional joint-allocation phase.
+  return availableSolverPhases <= 1
+    ? availableSolverPhases
+    : availableSolverPhases - 1;
 }
 
 // Self-hosted BullMQ has no Vercel function ceiling. Six hours safely covers

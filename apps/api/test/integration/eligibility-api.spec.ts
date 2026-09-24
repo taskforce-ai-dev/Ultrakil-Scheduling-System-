@@ -8,7 +8,7 @@
  */
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { AssignmentStatus, BranchCode, PrismaClient, UserRole, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, LockScope, PrismaClient, UserRole, Weekday } from '@prisma/client';
 import request from 'supertest';
 
 import { AppModule } from '../../src/app.module';
@@ -462,6 +462,56 @@ describe('assigning a crew', () => {
 
     const visit = await request(http).get(`/api/visits/${visitId}`).set(auth(adminToken));
     expect(visit.body.crewChanges[0]).toMatchObject({ action: 'CREW_REMOVED', crewSize: 0 });
+  });
+
+  it('rejects replacement of a locked draft without changing its crew or lock reason', async () => {
+    const visitId = await visitForAssignment();
+    const assigned = await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), reason: 'Initial assignment' })
+      .expect(200);
+    await request(http)
+      .post(`/api/assignments/${assigned.body.id}/lock`)
+      .set(auth(adminToken))
+      .send({ scope: LockScope.CREW, reason: 'Keep this crew for the client' })
+      .expect(200);
+
+    const before = await prisma.assignment.findUniqueOrThrow({
+      where: { id: assigned.body.id },
+      include: { crewMembers: true, vehicles: true, locks: true },
+    });
+    const checked = await request(http)
+      .post(`/api/visits/${visitId}/assignment/check`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), plannedEndMinute: 12 * 60 });
+    expect(checked.status).toBe(409);
+    expect(checked.body.code).toBe('RESOURCE_CONFLICT');
+
+    const replacement = await request(http)
+      .put(`/api/visits/${visitId}/assignment`)
+      .set(auth(adminToken))
+      .send({ ...goodCrew(), plannedEndMinute: 12 * 60, reason: 'Try a later finish' });
+
+    expect(replacement.status).toBe(409);
+    expect(replacement.body.code).toBe('RESOURCE_CONFLICT');
+    expect(replacement.body.details).toEqual({ visitId, assignmentId: assigned.body.id });
+    expect(await prisma.assignment.findUniqueOrThrow({
+      where: { id: assigned.body.id },
+      include: { crewMembers: true, vehicles: true, locks: true },
+    })).toEqual(before);
+    expect(before.locks).toEqual([
+      expect.objectContaining({
+        assignmentId: assigned.body.id,
+        scope: LockScope.CREW,
+        reason: 'Keep this crew for the client',
+        releasedAt: null,
+      }),
+    ]);
+    expect(await prisma.assignment.count({ where: { generatedVisitId: visitId } })).toBe(1);
+    expect(await prisma.auditEvent.count({
+      where: { entityType: 'GeneratedVisit', action: 'visit.crew_changed', entityId: visitId },
+    })).toBe(1);
   });
 
   it('leaves the history empty for a visit nobody has touched', async () => {

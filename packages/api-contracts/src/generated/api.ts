@@ -2302,7 +2302,7 @@ export interface components {
         };
         ConflictDto: {
             /** @enum {string} */
-            code: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW" | "DAILY_VISIT_CAP_REACHED";
+            code: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW" | "NO_FEASIBLE_TIME" | "DAILY_VISIT_CAP_REACHED";
             /** @description Written for a manager. */
             message: string;
             /** @description What to actually do about it. */
@@ -2368,6 +2368,18 @@ export interface components {
             driverEmployeeId: string | null;
             driverName: string | null;
         };
+        ActiveAssignmentLockDto: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            scope: "FULL" | "CREW" | "SUPERVISOR" | "VEHICLE" | "TIME";
+            reason: string | null;
+            /** Format: uuid */
+            lockedByUserId: string | null;
+            lockedByName: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
         AssignmentDto: {
             /** Format: uuid */
             id: string;
@@ -2384,6 +2396,8 @@ export interface components {
             crew: components["schemas"]["AssignedCrewMemberDto"][];
             vehicles: components["schemas"]["AssignedVehicleDto"][];
             isLocked: boolean;
+            /** @description Active manager pins; released scopes are excluded. */
+            locks: components["schemas"]["ActiveAssignmentLockDto"][];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4896,7 +4910,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description RESOURCE_CONFLICT — published assignment history or multiple active assignments prevent a draft eligibility check. */
+            /** @description RESOURCE_CONFLICT — a manager lock, published assignment history, or multiple active assignments prevents a draft eligibility check. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5008,7 +5022,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every reason. */
+            /** @description ASSIGNMENT_NOT_ELIGIBLE — details.conflicts holds every eligibility reason; or RESOURCE_CONFLICT — an active manager lock or non-editable assignment history prevents replacement. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -5051,7 +5065,7 @@ export interface operations {
                  */
                 withConflictsOnly?: boolean;
                 /** @description Only visits with this recorded conflict code. Engine vocabulary, not group vocabulary — a group label such as MISSING_SKILL belongs in conflictGroup. Facets remain scoped to the other filters. */
-                conflictCode?: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW" | "DAILY_VISIT_CAP_REACHED";
+                conflictCode?: "BRANCH_MISMATCH" | "EMPLOYEE_INACTIVE" | "EMPLOYEE_UNAVAILABLE" | "EMPLOYEE_DOUBLE_BOOKED" | "EMPLOYEE_PERMANENTLY_STATIONED" | "NO_PMS_SUPERVISOR_AVAILABLE" | "BRANCH_HAS_NO_PMS_SUPERVISOR" | "CREW_TOO_SMALL" | "SKILL_NOT_HELD" | "DUPLICATE_CREW_MEMBER" | "VEHICLE_INACTIVE" | "VEHICLE_BRANCH_MISMATCH" | "VEHICLE_DOUBLE_BOOKED" | "NO_AUTHORIZED_DRIVER" | "VEHICLE_CAPACITY_EXCEEDED" | "OUTSIDE_SERVICE_HOURS" | "WINDOW_TOO_SHORT" | "VISIT_NOT_SCHEDULABLE" | "ASSIGNMENT_LOCKED" | "CREW_CANNOT_TRAVEL" | "TOO_MANY_VEHICLES" | "NO_FEASIBLE_CREW" | "NO_FEASIBLE_TIME" | "DAILY_VISIT_CAP_REACHED";
                 /** @description Only visits carrying at least one conflict in this manager-facing group. Each group maps to a fixed set of engine conflict codes. Facets remain scoped to the other filters. */
                 conflictGroup?: "MISSING_PMS" | "INSUFFICIENT_CREW" | "MISSING_SKILL" | "NO_AUTHORIZED_DRIVER" | "UNAVAILABLE_VEHICLE" | "BRANCH_RESTRICTION" | "PERMANENT_STAFF_RESTRICTION" | "SERVICE_WINDOW_CONFLICT" | "EMPLOYEE_OVERLAP" | "VEHICLE_OVERLAP" | "CREW_CANNOT_TRAVEL" | "OTHER";
                 /** @description UNASSIGNED: no eligibility conflicts are recorded against the visit, so nobody has proposed a crew for it yet. EXCEPTION: a crew was judged and refused and the reasons are stored. Omit for both. */

@@ -190,3 +190,31 @@ export async function assertScheduleSnapshot(
     );
   }
 }
+
+/** Validate a batched post-lock read without another assignment query per visit. */
+export function assertScheduleSnapshotRows(
+  visitId: string,
+  assignmentId: string | undefined,
+  assignments: Array<PublicationHistoryAssignment & { id: string }>,
+) {
+  if (assignments.some(isPublicationHistory)) {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'This visit is part of a published schedule and cannot be changed. The published schedule is kept as a record.',
+      HttpStatus.CONFLICT,
+      { visitId },
+    );
+  }
+  const current = assignments.filter(
+    (assignment) => assignment.status === AssignmentStatus.DRAFT ||
+      assignment.status === AssignmentStatus.PROPOSED,
+  );
+  if (assignmentId ? current.length !== 1 || current[0].id !== assignmentId : current.length !== 0) {
+    throw new AppException(
+      'RESOURCE_CONFLICT',
+      'An assignment changed while this schedule was being prepared. Refresh and try again.',
+      HttpStatus.CONFLICT,
+      { visitId, assignmentId },
+    );
+  }
+}

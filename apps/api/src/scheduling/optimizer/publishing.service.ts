@@ -470,7 +470,7 @@ export class PublishingService {
       const lock = await tx.assignmentLock.upsert({
         where: { assignmentId_scope: { assignmentId, scope } },
         create: { assignmentId, scope, reason, lockedByUserId: actor.id },
-        update: { reason, lockedByUserId: actor.id, releasedAt: null },
+        update: { reason, lockedByUserId: actor.id, releasedAt: null, createdAt: new Date() },
       });
       await this.reviseVisit(tx, assignment.generatedVisitId);
       await this.audit.record({

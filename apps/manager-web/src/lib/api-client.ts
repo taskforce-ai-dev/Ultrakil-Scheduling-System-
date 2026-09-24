@@ -1120,16 +1120,7 @@ export function unassignVisit(visitId: string): Promise<void> {
   return request<void>(`/visits/${visitId}/assignment`, { method: "DELETE" });
 }
 
-/**
- * Pins part of an assignment (`FULL`, `CREW`, `SUPERVISOR`, `VEHICLE` or
- * `TIME`) so the next schedule run keeps it exactly as it is.
- *
- * Known gap: nothing in the published contract or the response of this call
- * lets a client later ask "which scopes are locked on assignment X" — the
- * only read signal is `Assignment.isLocked`, a single boolean covering any
- * scope. Flagged in the PR; the fix is for `AssignmentDto` to include the
- * live `locks: AssignmentLock[]` for an assignment.
- */
+/** Pins part of an assignment so the next schedule run preserves it. */
 export function lockAssignment(
   assignmentId: string,
   dto: LockAssignmentRequest,

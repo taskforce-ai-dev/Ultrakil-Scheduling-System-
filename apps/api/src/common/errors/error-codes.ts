@@ -105,6 +105,8 @@ export const ErrorCode = {
   TOO_MANY_VEHICLES: 'TOO_MANY_VEHICLES',
   /** No legal crew/vehicle combination exists for the visit as currently defined. */
   NO_FEASIBLE_CREW: 'NO_FEASIBLE_CREW',
+  /** No legal start time remains under the current date, cadence and opening-hour rules. */
+  NO_FEASIBLE_TIME: 'NO_FEASIBLE_TIME',
   /**
    * The optimizer wanted to move the visit on to a branch-day already carrying
    * VISIT_GENERATION_DAILY_CAP visits. Generation spreads a calendar so no day

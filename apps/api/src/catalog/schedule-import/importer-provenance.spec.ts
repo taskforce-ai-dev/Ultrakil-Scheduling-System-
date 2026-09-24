@@ -101,6 +101,7 @@ function fixture(state: Partial<ExistingState> = {}) {
       create: jest.fn(),
     },
     serviceSite: {
+      findMany: jest.fn(async () => [{ id: SITE_ID }]),
       findFirst: jest.fn(async () => ({
         id: SITE_ID,
         branchId: COLOMBO_BRANCH,
@@ -140,7 +141,10 @@ function fixture(state: Partial<ExistingState> = {}) {
       createMany: jest.fn(async () => ({ count: 0 })),
     },
     // The agreement-row lock, which answers with the rows it was asked for.
-    $queryRaw: jest.fn(async () => [{ id: AGREEMENT_ID }]),
+    $queryRaw: jest.fn(async (statement: { sql: string }) =>
+      statement.sql.includes('service_sites')
+        ? [{ id: SITE_ID }]
+        : [{ id: AGREEMENT_ID }]),
     // The per-customer advisory lock, held before the existence check.
     $executeRaw: jest.fn(async () => 1),
   };

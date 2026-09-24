@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AssignmentStatus, CrewRole } from '@prisma/client';
+import { AssignmentStatus, CrewRole, LockScope } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -188,6 +188,16 @@ export class AssignedVehicleDto {
   @ApiProperty({ type: String, nullable: true }) driverName!: string | null;
 }
 
+export class ActiveAssignmentLockDto {
+  @ApiProperty({ type: String, format: 'uuid' }) id!: string;
+  @ApiProperty({ enum: LockScope }) scope!: LockScope;
+  @ApiProperty({ type: String, nullable: true }) reason!: string | null;
+  @ApiProperty({ type: String, nullable: true, format: 'uuid' })
+  lockedByUserId!: string | null;
+  @ApiProperty({ type: String, nullable: true }) lockedByName!: string | null;
+  @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
+}
+
 export class AssignmentDto {
   @ApiProperty({ type: String, format: 'uuid' }) id!: string;
   @ApiProperty({ type: String, format: 'uuid' }) generatedVisitId!: string;
@@ -203,6 +213,8 @@ export class AssignmentDto {
   crew!: AssignedCrewMemberDto[];
   @ApiProperty({ type: [AssignedVehicleDto] }) vehicles!: AssignedVehicleDto[];
   @ApiProperty({ type: Boolean }) isLocked!: boolean;
+  @ApiProperty({ type: [ActiveAssignmentLockDto], description: 'Active manager pins; released scopes are excluded.' })
+  locks!: ActiveAssignmentLockDto[];
   @ApiProperty({ type: String, format: 'date-time' }) createdAt!: string;
   @ApiProperty({ type: String, format: 'date-time' }) updatedAt!: string;
 }

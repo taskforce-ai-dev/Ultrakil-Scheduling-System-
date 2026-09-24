@@ -23,13 +23,13 @@ export interface SolveRequest {
     service_site_id: string;
     service_agreement_id: string;
     is_preferred_day: boolean;
-    /** Every legal date and time this visit may take. Empty pins it in place. */
+    /** Null is legacy fixed-window fallback; [] means no legal time exists. */
     candidate_slots: {
       date: string;
       earliest_start_minute: number;
       latest_start_minute: number;
       is_preferred: boolean;
-    }[];
+    }[] | null;
     /** Unique generated-visit keys already owned by sibling rows. */
     occupied_start_keys?: { date: string; start_minute: number }[];
   }[];
@@ -51,10 +51,14 @@ export interface SolveRequest {
   }[];
   locks: {
     visit_id: string;
-    scope: 'FULL' | 'CREW' | 'VEHICLE' | 'TIME';
+    scope: 'FULL' | 'CREW' | 'SUPERVISOR' | 'VEHICLE' | 'TIME';
     employee_ids: string[];
     vehicle_ids: string[];
+    /** Exact driver pins; older callers may omit this and leave driver choice open. */
+    vehicle_drivers?: { vehicle_id: string; driver_employee_id: string | null }[];
     start_minute: number | null;
+    /** Exact locked appointment end; older callers may omit this. */
+    end_minute?: number | null;
   }[];
   existing: {
     visit_id: string;

@@ -24,6 +24,7 @@ const EXPECTED: Record<ConflictCode, string> = {
   EMPLOYEE_PERMANENTLY_STATIONED: "PERMANENT_STAFF_RESTRICTION",
   OUTSIDE_SERVICE_HOURS: "SERVICE_WINDOW_CONFLICT",
   WINDOW_TOO_SHORT: "SERVICE_WINDOW_CONFLICT",
+  NO_FEASIBLE_TIME: "SERVICE_WINDOW_CONFLICT",
   EMPLOYEE_DOUBLE_BOOKED: "EMPLOYEE_OVERLAP",
   DUPLICATE_CREW_MEMBER: "EMPLOYEE_OVERLAP",
   VEHICLE_DOUBLE_BOOKED: "VEHICLE_OVERLAP",
@@ -43,7 +44,7 @@ describe("conflictGroup", () => {
   });
 
   it("covers every conflict code the backend defines", () => {
-    expect(Object.keys(EXPECTED)).toHaveLength(23);
+    expect(Object.keys(EXPECTED)).toHaveLength(24);
   });
 
   it("lists all eleven named groups plus Other, in a stable order", () => {

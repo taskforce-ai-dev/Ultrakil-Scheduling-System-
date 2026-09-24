@@ -45,6 +45,22 @@ Why a separate Python service: constraint solving is Python's strongest
 ecosystem (OR-Tools), and keeping it out of the API means a slow solve never
 blocks a manager clicking around the dispatch board.
 
+Multi-day solves keep the production-sized problem bounded. Manager-locked
+visits are allocated jointly across their legal dates first, with an exact
+objective order of retained lock count, covered visits, then preferences. A
+deterministic 64-visit connected lookahead keeps directly competing ordinary
+work visible without rebuilding the whole 1,300-visit horizon model; its joint
+assignments become reservations for the following per-day solves. Work outside
+that bounded neighborhood remains deliberately greedy, so a decomposed horizon
+is reported as `FEASIBLE`, not globally `OPTIMAL`. Invalid or mutually
+incompatible locks remain unassigned and the API refuses to overwrite their
+existing drafts, requiring a manager to repair or release the lock.
+
+That joint lock allocation is one additional solver phase on a locked
+multi-day run. The API includes it in execution-budget admission and transport
+timeouts. QStash's advertised maximum range reserves that conditional phase;
+self-hosted BullMQ keeps its larger execution budget.
+
 ### `apps/manager-web` — Next.js
 
 Everything the manager sees. Holds no business rules of its own: it renders what
@@ -113,14 +129,23 @@ which reaches somebody as a 500 on a button they pressed for a good reason.
 
 1. **agreement rows**, ascending by id, through `lockAgreementRows`
    (`common/locks/agreement-lock.ts`) — all of them, before touching any;
-2. **visit rows**, ascending by id, through `lockScheduleVisits`;
-3. **employee then vehicle rows**, ascending by id, through
+2. **site rows**, ascending by id, through `lockSiteRows`
+   (`common/locks/site-lock.ts`) whenever site hours or site children matter;
+3. **visit rows**, ascending by id, through `lockScheduleVisits`;
+4. **employee then vehicle rows**, ascending by id, through
    `lockScheduleResources`;
-4. **branch-days**, ascending by key, through `lockBranchDays`
+5. **branch-days**, ascending by key, through `lockBranchDays`
    (`scheduling/optimizer/branch-day-lock.ts`).
 
+The staging synthetic-capacity CLI takes its own transaction-scoped,
+branch-specific advisory lock before reading a mutation plan or synthetic
+resources. Its `UKSC` two-integer lock namespace is distinct from the `UKLD`
+branch-day namespace. This also serializes a branch's first apply, when there
+are no employee or vehicle rows to lock yet; resource row locks still follow
+the normal employee-then-vehicle order.
+
 A writer skipping a level is fine; a writer inverting two is not. The rule is
-written as code in those four helpers, and the only way to keep it is to reach
+written as code in those five helpers, and the only way to keep it is to reach
 for them rather than to lock by hand — which is how each of the three deadlocks
 this section exists because of got in: generation locking a branch-day while
 holding no agreement, and the importer updating a customer's agreements in the

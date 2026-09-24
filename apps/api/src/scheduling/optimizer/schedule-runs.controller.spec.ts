@@ -47,11 +47,11 @@ describe('ScheduleRunsController QStash bounds', () => {
     expect(managerSafeError(null)).toBeNull();
   });
 
-  it('rejects a QStash range that cannot fit the configured per-day solver budget before creating a run', async () => {
+  it('rejects a QStash range that cannot fit a locked joint phase before creating a run', async () => {
     const runs = { create: jest.fn() };
     const dispatcher = {
       provider: 'qstash',
-      maxRangeDays: 9,
+      maxRangeDays: 8,
       enqueue: jest.fn(),
       cancel: jest.fn(),
     };
@@ -67,7 +67,7 @@ describe('ScheduleRunsController QStash bounds', () => {
       controller.start(
         {
           from: '2027-03-01',
-          to: '2027-03-10',
+          to: '2027-03-09',
           branchCode: BranchCode.COLOMBO,
         },
         {
@@ -77,7 +77,10 @@ describe('ScheduleRunsController QStash bounds', () => {
           fullName: 'Actor',
         },
       ),
-    ).rejects.toMatchObject({ code: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED' });
+    ).rejects.toMatchObject({
+      code: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+      details: { days: 9, maximumDays: 8, provider: 'qstash' },
+    });
     expect(runs.create).not.toHaveBeenCalled();
   });
 

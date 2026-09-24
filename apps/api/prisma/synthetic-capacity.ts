@@ -24,6 +24,14 @@ export {
 };
 
 const MAX_SYNTHETIC_TEAMS = 50;
+// UKSC: a separate two-int advisory-lock scheme from the branch-day UKLD
+// scheme. Lock the branch before reading a mutation plan, including when no
+// synthetic rows exist yet; employee and vehicle row locks still follow.
+const SYNTHETIC_BRANCH_LOCK_CLASS = 0x554b5343;
+const SYNTHETIC_BRANCH_LOCK_KEY: Record<BranchCode, number> = {
+  [BranchCode.COLOMBO]: 1,
+  [BranchCode.KANDY]: 2,
+};
 const LIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
   AssignmentStatus.DRAFT,
   AssignmentStatus.PROPOSED,
@@ -287,6 +295,14 @@ export function normalizeAgreementEffectiveDate(asOf: Date): Date {
     asOf.getUTCMonth(),
     asOf.getUTCDate(),
   ));
+}
+
+async function lockSyntheticBranch(
+  tx: Prisma.TransactionClient,
+  branchCode: BranchCode,
+): Promise<void> {
+  const key = SYNTHETIC_BRANCH_LOCK_KEY[branchCode];
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SYNTHETIC_BRANCH_LOCK_CLASS}::int, ${key}::int)`;
 }
 
 async function buildPlan(
@@ -740,13 +756,17 @@ export async function executeSyntheticCapacity(
   options: { asOf?: Date; hooks?: SyntheticCapacityHooks } = {},
 ): Promise<SyntheticCapacityResult> {
   const asOf = options.asOf ?? new Date();
-  const plan = await buildPlan(prisma, args.branchCode, args.teams, asOf);
   if (args.mode === 'dry-run') {
+    const plan = await buildPlan(prisma, args.branchCode, args.teams, asOf);
     return previewSyntheticCapacity(prisma, plan);
   }
   const mode = args.mode;
   return prisma.$transaction(
-    (tx) => mutateSyntheticCapacity(tx, plan, mode, options.hooks ?? {}),
+    async (tx) => {
+      await lockSyntheticBranch(tx, args.branchCode);
+      const plan = await buildPlan(tx, args.branchCode, args.teams, asOf);
+      return mutateSyntheticCapacity(tx, plan, mode, options.hooks ?? {});
+    },
     { timeout: 60_000 },
   );
 }
