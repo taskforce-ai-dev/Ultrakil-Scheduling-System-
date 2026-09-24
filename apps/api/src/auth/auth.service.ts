@@ -46,7 +46,7 @@ export class AuthService {
           .then(() => false);
 
     if (!user || !ok || !user.isActive) {
-      this.logger.warn(`Failed sign-in for "${email}"`);
+      this.logger.warn('Failed sign-in');
       throw new UnauthorizedException({
         code: 'INVALID_CREDENTIALS',
         message: 'Email or password is incorrect.',

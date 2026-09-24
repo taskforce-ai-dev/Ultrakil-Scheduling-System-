@@ -28,6 +28,15 @@
     "vercel:import": "node deploy/vercel-import.mjs",
     "contracts:generate": "pnpm --filter @ultrakil/api openapi:generate && pnpm --filter @ultrakil/api-contracts generate"
   },
+  "pnpm": {
+    "overrides": {
+      "@nestjs/platform-express>multer": "2.3.0",
+      "@prisma/config>deepmerge-ts": "8.0.1",
+      "exceljs>uuid": "11.1.1",
+      "express>qs": "6.16.0",
+      "next>sharp": "0.35.4"
+    }
+  },
   "devDependencies": {
     "prettier": "^3.3.3",
     "typescript": "^5.6.3"

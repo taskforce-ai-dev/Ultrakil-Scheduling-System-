@@ -1,5 +1,6 @@
 import { BranchCode, PrismaClient, UserRole } from '@prisma/client';
 import { AuthService } from '../src/auth/auth.service';
+import { assertProductionSeedCredentials } from './seed-guards';
 
 type Log = (message: string) => void;
 const silent: Log = () => undefined;
@@ -18,6 +19,7 @@ export async function seedAdminUser(prisma: PrismaClient, log: Log = silent): Pr
     log(`Users already exist (${existing}) — leaving accounts untouched.`);
     return;
   }
+  assertProductionSeedCredentials(process.env);
   const email = (process.env.SEED_ADMIN_EMAIL ?? 'admin@taskforceai.tech').trim().toLowerCase();
   const password = process.env.SEED_ADMIN_PASSWORD ?? 'ultrakil-change-me';
   await prisma.user.create({ data: {

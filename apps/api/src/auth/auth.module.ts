@@ -1,10 +1,11 @@
 import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AuthenticatedResponseCacheInterceptor } from './authenticated-response-cache.interceptor';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 
@@ -52,6 +53,7 @@ import { RolesGuard } from './guards/roles.guard';
     // can rely on request.user being present.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_INTERCEPTOR, useClass: AuthenticatedResponseCacheInterceptor },
   ],
   exports: [AuthService],
 })
