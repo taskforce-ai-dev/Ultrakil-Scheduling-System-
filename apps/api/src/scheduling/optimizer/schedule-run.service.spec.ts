@@ -959,6 +959,14 @@ describe('solver replacement lifecycle fence', () => {
         assignments: [{ ...f.oldAssignment, locks: [] }],
         serviceAgreement: {
           ...f.visit.serviceAgreement,
+          serviceWindowStartMinute: 480,
+          serviceWindowEndMinute: 1020,
+          serviceSite: {
+            operatingHours: [
+              { weekday: Weekday.WEDNESDAY, opensAtMinute: 480, closesAtMinute: 1020 },
+              { weekday: Weekday.THURSDAY, opensAtMinute: 480, closesAtMinute: 1020 },
+            ],
+          },
           dayRules: [
             { weekday: Weekday.WEDNESDAY, kind: DayRuleKind.ALLOWED },
             { weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },

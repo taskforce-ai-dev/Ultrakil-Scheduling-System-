@@ -185,7 +185,12 @@ type SlotVisit = {
   };
 };
 
-function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
+function candidateSlotsForVisit(
+  visit: SlotVisit,
+  from: Date,
+  to: Date,
+  restrictToCurrentWindow = false,
+) {
   const { allowedDays, preferredDays } = splitDayRules(
     visit.serviceAgreement.dayRules,
   );
@@ -211,7 +216,7 @@ function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
     from: booked ? visit.visitDate : from,
     to: booked ? visit.visitDate : to,
   });
-  if (!booked) return slots;
+  if (!booked && !restrictToCurrentWindow) return slots;
   return slots
     .map((slot) => ({
       ...slot,
@@ -899,7 +904,12 @@ export class ScheduleRunService {
         // never silently becomes a TIME lock. Assignment TIME/FULL locks carry
         // their exact interval separately and use the legacy fixed-window
         // fallback (`null`). An explicit empty list remains "no legal slot".
-        const allCandidates = candidateSlotsForVisit(visit, options.from, options.to);
+        const allCandidates = candidateSlotsForVisit(
+          visit,
+          options.from,
+          options.to,
+          datePinned.has(visit.id),
+        );
         const keepDate = datePinned.has(visit.id) || visit.placement === VisitPlacement.BOOKED;
         const candidates = timePinned.has(visit.id)
           ? null
