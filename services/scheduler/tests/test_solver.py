@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.solver import model as solver_model
 from app.solver.model import solve
 from app.solver.schemas import (
     CandidateSlot,
@@ -761,6 +762,348 @@ class TestLocks:
         result = solve(request(employees=[driver, TECHNICIAN], vehicles=vans, locks=[lock]))
 
         assert [v.vehicle_id for v in result.assignments[0].vehicles] == ["van-2"]
+
+
+class TestLockedVisitPriority:
+    def test_joint_outside_day_witness_survives_ordinary_preferred_day_holdback(self):
+        first, second, third = "2026-09-09", "2026-09-10", "2026-09-11"
+        result = solve(request(
+            visits=[
+                visit(id="locked", candidate_slots=[self.slot(first)]),
+                *[visit(id=identity, candidate_slots=[
+                    self.slot(first), self.slot(second), self.slot(third, True),
+                ]) for identity in ("flex-1", "flex-2")],
+            ],
+            locks=[self.lock("locked")],
+        ))
+
+        by_id = {row.visit_id: row for row in result.assignments}
+        assert set(by_id) == {"locked", "flex-1", "flex-2"}
+        assert by_id["locked"].scheduled_date == first
+        assert {by_id[identity].scheduled_date for identity in ("flex-1", "flex-2")} == {
+            second, third,
+        }
+        assert result.unassigned == []
+
+    def test_joint_lookahead_retains_ordinary_dates_outside_lock_horizon(self):
+        first, second, third = "2026-09-09", "2026-09-10", "2026-09-11"
+        result = solve(request(
+            visits=[
+                visit(id="locked", candidate_slots=[self.slot(first), self.slot(second, True)]),
+                visit(id="flexible", candidate_slots=[self.slot(first), self.slot(third)]),
+                visit(id="fixed", visit_date=second, candidate_slots=[self.slot(second)]),
+            ],
+            locks=[self.lock("locked")],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date) for row in result.assignments] == [
+            ("fixed", second), ("flexible", third), ("locked", first),
+        ]
+        assert result.unassigned == []
+
+    def test_no_authorized_driver_does_not_exclude_public_transport_coverage(self):
+        first, second = "2026-09-09", "2026-09-10"
+        result = solve(request(
+            visits=[
+                visit(id="locked", candidate_slots=[self.slot(first), self.slot(second, True)]),
+                visit(id="ordinary", visit_date=second, candidate_slots=[self.slot(second)]),
+            ],
+            locks=[self.lock("locked")],
+            vehicles=[VehicleInput(id="undrivable", seat_capacity=4)],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date) for row in result.assignments] == [
+            ("locked", first), ("ordinary", second),
+        ]
+        assert all(row.vehicles == [] for row in result.assignments)
+
+    @pytest.mark.parametrize("noise", ["missing-skill", "afternoon"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_irrelevant_rows_do_not_crowd_out_real_lock_competitor(self, noise, reverse):
+        first, second = "2026-09-09", "2026-09-10"
+        visits = [
+            visit(id="locked", candidate_slots=[self.slot(first), self.slot(second, True)]),
+            visit(id="z-target", visit_date=second, candidate_slots=[self.slot(second)]),
+        ]
+        visits += [visit(
+            id=f"a-noise-{number:02}",
+            required_skill_codes=["nonexistent"] if noise == "missing-skill" else [],
+            candidate_slots=[self.slot(first)] if noise == "missing-skill" else [
+                CandidateSlot(date=first, earliest_start_minute=780, latest_start_minute=780)
+            ],
+        ) for number in range(solver_model.LOCK_COVERAGE_LOOKAHEAD_LIMIT)]
+        result = solve(request(
+            visits=list(reversed(visits)) if reverse else visits,
+            locks=[self.lock("locked")],
+        ))
+
+        by_id = {row.visit_id: row for row in result.assignments}
+        assert by_id["locked"].scheduled_date == first
+        assert by_id["z-target"].scheduled_date == second
+        assert len(result.assignments) == (2 if noise == "missing-skill" else 3)
+
+    def test_shadow_does_not_reserve_a_day_whose_demand_is_outside_lookahead(self):
+        first, second = "2026-09-09", "2026-09-10"
+        result = solve(request(
+            visits=[
+                visit(id="locked", candidate_slots=[self.slot(first)]),
+                visit(id="flexible", candidate_slots=[
+                    CandidateSlot(date=first, earliest_start_minute=780, latest_start_minute=780),
+                    self.slot(second, True),
+                ]),
+                visit(id="fixed", visit_date=second, candidate_slots=[self.slot(second)]),
+            ],
+            locks=[self.lock("locked")],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date, row.start_minute)
+                for row in result.assignments] == [
+            ("fixed", second, 540), ("flexible", first, 780), ("locked", first, 540),
+        ]
+
+    def test_large_horizon_keeps_ordinary_lookahead_bounded(self, monkeypatch):
+        sizes = []
+        solve_window = solver_model._solve_window
+
+        def record_window(payload):
+            sizes.append(len(payload.visits))
+            return solve_window(payload)
+
+        monkeypatch.setattr(solver_model, "_solve_window", record_window)
+        visits = [visit(id="locked", candidate_slots=[
+            self.slot("2026-09-09"), self.slot("2026-09-10", True),
+        ])]
+        visits += [
+            visit(id=f"ordinary-{day}-{number:03}", visit_date=day,
+                  candidate_slots=[self.slot(day)])
+            for day in ("2026-09-09", "2026-09-10", "2026-09-11", "2026-09-12")
+            for number in range(180)
+        ]
+        result = solve(request(visits=visits, locks=[self.lock("locked")]))
+
+        # 721 visits remain decomposed: one bounded joint lookahead and four
+        # ordinary days, never the known whole-horizon solver cliff.
+        assert sizes[0] <= 1 + solver_model.LOCK_COVERAGE_LOOKAHEAD_LIMIT
+        assert max(sizes) <= 180
+        assert len(sizes) <= 5  # One joint solve plus at most four daily solves.
+        assert len(result.assignments) == 4
+        assert any(row.visit_id == "locked" for row in result.assignments)
+        assert result.status == "FEASIBLE"
+
+    @pytest.mark.parametrize("preference", ["weekday", "existing"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_lock_preferences_never_displace_fixed_ordinary_coverage(self, preference, reverse):
+        first, second = "2026-09-09", "2026-09-10"
+        visits = [
+            visit(id="locked", visit_date=second, candidate_slots=[
+                self.slot(first), self.slot(second, preference == "weekday"),
+            ]),
+            visit(id="ordinary", visit_date=second, candidate_slots=[self.slot(second)]),
+        ]
+        result = solve(request(
+            visits=list(reversed(visits)) if reverse else visits,
+            locks=[self.lock("locked")],
+            existing=[ExistingAssignmentInput(
+                visit_id="locked", employee_ids=["sup-1", "tech-1"], start_minute=540,
+            )] if preference == "existing" else [],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date) for row in result.assignments] == [
+            ("locked", first), ("ordinary", second),
+        ]
+        assert result.unassigned == []
+
+    @staticmethod
+    def lock(visit_id, scope="CREW"):
+        return LockInput(
+            visit_id=visit_id,
+            scope=scope,
+            employee_ids=["sup-1"] if scope == "SUPERVISOR" else ["sup-1", "tech-1"],
+            vehicle_ids=["van"],
+            vehicle_drivers=[LockedVehicleDriver(vehicle_id="van", driver_employee_id="sup-1")],
+            start_minute=540 if scope in ("TIME", "FULL") else None,
+            end_minute=660 if scope in ("TIME", "FULL") else None,
+        )
+
+    @staticmethod
+    def pool():
+        return [SUPERVISOR.model_copy(update={"authorized_vehicle_ids": ["van"]}), TECHNICIAN]
+
+    @staticmethod
+    def slot(day, preferred=False):
+        return CandidateSlot(
+            date=day, earliest_start_minute=540, latest_start_minute=540,
+            is_preferred=preferred,
+        )
+
+    @pytest.mark.parametrize("scope", ["CREW", "FULL", "TIME", "VEHICLE", "SUPERVISOR"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_locked_visit_beats_two_unlocked_visits(self, scope, reverse):
+        visits = [
+            visit(id="locked", duration_minutes=120, window_end_minute=660),
+            visit(id="ordinary-1", duration_minutes=60, window_end_minute=600),
+            visit(id="ordinary-2", duration_minutes=60,
+                  window_start_minute=600, window_end_minute=660),
+        ]
+        result = solve(request(
+            visits=list(reversed(visits)) if reverse else visits,
+            employees=list(reversed(self.pool())) if reverse else self.pool(),
+            vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[self.lock("locked", scope)],
+            existing=[ExistingAssignmentInput(
+                visit_id="locked", employee_ids=["sup-1", "tech-1"],
+                vehicle_ids=["van"], start_minute=540,
+            )],
+        ))
+
+        assert result.status == "OPTIMAL"
+        assert [row.visit_id for row in result.assignments] == ["locked"]
+        assert [row.visit_id for row in result.unassigned] == ["ordinary-1", "ordinary-2"]
+
+    def test_multiple_scopes_count_once_and_incompatible_locks_keep_maximum_count(self):
+        visits = [
+            visit(id="many-scopes", duration_minutes=120, window_end_minute=660),
+            visit(id="short-1", duration_minutes=60, window_end_minute=600),
+            visit(id="short-2", duration_minutes=60,
+                  window_start_minute=600, window_end_minute=660),
+        ]
+        locks = [self.lock("many-scopes", scope) for scope in ("CREW", "TIME", "VEHICLE")]
+        locks += [self.lock("short-1"), self.lock("short-2")]
+        result = solve(request(
+            visits=visits, employees=self.pool(),
+            vehicles=[VehicleInput(id="van", seat_capacity=4)], locks=locks,
+        ))
+
+        assert result.status == "OPTIMAL"
+        assert [row.visit_id for row in result.assignments] == ["short-1", "short-2"]
+        assert [row.visit_id for row in result.unassigned] == ["many-scopes"]
+
+    @pytest.mark.parametrize("invalid", [
+        LockInput(visit_id="invalid", scope="CREW", employee_ids=["missing", "tech-1"]),
+        LockInput(visit_id="invalid", scope="SUPERVISOR", employee_ids=["tech-1"]),
+        LockInput(visit_id="invalid", scope="VEHICLE", vehicle_ids=["van"],
+                  vehicle_drivers=[LockedVehicleDriver(
+                      vehicle_id="van", driver_employee_id="tech-1")]),
+        LockInput(visit_id="invalid", scope="TIME", start_minute=540, end_minute=570),
+    ])
+    def test_invalid_lock_does_not_prevent_independent_work(self, invalid):
+        result = solve(request(
+            visits=[visit(id="invalid"), visit(id="ordinary")],
+            employees=self.pool(), vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[invalid],
+        ))
+
+        assert result.status == "OPTIMAL"
+        assert [row.visit_id for row in result.assignments] == ["ordinary"]
+        assert [row.visit_id for row in result.unassigned] == ["invalid"]
+
+    @pytest.mark.parametrize("same_agreement", [False, True])
+    def test_joint_allocation_moves_flexible_lock_and_is_order_independent(self, same_agreement):
+        first, second = "2026-09-09", "2026-09-10"
+        visits = [
+            visit(id="a-flexible", service_agreement_id="shared" if same_agreement else "a",
+                  candidate_slots=[self.slot(first, True), self.slot(second)]),
+            visit(id="b-fixed", service_agreement_id="shared" if same_agreement else "b",
+                  candidate_slots=[self.slot(first)]),
+            visit(id="ordinary", candidate_slots=[self.slot(first), self.slot(second)]),
+        ]
+        locks = [self.lock("a-flexible"), self.lock("b-fixed")]
+        results = [solve(request(
+            visits=list(reversed(visits)) if reverse else visits,
+            employees=list(reversed(self.pool())) if reverse else self.pool(),
+            vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=list(reversed(locks)) if reverse else locks,
+        )) for reverse in (False, True)]
+
+        for result in results:
+            assert [(row.visit_id, row.scheduled_date) for row in result.assignments] == [
+                ("a-flexible", second), ("b-fixed", first),
+            ]
+            assert [row.visit_id for row in result.unassigned] == ["ordinary"]
+        assert results[0].assignments == results[1].assignments
+        assert results[0].unassigned == results[1].unassigned
+
+    def test_joint_locks_respect_published_reservations(self):
+        first, second = "2026-09-09", "2026-09-10"
+        result = solve(request(
+            visits=[visit(id="locked", candidate_slots=[self.slot(first), self.slot(second)])],
+            employees=self.pool(), vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[self.lock("locked")],
+            reservations=[ReservationInput(
+                assignment_id="published", scheduled_date=first,
+                start_minute=540, end_minute=630, employee_ids=["sup-1", "tech-1"],
+                vehicle_ids=["van"],
+            )],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date) for row in result.assignments] == [
+            ("locked", second),
+        ]
+
+    def test_joint_allocation_preserves_agreement_day_for_ordinary_work(self):
+        first, second = "2026-09-09", "2026-09-10"
+        result = solve(request(
+            visits=[
+                visit(id="locked", service_agreement_id="shared",
+                      candidate_slots=[self.slot(first), self.slot(second)]),
+                visit(id="ordinary", service_agreement_id="shared", candidate_slots=[
+                    CandidateSlot(date=first, earliest_start_minute=660, latest_start_minute=660),
+                    CandidateSlot(date=second, earliest_start_minute=660, latest_start_minute=660),
+                ]),
+            ],
+            employees=self.pool(), vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[self.lock("locked")],
+        ))
+
+        assert len(result.assignments) == 2
+        assert len({row.scheduled_date for row in result.assignments}) == 2
+
+    @pytest.mark.parametrize("scope", ["TIME", "FULL"])
+    @pytest.mark.parametrize("resource", ["employee", "vehicle"])
+    def test_daily_work_preserves_joint_locks_exact_longer_interval(self, scope, resource):
+        pool = self.pool()
+        if resource == "vehicle":
+            pool += [employee(id="sup-2", is_pms_grade=True,
+                              authorized_vehicle_ids=["van"]), employee(id="tech-2")]
+            pool = [
+                person.model_copy(update={"can_use_public_transport": False}) for person in pool
+            ]
+        result = solve(request(
+            visits=[
+                visit(id="locked", duration_minutes=90),
+                visit(id="ordinary", duration_minutes=60, candidate_slots=[
+                    CandidateSlot(date=day, earliest_start_minute=630, latest_start_minute=630)
+                    for day in ("2026-09-09", "2026-09-10")
+                ]),
+            ],
+            employees=pool, vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[self.lock("locked", scope)],
+        ))
+
+        assert [(row.visit_id, row.scheduled_date, row.start_minute)
+                for row in result.assignments] == [
+            ("locked", "2026-09-09", 540), ("ordinary", "2026-09-10", 630),
+        ]
+        assert result.assignments[0].vehicles[0].driver_employee_id in (
+            "sup-1", "sup-2"
+        )
+
+    def test_joint_allocation_honours_exact_reservation_exclusion(self):
+        result = solve(request(
+            visits=[visit(id="locked", candidate_slots=[
+                self.slot("2026-09-09", True), self.slot("2026-09-10"),
+            ])],
+            employees=self.pool(), vehicles=[VehicleInput(id="van", seat_capacity=4)],
+            locks=[self.lock("locked")],
+            reservations=[ReservationInput(
+                assignment_id="predecessor", scheduled_date="2026-09-09",
+                start_minute=540, end_minute=630, employee_ids=["sup-1", "tech-1"],
+                vehicle_ids=["van"],
+            )],
+            excluded_reservation_assignment_ids=["predecessor"],
+        ))
+
+        assert result.assignments[0].scheduled_date == "2026-09-09"
 
 
 class TestSoftPreferences:

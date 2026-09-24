@@ -17,11 +17,13 @@ never drop a visit to make the remaining ones tidier.
 from __future__ import annotations
 
 import time
+from collections import deque
 
 from ortools.sat.python import cp_model
 
 from app.solver.schemas import (
     AssignmentOutput,
+    ReservationInput,
     SolveRequest,
     SolveResponse,
     UnassignedOutput,
@@ -37,6 +39,9 @@ from app.solver.schemas import (
 # schedule and a timeout, and a schedule nobody waited for is worth more than a
 # theoretically tidier one that never arrives.
 SLOT_GRANULARITY_MINUTES = 30
+# Keep ordinary coverage visible when placing locks without rebuilding the
+# unbounded whole-horizon model. The rest is still handled by daily solves.
+LOCK_COVERAGE_LOOKAHEAD_LIMIT = 64
 
 WEIGHT_VISIT_STAFFED = 10_000
 WEIGHT_PREFERRED_DAY = 30
@@ -153,6 +158,101 @@ def _employee_can_serve(employee, visit) -> bool:
     return True
 
 
+def _lock_coverage_lookahead(request: SolveRequest, locked_visits: list) -> list:
+    """Bound ordinary lookahead by eligibility and competing lock date/time.
+
+    This is a deterministic sampling heuristic, not a global coverage proof.
+    It runs no per-candidate solves. Only the returned visits enter CP-SAT.
+    """
+    def windows(visit):
+        time_lock = next((lock for lock in request.locks
+                          if lock.visit_id == visit.id and lock.scope in ("FULL", "TIME")), None)
+        if time_lock is not None and time_lock.start_minute is not None:
+            end = time_lock.end_minute or time_lock.start_minute + visit.duration_minutes
+            return [(visit.visit_date, time_lock.start_minute, end)]
+        if visit.candidate_slots is None:
+            return [(visit.visit_date, visit.window_start_minute,
+                     visit.window_start_minute + visit.duration_minutes)]
+        return [
+            (slot.date, slot.earliest_start_minute,
+             min(slot.latest_start_minute, 1440 - visit.duration_minutes) + visit.duration_minutes)
+            for slot in visit.candidate_slots
+            if slot.earliest_start_minute <= min(
+                slot.latest_start_minute, 1440 - visit.duration_minutes
+            )
+        ]
+
+    def resources(visit):
+        eligible = [employee for employee in request.employees
+                    if _employee_can_serve(employee, visit)]
+        vehicles = {vehicle.id for vehicle in request.vehicles
+                    if _vehicle_serves_branch(vehicle, visit)
+                    and (vehicle.seat_capacity is None
+                         or vehicle.seat_capacity >= visit.required_crew_size)
+                    and any(vehicle.id in employee.authorized_vehicle_ids for employee in eligible)}
+        return {employee.id for employee in eligible}, vehicles
+
+    locked_ids = {visit.id for visit in locked_visits}
+    candidates = {}
+    for visit in request.visits:
+        if visit.id in locked_ids:
+            continue
+        # NO_AUTHORIZED_DRIVER alone is advisory: public transport can still
+        # staff the job. Every other existing reason proves a hard-rule failure.
+        if any(reason != "NO_AUTHORIZED_DRIVER" for reason in _why_unstaffable(request, visit)):
+            continue
+        candidate_windows = windows(visit)
+        crew, vehicles = resources(visit)
+        candidates[visit.id] = (visit, candidate_windows, crew, vehicles)
+
+    def competing_queues(anchor):
+        """One ranked queue per anchor date/time, including future alternatives."""
+        anchor_crew, anchor_vehicles = resources(anchor)
+        for day, start, end in sorted(set(windows(anchor))):
+            ranked = []
+            for visit, candidate_windows, crew, vehicles in candidates.values():
+                if visit.id == anchor.id:
+                    continue
+                agreement = anchor.service_agreement_id
+                same_agreement = bool(agreement and agreement == visit.service_agreement_id)
+                if not (same_agreement or crew & anchor_crew or vehicles & anchor_vehicles):
+                    continue
+                on_day = [(opening, closing) for date, opening, closing in candidate_windows
+                          if date == day]
+                if not on_day:
+                    continue
+                conflicts = same_agreement or any(
+                    opening < end and start < closing for opening, closing in on_day
+                )
+                date_count = len({window[0] for window in candidate_windows})
+                rank = (not conflicts, date_count, len(crew) - visit.required_crew_size, visit.id)
+                ranked.append((rank, visit))
+            if ranked:
+                yield deque(sorted(ranked, key=lambda entry: entry[0]))
+
+    # Breadth-first expansion follows selected shadows to their other dates,
+    # exposing demand that would otherwise be hidden by the lock-only horizon.
+    # Keep all original candidates: shrinking a shadow's freedom can make the
+    # model choose the wrong lock date. Round-robin limits domination by many
+    # interchangeable competitors in one date/time bucket.
+    queues = deque(queue for anchor in sorted(locked_visits, key=lambda visit: visit.id)
+                   for queue in competing_queues(anchor))
+    selected = {}
+    while queues and len(selected) < LOCK_COVERAGE_LOOKAHEAD_LIMIT:
+        queue = queues.popleft()
+        while queue and queue[0][1].id in selected:
+            queue.popleft()
+        if not queue:
+            continue
+        _, visit = queue.popleft()
+        selected[visit.id] = visit
+        if len(selected) < LOCK_COVERAGE_LOOKAHEAD_LIMIT:
+            queues.extend(competing_queues(visit))
+        if queue:
+            queues.append(queue)
+    return list(selected.values())
+
+
 def _may_take(visit, day: str, allowed_days: list[str]) -> bool:
     """Whether `day` may take `visit` yet, as the horizon is worked through.
 
@@ -172,12 +272,13 @@ def _may_take(visit, day: str, allowed_days: list[str]) -> bool:
 
 
 def solve(request: SolveRequest) -> SolveResponse:
-    """Schedules a horizon by solving one day at a time.
+    """Allocate manager locks jointly, then schedule ordinary work per day.
 
-    A visit never crosses midnight, so two visits on different days cannot
-    overlap and no employee or vehicle constraint links one day to the next.
-    The days are therefore genuinely independent, and solving them together
-    buys nothing but size — which turns out to be what breaks it.
+    Flexible locked visits link days: taking Tuesday's crew for a lock that
+    could move to Thursday may strand another lock that can only use Tuesday.
+    Solve those visits together with bounded ordinary coverage lookahead, then
+    reserve the selected assignments. Eligible resource/time competitors get
+    priority, with lookahead spread across the locks' possible dates and times.
 
     Measured on a real September week, 1,353 visits against 40 staff:
 
@@ -192,11 +293,9 @@ def solve(request: SolveRequest) -> SolveResponse:
     UltraKIL's real matrix was loaded.
 
     A visit free to move is offered to each of its allowed days in turn and
-    rolls forward while it stays unstaffed, so it lands on the earliest day
-    that can take it. That is greedy across days and exact within one, which
-    is the right way round: the coverage that matters is won inside a day, by
-    fitting crews around each other, and no amount of cross-day cleverness
-    beats simply asking the next day.
+    rolls forward while it stays unstaffed. This remains greedy for ordinary
+    work outside the lookahead. Optimal submodels prove the maximum lock count
+    and coverage within their inputs, not globally maximum ordinary coverage.
     """
     started = time.monotonic()
 
@@ -233,9 +332,65 @@ def solve(request: SolveRequest) -> SolveResponse:
     assignments: list[AssignmentOutput] = []
     statuses: list[str] = []
     objective = 0
+    locked_ids = {lock.visit_id for lock in request.locks} & pending.keys()
+    reservations = list(request.reservations)
+    reserved_agreement_days: set[tuple[str, str]] = set()
+
+    if locked_ids:
+        # Time locks ignore candidate dates. Normalize their candidates before
+        # the joint solve so availability and preference logic use the pinned day.
+        locked_visits = [
+            visit.model_copy(update={"candidate_slots": None})
+            if visit.id in date_pinned else visit
+            for visit in visits if visit.id in locked_ids
+        ]
+        # Use real optional visits, not estimated penalties: all crew, skill,
+        # travel, reservation and agreement/day rules apply to the lookahead.
+        # Distinct locked visits always remain the first objective. Ordinary
+        # coverage is second, ahead of every weekday/churn preference.
+        lookahead = _lock_coverage_lookahead(request, locked_visits)
+        allocation_ids = locked_ids | {visit.id for visit in lookahead}
+        allocation = _solve_window(request.model_copy(update={
+            "visits": locked_visits + lookahead,
+            "locks": [lock for lock in request.locks if lock.visit_id in locked_ids],
+            "existing": [row for row in request.existing if row.visit_id in allocation_ids],
+        }))
+        statuses.append(allocation.status)
+        objective += allocation.objective_value
+        # Preserve the whole joint coverage witness. Re-solving its ordinary
+        # visits greedily can discard coverage through preferred-day holdback.
+        # The lookahead follows outside-date competition before this solve;
+        # coverage beyond that bounded sample remains heuristic, not optimal.
+        for assignment in allocation.assignments:
+            visit = pending.pop(assignment.visit_id)
+            assignments.append(assignment)
+            time_lock = next(
+                (lock for lock in request.locks
+                 if lock.visit_id == visit.id and lock.scope in ("FULL", "TIME")),
+                None,
+            )
+            end = (
+                time_lock.end_minute
+                if time_lock is not None and time_lock.end_minute is not None
+                else assignment.start_minute + visit.duration_minutes
+            )
+            reservations.append(ReservationInput(
+                scheduled_date=assignment.scheduled_date,
+                start_minute=assignment.start_minute,
+                end_minute=end,
+                employee_ids=assignment.employee_ids,
+                vehicle_ids=[vehicle.vehicle_id for vehicle in assignment.vehicles],
+            ))
+            if visit.service_agreement_id:
+                reserved_agreement_days.add((visit.service_agreement_id, assignment.scheduled_date))
 
     for day in all_days:
-        todays = [visit for visit in pending.values() if _may_take(visit, day, days_for(visit))]
+        todays = [
+            visit for visit in pending.values()
+            if visit.id not in locked_ids
+            and (visit.service_agreement_id, day) not in reserved_agreement_days
+            and _may_take(visit, day, days_for(visit))
+        ]
         if not todays:
             continue
 
@@ -256,6 +411,7 @@ def solve(request: SolveRequest) -> SolveResponse:
                     "visits": narrowed,
                     "locks": [lock for lock in request.locks if lock.visit_id in ids],
                     "existing": [row for row in request.existing if row.visit_id in ids],
+                    "reservations": reservations,
                     "time_limit_seconds": per_day,
                 }
             )
@@ -285,11 +441,9 @@ def solve(request: SolveRequest) -> SolveResponse:
         for visit in pending.values()
     ]
 
-    # The horizon is only as certain as its least certain day.
+    # Daily optimality does not prove global optimality for greedy ordinary work.
     if any(status == "UNKNOWN" for status in statuses):
         status_name = "UNKNOWN"
-    elif all(status == "OPTIMAL" for status in statuses):
-        status_name = "OPTIMAL"
     elif any(status in ("OPTIMAL", "FEASIBLE") for status in statuses):
         status_name = "FEASIBLE"
     else:
@@ -390,23 +544,6 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         if visit.window_end_minute - visit.window_start_minute < visit.duration_minutes:
             model.Add(staffed[visit.id] == 0)
 
-    # One visit per agreement per day.
-    #
-    # Two visits of the same agreement are the same treatment at the same site;
-    # doing both on one day is not a schedule anybody wants, and the database
-    # says so too — generated visits are unique on agreement, date and start
-    # time, so a solver free to move dates will otherwise propose a pair that
-    # cannot be written. This model covers exactly one day, so the rule is a
-    # single sum per agreement.
-    by_agreement: dict[str, list] = {}
-    for v in visits:
-        if v.service_agreement_id:
-            by_agreement.setdefault(v.service_agreement_id, []).append(v)
-
-    for same_agreement in by_agreement.values():
-        if len(same_agreement) > 1:
-            model.Add(sum(staffed[v.id] for v in same_agreement) <= 1)
-
     # --- When each visit happens ------------------------------------------
     #
     # This is the decision the old model never made. It read the date off the
@@ -498,6 +635,24 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         start_of[v.id] = model.NewIntVarFromDomain(
             cp_model.Domain.FromValues(starts), f"start_{v.id}"
         )
+
+    # One staffed visit per agreement per selected day, including the joint
+    # locked-visit solve where two visits may legally occupy different days.
+    by_agreement: dict[str, list] = {}
+    for v in visits:
+        if v.service_agreement_id:
+            by_agreement.setdefault(v.service_agreement_id, []).append(v)
+    for agreement_id, same_agreement in by_agreement.items():
+        if len(same_agreement) < 2:
+            continue
+        intervals = []
+        for v in same_agreement:
+            selected_day = model.NewIntVar(0, len(all_dates) - 1, f"day_{v.id}")
+            model.AddDivisionEquality(selected_day, start_of[v.id], 1440)
+            intervals.append(model.NewOptionalFixedSizeIntervalVar(
+                selected_day, 1, staffed[v.id], f"agreement_{agreement_id}_{v.id}"
+            ))
+        model.AddNoOverlap(intervals)
 
     # An employee who cannot work a date cannot be on a visit that lands on it.
     # Expressed against the start variable rather than by dropping the pairing,
@@ -780,14 +935,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     terms: list[tuple[int, cp_model.IntVar]] = []
 
     for visit in visits:
-        terms.append((WEIGHT_VISIT_STAFFED, staffed[visit.id]))
-
         # The customer's preferred weekday. On a pinned visit the date is
         # already decided, so this is a flat bonus for having landed on one. On
         # a movable visit it has to follow the choice: a bonus that ignored
         # where the solver actually put it would reward preference it never
-        # delivered. Still only 30 against staffing's 10,000 — a preferred day
-        # is never worth leaving work uncovered for.
+        # delivered. The bound below makes all preferences together worth less
+        # than one additional staffed visit.
         preferred = preferred_landing.get(visit.id)
         if preferred is not None:
             terms.append((WEIGHT_PREFERRED_DAY, preferred))
@@ -835,6 +988,22 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             if load:
                 model.Add(busiest >= sum(load))
         objective = objective - WEIGHT_WORKLOAD_SPREAD * busiest
+
+    # Exact lexicographic tiers: lock count, total coverage, then preferences.
+    # Each multiplier exceeds the full possible range of every lower tier;
+    # a constant staffing reward alone is not sufficient on a large input.
+    preference_range = sum(abs(weight) for weight, _ in terms)
+    preference_range += WEIGHT_WORKLOAD_SPREAD * len(visits)
+    coverage_weight = max(WEIGHT_VISIT_STAFFED, preference_range + 1)
+    objective += coverage_weight * sum(staffed.values())
+
+    # An additional protected visit outweighs the entire possible range of
+    # ordinary staffing and preferences, including the negative workload term.
+    # Count visits once even when a manager has applied several lock scopes.
+    locked_staffed = [staffed[v.id] for v in visits if v.id in locks_by_visit]
+    if locked_staffed:
+        lower_priority_range = coverage_weight * len(visits) + preference_range
+        objective += (lower_priority_range + 1) * sum(locked_staffed)
 
     model.Maximize(objective)
 
