@@ -610,6 +610,31 @@ describe('solver replacement lifecycle fence', () => {
     await expect(pending).resolves.toMatchObject({ scheduled: 1 });
   });
 
+  it('uses the PMS-qualified crew identity when a supervisor pin has no role marker', async () => {
+    const f = fixture();
+    Object.assign(f.oldAssignment, {
+      crewMembers: [{
+        employeeId: 'employee',
+        role: CrewRole.TECHNICIAN,
+        isPmsSupervisor: true,
+      }],
+    });
+    f.oldAssignment.locks.push({ scope: LockScope.SUPERVISOR, releasedAt: null });
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+
+    expect(request.locks).toEqual([
+      expect.objectContaining({
+        scope: LockScope.SUPERVISOR,
+        employee_ids: ['employee'],
+      }),
+    ]);
+    f.release();
+    await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+  });
+
   it('rejects a stale response that replaces a pinned supervisor while retaining a PMS-grade crew', async () => {
     const f = fixture();
     f.oldAssignment.locks.push({ scope: LockScope.SUPERVISOR, releasedAt: null });
@@ -1030,6 +1055,9 @@ describe('solver replacement lifecycle fence', () => {
       const f = fixture();
       f.visit.isManuallyAdjusted = protection === 'manual';
       f.visit.lockedAt = protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null;
+      f.visit.serviceAgreement.dayRules = [
+        { weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },
+      ];
 
       const pending = f.service.execute(f.run.id);
       await f.started.promise;
@@ -1060,6 +1088,53 @@ describe('solver replacement lifecycle fence', () => {
         }),
       }));
       expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+    },
+  );
+
+  it.each(['manual', 'visit-lock'] as const)(
+    'keeps a %s protected date even when it is outside the agreement cadence',
+    (protection) => {
+      const f = fixture();
+      const target = {
+        ...f.visit,
+        isManuallyAdjusted: protection === 'manual',
+        lockedAt: protection === 'visit-lock' ? new Date('2027-02-02T00:00:00Z') : null,
+        assignments: [],
+        serviceAgreement: {
+          ...f.visit.serviceAgreement,
+          dayRules: [{ weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED }],
+        },
+      };
+      const request = (
+        f.service as unknown as {
+          buildSolveRequest: (
+            runId: string,
+            visits: unknown[],
+            employees: unknown[],
+            vehicles: unknown[],
+            options: { timeLimitSeconds: number; from: Date; to: Date },
+          ) => {
+            visits: {
+              candidate_slots: {
+                date: string;
+                earliest_start_minute: number;
+                latest_start_minute: number;
+              }[] | null;
+            }[];
+          };
+        }
+      ).buildSolveRequest('run', [target], [], [], {
+        timeLimitSeconds: 20,
+        from: new Date('2027-03-03T00:00:00Z'),
+        to: new Date('2027-03-07T00:00:00Z'),
+      });
+
+      expect(request.visits[0].candidate_slots).toEqual([{
+        date: '2027-03-03',
+        earliest_start_minute: 540,
+        latest_start_minute: 630,
+        is_preferred: false,
+      }]);
     },
   );
 

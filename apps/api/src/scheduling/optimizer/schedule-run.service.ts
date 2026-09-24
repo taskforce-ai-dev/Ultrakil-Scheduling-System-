@@ -231,6 +231,18 @@ function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
     .filter((slot) => slot.earliestStartMinute <= slot.latestStartMinute);
 }
 
+/** A manager-protected date/window is authoritative even outside cadence. */
+function protectedDateSlots(visit: SlotVisit) {
+  const latestStartMinute = visit.windowEndMinute - visit.durationMinutes;
+  if (latestStartMinute < visit.windowStartMinute) return [];
+  return [{
+    date: dateOnly(visit.visitDate),
+    earliestStartMinute: visit.windowStartMinute,
+    latestStartMinute,
+    isPreferred: false,
+  }];
+}
+
 interface ProposedAssignment extends SolveSnapshot {
   dto: {
     plannedStartMinute: number;
@@ -297,6 +309,28 @@ function isPrismaUniqueConstraint(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === 'P2002'
   );
+}
+
+function supervisorEmployeeIds(
+  crewMembers: readonly {
+    employeeId: string;
+    role: CrewRole;
+    isPmsSupervisor: boolean;
+  }[],
+): string[] {
+  const roleMarked = crewMembers
+    .filter((member) => member.role === CrewRole.SUPERVISOR)
+    .map((member) => member.employeeId)
+    .sort();
+  if (roleMarked.length > 0) return roleMarked;
+
+  // Older/manual drafts may carry the PMS fact without a role label. The
+  // manager read model already treats that person as the supervisor; use the
+  // same deterministic fallback so a valid pin cannot invalidate the request.
+  return crewMembers
+    .filter((member) => member.isPmsSupervisor)
+    .map((member) => member.employeeId)
+    .sort();
 }
 
 /**
@@ -709,21 +743,22 @@ export class ScheduleRunService {
           }
         : undefined;
 
+      const pinnedAssignment = visit.assignments.find((assignment) =>
+        REPLACEABLE_STATUSES.includes(assignment.status) &&
+        assignment.locks.some((lock) =>
+          lock.scope === LockScope.SUPERVISOR || lock.scope === LockScope.FULL,
+        ),
+      );
+
       const dto = {
         plannedStartMinute: proposal.start_minute,
         plannedEndMinute: proposal.start_minute + visit.durationMinutes,
         crew: solvedCrewRoles(
           proposal.employee_ids,
           (employeeId) => pmsGradeById.get(employeeId) === true,
-          visit.assignments
-            .find((assignment) =>
-              REPLACEABLE_STATUSES.includes(assignment.status) &&
-              assignment.locks.some((lock) =>
-                lock.scope === LockScope.SUPERVISOR || lock.scope === LockScope.FULL,
-              ),
-            )
-            ?.crewMembers.filter((member) => member.role === CrewRole.SUPERVISOR)
-            .map((member) => member.employeeId),
+          pinnedAssignment
+            ? supervisorEmployeeIds(pinnedAssignment.crewMembers)
+            : undefined,
         ),
         vehicles: proposal.vehicles.map((entry) => ({
           vehicleId: entry.vehicle_id,
@@ -830,6 +865,8 @@ export class ScheduleRunService {
       // Published work is settled — the solver is not offered it at all.
       if (!REPLACEABLE_STATUSES.includes(live.status)) return false;
 
+      const supervisorIds = supervisorEmployeeIds(live.crewMembers);
+
       for (const lock of [...live.locks].sort((left, right) => left.scope.localeCompare(right.scope))) {
         // Every active manager pin must reach the solver. An assignment may
         // carry separate TIME, CREW and VEHICLE decisions at once.
@@ -842,10 +879,7 @@ export class ScheduleRunService {
           scope: lock.scope,
           employee_ids:
             lock.scope === LockScope.SUPERVISOR
-              ? live.crewMembers
-                  .filter((member) => member.role === CrewRole.SUPERVISOR)
-                  .map((member) => member.employeeId)
-                  .sort()
+              ? supervisorIds
               : live.crewMembers.map((member) => member.employeeId).sort(),
           vehicle_ids: live.vehicles.map((vehicle) => vehicle.vehicleId).sort(),
           vehicle_drivers: live.vehicles
@@ -906,8 +940,11 @@ export class ScheduleRunService {
         // never silently becomes a TIME lock. Assignment TIME/FULL locks carry
         // their exact interval separately and use the legacy fixed-window
         // fallback (`null`). An explicit empty list remains "no legal slot".
-        const allCandidates = candidateSlotsForVisit(visit, options.from, options.to);
-        const keepDate = datePinned.has(visit.id) || visit.placement === VisitPlacement.BOOKED;
+        const protectedDate = datePinned.has(visit.id);
+        const allCandidates = protectedDate
+          ? protectedDateSlots(visit)
+          : candidateSlotsForVisit(visit, options.from, options.to);
+        const keepDate = protectedDate || visit.placement === VisitPlacement.BOOKED;
         const candidates = timePinned.has(visit.id)
           ? null
           : keepDate
@@ -1156,9 +1193,7 @@ export class ScheduleRunService {
               const proposedVehicles = entry.dto.vehicles
                 .map(({ vehicleId, driverEmployeeId }) => [vehicleId, driverEmployeeId])
                 .sort(([left], [right]) => left!.localeCompare(right!));
-              const currentSupervisors = replaced.crewMembers
-                .filter((member) => member.role === CrewRole.SUPERVISOR)
-                .map((member) => member.employeeId);
+              const currentSupervisors = supervisorEmployeeIds(replaced.crewMembers);
               const proposedSupervisors = entry.dto.crew
                 .filter((member) => member.role === CrewRole.SUPERVISOR)
                 .map((member) => member.employeeId);
@@ -1187,13 +1222,23 @@ export class ScheduleRunService {
             const target = entry.proposedVisit?.visitDate ?? visit.visitDate;
             const validTarget = !Number.isNaN(target.getTime());
             const sameDate = validTarget && dateOnly(target) === dateOnly(visit.visitDate);
+            const assignmentDatePinned = replaced?.locks.some(
+              (lock) => lock.scope === LockScope.FULL || lock.scope === LockScope.TIME,
+            ) ?? false;
+            const legalSlots = sameDate && (
+              visit.isManuallyAdjusted ||
+              visit.lockedAt !== null ||
+              assignmentDatePinned
+            )
+              ? protectedDateSlots(visit)
+              : candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd);
             const legal = validTarget &&
               (sameDate || visit.placement !== VisitPlacement.BOOKED) &&
               (!sameDate || (
                 entry.dto.plannedStartMinute >= visit.windowStartMinute &&
                 entry.dto.plannedEndMinute <= visit.windowEndMinute
               )) &&
-              candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd).some(
+              legalSlots.some(
                 (slot) => slot.date === dateOnly(target) &&
                   entry.dto.plannedStartMinute >= slot.earliestStartMinute &&
                   entry.dto.plannedStartMinute <= slot.latestStartMinute,
