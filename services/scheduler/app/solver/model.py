@@ -378,6 +378,7 @@ def solve(request: SolveRequest) -> SolveResponse:
                 scheduled_date=assignment.scheduled_date,
                 start_minute=assignment.start_minute,
                 end_minute=end,
+                service_site_id=visit.service_site_id,
                 employee_ids=assignment.employee_ids,
                 vehicle_ids=[vehicle.vehicle_id for vehicle in assignment.vehicles],
             ))
@@ -423,7 +424,18 @@ def solve(request: SolveRequest) -> SolveResponse:
             assignments.append(assignment)
             # Staffed is settled. Anything left stays pending and is offered to
             # its next allowed day.
-            pending.pop(assignment.visit_id, None)
+            visit = pending.pop(assignment.visit_id, None)
+            if visit is not None:
+                reservations.append(ReservationInput(
+                    scheduled_date=assignment.scheduled_date,
+                    start_minute=assignment.start_minute,
+                    end_minute=assignment.start_minute + visit.duration_minutes,
+                    service_site_id=visit.service_site_id,
+                    employee_ids=assignment.employee_ids,
+                    vehicle_ids=[
+                        vehicle.vehicle_id for vehicle in assignment.vehicles
+                    ],
+                ))
 
     # Whatever no day could take. The reasons are computed against the original
     # request so they describe the visit as the manager sees it, not as one
@@ -748,6 +760,84 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             start, duration, f"reserved_{kind}_{resource_id}_{reservation.assignment_id or start}"
         )
 
+    def add_different_site_visit_pair_gap(
+        left,
+        left_present,
+        right,
+        right_present,
+        resource_name: str,
+    ) -> None:
+        buffer = request.minimum_travel_buffer_minutes
+        if buffer == 0 or left.service_site_id == right.service_site_id:
+            return
+        left_starts = slot_starts(left)
+        right_starts = slot_starts(right)
+        if not left_starts or not right_starts:
+            return
+        if (
+            max(left_starts) + scheduled_duration(left) + buffer
+            <= min(right_starts)
+            or max(right_starts) + scheduled_duration(right) + buffer
+            <= min(left_starts)
+        ):
+            return
+        left_before = model.NewBoolVar(f"travel_before_{resource_name}_{left.id}_{right.id}")
+        right_before = model.NewBoolVar(f"travel_before_{resource_name}_{right.id}_{left.id}")
+        model.Add(
+            absolute_start(left) + scheduled_duration(left) + buffer
+            <= absolute_start(right)
+        ).OnlyEnforceIf(left_before)
+        model.Add(
+            absolute_start(right) + scheduled_duration(right) + buffer
+            <= absolute_start(left)
+        ).OnlyEnforceIf(right_before)
+        model.AddBoolOr([
+            left_before,
+            right_before,
+            left_present.Not(),
+            right_present.Not(),
+        ])
+
+    def add_different_site_reservation_gap(
+        visit,
+        visit_present,
+        reservation,
+        resource_name: str,
+    ) -> None:
+        buffer = request.minimum_travel_buffer_minutes
+        if (
+            buffer == 0
+            or reservation.service_site_id is None
+            or reservation.service_site_id == visit.service_site_id
+        ):
+            return
+        reserved_start = (
+            day_index[reservation.scheduled_date] * 1440 + reservation.start_minute
+        )
+        reserved_end = day_index[reservation.scheduled_date] * 1440 + reservation.end_minute
+        visit_starts = slot_starts(visit)
+        if not visit_starts:
+            return
+        if (
+            max(visit_starts) + scheduled_duration(visit) + buffer <= reserved_start
+            or reserved_end + buffer <= min(visit_starts)
+        ):
+            return
+        reservation_key = reservation.assignment_id or reserved_start
+        visit_before = model.NewBoolVar(
+            f"travel_before_{resource_name}_{visit.id}_{reservation_key}"
+        )
+        reservation_before = model.NewBoolVar(
+            f"travel_before_{resource_name}_{reservation_key}_{visit.id}"
+        )
+        model.Add(
+            absolute_start(visit) + scheduled_duration(visit) + buffer <= reserved_start
+        ).OnlyEnforceIf(visit_before)
+        model.Add(
+            reserved_end + buffer <= absolute_start(visit)
+        ).OnlyEnforceIf(reservation_before)
+        model.AddBoolOr([visit_before, reservation_before, visit_present.Not()])
+
     for employee in employees:
         intervals = [
             interval
@@ -771,6 +861,26 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             )
         if len(intervals) > 1:
             model.AddNoOverlap(intervals)
+        employee_visits = [
+            visit for visit in visits if (visit.id, employee.id) in assign
+        ]
+        for index, left in enumerate(employee_visits):
+            for right in employee_visits[index + 1:]:
+                add_different_site_visit_pair_gap(
+                    left,
+                    assign[left.id, employee.id],
+                    right,
+                    assign[right.id, employee.id],
+                    f"employee_{employee.id}",
+                )
+            for reservation in reservations:
+                if employee.id in reservation.employee_ids:
+                    add_different_site_reservation_gap(
+                        left,
+                        assign[left.id, employee.id],
+                        reservation,
+                        f"employee_{employee.id}",
+                    )
 
     for vehicle in vehicles:
         intervals = [
@@ -795,6 +905,26 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             )
         if len(intervals) > 1:
             model.AddNoOverlap(intervals)
+        vehicle_visits = [
+            visit for visit in visits if (visit.id, vehicle.id) in uses_vehicle
+        ]
+        for index, left in enumerate(vehicle_visits):
+            for right in vehicle_visits[index + 1:]:
+                add_different_site_visit_pair_gap(
+                    left,
+                    uses_vehicle[left.id, vehicle.id],
+                    right,
+                    uses_vehicle[right.id, vehicle.id],
+                    f"vehicle_{vehicle.id}",
+                )
+            for reservation in reservations:
+                if vehicle.id in reservation.vehicle_ids:
+                    add_different_site_reservation_gap(
+                        left,
+                        uses_vehicle[left.id, vehicle.id],
+                        reservation,
+                        f"vehicle_{vehicle.id}",
+                    )
 
     # Vehicles: seats, and a driver who is actually going and authorized.
     for visit in visits:

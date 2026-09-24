@@ -187,7 +187,7 @@ class TestHardRules:
 
 
 class TestPublishedReservations:
-    def test_reserves_published_employee_and_vehicle_but_allows_adjacent_reuse(self):
+    def test_reserves_published_employee_and_vehicle_but_allows_same_site_adjacent_reuse(self):
         van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
         driver = employee(
             id="sup-1",
@@ -218,12 +218,123 @@ class TestPublishedReservations:
                         end_minute=10 * 60,
                         employee_ids=["sup-1", "tech-1"],
                         vehicle_ids=["van-1"],
+                        service_site_id=SITE,
                     )
                 ],
             )
         )
 
         assert result.assignments[0].start_minute == 10 * 60
+        assert result.assignments[0].vehicles[0].vehicle_id == "van-1"
+
+    def test_keeps_travel_time_between_two_solved_visits_at_different_sites(self):
+        only_supervisor = employee(id="sup-1", is_pms_grade=True)
+        first = visit(
+            id="visit-1",
+            service_site_id="site-1",
+            service_agreement_id="agreement-1",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-09",
+                earliest_start_minute=9 * 60,
+                latest_start_minute=10 * 60,
+            )],
+        )
+        second = visit(
+            id="visit-2",
+            service_site_id="site-2",
+            service_agreement_id="agreement-2",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-09",
+                earliest_start_minute=10 * 60,
+                latest_start_minute=11 * 60,
+            )],
+        )
+
+        result = solve(request(visits=[first, second], employees=[only_supervisor]))
+
+        assert len(result.assignments) == 2
+        starts = sorted(assignment.start_minute for assignment in result.assignments)
+        assert starts[1] - (starts[0] + 60) >= 60
+
+    def test_keeps_travel_time_across_midnight_when_the_horizon_is_solved_by_day(self):
+        only_supervisor = employee(id="sup-1", is_pms_grade=True)
+        first = visit(
+            id="visit-1",
+            visit_date="2026-09-09",
+            service_site_id="site-1",
+            service_agreement_id="agreement-1",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-09",
+                earliest_start_minute=23 * 60,
+                latest_start_minute=23 * 60,
+            )],
+        )
+        second = visit(
+            id="visit-2",
+            visit_date="2026-09-10",
+            service_site_id="site-2",
+            service_agreement_id="agreement-2",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-10",
+                earliest_start_minute=0,
+                latest_start_minute=60,
+            )],
+        )
+
+        result = solve(request(visits=[first, second], employees=[only_supervisor]))
+
+        assert len(result.assignments) == 2
+        by_visit = {assignment.visit_id: assignment for assignment in result.assignments}
+        assert by_visit["visit-1"].start_minute == 23 * 60
+        assert by_visit["visit-2"].start_minute == 60
+
+    def test_keeps_employee_and_vehicle_travel_time_after_a_different_site_reservation(self):
+        van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
+        driver = employee(
+            id="sup-1",
+            is_pms_grade=True,
+            authorized_vehicle_ids=["van-1"],
+            can_use_public_transport=False,
+        )
+        crew = employee(id="tech-1", can_use_public_transport=False)
+        movable = visit(
+            duration_minutes=60,
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-09",
+                    earliest_start_minute=10 * 60,
+                    latest_start_minute=11 * 60,
+                )
+            ],
+        )
+
+        result = solve(
+            request(
+                visits=[movable],
+                employees=[driver, crew],
+                vehicles=[van],
+                reservations=[
+                    ReservationInput(
+                        scheduled_date="2026-09-09",
+                        start_minute=9 * 60,
+                        end_minute=10 * 60,
+                        employee_ids=["sup-1", "tech-1"],
+                        vehicle_ids=["van-1"],
+                        service_site_id="site-2",
+                    )
+                ],
+            )
+        )
+
+        assert result.assignments[0].start_minute == 11 * 60
         assert result.assignments[0].vehicles[0].vehicle_id == "van-1"
 
     def test_never_uses_a_sibling_generated_visit_unique_key(self):
