@@ -52,8 +52,8 @@ These facts support the exercise; they do not sign it on the client's behalf.
 | Decision maker | A named UltraKIL representative authorized to accept the workflow |
 | Facilitator | A delivery-team member who can record findings and restore the controlled test assignment |
 | Browser | Current desktop or laptop Chrome, Edge or Firefox |
-| Account | An active manager or administrator account supplied securely |
-| Write-test visit | One future staging visit approved for Section 6; its current assignment state must be recorded first |
+| Account | An active manager or administrator account supplied securely; the controlled write test in Section 6 requires an administrator |
+| Write-test visit | One future, unlocked visit with one editable DRAFT or PROPOSED assignment (not published history), an eligible alternative date and an eligible alternative crew, vehicle or time; record its current business state first |
 
 If any screen differs from the expected result, mark that section **FAIL** and
 record the exact page, date/branch filter, visit identifier, action and visible
@@ -180,31 +180,45 @@ Expected result:
 
 ## 6. Controlled manual override and recovery
 
-This is the only section that changes staging data. Use only the future visit
-approved before the session. Record its visit identifier, date, original crew,
-vehicle, driver, timing, pin state and assignment reason before editing.
+This is the only section that changes staging data and it requires an
+administrator account. Use only the approved future visit. Before starting,
+confirm that it is unlocked, currently assigned as an editable DRAFT or
+PROPOSED assignment, and is not published history. Record its visit identifier,
+date, original crew, vehicle, driver, timing, pin state and assignment reason.
+The visit must have one eligible alternative date and one eligible alternative
+crew, vehicle or time agreed by the facilitator before the session.
 
-1. Open **Edit crew** for the approved visit.
-2. Build a valid assignment with the required number of people, PMS coverage,
-   required skills and either compliant public transport or one vehicle with an
-   authorized crew driver.
-3. Confirm the Validation panel says the crew is eligible.
-4. Enter a meaningful **Reason for this change** and save.
-5. Reopen the same visit and confirm it does not report a conflict against its
+1. In **Calendar**, use the visit's move action to select the approved
+   alternative date. Enter a meaningful move reason and choose **Move visit**.
+2. Reload the calendar and confirm that the visit appears only on the new date.
+3. Move the visit back to its original date with a separate restoration reason,
+   then reload and confirm that it appears only on the original date.
+4. Open **Edit crew** for the restored visit.
+5. Change at least one of crew, vehicle, driver or timing while keeping the
+   required number of people, PMS coverage, required skills and either
+   compliant public transport or one vehicle with an authorized crew driver.
+6. Confirm the Validation panel says the changed crew is eligible.
+7. Enter a meaningful **Reason for this change** and save.
+8. Reopen the same visit and confirm it does not report a conflict against its
    own saved assignment.
-6. Use the pin controls to protect one deliberate decision, then reopen the
-   visit and confirm the pin persists.
-7. Restore the exact original assignment and pin state before leaving this
-   section. Record the restoration reason.
+9. Use the pin controls to protect one deliberate decision, supply a pin reason,
+   then reopen the visit and confirm the pin persists. Release that pin again.
+10. Restore the exact original crew, vehicle, driver, timing and pin state with
+    a separate restoration reason. Reopen the visit and compare its business
+    state with the values recorded before Step 1. Keep the new audit history:
+    the test and its restoration must remain explainable rather than erased.
 
 Expected result:
 
-- A manager can override a crew, vehicle or timing decision within the
+- An administrator can move a visit to an eligible date and restore its
+  original date without duplicating or losing it.
+- An administrator can override a crew, vehicle or timing decision within the
   permitted service window.
 - Every manual change requires and retains an audit reason.
 - Reopening a saved assignment does not create false self-overlap errors.
 - Pinned decisions are explicit and survive reopening.
-- The controlled visit is returned to its original state at the end.
+- The controlled visit is returned to its original business state at the end;
+  its added audit entries remain intentionally.
 
 | Result | ☐ PASS ☐ FAIL ☐ NOT RUN |
 | --- | --- |
