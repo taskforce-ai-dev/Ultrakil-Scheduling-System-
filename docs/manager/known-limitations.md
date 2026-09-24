@@ -27,27 +27,40 @@ close these operational decisions:
    all 150 published candidates were checked: zero current/future findings
    remain selectable, employee overlap/travel pairs are zero, vehicle
    overlap/travel pairs are zero, and 55 historical findings remain immutable.
-3. **Staffing horizon:** the repair covered already-published assignments; it
-   does not claim every future planned visit has already been dispatched. The
-   current live assignments have zero short crews, zero missing PMS supervisors
-   and at most one vehicle each, so no additional capacity is justified by the
-   current/future published workload.
+3. **Staffing horizon:** the repair covered already-published assignments; the
+   remaining future visits stay pending until a manager runs and publishes the
+   appropriate dispatch horizon. A 24 September full-year audit restored the
+   live database into an isolated disposable clone and ran seven non-overlapping
+   optimizer windows from 24 September 2026 through the rolling-horizon boundary
+   on 24 September 2027. The first six runs considered and staffed all 1,506
+   pending visits through 18 September with zero unassigned. Count-only SQL
+   proved that the remaining 19–24 September tail held zero generated visits in
+   both live staging and the restored clone; the seventh run therefore succeeded
+   with zero work rather than hiding unaudited visits. The 1,506 resulting drafts
+   had zero employee/vehicle overlap or travel conflicts, short or overstaffed
+   crews, missing PMS supervisors, missing skills, invalid transport,
+   unauthorized drivers, branch/permanent-site violations or absence violations.
+   These drafts were audit evidence on the clone, not schedules published to the
+   live system.
 4. **Synthetic staging capacity:** the existing visible staging-only team is
-   two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. No further
-   synthetic resources should be added unless a new count-only run proves an
-   actual compliant-capacity refusal.
+   two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. The
+   full-year optimizer audit above proves the current future workload has no
+   compliant-capacity refusal, so this release added no synthetic resources.
+   A later workload must still prove an actual shortage before more are added.
 5. **Authentication hardening:** failed login attempts are constant-time and
    identity-safe in logs, but no failed-attempt throttle is implemented yet.
    Controlled staging UAT may continue; production sign-off must include an
    approved throttling policy and verified implementation.
 
-The final post-repair backup is
-`ultrakil-20260924T172439Z-b15614122c24.dump` with SHA-256
-`ed9bf91f6bcdb79fd06f6eb5a49919f6910311d9ff7cd076a5f11582b66105d1`.
+The final post-catch-up backup is
+`ultrakil-20260924T175533Z-310c0698fc7e.dump` with SHA-256
+`d504632d624db101e781488359a265a5901b2b920b386e81720d670ab5aa83fb`.
 It passed manifest/archive verification and restored into an isolated marked
 database with 27 required tables, 18 successful migrations, zero failed
 migrations, zero duplicate outbox keys and the same clean scheduling
-invariants. The disposable restore database was removed after verification.
+invariants. That clone supplied the full-year optimizer evidence above; its
+API container, Redis namespace and disposable database were removed after the
+count-only results were recorded.
 
 The detailed findings below are the historical O08 record. Where an older
 commit, count or deployment is quoted, this current-release section takes
@@ -136,15 +149,13 @@ there is no UI for any of them today.
    has no active agreement or generated visit in this import, so the
    no-PMS outcome cannot be demonstrated with a live row.
 
-4. **[Resolved] Vehicles with no recorded branch were never offered.**
-   Imported vehicles have no branch (the Technician Matrix does not state
-   one), and the assignment editor's vehicle picker filtered by the visit's
-   exact branch, so on real data it opened onto nothing while the
-   eligibility engine would have accepted those vehicles. The picker now
-   asks the API which vehicles can serve the branch (`servesBranch`): those
-   recorded in it plus those with none recorded. A vehicle recorded in a
-   different branch is still never offered, and an empty result is now
-   explained on screen rather than presented as an enabled control.
+4. **[Resolved] Vehicle branch handling is now consistent.** The Technician
+   Matrix does not state vehicle branches, so the importer now assigns every
+   matrix vehicle to Colombo on both create and update; re-import also repairs
+   legacy null branches. The assignment editor asks the API which vehicles can
+   serve the visit branch (`servesBranch`). A manually created legacy vehicle
+   with no recorded branch remains usable, a vehicle recorded in a different
+   branch is never offered, and an empty result is explained on screen.
 
 5. **No inactive customer/site existed in demo data.** One site and one
    customer were deactivated directly in the local database to exercise
@@ -167,13 +178,12 @@ there is no UI for any of them today.
    documented in the manager guide and remains a possible Phase 2 workflow
    enhancement if multi-vehicle transport is later required.
 
-8. **"Save assignment" silently stays disabled until "Reason for this
-   change" is filled in**, even after every validation check passes and
-   the panel says the crew is eligible. There's no separate message
-   telling the manager this is why Save won't activate. Low severity (the
-   guide now documents the recovery step), but worth a small UX
-   improvement — surfacing it as a visible requirement, the same way every
-   other blocking condition is shown, rather than a silent disabled state.
+8. **[Fixed] "Save assignment" now explains what it is waiting for.** The
+   button carries a visible and accessible description for every blocker,
+   including the required reason, missing crew, eligibility validation,
+   loading and active locks. Clicking it while only the reason is missing
+   also focuses the required reason box. Deterministic manager tests cover
+   the visible message, accessible description and focus behavior.
 
 9. **Three screenshots in the original draft showed the historical
    self-overlap defect rather than a clean save.** They were removed from
@@ -186,10 +196,10 @@ there is no UI for any of them today.
     visible names, with an automated regression covering both fields. The
     obsolete screenshot was removed.
 
-11. **The previously-cited test count was stale.** The current manager suite
-    reports **180 passed**, 18 test files, 0 failed, including assignment
-    driver removal and selected-label regressions. GitHub CI is the
-    authoritative release record.
+11. **The previously-cited fixed test count was stale.** Test totals continue
+    to grow, so this handover no longer freezes a number in prose. Exact-head
+    GitHub CI is the authoritative release record, including assignment-driver
+    removal, selected-label and Save-blocker regressions.
 
 12. **[Confirmed on current staging] DAC-2485 is normalized once and has
     exactly three equal driver authorizations.** No owner or primary-driver
@@ -202,15 +212,12 @@ there is no UI for any of them today.
     demonstrated with a live row. The workforce audit still confirms zero
     PMS-qualified Kandy supervisors; no bypass was introduced.
 
-14. **[Confirmed, expected] DAC-2485's vehicle record shows "Unassigned
-    branch," while all three of its authorized drivers are tagged "Colombo."**
-    Not a defect. The Technician Matrix records who may drive a vehicle but
-    never which branch the vehicle belongs to, so every imported vehicle
-    arrives with no branch until a manager records one under **Vehicles**.
-    Driver authorizations come from the matrix checkmarks and are
-    independent of the vehicle's branch. Such a vehicle can be offered for
-    any branch's work (see item 4) and publication flags it as unconfirmed
-    source data until its branch is recorded.
+14. **[Resolved] DAC-2485 and every other matrix-imported vehicle now default
+    to Colombo.** The matrix still states only who may drive each vehicle, not
+    its branch; Colombo is the Technical Director's explicit operational
+    default. Driver authorizations remain independent checkmarks with no owner
+    or primary-driver priority. The current live audit found zero active
+    vehicles outside or unmapped from Colombo.
 
 15. **[Covered automatically] Driver removal/revalidation.** The manager UI
     regression removes the selected driver from the crew and verifies that
