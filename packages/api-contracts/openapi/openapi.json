@@ -2713,6 +2713,7 @@
                 "EMPLOYEE_INACTIVE",
                 "EMPLOYEE_UNAVAILABLE",
                 "EMPLOYEE_DOUBLE_BOOKED",
+                "EMPLOYEE_TRAVEL_GAP_TOO_SHORT",
                 "EMPLOYEE_PERMANENTLY_STATIONED",
                 "NO_PMS_SUPERVISOR_AVAILABLE",
                 "BRANCH_HAS_NO_PMS_SUPERVISOR",
@@ -2722,6 +2723,7 @@
                 "VEHICLE_INACTIVE",
                 "VEHICLE_BRANCH_MISMATCH",
                 "VEHICLE_DOUBLE_BOOKED",
+                "VEHICLE_TRAVEL_GAP_TOO_SHORT",
                 "NO_AUTHORIZED_DRIVER",
                 "VEHICLE_CAPACITY_EXCEEDED",
                 "OUTSIDE_SERVICE_HOURS",
@@ -6332,6 +6334,7 @@
               "EMPLOYEE_INACTIVE",
               "EMPLOYEE_UNAVAILABLE",
               "EMPLOYEE_DOUBLE_BOOKED",
+              "EMPLOYEE_TRAVEL_GAP_TOO_SHORT",
               "EMPLOYEE_PERMANENTLY_STATIONED",
               "NO_PMS_SUPERVISOR_AVAILABLE",
               "BRANCH_HAS_NO_PMS_SUPERVISOR",
@@ -6341,6 +6344,7 @@
               "VEHICLE_INACTIVE",
               "VEHICLE_BRANCH_MISMATCH",
               "VEHICLE_DOUBLE_BOOKED",
+              "VEHICLE_TRAVEL_GAP_TOO_SHORT",
               "NO_AUTHORIZED_DRIVER",
               "VEHICLE_CAPACITY_EXCEEDED",
               "OUTSIDE_SERVICE_HOURS",
@@ -6424,7 +6428,9 @@
               "EMPLOYEE_UNAVAILABLE",
               "EMPLOYEE_PERMANENTLY_STATIONED",
               "EMPLOYEE_DOUBLE_BOOKED",
-              "VEHICLE_DOUBLE_BOOKED"
+              "EMPLOYEE_TRAVEL_GAP_TOO_SHORT",
+              "VEHICLE_DOUBLE_BOOKED",
+              "VEHICLE_TRAVEL_GAP_TOO_SHORT"
             ]
           },
           "message": {

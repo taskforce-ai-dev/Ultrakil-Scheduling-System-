@@ -1,5 +1,6 @@
 import { CrewRole, DeploymentType } from '@prisma/client';
 
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import { pmsSupervisorRemediation } from '../../workforce/pms-grade';
 import { Conflict, sortConflicts } from './conflict-codes';
 
@@ -42,6 +43,7 @@ export interface VisitFacts {
 /** A booking that already exists, used to catch double-booking. */
 export interface BusyPeriod {
   assignmentId: string;
+  serviceSiteId: string;
   /** Minutes from midnight on the visit's own date. */
   startMinute: number;
   endMinute: number;
@@ -132,6 +134,21 @@ function overlaps(
 ): boolean {
   // Touching is not overlapping: a crew finishing at 12:00 can start at 12:00.
   return aStart < bEnd && bStart < aEnd;
+}
+
+function hasInsufficientTravelGap(
+  start: number,
+  end: number,
+  serviceSiteId: string,
+  period: BusyPeriod,
+): boolean {
+  if (period.serviceSiteId === serviceSiteId || overlaps(start, end, period.startMinute, period.endMinute)) {
+    return false;
+  }
+  const gap = period.endMinute <= start
+    ? start - period.endMinute
+    : period.startMinute - end;
+  return gap < DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES;
 }
 
 /**
@@ -293,6 +310,21 @@ export function evaluateAssignment(
         },
       });
     }
+    const travelClash = employee.busy.find((period) =>
+      hasInsufficientTravelGap(start, end, visit.serviceSiteId, period),
+    );
+    if (travelClash) {
+      conflicts.push({
+        code: 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT',
+        message: `${employee.fullName} has less than ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes to travel between different sites on ${visit.visitDate}.`,
+        remediation: 'Move one visit, or assign someone with enough travel time between jobs.',
+        resources: {
+          visitId: visit.id,
+          employeeIds: [employee.id],
+          assignmentIds: [travelClash.assignmentId],
+        },
+      });
+    }
   }
 
   // --- Supervision ---------------------------------------------------------
@@ -375,6 +407,21 @@ export function evaluateAssignment(
           visitId: visit.id,
           vehicleIds: [vehicle.id],
           assignmentIds: [clash.assignmentId],
+        },
+      });
+    }
+    const travelClash = vehicle.busy.find((period) =>
+      hasInsufficientTravelGap(start, end, visit.serviceSiteId, period),
+    );
+    if (travelClash) {
+      conflicts.push({
+        code: 'VEHICLE_TRAVEL_GAP_TOO_SHORT',
+        message: `${vehicle.label} has less than ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes to travel between different sites on ${visit.visitDate}.`,
+        remediation: 'Move one visit, or use a vehicle with enough travel time between jobs.',
+        resources: {
+          visitId: visit.id,
+          vehicleIds: [vehicle.id],
+          assignmentIds: [travelClash.assignmentId],
         },
       });
     }

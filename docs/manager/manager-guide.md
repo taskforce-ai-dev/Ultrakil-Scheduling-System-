@@ -346,6 +346,7 @@ You never have to guess.
 | **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Replace it with one vehicle large enough for the full crew. |
 | **Unavailable vehicle** `TOO_MANY_VEHICLES` | More than one vehicle is assigned to the visit. | Keep exactly one suitable vehicle and release the others. The current release does not split a crew across multiple vehicles. |
 | **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. |
+| **Employee / Vehicle travel gap** `EMPLOYEE_TRAVEL_GAP_TOO_SHORT` / `VEHICLE_TRAVEL_GAP_TOO_SHORT` | This person or vehicle has less than 60 minutes to move between different service sites. Same-site jobs may follow immediately. | Move one visit by enough time, or choose a different available person or vehicle. |
 
 None of these are colour-only — every one carries text, so they read
 correctly even in black-and-white or for a colour-blind reader.

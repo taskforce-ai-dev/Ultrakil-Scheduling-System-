@@ -22,6 +22,7 @@ import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { lockSiteRows } from '../../common/locks/site-lock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import { crewMinutesOf } from '../capacity';
 import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
@@ -960,6 +961,7 @@ export class ScheduleRunService {
           scheduled_date: dateOnly(assignment.plannedStart),
           start_minute: minuteOfDay(assignment.plannedStart),
           end_minute: minuteFromDayStart(assignment.plannedEnd, assignment.plannedStart),
+          service_site_id: visit.serviceAgreement.serviceSiteId,
           employee_ids: assignment.crewMembers
             .map((member) => member.employeeId)
             .sort(),
@@ -972,6 +974,8 @@ export class ScheduleRunService {
 
     return {
       run_id: runId,
+      minimum_travel_buffer_minutes:
+        DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES,
       visits: solvable.map((visit) => {
         // The day a visit was generated on is one legal option among several,
         // not a decision. Handing the solver all of them is what lets it settle

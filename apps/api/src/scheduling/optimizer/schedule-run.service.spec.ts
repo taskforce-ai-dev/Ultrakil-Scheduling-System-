@@ -988,6 +988,7 @@ describe('solver replacement lifecycle fence', () => {
         scheduled_date: '2027-03-03',
         start_minute: 540,
         end_minute: 630,
+        service_site_id: 'site',
         employee_ids: ['published-employee'],
         vehicle_ids: ['published-vehicle'],
       },
@@ -1001,6 +1002,10 @@ describe('solver replacement lifecycle fence', () => {
       }),
     ]);
     expect(request.excluded_reservation_assignment_ids).toEqual([]);
+    expect(
+      (request as unknown as { minimum_travel_buffer_minutes: number })
+        .minimum_travel_buffer_minutes,
+    ).toBe(60);
   });
 
   it('sends an existing draft start minute as a soft solver preference', () => {

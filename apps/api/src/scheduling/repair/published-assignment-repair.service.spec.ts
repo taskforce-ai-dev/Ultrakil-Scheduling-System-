@@ -64,6 +64,7 @@ function source(status: AssignmentStatus = AssignmentStatus.PUBLISHED) {
       updatedAt: new Date('2027-02-28T09:00:00.000Z'),
       assignments: [{ id: sourceId }],
       serviceAgreement: {
+        serviceSiteId: 'site-1',
         customer: { name: 'Customer' },
         serviceSite: { name: 'Site' },
       },
@@ -246,6 +247,91 @@ describe('PublishedAssignmentRepairService', () => {
       { excludeAssignmentIds: [sourceId, secondSourceId] },
       expect.any(Object),
     );
+  });
+
+  it('refuses adjacent repair replacements sharing crew across different sites', async () => {
+    const { service, tx, row } = fixture();
+    const secondSourceId = '88888888-8888-4888-8888-888888888888';
+    const secondVisitId = '99999999-9999-4999-8999-999999999999';
+    tx.assignment.findMany.mockResolvedValueOnce([
+      row,
+      {
+        ...row,
+        id: secondSourceId,
+        generatedVisitId: secondVisitId,
+        generatedVisit: {
+          ...row.generatedVisit,
+          id: secondVisitId,
+          assignments: [{ id: secondSourceId }],
+          serviceAgreement: {
+            ...row.generatedVisit.serviceAgreement,
+            serviceSiteId: 'site-2',
+          },
+        },
+      },
+    ]);
+
+    const preview = await service.preview({
+      operations: [
+        replacement,
+        {
+          ...replacement,
+          sourceAssignmentId: secondSourceId,
+          replacement: {
+            ...replacement.replacement,
+            plannedStartMinute: 660,
+            plannedEndMinute: 720,
+          },
+        },
+      ],
+    });
+
+    expect(preview.isValid).toBe(false);
+    expect(preview.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          conflicts: expect.arrayContaining([
+            expect.objectContaining({ code: 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT' }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it('allows adjacent repair replacements sharing crew at the same site', async () => {
+    const { service, tx, row } = fixture();
+    const secondSourceId = '88888888-8888-4888-8888-888888888888';
+    const secondVisitId = '99999999-9999-4999-8999-999999999999';
+    tx.assignment.findMany.mockResolvedValueOnce([
+      row,
+      {
+        ...row,
+        id: secondSourceId,
+        generatedVisitId: secondVisitId,
+        generatedVisit: {
+          ...row.generatedVisit,
+          id: secondVisitId,
+          assignments: [{ id: secondSourceId }],
+        },
+      },
+    ]);
+
+    const preview = await service.preview({
+      operations: [
+        replacement,
+        {
+          ...replacement,
+          sourceAssignmentId: secondSourceId,
+          replacement: {
+            ...replacement.replacement,
+            plannedStartMinute: 660,
+            plannedEndMinute: 720,
+          },
+        },
+      ],
+    });
+
+    expect(preview.isValid).toBe(true);
   });
 
   it.each([

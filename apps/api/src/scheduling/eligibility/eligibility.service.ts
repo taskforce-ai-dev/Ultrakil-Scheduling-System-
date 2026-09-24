@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { AssignmentStatus, BranchCode, DeploymentType, Prisma } from '@prisma/client';
 
 import { AppException } from '../../common/errors/app.exception';
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   AssignmentCandidatesDto,
@@ -43,6 +44,15 @@ interface EligibilityOptions {
 /** Minutes from the visit's midnight. This intentionally preserves 1440. */
 function minuteOfVisitDate(moment: Date, visitDate: Date): number {
   return Math.round((moment.getTime() - visitDate.getTime()) / 60_000);
+}
+
+function travelWindow(visitDate: Date): { start: Date; end: Date } {
+  const bufferMilliseconds =
+    DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES * 60_000;
+  return {
+    start: new Date(visitDate.getTime() - bufferMilliseconds),
+    end: new Date(visitDate.getTime() + 86_400_000 + bufferMilliseconds),
+  };
 }
 
 const absenceMessage: Record<string, string> = {
@@ -178,7 +188,8 @@ export class EligibilityService {
     }
     const assignment = {
       status: { in: LIVE_ASSIGNMENT_STATUSES },
-      generatedVisit: { visitDate: visit.visitDate },
+      plannedStart: { lt: travelWindow(visit.visitDate).end },
+      plannedEnd: { gt: travelWindow(visit.visitDate).start },
       ...(excludeAssignmentId ? { id: { not: excludeAssignmentId } } : {}),
     };
     const [employees, vehicles] = await Promise.all([
@@ -187,32 +198,59 @@ export class EligibilityService {
         include: {
           availability: { where: { startDate: { lte: visit.visitDate }, endDate: { gte: visit.visitDate } }, select: { kind: true }, orderBy: [{ startDate: 'asc' }, { endDate: 'asc' }, { id: 'asc' }] },
           permanentAssignments: { where: { effectiveFrom: { lte: visit.visitDate }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: visit.visitDate } }] }, select: { serviceSiteId: true } },
-          crewMemberships: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true } } } },
+          crewMemberships: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true, generatedVisit: { select: { serviceAgreement: { select: { serviceSiteId: true } } } } } } } },
         },
       }),
       this.prisma.vehicle.findMany({
         where: { isActive: true, OR: [{ branch: { is: { code: visit.branchCode } } }, { branchId: null }] },
-        include: { assignmentVehicles: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true } } } } },
+        include: { assignmentVehicles: { where: { assignment }, select: { assignment: { select: { id: true, plannedStart: true, plannedEnd: true, generatedVisit: { select: { serviceAgreement: { select: { serviceSiteId: true } } } } } } } } },
       }),
     ]);
     const minutes = (time: Date) => Math.round((time.getTime() - visit.visitDate.getTime()) / 60_000);
     const overlaps = (booking: { plannedStart: Date; plannedEnd: Date }) => dto.plannedStartMinute < minutes(booking.plannedEnd) && minutes(booking.plannedStart) < dto.plannedEndMinute;
+    const lacksTravelTime = (booking: { plannedStart: Date; plannedEnd: Date; generatedVisit: { serviceAgreement: { serviceSiteId: string } } }) => {
+      if (
+        booking.generatedVisit.serviceAgreement.serviceSiteId ===
+          visit.serviceAgreement.serviceSiteId ||
+        overlaps(booking)
+      ) {
+        return false;
+      }
+      const bookingStart = minutes(booking.plannedStart);
+      const bookingEnd = minutes(booking.plannedEnd);
+      const gap = bookingEnd <= dto.plannedStartMinute
+        ? dto.plannedStartMinute - bookingEnd
+        : bookingStart - dto.plannedEndMinute;
+      return gap < DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES;
+    };
     const bookedMessage = (booking: { plannedStart: Date; plannedEnd: Date }) => {
       const show = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
       return `Booked ${show(minutes(booking.plannedStart))}–${show(minutes(booking.plannedEnd))}`;
     };
     const employeeCandidates = employees.map((employee) => {
-      const booking = employee.crewMemberships.map((member) => member.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const bookings = employee.crewMemberships.map((member) => member.assignment);
+      const booking = bookings.filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const travelBooking = bookings.filter(lacksTravelTime).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
       const reason = employee.availability[0]
         ? { code: AssignmentCandidateReasonCode.EMPLOYEE_UNAVAILABLE, message: absenceMessage[employee.availability[0].kind] ?? 'Unavailable' }
         : employee.deploymentType === DeploymentType.PERMANENTLY_STATIONED && !employee.permanentAssignments.some((entry) => entry.serviceSiteId === visit.serviceAgreement.serviceSiteId)
           ? { code: AssignmentCandidateReasonCode.EMPLOYEE_PERMANENTLY_STATIONED, message: 'Permanently stationed elsewhere' }
-          : booking ? { code: AssignmentCandidateReasonCode.EMPLOYEE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
+          : booking
+            ? { code: AssignmentCandidateReasonCode.EMPLOYEE_DOUBLE_BOOKED, message: bookedMessage(booking) }
+            : travelBooking
+              ? { code: AssignmentCandidateReasonCode.EMPLOYEE_TRAVEL_GAP_TOO_SHORT, message: `Needs ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes between different sites` }
+              : null;
       return { id: employee.id, displayName: employee.fullName, isPmsGrade: employee.isPmsGrade, isAvailable: !reason, unavailableReason: reason };
     });
     const vehicleCandidates = vehicles.map((vehicle) => {
-      const booking = vehicle.assignmentVehicles.map((entry) => entry.assignment).filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
-      const reason = booking ? { code: AssignmentCandidateReasonCode.VEHICLE_DOUBLE_BOOKED, message: bookedMessage(booking) } : null;
+      const bookings = vehicle.assignmentVehicles.map((entry) => entry.assignment);
+      const booking = bookings.filter(overlaps).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const travelBooking = bookings.filter(lacksTravelTime).sort((left, right) => left.plannedStart.getTime() - right.plannedStart.getTime() || left.id.localeCompare(right.id))[0];
+      const reason = booking
+        ? { code: AssignmentCandidateReasonCode.VEHICLE_DOUBLE_BOOKED, message: bookedMessage(booking) }
+        : travelBooking
+          ? { code: AssignmentCandidateReasonCode.VEHICLE_TRAVEL_GAP_TOO_SHORT, message: `Needs ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes between different sites` }
+          : null;
       return { id: vehicle.id, displayName: vehicle.label, seatCapacity: vehicle.seatCapacity, isAvailable: !reason, unavailableReason: reason };
     });
     const compare = <T extends { isAvailable: boolean }>(name: (item: T) => string, id: (item: T) => string) => (left: T, right: T) => Number(right.isAvailable) - Number(left.isAvailable) || name(left).localeCompare(name(right)) || id(left).localeCompare(id(right));
@@ -229,6 +267,7 @@ export class EligibilityService {
     excludeAssignmentIds: string[] = [],
   ): Promise<EmployeeFacts[]> {
     if (ids.length === 0) return [];
+    const range = travelWindow(visitDate);
 
     const employees = await client.employee.findMany({
       where: { id: { in: ids } },
@@ -250,12 +289,24 @@ export class EligibilityService {
           where: {
             assignment: {
               status: { in: LIVE_ASSIGNMENT_STATUSES },
-              generatedVisit: { visitDate },
+              plannedStart: { lt: range.end },
+              plannedEnd: { gt: range.start },
               ...assignmentExclusion(excludeAssignmentIds),
             },
           },
           select: {
-            assignment: { select: { id: true, plannedStart: true, plannedEnd: true } },
+            assignment: {
+              select: {
+                id: true,
+                plannedStart: true,
+                plannedEnd: true,
+                generatedVisit: {
+                  select: {
+                    serviceAgreement: { select: { serviceSiteId: true } },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -284,6 +335,8 @@ export class EligibilityService {
           assignmentId: entry.assignment.id,
           startMinute: minuteOfVisitDate(entry.assignment.plannedStart, visitDate),
           endMinute: minuteOfVisitDate(entry.assignment.plannedEnd, visitDate),
+          serviceSiteId:
+            entry.assignment.generatedVisit.serviceAgreement.serviceSiteId,
         }))
         .sort((left, right) => left.startMinute - right.startMinute),
     }));
@@ -296,6 +349,7 @@ export class EligibilityService {
     excludeAssignmentIds: string[] = [],
   ): Promise<VehicleFacts[]> {
     if (ids.length === 0) return [];
+    const range = travelWindow(visitDate);
 
     const vehicles = await client.vehicle.findMany({
       where: { id: { in: ids } },
@@ -305,12 +359,24 @@ export class EligibilityService {
           where: {
             assignment: {
               status: { in: LIVE_ASSIGNMENT_STATUSES },
-              generatedVisit: { visitDate },
+              plannedStart: { lt: range.end },
+              plannedEnd: { gt: range.start },
               ...assignmentExclusion(excludeAssignmentIds),
             },
           },
           select: {
-            assignment: { select: { id: true, plannedStart: true, plannedEnd: true } },
+            assignment: {
+              select: {
+                id: true,
+                plannedStart: true,
+                plannedEnd: true,
+                generatedVisit: {
+                  select: {
+                    serviceAgreement: { select: { serviceSiteId: true } },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -328,6 +394,8 @@ export class EligibilityService {
           assignmentId: entry.assignment.id,
           startMinute: minuteOfVisitDate(entry.assignment.plannedStart, visitDate),
           endMinute: minuteOfVisitDate(entry.assignment.plannedEnd, visitDate),
+          serviceSiteId:
+            entry.assignment.generatedVisit.serviceAgreement.serviceSiteId,
         }))
         .sort((left, right) => left.startMinute - right.startMinute),
     }));

@@ -11,6 +11,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 
 import { AppException } from '../../common/errors/app.exception';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import {
   SchedulerClient,
   SolveRequest,
@@ -127,6 +128,11 @@ export class PublishedAssignmentRepairPlannerAdapter {
           id: true,
           plannedStart: true,
           plannedEnd: true,
+          generatedVisit: {
+            select: {
+              serviceAgreement: { select: { serviceSiteId: true } },
+            },
+          },
           crewMembers: { select: { employeeId: true } },
           vehicles: { select: { vehicleId: true } },
         },
@@ -137,6 +143,8 @@ export class PublishedAssignmentRepairPlannerAdapter {
     const runId = randomUUID();
     const request: SolveRequest = {
       run_id: runId,
+      minimum_travel_buffer_minutes:
+        DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES,
       visits: orderedTargets.map((source) => ({
         id: source.generatedVisitId,
         branch_code: source.generatedVisit.branchCode,
@@ -191,6 +199,8 @@ export class PublishedAssignmentRepairPlannerAdapter {
         scheduled_date: dateOnly(assignment.plannedStart),
         start_minute: minuteOfDay(assignment.plannedStart),
         end_minute: minuteFromDayStart(assignment.plannedEnd, assignment.plannedStart),
+        service_site_id:
+          assignment.generatedVisit.serviceAgreement.serviceSiteId,
         employee_ids: assignment.crewMembers
           .map((entry) => entry.employeeId)
           .sort(),

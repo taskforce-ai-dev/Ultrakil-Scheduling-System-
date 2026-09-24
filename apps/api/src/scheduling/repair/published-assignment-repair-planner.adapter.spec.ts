@@ -81,6 +81,9 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
             id: 'non-target',
             plannedStart: new Date('2027-03-03T23:00:00.000Z'),
             plannedEnd: new Date('2027-03-04T00:00:00.000Z'),
+            generatedVisit: {
+              serviceAgreement: { serviceSiteId: 'reserved-site' },
+            },
             crewMembers: [{ employeeId: 'reserved-employee' }],
             vehicles: [{ vehicleId: 'reserved-vehicle' }],
           },
@@ -124,10 +127,12 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
             scheduled_date: '2027-03-03',
             start_minute: 1380,
             end_minute: 1440,
+            service_site_id: 'reserved-site',
             employee_ids: ['reserved-employee'],
             vehicle_ids: ['reserved-vehicle'],
           },
         ],
+        minimum_travel_buffer_minutes: 60,
         excluded_reservation_assignment_ids: [firstSourceId, secondSourceId],
         existing: [
           expect.objectContaining({ visit_id: 'visit-1' }),
