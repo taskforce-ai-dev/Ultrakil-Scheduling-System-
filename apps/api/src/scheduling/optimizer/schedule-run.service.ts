@@ -704,10 +704,9 @@ export class ScheduleRunService {
       return this.finish(runId, 0, 0, lease);
     }
 
-    // The solver works a day at a time and spends up to the time limit on each,
-    // so a week can legitimately take seven times as long as one day. Timing out
-    // at a single day's budget aborted solves that were running perfectly well
-    // and reported SCHEDULER_UNAVAILABLE — a service that was in fact answering.
+    // The solver can spend the time limit on each day. A locked multi-day run
+    // also spends it once on joint lock allocation before those daily solves.
+    // Reserve for every phase in both admission and the HTTP timeout.
     const solveDays = new Set(
       request.visits.flatMap((visit) =>
         visit.candidate_slots?.length
@@ -715,31 +714,32 @@ export class ScheduleRunService {
           : [visit.visit_date],
       ),
     ).size;
+    const solvePhases = solveDays + (solveDays > 1 && request.locks.length > 0 ? 1 : 0);
     const availableSolverSeconds =
       options.executionBudgetSeconds -
       SCHEDULE_EXECUTION_PERSISTENCE_RESERVE_SECONDS -
       SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS -
       SCHEDULE_EXECUTION_PREPARATION_RESERVE_SECONDS -
       SCHEDULE_EXECUTION_LEASE_SAFETY_SECONDS;
-    if (availableSolverSeconds < solveDays) {
+    if (availableSolverSeconds < solvePhases) {
       throw new AppException(
         'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
         'This schedule run exceeds the execution budget available to its delivery provider.',
         HttpStatus.UNPROCESSABLE_ENTITY,
-        { runId, solveDays, executionBudgetSeconds: options.executionBudgetSeconds },
+        { runId, solveDays, solvePhases, executionBudgetSeconds: options.executionBudgetSeconds },
       );
     }
-    const perDayLimitSeconds = Math.min(
+    const perPhaseLimitSeconds = Math.min(
       request.time_limit_seconds,
-      Math.max(1, Math.floor(availableSolverSeconds / solveDays)),
+      Math.max(1, Math.floor(availableSolverSeconds / solvePhases)),
     );
     const boundedRequest = {
       ...request,
-      time_limit_seconds: perDayLimitSeconds,
+      time_limit_seconds: perPhaseLimitSeconds,
     };
     const solution = await this.scheduler.solve(
       boundedRequest,
-      (perDayLimitSeconds * Math.max(1, solveDays) +
+      (perPhaseLimitSeconds * solvePhases +
         SCHEDULE_SOLVER_TRANSPORT_RESERVE_SECONDS) *
         1000,
     );

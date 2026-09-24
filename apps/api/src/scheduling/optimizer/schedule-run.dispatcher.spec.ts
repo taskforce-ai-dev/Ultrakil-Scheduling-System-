@@ -58,7 +58,7 @@ describe('QStashScheduleRunDispatcher', () => {
   it('keeps at least five seconds below Vercel Hobby for the response while supporting a week', () => {
     const { dispatcher } = fixture();
 
-    expect(dispatcher.maxRangeDays).toBe(9);
+    expect(dispatcher.maxRangeDays).toBe(8);
     expect(qstashMaximumRangeDays(47)).toBe(1);
   });
 

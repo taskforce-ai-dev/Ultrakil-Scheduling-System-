@@ -89,6 +89,7 @@ afterEach(async () => {
   await prisma.serviceAgreement.deleteMany({ where: { id: { in: agreements } } });
   await prisma.scheduleRun.deleteMany({ where: { id: { in: runs } } });
   await prisma.siteOperatingHours.deleteMany({ where: { serviceSiteId: siteId } });
+  await prisma.employeeAvailability.deleteMany({ where: { employeeId: { in: [employeeId, secondEmployeeId] } } });
   agreements.length = 0;
   runs.length = 0;
 });
@@ -376,6 +377,42 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
     }
   });
 
+  it('persists a retained crew lock when an ordinary visit loses the same employee', async () => {
+    const competitor = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    const locked = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+      timeLockReleasedAt: null,
+    });
+    const predecessor = await prisma.assignment.findFirstOrThrow({ where: { generatedVisitId: locked.visit.id } });
+    await prisma.assignmentCrewMember.create({ data: {
+      assignmentId: predecessor.id, employeeId, role: CrewRole.SUPERVISOR, isPmsSupervisor: true,
+    } });
+    await prisma.assignmentLock.updateMany({ where: { assignmentId: predecessor.id }, data: { scope: LockScope.CREW } });
+    competitor.solve.mockImplementation(async (request: SolveRequest) => ({
+      ...competitor.responseFor(request),
+      assignments: [{ visit_id: locked.visit.id, employee_ids: [employeeId], vehicles: [],
+        start_minute: 600, scheduled_date: '2027-03-03' }],
+      unassigned: [{ visit_id: competitor.visit.id, reason_codes: ['NO_FEASIBLE_CREW'],
+        message: 'The locked crew has priority' }],
+      visits_considered: 2,
+    }));
+
+    await expect(competitor.service.execute(competitor.run.id)).resolves.toMatchObject({ scheduled: 1, unassigned: 1 });
+    expect(competitor.solve.mock.calls[0][0].locks).toMatchObject([{ scope: 'CREW',
+      visit_id: locked.visit.id, employee_ids: [employeeId] }]);
+    const replacement = await prisma.assignment.findFirstOrThrow({ where: {
+      generatedVisitId: locked.visit.id, scheduleRunId: competitor.run.id,
+    }, include: { crewMembers: true, locks: true } });
+    expect(replacement.crewMembers.map((member) => member.employeeId)).toEqual([employeeId]);
+    expect(replacement.locks).toMatchObject([{ scope: LockScope.CREW, releasedAt: null }]);
+    expect(await prisma.assignment.findUnique({ where: { id: predecessor.id } })).toBeNull();
+    expect(await prisma.assignment.count({ where: { generatedVisitId: competitor.visit.id } })).toBe(0);
+    expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: competitor.visit.id } })).status)
+      .toBe(VisitStatus.UNASSIGNED);
+  });
+
   it('preserves a locked draft and rolls back another visit when the solver reports it unassigned', async () => {
     const first = await fixture({
       allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
@@ -385,9 +422,18 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
       timeLockReleasedAt: null,
     });
     const lockedAssignment = await prisma.assignment.findFirstOrThrow({ where: { generatedVisitId: locked.visit.id } });
+    await prisma.assignmentCrewMember.create({ data: {
+      assignmentId: lockedAssignment.id, employeeId, role: CrewRole.SUPERVISOR, isPmsSupervisor: true,
+    } });
+    await prisma.assignmentLock.updateMany({ where: { assignmentId: lockedAssignment.id }, data: { scope: LockScope.CREW } });
+    await prisma.employeeAvailability.create({ data: {
+      employeeId, startDate: date('2027-03-03'), endDate: date('2027-03-03'),
+    } });
+    const originalFirstStatus = (await prisma.generatedVisit.findUniqueOrThrow({ where: { id: first.visit.id } })).status;
+    const originalLockedStatus = (await prisma.generatedVisit.findUniqueOrThrow({ where: { id: locked.visit.id } })).status;
     first.solve.mockImplementation(async (request: SolveRequest) => ({
       ...first.responseFor(request),
-      assignments: [{ visit_id: first.visit.id, employee_ids: [employeeId], vehicles: [],
+      assignments: [{ visit_id: first.visit.id, employee_ids: [secondEmployeeId], vehicles: [],
         start_minute: 600, scheduled_date: '2027-03-03' }],
       unassigned: [{ visit_id: locked.visit.id, reason_codes: ['NO_FEASIBLE_CREW'],
         message: 'No feasible crew' }],
@@ -397,6 +443,8 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
     await expect(first.service.execute(first.run.id)).rejects.toMatchObject({
       code: 'RESOURCE_CONFLICT', message: expect.stringMatching(/unlock|repair/i),
     });
+    expect(first.solve.mock.calls[0][0].employees.find((employee) => employee.id === employeeId)?.unavailable_dates)
+      .toContain('2027-03-03');
     expect(await prisma.scheduleRun.findUniqueOrThrow({ where: { id: first.run.id } }))
       .toMatchObject({ status: 'FAILED', errorCode: 'RESOURCE_CONFLICT',
         errorMessage: expect.stringMatching(/unlock|repair/i) });
@@ -405,7 +453,10 @@ describe('optimizer cadence persistence against PostgreSQL', () => {
       .toMatchObject({ status: AssignmentStatus.DRAFT });
     expect(await prisma.assignmentLock.count({ where: { assignmentId: lockedAssignment.id, releasedAt: null } })).toBe(1);
     expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: locked.visit.id } })).status)
-      .not.toBe(VisitStatus.UNASSIGNED);
+      .toBe(originalLockedStatus);
+    expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: first.visit.id } })).status)
+      .toBe(originalFirstStatus);
+    expect(await prisma.visitUnassignedReason.count({ where: { generatedVisitId: first.visit.id } })).toBe(0);
   });
 
   it('preserves a locked draft when eligibility rejects the solver proposal', async () => {

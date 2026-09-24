@@ -2069,6 +2069,115 @@ describe('at-least-once schedule-run delivery leases', () => {
     );
   });
 
+  it('budgets one extra solver phase for a locked multi-day solve', async () => {
+    const f = fixture();
+    f.run.timeLimitSeconds = 300;
+    f.oldAssignment.locks.push({ scope: LockScope.CREW, releasedAt: null });
+
+    const pending = f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 55,
+      retryOnFailure: true,
+    });
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.scheduler.solve).toHaveBeenCalledWith(
+      expect.objectContaining({ time_limit_seconds: 3,
+        locks: [expect.objectContaining({ scope: 'CREW' })] }),
+      19_000,
+    );
+  });
+
+  it('does not add a solver phase for a locked visit with one solve day', async () => {
+    const f = fixture();
+    f.run.timeLimitSeconds = 300;
+    f.oldAssignment.locks.push({ scope: LockScope.CREW, releasedAt: null });
+    f.visit.serviceAgreement.dayRules = [
+      { weekday: Weekday.WEDNESDAY, kind: DayRuleKind.ALLOWED },
+    ];
+
+    const pending = f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 55,
+      retryOnFailure: true,
+    });
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.scheduler.solve).toHaveBeenCalledWith(
+      expect.objectContaining({ time_limit_seconds: 9 }),
+      19_000,
+    );
+  });
+
+  it('rejects a locked multi-day solve when its extra phase exceeds the execution budget', async () => {
+    const f = fixture();
+    f.oldAssignment.locks.push({ scope: LockScope.CREW, releasedAt: null });
+
+    await expect(f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 48,
+      retryOnFailure: false,
+    })).rejects.toMatchObject({
+      code: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+      details: { solveDays: 2, solvePhases: 3, executionBudgetSeconds: 48 },
+    });
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('rejects a locked nine-day solve at the QStash 55-second ceiling', async () => {
+    const f = fixture();
+    f.run.rangeEnd = new Date('2027-03-09T00:00:00Z');
+    f.oldAssignment.locks.push({ scope: LockScope.CREW, releasedAt: null });
+    f.visit.serviceAgreement.dayRules = Object.values(Weekday).map((weekday) => ({
+      weekday,
+      kind: DayRuleKind.ALLOWED,
+    }));
+    f.generatedVisit.findMany.mockResolvedValueOnce([
+      {
+        ...f.visit,
+        assignments: [{
+          ...f.oldAssignment,
+          publishedAt: null,
+          _count: { notificationOutboxEntries: 0 },
+        }],
+      },
+      {
+        ...f.visit,
+        id: 'visit-next-period',
+        visitDate: new Date('2027-03-08T00:00:00Z'),
+        assignments: [],
+      },
+    ]);
+
+    await expect(f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 55,
+      retryOnFailure: false,
+    })).rejects.toMatchObject({
+      code: 'SCHEDULE_EXECUTION_BUDGET_EXCEEDED',
+      details: { solveDays: 9, solvePhases: 10, executionBudgetSeconds: 55 },
+    });
+    expect(f.scheduler.solve).not.toHaveBeenCalled();
+  });
+
+  it('admits a lock-free multi-day solve within the same two-phase budget', async () => {
+    const f = fixture();
+    f.run.timeLimitSeconds = 300;
+
+    const pending = f.service.deliver(f.run.id, {
+      executionBudgetSeconds: 48,
+      retryOnFailure: true,
+    });
+    await f.started.promise;
+    f.release();
+    await pending;
+
+    expect(f.scheduler.solve).toHaveBeenCalledWith(
+      expect.objectContaining({ time_limit_seconds: 1, locks: [] }),
+      12_000,
+    );
+  });
+
   it('rejects stale progress, failure, and finalization after another delivery reclaims the lease', async () => {
     const f = fixture();
     const staleLease = {

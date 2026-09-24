@@ -45,6 +45,22 @@ Why a separate Python service: constraint solving is Python's strongest
 ecosystem (OR-Tools), and keeping it out of the API means a slow solve never
 blocks a manager clicking around the dispatch board.
 
+Multi-day solves keep the production-sized problem bounded. Manager-locked
+visits are allocated jointly across their legal dates first, with an exact
+objective order of retained lock count, covered visits, then preferences. A
+deterministic 64-visit connected lookahead keeps directly competing ordinary
+work visible without rebuilding the whole 1,300-visit horizon model; its joint
+assignments become reservations for the following per-day solves. Work outside
+that bounded neighborhood remains deliberately greedy, so a decomposed horizon
+is reported as `FEASIBLE`, not globally `OPTIMAL`. Invalid or mutually
+incompatible locks remain unassigned and the API refuses to overwrite their
+existing drafts, requiring a manager to repair or release the lock.
+
+That joint lock allocation is one additional solver phase on a locked
+multi-day run. The API includes it in execution-budget admission and transport
+timeouts. QStash's advertised maximum range reserves that conditional phase;
+self-hosted BullMQ keeps its larger execution budget.
+
 ### `apps/manager-web` — Next.js
 
 Everything the manager sees. Holds no business rules of its own: it renders what
