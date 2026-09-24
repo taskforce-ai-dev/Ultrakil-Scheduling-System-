@@ -66,11 +66,24 @@ synthetic employee or vehicle was added to live staging.
 
 **Deployed route smoke and runtime health:** an authenticated Chromium pass
 loaded all 11 manager routes with zero console errors, zero page exceptions and
-zero API HTTP errors. This was a read-only route smoke; it did not rerun every
-success, conflict, unassigned, stale-response, override, repair and recovery
-workflow against the deployed build. All six services were healthy with zero
-restarts and no error/exception/fatal lines in the inspected post-repair
-window. Public portal and API readiness returned HTTP 200.
+zero API HTTP errors. A second server-local Playwright pass kept authentication
+on the VPS and ran only the confirmed read-only deployed specs: 41 passed,
+including authentication setup, and one was truthfully skipped because the
+import has no fully inactive customer.
+It covered serious/critical accessibility checks across all ten primary manager
+screens and their read-only dialogs, responsive navigation and page-overflow
+checks at 1366×768 and 768×1024, all five known multi-driver vehicles, and the
+active-customer/inactive-site exclusion flow. The generation dialog performed
+preview only; no create, confirm, assignment, publish or repair mutation ran.
+
+Post-run count-only SQL reproduced 74 live assignments, 1,506 pending visits,
+zero employee/vehicle overlap, short crew, missing PMS/skill, multi-vehicle,
+driver, transport, branch or vehicle-capacity violations, and a maximum future
+branch/day load of 12. The ephemeral browser container was absent afterward,
+readiness remained `ok`, and API/web/scheduler logs had zero error-like lines
+in the inspected ten-minute window. This deployed pass still does not replace
+the complete destructive workflow suite, which runs against an isolated
+disposable database, or the named human business-acceptance sign-off.
 
 **Backup and restore:** final compressed backup
 `ultrakil-20260924T175533Z-310c0698fc7e.dump`, 463,455 bytes, SHA-256

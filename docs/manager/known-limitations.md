@@ -10,7 +10,12 @@ The current application release is PR #75 merged as
 update merged as `a8174accb7d99248ba415fe78bb227c49aac23e9`. The exact-head pipelines
 passed, all six staging services are healthy with zero restarts, and an
 authenticated read-only browser smoke loaded all 11 manager routes with zero
-page exceptions, API HTTP errors or console errors.
+page exceptions, API HTTP errors or console errors. A second server-local,
+read-only Playwright pass completed 41 checks, including authentication, across
+accessibility, responsive layout, vehicle-driver visibility and inactive-site
+exclusion; the only skip was the inapplicable fully-inactive-customer scenario
+because this import has no inactive customer. Post-run invariants and runtime
+health remained clean.
 
 This proves the deployed release is ready for management testing. It does not
 close these operational decisions:
@@ -51,6 +56,13 @@ close these operational decisions:
    identity-safe in logs, but no failed-attempt throttle is implemented yet.
    Controlled staging UAT may continue; production sign-off must include an
    approved throttling policy and verified implementation.
+6. **Deployed browser coverage boundary:** the shared-staging pass is
+   deliberately read-only. Create, generation-confirm, assignment-save,
+   publish and repair journeys are covered by the strict disposable-database
+   browser rehearsal and real-data API evidence, but were not replayed through
+   the shared deployed portal because those specs leave test or dispatch data
+   behind. Final business acceptance remains a named human sign-off rather than
+   an inference from automation.
 
 The final post-catch-up backup is
 `ultrakil-20260924T175533Z-310c0698fc7e.dump` with SHA-256
