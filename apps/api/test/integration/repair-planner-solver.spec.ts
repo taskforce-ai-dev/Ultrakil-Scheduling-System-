@@ -146,4 +146,21 @@ describe('repair adapter through the real Python scheduler', () => {
       result.response.assignments.map((assignment) => assignment.start_minute).sort(),
     ).toEqual([480, 600]);
   });
+
+  it('preserves an off-grid published start when it remains legal', async () => {
+    const source = target(555, 60);
+    source.generatedVisit.windowStartMinute = 480;
+    source.generatedVisit.windowEndMinute = 1020;
+
+    const result = await adapter().solve([source], [source.id]);
+
+    expect(result.response.unassigned).toEqual([]);
+    expect(result.response.assignments).toEqual([
+      expect.objectContaining({
+        visit_id: source.generatedVisitId,
+        scheduled_date: '2027-03-03',
+        start_minute: 555,
+      }),
+    ]);
+  });
 });
