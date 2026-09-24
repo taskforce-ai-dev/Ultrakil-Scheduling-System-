@@ -113,10 +113,12 @@ which reaches somebody as a 500 on a button they pressed for a good reason.
 
 1. **agreement rows**, ascending by id, through `lockAgreementRows`
    (`common/locks/agreement-lock.ts`) — all of them, before touching any;
-2. **visit rows**, ascending by id, through `lockScheduleVisits`;
-3. **employee then vehicle rows**, ascending by id, through
+2. **site rows**, ascending by id, through `lockSiteRows`
+   (`common/locks/site-lock.ts`) whenever site hours or site children matter;
+3. **visit rows**, ascending by id, through `lockScheduleVisits`;
+4. **employee then vehicle rows**, ascending by id, through
    `lockScheduleResources`;
-4. **branch-days**, ascending by key, through `lockBranchDays`
+5. **branch-days**, ascending by key, through `lockBranchDays`
    (`scheduling/optimizer/branch-day-lock.ts`).
 
 The staging synthetic-capacity CLI takes its own transaction-scoped,
@@ -127,7 +129,7 @@ are no employee or vehicle rows to lock yet; resource row locks still follow
 the normal employee-then-vehicle order.
 
 A writer skipping a level is fine; a writer inverting two is not. The rule is
-written as code in those four helpers, and the only way to keep it is to reach
+written as code in those five helpers, and the only way to keep it is to reach
 for them rather than to lock by hand — which is how each of the three deadlocks
 this section exists because of got in: generation locking a branch-day while
 holding no agreement, and the importer updating a customer's agreements in the
