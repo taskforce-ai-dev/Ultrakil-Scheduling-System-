@@ -782,6 +782,34 @@ describe('solver replacement lifecycle fence', () => {
     },
   );
 
+  it.each([
+    { scope: LockScope.TIME, changedWindow: 'site' },
+    { scope: LockScope.FULL, changedWindow: 'agreement' },
+  ] as const)(
+    'rechecks current $changedWindow hours for a $scope-locked assignment',
+    async ({ scope, changedWindow }) => {
+      const f = fixture();
+      f.visit.windowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+      f.visit.serviceAgreement.serviceSite.operatingHours = [
+        { weekday: Weekday.WEDNESDAY, opensAtMinute: 540, closesAtMinute: 1020 },
+      ];
+      f.oldAssignment.locks.push({ scope, releasedAt: null });
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      if (changedWindow === 'site') {
+        f.visit.serviceAgreement.serviceSite.operatingHours[0].opensAtMinute = 720;
+      } else {
+        f.visit.serviceAgreement.serviceWindowStartMinute = 720;
+      }
+      f.release();
+
+      await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(f.assignment.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('allows a legal move after its time lock was released', async () => {
     const f = fixture('2027-03-04');
     f.oldAssignment.locks.push({

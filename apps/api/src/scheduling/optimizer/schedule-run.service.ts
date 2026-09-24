@@ -1277,7 +1277,7 @@ export class ScheduleRunService {
             )) {
               legalSlots = constrainedProtectedDateSlots(visit, proposedDuration);
             } else if (sameDate && assignmentDatePinned) {
-              legalSlots = protectedDateSlots(visit);
+              legalSlots = constrainedProtectedDateSlots(visit, proposedDuration);
             } else {
               legalSlots = candidateSlotsForVisit(
                 visit,
