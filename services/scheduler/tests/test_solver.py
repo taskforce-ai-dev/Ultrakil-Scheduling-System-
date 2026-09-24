@@ -507,6 +507,47 @@ class TestLocks:
         assert result.assignments[0].start_minute == 22 * 60 + 30
         assert result.assignments[0].scheduled_date == "2026-09-09"
 
+    @pytest.mark.parametrize("scope", ["TIME", "FULL"])
+    def test_lock_preserves_an_interval_longer_than_the_visit_minimum(self, scope):
+        lock = LockInput(
+            visit_id="visit-1",
+            scope=scope,
+            start_minute=9 * 60,
+            end_minute=11 * 60,
+            employee_ids=["sup-1", "tech-1"] if scope == "FULL" else [],
+        )
+
+        result = solve(request(locks=[lock]))
+
+        assert [assignment.visit_id for assignment in result.assignments] == ["visit-1"]
+        assert result.assignments[0].start_minute == 9 * 60
+
+    def test_longer_time_lock_reserves_its_exact_employee_interval(self):
+        locked = visit(id="v-1", duration_minutes=90)
+        overlap = visit(
+            id="v-2",
+            service_agreement_id="agreement-2",
+            window_start_minute=10 * 60 + 30,
+            window_end_minute=11 * 60 + 30,
+            duration_minutes=60,
+        )
+        lock = LockInput(
+            visit_id="v-1",
+            scope="TIME",
+            start_minute=9 * 60,
+            end_minute=11 * 60,
+        )
+        existing = ExistingAssignmentInput(
+            visit_id="v-1",
+            employee_ids=["sup-1", "tech-1"],
+            start_minute=9 * 60,
+        )
+
+        result = solve(request(visits=[locked, overlap], locks=[lock], existing=[existing]))
+
+        assert [assignment.visit_id for assignment in result.assignments] == ["v-1"]
+        assert [entry.visit_id for entry in result.unassigned] == ["v-2"]
+
     def test_time_lock_keeps_original_date_even_if_a_caller_sends_other_candidates(self):
         movable = visit(
             candidate_slots=[

@@ -433,6 +433,28 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     )
     day_index = {date: index for index, date in enumerate(all_dates)}
 
+    def time_lock(v):
+        return next(
+            (
+                entry
+                for entry in locks_by_visit.get(v.id, [])
+                if entry.scope in ("FULL", "TIME")
+            ),
+            None,
+        )
+
+    def scheduled_duration(v) -> int:
+        """Reserve the manager's exact valid interval, not only its minimum."""
+        lock = time_lock(v)
+        if (
+            lock is not None
+            and lock.start_minute is not None
+            and lock.end_minute is not None
+            and lock.end_minute - lock.start_minute >= v.duration_minutes
+        ):
+            return lock.end_minute - lock.start_minute
+        return v.duration_minutes
+
     def slot_starts(v) -> list[int]:
         """Every absolute start minute this visit may legally take.
 
@@ -440,11 +462,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         integer carries both the date and the time and two visits on different
         days can never be found to overlap.
         """
-        lock = next(
-            (entry for entry in locks_by_visit.get(v.id, []) if entry.scope in ("FULL", "TIME")),
-            None,
-        )
-        if lock is not None and lock.scope in ("FULL", "TIME") and lock.start_minute is not None:
+        lock = time_lock(v)
+        if (
+            lock is not None
+            and lock.scope in ("FULL", "TIME")
+            and lock.start_minute is not None
+        ):
             return [day_index[v.visit_date] * 1440 + lock.start_minute]
         if v.candidate_slots is None:
             base = day_index[v.visit_date] * 1440 + v.window_start_minute
@@ -581,11 +604,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             if var is None:
                 continue
             start = absolute_start(v)
+            duration = scheduled_duration(v)
             intervals.append(
                 model.NewOptionalIntervalVar(
                     start,
-                    v.duration_minutes,
-                    start + v.duration_minutes,
+                    duration,
+                    start + duration,
                     var,
                     f"i_{v.id}_{employee.id}",
                 )
@@ -604,11 +628,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             if var is None:
                 continue
             start = absolute_start(v)
+            duration = scheduled_duration(v)
             intervals.append(
                 model.NewOptionalIntervalVar(
                     start,
-                    v.duration_minutes,
-                    start + v.duration_minutes,
+                    duration,
+                    start + duration,
                     var,
                     f"iv_{v.id}_{vehicle.id}",
                 )
@@ -701,7 +726,9 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
                 and lock.end_minute is not None
                 and (
                     lock.start_minute is None
-                    or lock.end_minute - lock.start_minute != visit.duration_minutes
+                    or lock.end_minute - lock.start_minute < visit.duration_minutes
+                    or lock.start_minute < visit.window_start_minute
+                    or lock.end_minute > visit.window_end_minute
                 )
             ):
                 model.Add(staffed[visit.id] == 0)

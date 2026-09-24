@@ -749,10 +749,18 @@ export class ScheduleRunService {
           lock.scope === LockScope.SUPERVISOR || lock.scope === LockScope.FULL,
         ),
       );
+      const timePinnedAssignment = visit.assignments.find((assignment) =>
+        REPLACEABLE_STATUSES.includes(assignment.status) &&
+        assignment.locks.some((lock) =>
+          lock.scope === LockScope.TIME || lock.scope === LockScope.FULL,
+        ),
+      );
 
       const dto = {
         plannedStartMinute: proposal.start_minute,
-        plannedEndMinute: proposal.start_minute + visit.durationMinutes,
+        plannedEndMinute: timePinnedAssignment
+          ? minuteFromDayStart(timePinnedAssignment.plannedEnd, visit.visitDate)
+          : proposal.start_minute + visit.durationMinutes,
         crew: solvedCrewRoles(
           proposal.employee_ids,
           (employeeId) => pmsGradeById.get(employeeId) === true,
@@ -940,14 +948,14 @@ export class ScheduleRunService {
         // never silently becomes a TIME lock. Assignment TIME/FULL locks carry
         // their exact interval separately and use the legacy fixed-window
         // fallback (`null`). An explicit empty list remains "no legal slot".
-        const protectedDate = datePinned.has(visit.id);
+        const protectedDate = datePinned.has(visit.id) ||
+          visit.placement === VisitPlacement.BOOKED;
         const allCandidates = protectedDate
           ? protectedDateSlots(visit)
           : candidateSlotsForVisit(visit, options.from, options.to);
-        const keepDate = protectedDate || visit.placement === VisitPlacement.BOOKED;
         const candidates = timePinned.has(visit.id)
           ? null
-          : keepDate
+          : protectedDate
             ? allCandidates.filter((slot) => slot.date === dateOnly(visit.visitDate))
             : allCandidates;
 
@@ -1228,6 +1236,7 @@ export class ScheduleRunService {
             const legalSlots = sameDate && (
               visit.isManuallyAdjusted ||
               visit.lockedAt !== null ||
+              visit.placement === VisitPlacement.BOOKED ||
               assignmentDatePinned
             )
               ? protectedDateSlots(visit)

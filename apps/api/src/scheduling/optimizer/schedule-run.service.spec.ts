@@ -577,11 +577,14 @@ describe('solver replacement lifecycle fence', () => {
     await expect(pending).resolves.toMatchObject({ scheduled: 1 });
   });
 
-  it('keeps a BOOKED visit on its date while offering all legal time slots', async () => {
+  it('keeps a BOOKED visit on its stored fallback window when that weekday has no site hours', async () => {
     const f = fixture();
     f.visit.placement = VisitPlacement.BOOKED;
     f.visit.windowEndMinute = 1020;
     f.visit.serviceAgreement.serviceWindowEndMinute = 1020;
+    f.visit.serviceAgreement.serviceSite.operatingHours = [
+      { weekday: Weekday.THURSDAY, opensAtMinute: 480, closesAtMinute: 1020 },
+    ];
 
     const pending = f.service.execute(f.run.id);
     await f.started.promise;
@@ -694,6 +697,31 @@ describe('solver replacement lifecycle fence', () => {
     expect(f.assignment.create).not.toHaveBeenCalled();
     expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
   });
+
+  it.each([LockScope.TIME, LockScope.FULL])(
+    'preserves the exact longer interval of a %s-locked assignment',
+    async (scope) => {
+      const f = fixture();
+      f.oldAssignment.plannedEnd = new Date('2027-03-03T12:00:00Z');
+      f.oldAssignment.locks.push({ scope, releasedAt: null });
+
+      const pending = f.service.execute(f.run.id);
+      await f.started.promise;
+      const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+      expect(request.locks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ scope, start_minute: 600, end_minute: 720 }),
+      ]));
+      f.release();
+
+      await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+      expect(f.assignment.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({
+          plannedStart: new Date('2027-03-03T10:00:00.000Z'),
+          plannedEnd: new Date('2027-03-03T12:00:00.000Z'),
+        }),
+      }));
+    },
+  );
 
   it('allows a legal move after its time lock was released', async () => {
     const f = fixture('2027-03-04');
