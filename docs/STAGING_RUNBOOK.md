@@ -320,14 +320,19 @@ blocks (SHA-256 `17999a34c8de3fe8b141bfe0e87756b439d434f1e696eb2ae6c30463653c13b
 The 2026-09-24 recheck returned Caddy `v2.6.2`, the same checksum, and the
 same email-plus-three-route configuration. This is evidence for those
 instants, not permission to overwrite the host later.
-On 2026-09-24, the author also streamed the exact source-controlled wrapper and
-fragment together over SSH to the authorized staging host: `sudo -n caddy
-version` returned `2.6.2`, and both `caddy adapt --config /dev/stdin --adapter
-caddyfile` and `caddy validate --config /dev/stdin --adapter caddyfile`
-succeeded. This was a read-only author validation: it did not write a host file,
-reload Caddy, or deploy this change, and it is not an independent-reviewer
-attestation. It proves parser compatibility for that version only; repeat the
-candidate validation below immediately before a release.
+On 2026-09-24, the author validated an explicit combined candidate over SSH to
+the authorized staging host. Locally, the candidate removed the single
+`import Caddyfile.ultrakil` line from `deploy/caddy/Caddyfile` and appended
+`deploy/caddy/Caddyfile.ultrakil`; that combined text was then streamed to
+`sudo -n caddy adapt --config /dev/stdin --adapter caddyfile` and `sudo -n
+caddy validate --config /dev/stdin --adapter caddyfile`. `sudo -n caddy
+version` returned `2.6.2` and both commands succeeded. This did not ask Caddy
+to resolve a relative import from `/dev`; it validated the wrapper's global
+options and all three site blocks as one effective candidate. This was a
+read-only author validation: it did not write a host file, reload Caddy, or
+deploy this change, and it is not an independent-reviewer attestation. It
+proves parser compatibility for that version only; repeat the candidate
+validation below immediately before a release.
 Before each release, repeat the read-only inspection:
 
 ```bash

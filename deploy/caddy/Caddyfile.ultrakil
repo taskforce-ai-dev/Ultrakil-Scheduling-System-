@@ -1,5 +1,7 @@
 # UltraKIL staging site fragment for Caddy v2.6.2+. It contains no global
-# options and can be safely imported by an existing host Caddyfile.
+# options, but may be imported only after review proves none of these three
+# hostnames is already defined across the target Caddyfile's transitive imports.
+# Existing routes require a separately reviewed merge, not a second site block.
 (ultrakil_security_headers) {
 	# HSTS deliberately applies only to each served host. Do not add
 	# includeSubDomains or preload until every sibling hostname is TLS-ready.
