@@ -72,11 +72,13 @@ test("creates a customer with a site, then a service agreement for it, and sees 
   await expect(
     page.getByText("every other customer's existing schedule is untouched")
   ).toBeVisible();
-  // Saving the agreement already ran its automatic scoped plan — there is no
-  // separate preview/confirm step, and no "Schedule now" left to press.
-  // Exactly one of the three onboarding outcomes is shown for it.
+  // Saving the agreement already ran its automatic scoped date placement —
+  // there is no separate preview/confirm step, and no "Schedule now" left to
+  // press. Exactly one of the three truthful placement outcomes is shown.
   await expect(
-    page.getByRole("heading", { name: /^(Scheduled|Scheduled, with shortfalls|Scheduling failed)$/ })
+    page.getByRole("heading", {
+      name: /^(Visits placed on calendar|Visits placed with warnings|Date placement failed)$/,
+    })
   ).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole("button", { name: "Schedule now" })).toHaveCount(0);
 });
