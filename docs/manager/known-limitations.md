@@ -54,8 +54,13 @@ close these operational decisions:
    A later workload must still prove an actual shortage before more are added.
 5. **Authentication hardening:** failed login attempts are constant-time and
    identity-safe in logs, but no failed-attempt throttle is implemented yet.
-   Controlled staging UAT may continue; production sign-off must include an
-   approved throttling policy and verified implementation.
+   The manager portal also persists its 12-hour bearer token in browser
+   `localStorage`; the source labels that acceptable only for the internal
+   Phase 1 pilot and says it must be revisited before internet exposure. The
+   staging URL is already internet-accessible. Controlled staging UAT may
+   continue, but production sign-off requires an approved distributed
+   throttling policy and an HttpOnly browser-session design, followed by
+   verified implementation and deployment.
 6. **Deployed browser coverage boundary:** the shared-staging pass is
    deliberately read-only. Create, generation-confirm, assignment-save,
    publish and repair journeys are covered by the strict disposable-database
