@@ -51,14 +51,17 @@ overloaded days, booking warnings or skipped periods. Repeating the preview
 then reported zero additions, updates or removals.
 
 The resulting database was backed up, verified and restored into an isolated
-disposable clone. Six non-overlapping optimizer runs covered 24 September 2026
-through 18 September 2027. All six succeeded: 1,506 pending visits considered,
-1,506 scheduled and zero unassigned. Count-only SQL over the 1,506 draft
-assignments found zero employee/vehicle overlap or travel conflicts, short or
-overstaffed crews, missing PMS supervisors, missing required skills, duplicate
-active visit assignments, invalid/undersized transport, unauthorized drivers,
-branch/permanent-site violations or employee-absence violations. Maximum
-vehicles per assignment was one. No clone proposal was published and no
+disposable clone. Seven non-overlapping optimizer runs covered 24 September 2026
+through the rolling-horizon boundary on 24 September 2027. The first six
+succeeded with 1,506 pending visits considered, 1,506 scheduled and zero
+unassigned through 18 September. Count-only SQL found zero generated visits in
+the remaining 19–24 September tail in both live staging and the restored clone;
+the seventh optimizer run succeeded with zero work. Count-only SQL over the
+1,506 draft assignments found zero employee/vehicle overlap or travel conflicts,
+short or overstaffed crews, missing PMS supervisors, missing required skills,
+duplicate active visit assignments, invalid/undersized transport, unauthorized
+drivers, branch/permanent-site violations or employee-absence violations.
+Maximum vehicles per assignment was one. No clone proposal was published and no
 synthetic employee or vehicle was added to live staging.
 
 **Deployed route smoke and runtime health:** an authenticated Chromium pass

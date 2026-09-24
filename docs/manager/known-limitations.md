@@ -30,14 +30,18 @@ close these operational decisions:
 3. **Staffing horizon:** the repair covered already-published assignments; the
    remaining future visits stay pending until a manager runs and publishes the
    appropriate dispatch horizon. A 24 September full-year audit restored the
-   live database into an isolated disposable clone and ran six non-overlapping
-   optimizer windows from 24 September 2026 through 18 September 2027. All six
-   runs succeeded: 1,506 pending visits considered, 1,506 staffed and zero
-   unassigned. The resulting drafts also had zero employee/vehicle overlap or
-   travel conflicts, short or overstaffed crews, missing PMS supervisors,
-   missing skills, invalid transport, unauthorized drivers, branch/permanent-
-   site violations or absence violations. These drafts were audit evidence on
-   the clone, not schedules published to the live system.
+   live database into an isolated disposable clone and ran seven non-overlapping
+   optimizer windows from 24 September 2026 through the rolling-horizon boundary
+   on 24 September 2027. The first six runs considered and staffed all 1,506
+   pending visits through 18 September with zero unassigned. Count-only SQL
+   proved that the remaining 19–24 September tail held zero generated visits in
+   both live staging and the restored clone; the seventh run therefore succeeded
+   with zero work rather than hiding unaudited visits. The 1,506 resulting drafts
+   had zero employee/vehicle overlap or travel conflicts, short or overstaffed
+   crews, missing PMS supervisors, missing skills, invalid transport,
+   unauthorized drivers, branch/permanent-site violations or absence violations.
+   These drafts were audit evidence on the clone, not schedules published to the
+   live system.
 4. **Synthetic staging capacity:** the existing visible staging-only team is
    two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. The
    full-year optimizer audit above proves the current future workload has no
