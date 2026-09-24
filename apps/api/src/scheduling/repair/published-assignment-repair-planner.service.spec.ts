@@ -431,6 +431,35 @@ describe('PublishedAssignmentRepairPlannerService', () => {
     });
   });
 
+  it('rejects a solver proposal that moves a published repair to another date', async () => {
+    const f = fixture();
+    f.adapter.solve.mockResolvedValue({
+      response: {
+        run_id: 'repair-plan-run',
+        status: 'FEASIBLE',
+        assignments: [
+          {
+            visit_id: visitId,
+            employee_ids: [employeeId],
+            vehicles: [],
+            start_minute: 600,
+            scheduled_date: '2027-03-04',
+          },
+        ],
+        unassigned: [],
+        solve_seconds: 0.1,
+        objective_value: 1,
+        visits_considered: 1,
+      },
+      pmsEmployeeIds: new Set([employeeId]),
+    });
+
+    await expect(
+      f.service.plan({ sourceAssignmentIds: [sourceId] }),
+    ).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.repairs.preview).not.toHaveBeenCalled();
+  });
+
   it('rejects an oversized untrusted scheduler reason list', async () => {
     const f = fixture();
     f.adapter.solve.mockResolvedValue({

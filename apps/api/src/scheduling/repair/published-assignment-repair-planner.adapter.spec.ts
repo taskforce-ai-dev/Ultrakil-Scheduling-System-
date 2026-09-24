@@ -6,7 +6,11 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service';
-import { SchedulerClient, SolveResponse } from '../optimizer/scheduler.client';
+import {
+  SchedulerClient,
+  SolveRequest,
+  SolveResponse,
+} from '../optimizer/scheduler.client';
 import {
   PlannerSourceAssignment,
   PublishedAssignmentRepairPlannerAdapter,
@@ -21,8 +25,8 @@ function target(id: string, visitId: string): PlannerSourceAssignment {
     generatedVisitId: visitId,
     branchCode: BranchCode.KANDY,
     status: AssignmentStatus.PUBLISHED,
-    plannedStart: new Date('2027-03-03T09:00:00.000Z'),
-    plannedEnd: new Date('2027-03-03T10:00:00.000Z'),
+    plannedStart: new Date('2027-03-03T09:15:00.000Z'),
+    plannedEnd: new Date('2027-03-03T10:15:00.000Z'),
     updatedAt: new Date('2027-02-28T09:00:00.000Z'),
     crewMembers: [
       {
@@ -91,7 +95,7 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
       },
     };
     const scheduler = {
-      solve: jest.fn(async (request) => ({
+      solve: jest.fn(async (request: SolveRequest) => ({
         ...answer,
         run_id: request.run_id,
       })),
@@ -113,12 +117,38 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
           expect.objectContaining({
             id: 'visit-1',
             branch_code: BranchCode.COLOMBO,
-            candidate_slots: null,
+            candidate_slots: [
+              {
+                date: '2027-03-03',
+                earliest_start_minute: 480,
+                latest_start_minute: 960,
+                is_preferred: false,
+              },
+              {
+                date: '2027-03-03',
+                earliest_start_minute: 555,
+                latest_start_minute: 555,
+                is_preferred: false,
+              },
+            ],
           }),
           expect.objectContaining({
             id: 'visit-2',
             branch_code: BranchCode.COLOMBO,
-            candidate_slots: null,
+            candidate_slots: [
+              {
+                date: '2027-03-03',
+                earliest_start_minute: 480,
+                latest_start_minute: 960,
+                is_preferred: false,
+              },
+              {
+                date: '2027-03-03',
+                earliest_start_minute: 555,
+                latest_start_minute: 555,
+                is_preferred: false,
+              },
+            ],
           }),
         ],
         reservations: [
@@ -135,8 +165,8 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
         minimum_travel_buffer_minutes: 60,
         excluded_reservation_assignment_ids: [firstSourceId, secondSourceId],
         existing: [
-          expect.objectContaining({ visit_id: 'visit-1' }),
-          expect.objectContaining({ visit_id: 'visit-2' }),
+          expect.objectContaining({ visit_id: 'visit-1', start_minute: 555 }),
+          expect.objectContaining({ visit_id: 'visit-2', start_minute: 555 }),
         ],
       }),
       expect.any(Number),
@@ -188,5 +218,39 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
     await expect(failure).rejects.not.toMatchObject({
       message: expect.stringContaining('scheduler.internal'),
     });
+  });
+
+  it('sends an explicit empty slot list when the job cannot fit inside its window', async () => {
+    const impossible = target(firstSourceId, 'visit-1');
+    impossible.generatedVisit.windowEndMinute = 500;
+    const prisma = {
+      employee: { findMany: jest.fn(async () => []) },
+      vehicle: { findMany: jest.fn(async () => []) },
+      assignment: { findMany: jest.fn(async () => []) },
+    };
+    const scheduler = {
+      solve: jest.fn(async (request: SolveRequest) => ({
+        run_id: request.run_id,
+        status: 'INFEASIBLE',
+        assignments: [],
+        unassigned: [],
+        solve_seconds: 0,
+        objective_value: 0,
+        visits_considered: 1,
+      })),
+    };
+    const adapter = new PublishedAssignmentRepairPlannerAdapter(
+      prisma as unknown as PrismaService,
+      scheduler as unknown as SchedulerClient,
+    );
+
+    await adapter.solve([impossible], [firstSourceId]);
+
+    expect(scheduler.solve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        visits: [expect.objectContaining({ candidate_slots: [] })],
+      }),
+      expect.any(Number),
+    );
   });
 });

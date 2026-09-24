@@ -168,9 +168,11 @@ export class PublishedAssignmentRepairPlannerAdapter {
         service_site_id: source.generatedVisit.serviceAgreement.serviceSiteId,
         service_agreement_id: source.generatedVisit.serviceAgreementId,
         is_preferred_day: false,
-        // Repair keeps the published visit's existing appointment window.
-        // Null is the solver's fixed-window fallback; [] means no legal slot.
-        candidate_slots: null,
+        // Repair keeps the visit on its published calendar date, but may move
+        // it anywhere inside the customer's appointment window. Passing null
+        // would pin every repair to windowStartMinute, which can manufacture a
+        // capacity shortfall even when later legal times are available.
+        candidate_slots: repairCandidateSlots(source),
         occupied_start_keys: [],
       })),
       employees: employees.map((employee) => ({
@@ -201,6 +203,10 @@ export class PublishedAssignmentRepairPlannerAdapter {
           .map((entry) => entry.employeeId)
           .sort(),
         vehicle_ids: source.vehicles.map((entry) => entry.vehicleId).sort(),
+        start_minute: minuteFromDayStart(
+          source.plannedStart,
+          source.generatedVisit.visitDate,
+        ),
       })),
       reservations: reservations.map((assignment) => ({
         assignment_id: assignment.id,
@@ -248,6 +254,39 @@ export class PublishedAssignmentRepairPlannerAdapter {
       ),
     };
   }
+}
+
+function repairCandidateSlots(source: PlannerSourceAssignment) {
+  const visit = source.generatedVisit;
+  const latestStartMinute = visit.windowEndMinute - visit.durationMinutes;
+  if (latestStartMinute < visit.windowStartMinute) return [];
+  const slots = [
+    {
+      date: dateOnly(visit.visitDate),
+      earliest_start_minute: visit.windowStartMinute,
+      latest_start_minute: latestStartMinute,
+      is_preferred: false,
+    },
+  ];
+  const existingStartMinute = minuteFromDayStart(
+    source.plannedStart,
+    visit.visitDate,
+  );
+  if (
+    existingStartMinute > visit.windowStartMinute &&
+    existingStartMinute <= latestStartMinute
+  ) {
+    // The scheduler's ordinary candidate grid is deliberately coarse. Keep an
+    // exact 09:15-style published time in the domain as a singleton so the
+    // soft existing-time preference can preserve it when every hard rule does.
+    slots.push({
+      date: dateOnly(visit.visitDate),
+      earliest_start_minute: existingStartMinute,
+      latest_start_minute: existingStartMinute,
+      is_preferred: false,
+    });
+  }
+  return slots;
 }
 
 function invalidSolverResponse(message: string): AppException {
