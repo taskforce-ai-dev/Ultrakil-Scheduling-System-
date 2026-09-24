@@ -142,12 +142,22 @@ function fixture(
     }
     return 1;
   };
+  const externalReservationFindMany = jest.fn(
+    async (_args?: unknown): Promise<unknown[]> => [],
+  );
   const assignment = {
     findMany: jest.fn(
-      async ({ where }: { where: { status?: { in: AssignmentStatus[] } } }) =>
-        assignments
+      async (args: {
+        where: { status?: { in: AssignmentStatus[] } };
+        select?: { generatedVisit?: unknown };
+      }) => {
+        if (args.select?.generatedVisit) {
+          return externalReservationFindMany(args);
+        }
+        return assignments
           .filter(
-            (entry) => !where.status || where.status.in.includes(entry.status),
+            (entry) =>
+              !args.where.status || args.where.status.in.includes(entry.status),
           )
           .map((entry) => ({
             ...entry,
@@ -157,7 +167,8 @@ function fixture(
                 (notice) => notice.assignmentId === entry.id,
               ).length,
             },
-          })),
+          }));
+      },
     ),
     delete: jest.fn(async ({ where }: { where: { id: string } }) =>
       remove(where.id),
@@ -540,6 +551,7 @@ function fixture(
     assignments,
     outbox,
     assignment,
+    externalReservationFindMany,
     generatedVisit,
     eligibility,
     reasons: tx.visitUnassignedReason,
@@ -550,6 +562,49 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it('loads fixed reservations through the travel buffer at run boundaries', async () => {
+    const f = fixture();
+    f.externalReservationFindMany.mockResolvedValueOnce([
+      {
+        id: 'boundary-reservation',
+        generatedVisitId: 'boundary-visit',
+        plannedStart: new Date('2027-02-28T23:00:00Z'),
+        plannedEnd: new Date('2027-03-01T00:00:00Z'),
+        generatedVisit: {
+          serviceAgreement: { serviceSiteId: 'other-site' },
+        },
+        crewMembers: [{ employeeId: 'employee' }],
+        vehicles: [{ vehicleId: 'vehicle' }],
+      },
+    ]);
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+
+    expect(f.externalReservationFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          generatedVisitId: { notIn: [f.visit.id] },
+          plannedStart: { lt: new Date('2027-03-08T01:00:00Z') },
+          plannedEnd: { gt: new Date('2027-02-28T23:00:00Z') },
+        }),
+      }),
+    );
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+    expect(request.reservations).toContainEqual({
+      assignment_id: 'boundary-reservation',
+      scheduled_date: '2027-02-28',
+      start_minute: 1380,
+      end_minute: 1440,
+      service_site_id: 'other-site',
+      employee_ids: ['employee'],
+      vehicle_ids: ['vehicle'],
+    });
+
+    f.release();
+    await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+  });
+
   it.each([LockScope.TIME, LockScope.FULL])(
     'encodes a %s-locked appointment ending at next-day midnight as minute 1440', async (scope) => {
     const f = fixture();

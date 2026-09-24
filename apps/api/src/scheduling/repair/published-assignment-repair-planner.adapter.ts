@@ -100,6 +100,14 @@ export class PublishedAssignmentRepairPlannerAdapter {
     );
     const rangeEndExclusive = new Date(lastDate);
     rangeEndExclusive.setUTCDate(rangeEndExclusive.getUTCDate() + 1);
+    const travelBufferMilliseconds =
+      DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES * 60_000;
+    const reservationRangeStart = new Date(
+      rangeStart.getTime() - travelBufferMilliseconds,
+    );
+    const reservationRangeEndExclusive = new Date(
+      rangeEndExclusive.getTime() + travelBufferMilliseconds,
+    );
 
     const [employees, vehicles, reservations] = await Promise.all([
       this.prisma.employee.findMany({
@@ -121,8 +129,8 @@ export class PublishedAssignmentRepairPlannerAdapter {
         where: {
           id: { notIn: excludedIds },
           status: { in: RESERVATION_STATUSES },
-          plannedStart: { lt: rangeEndExclusive },
-          plannedEnd: { gt: rangeStart },
+          plannedStart: { lt: reservationRangeEndExclusive },
+          plannedEnd: { gt: reservationRangeStart },
         },
         select: {
           id: true,

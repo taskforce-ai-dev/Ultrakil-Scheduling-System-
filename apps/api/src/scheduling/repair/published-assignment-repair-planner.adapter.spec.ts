@@ -145,6 +145,8 @@ describe('PublishedAssignmentRepairPlannerAdapter', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           id: { notIn: [firstSourceId, secondSourceId] },
+          plannedStart: { lt: new Date('2027-03-04T01:00:00.000Z') },
+          plannedEnd: { gt: new Date('2027-03-02T23:00:00.000Z') },
           status: {
             in: [
               AssignmentStatus.DRAFT,
