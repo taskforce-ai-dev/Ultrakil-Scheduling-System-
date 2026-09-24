@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from datetime import date, timedelta
 
 from ortools.sat.python import cp_model
 
@@ -571,7 +572,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     #
     # A null/omitted candidate list retains the legacy fixed-window fallback.
     # An explicit empty list is impossible work, not permission to staff it.
-    all_dates = sorted(
+    represented_dates = sorted(
         {v.visit_date for v in visits}
         | {slot.date for v in visits for slot in v.candidate_slots or []}
         | {
@@ -580,6 +581,12 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             if reservation.assignment_id not in set(request.excluded_reservation_assignment_ids)
         }
     )
+    first_date = date.fromisoformat(represented_dates[0])
+    last_date = date.fromisoformat(represented_dates[-1])
+    all_dates = [
+        (first_date + timedelta(days=offset)).isoformat()
+        for offset in range((last_date - first_date).days + 1)
+    ]
     day_index = {date: index for index, date in enumerate(all_dates)}
 
     def time_lock(v):

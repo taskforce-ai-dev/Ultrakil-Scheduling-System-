@@ -296,6 +296,86 @@ class TestPublishedReservations:
         assert by_visit["visit-1"].start_minute == 23 * 60
         assert by_visit["visit-2"].start_minute == 60
 
+    def test_does_not_compress_a_calendar_day_gap_into_adjacent_midnights(self):
+        only_supervisor = employee(id="sup-1", is_pms_grade=True)
+        first = visit(
+            id="visit-1",
+            visit_date="2026-09-09",
+            service_site_id="site-1",
+            service_agreement_id="agreement-1",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-09",
+                earliest_start_minute=23 * 60,
+                latest_start_minute=23 * 60,
+            )],
+        )
+        second = visit(
+            id="visit-2",
+            visit_date="2026-09-11",
+            service_site_id="site-2",
+            service_agreement_id="agreement-2",
+            required_crew_size=1,
+            duration_minutes=60,
+            candidate_slots=[CandidateSlot(
+                date="2026-09-11",
+                earliest_start_minute=0,
+                latest_start_minute=0,
+            )],
+        )
+
+        result = solve(request(visits=[first, second], employees=[only_supervisor]))
+
+        assert len(result.assignments) == 2
+        assert result.unassigned == []
+
+    def test_joint_lock_solve_keeps_real_distance_between_nonconsecutive_dates(self):
+        only_supervisor = employee(id="sup-1", is_pms_grade=True)
+        first = visit(
+            id="visit-1",
+            visit_date="2026-09-09",
+            service_site_id="site-1",
+            service_agreement_id="agreement-1",
+            window_start_minute=23 * 60,
+            window_end_minute=24 * 60,
+            required_crew_size=1,
+            duration_minutes=60,
+        )
+        second = visit(
+            id="visit-2",
+            visit_date="2026-09-11",
+            service_site_id="site-2",
+            service_agreement_id="agreement-2",
+            window_start_minute=0,
+            window_end_minute=60,
+            required_crew_size=1,
+            duration_minutes=60,
+        )
+        locks = [
+            LockInput(
+                visit_id="visit-1",
+                scope="TIME",
+                start_minute=23 * 60,
+                end_minute=24 * 60,
+            ),
+            LockInput(
+                visit_id="visit-2",
+                scope="TIME",
+                start_minute=0,
+                end_minute=60,
+            ),
+        ]
+
+        result = solve(request(
+            visits=[first, second],
+            employees=[only_supervisor],
+            locks=locks,
+        ))
+
+        assert len(result.assignments) == 2
+        assert result.unassigned == []
+
     def test_keeps_employee_and_vehicle_travel_time_after_a_different_site_reservation(self):
         van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
         driver = employee(
