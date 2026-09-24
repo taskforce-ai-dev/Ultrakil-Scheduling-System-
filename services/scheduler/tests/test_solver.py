@@ -494,6 +494,19 @@ class TestGettingToSite:
 
 
 class TestLocks:
+    @pytest.mark.parametrize("scope", ["TIME", "FULL"])
+    def test_midnight_end_lock_is_1440_and_remains_staffable(self, scope):
+        late_visit = visit(window_start_minute=22 * 60 + 30, window_end_minute=1440)
+        lock = LockInput(
+            visit_id="visit-1", scope=scope, start_minute=22 * 60 + 30, end_minute=1440,
+            employee_ids=["sup-1", "tech-1"] if scope == "FULL" else [],
+        )
+
+        result = solve(request(visits=[late_visit], locks=[lock]))
+
+        assert result.assignments[0].start_minute == 22 * 60 + 30
+        assert result.assignments[0].scheduled_date == "2026-09-09"
+
     def test_time_lock_keeps_original_date_even_if_a_caller_sends_other_candidates(self):
         movable = visit(
             candidate_slots=[
@@ -1073,6 +1086,20 @@ class TestChoosingTheDayAndTime:
     unstaffed even when Thursday was empty. Every case here would fail against
     that model — which is the point of them.
     """
+
+    def test_two_booked_date_only_visits_share_one_crew_sequentially(self):
+        booked_slot = CandidateSlot(
+            date="2026-09-09", earliest_start_minute=9 * 60, latest_start_minute=17 * 60 - 90
+        )
+        result = solve(request(visits=[
+            visit(id="booked-a", candidate_slots=[booked_slot]),
+            visit(id="booked-b", candidate_slots=[booked_slot]),
+        ]))
+
+        assert len(result.assignments) == 2
+        assert {row.scheduled_date for row in result.assignments} == {"2026-09-09"}
+        starts = sorted(row.start_minute for row in result.assignments)
+        assert starts[1] >= starts[0] + 90
 
     def test_moves_a_visit_to_a_day_its_crew_can_actually_work(self):
         # Tuesday is the generated date and the whole crew is away. Thursday is

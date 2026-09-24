@@ -1,4 +1,4 @@
-import { BranchCode, CrewRole, DataProvenance, DayRuleKind, FrequencyUnit, LockScope, PrismaClient, VisitPlacement, Weekday } from '@prisma/client';
+import { AssignmentStatus, BranchCode, CrewRole, DataProvenance, DayRuleKind, FrequencyUnit, LockScope, PrismaClient, VisitPlacement, VisitStatus, Weekday } from '@prisma/client';
 
 import { AuditService } from '../../src/audit/audit.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
@@ -186,6 +186,182 @@ async function fixture(options: {
 }
 
 describe('optimizer cadence persistence against PostgreSQL', () => {
+  it('bounds post-solve rule-context queries as the result grows from 1 to 36 visits', async () => {
+    const observed = new PrismaClient({ log: [{ emit: 'event', level: 'query' }] });
+    let capture = false;
+    let ruleQueries = 0;
+    observed.$on('query', (event) => {
+      if (capture && /service_agreements|service_agreement_day_rules|site_operating_hours/.test(event.query)) {
+        ruleQueries += 1;
+      }
+    });
+    await observed.$connect();
+    try {
+      const measure = async (count: number) => {
+        const fixtures: Awaited<ReturnType<typeof fixture>>[] = [];
+        for (let index = 0; index < count; index += 1) {
+          fixtures.push(await fixture({
+            allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07',
+            solverDate: '2027-03-03', timeLockReleasedAt: null,
+          }));
+        }
+        const solve = jest.fn(async (request: SolveRequest): Promise<SolveResponse> => {
+          capture = true;
+          return {
+            ...fixtures[0].responseFor(request), assignments: [],
+            unassigned: request.visits.map((visit) => ({
+              visit_id: visit.id, reason_codes: ['NO_FEASIBLE_CREW'], message: 'No feasible crew',
+            })),
+            visits_considered: request.visits.length,
+          };
+        });
+        const service = new ScheduleRunService(
+          observed as unknown as PrismaService,
+          { solve } as unknown as SchedulerClient,
+          new EligibilityService(observed as unknown as PrismaService),
+          {} as AuditService,
+          new BranchDayCapacityService(observed as unknown as PrismaService, { get: () => undefined } as never),
+        );
+        ruleQueries = 0;
+        const started = Date.now();
+        await expect(service.execute(fixtures[0].run.id)).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+        const milliseconds = Date.now() - started;
+        capture = false;
+        expect(solve.mock.calls[0][0].visits).toHaveLength(count);
+        return { ruleQueries, milliseconds };
+      };
+
+      const one = await measure(1);
+      await prisma.serviceAgreement.deleteMany({ where: { id: { in: agreements } } });
+      agreements.length = 0;
+      const thirtySix = await measure(36);
+      expect(thirtySix.ruleQueries).toBeLessThanOrEqual(one.ruleQueries + 3);
+      console.info('optimizer persistence scope timing (test DB, ms):', {
+        oneVisit: one.milliseconds, thirtySixVisits: thirtySix.milliseconds,
+        ruleQueriesOne: one.ruleQueries, ruleQueriesThirtySix: thirtySix.ruleQueries,
+      });
+    } finally {
+      await observed.$disconnect();
+    }
+  });
+
+  it('preserves a locked draft and rolls back another visit when the solver reports it unassigned', async () => {
+    const first = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    const locked = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+      timeLockReleasedAt: null,
+    });
+    const lockedAssignment = await prisma.assignment.findFirstOrThrow({ where: { generatedVisitId: locked.visit.id } });
+    first.solve.mockImplementation(async (request: SolveRequest) => ({
+      ...first.responseFor(request),
+      assignments: [{ visit_id: first.visit.id, employee_ids: [employeeId], vehicles: [],
+        start_minute: 600, scheduled_date: '2027-03-03' }],
+      unassigned: [{ visit_id: locked.visit.id, reason_codes: ['NO_FEASIBLE_CREW'],
+        message: 'No feasible crew' }],
+      visits_considered: 2,
+    }));
+
+    await expect(first.service.execute(first.run.id)).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT', message: expect.stringMatching(/unlock|repair/i),
+    });
+    expect(await prisma.scheduleRun.findUniqueOrThrow({ where: { id: first.run.id } }))
+      .toMatchObject({ status: 'FAILED', errorCode: 'RESOURCE_CONFLICT',
+        errorMessage: expect.stringMatching(/unlock|repair/i) });
+    expect(await prisma.assignment.count({ where: { scheduleRunId: first.run.id } })).toBe(0);
+    expect(await prisma.assignment.findUniqueOrThrow({ where: { id: lockedAssignment.id } }))
+      .toMatchObject({ status: AssignmentStatus.DRAFT });
+    expect(await prisma.assignmentLock.count({ where: { assignmentId: lockedAssignment.id, releasedAt: null } })).toBe(1);
+    expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: locked.visit.id } })).status)
+      .not.toBe(VisitStatus.UNASSIGNED);
+  });
+
+  it('preserves a locked draft when eligibility rejects the solver proposal', async () => {
+    const locked = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07',
+      solverDate: '2027-03-03', timeLockReleasedAt: null,
+    });
+    const blocker = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    const lockedAssignment = await prisma.assignment.findFirstOrThrow({ where: { generatedVisitId: locked.visit.id } });
+    await prisma.assignment.create({ data: {
+      generatedVisitId: blocker.visit.id, branchId, branchCode: BranchCode.COLOMBO,
+      status: AssignmentStatus.PUBLISHED,
+      plannedStart: new Date('2027-03-03T10:00:00Z'),
+      plannedEnd: new Date('2027-03-03T11:30:00Z'),
+      crewMembers: { create: { employeeId, role: CrewRole.SUPERVISOR, isPmsSupervisor: true } },
+    } });
+
+    await expect(locked.service.execute(locked.run.id)).rejects.toMatchObject({
+      code: 'RESOURCE_CONFLICT', message: expect.stringMatching(/unlock|repair/i),
+    });
+    expect(await prisma.assignment.findUniqueOrThrow({ where: { id: lockedAssignment.id } }))
+      .toMatchObject({ status: AssignmentStatus.DRAFT });
+    expect(await prisma.assignmentLock.count({ where: { assignmentId: lockedAssignment.id, releasedAt: null } })).toBe(1);
+    expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: locked.visit.id } })).status)
+      .not.toBe(VisitStatus.UNASSIGNED);
+  });
+
+  it.each([VisitPlacement.ANCHORED, VisitPlacement.BOOKED])(
+    'rejects a same-date %s proposal when site hours shrink during solve', async (placement) => {
+      const f = await fixture({
+        placement, allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07',
+        solverDate: '2027-03-03',
+      });
+      await prisma.siteOperatingHours.create({ data: {
+        serviceSiteId: siteId, weekday: Weekday.WEDNESDAY,
+        opensAtMinute: 540, closesAtMinute: 1020,
+      } });
+      f.solve.mockImplementation(async (request: SolveRequest) => {
+        await prisma.siteOperatingHours.updateMany({
+          where: { serviceSiteId: siteId, weekday: Weekday.WEDNESDAY },
+          data: { opensAtMinute: 720 },
+        });
+        return f.responseFor(request);
+      });
+
+      await expect(f.service.execute(f.run.id)).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+      expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+    },
+  );
+
+  it('rejects a same-date proposal when the agreement weekday is removed during solve', async () => {
+    const f = await fixture({
+      allowedDays: [Weekday.WEDNESDAY], runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    f.solve.mockImplementation(async (request: SolveRequest) => {
+      await prisma.serviceAgreementDayRule.deleteMany({
+        where: { serviceAgreementId: f.agreement.id, weekday: Weekday.WEDNESDAY },
+      });
+      return f.responseFor(request);
+    });
+
+    await expect(f.service.execute(f.run.id)).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(await prisma.assignment.count({ where: { scheduleRunId: f.run.id } })).toBe(0);
+  });
+
+  it('keeps a BOOKED date while allowing a later legal time on that date', async () => {
+    const f = await fixture({
+      placement: VisitPlacement.BOOKED, allowedDays: [Weekday.THURSDAY],
+      runEnd: '2027-03-07', solverDate: '2027-03-03',
+    });
+    f.solve.mockImplementation(async (request: SolveRequest) => ({
+      ...f.responseFor(request), assignments: [{
+        visit_id: f.visit.id, employee_ids: [employeeId], vehicles: [],
+        start_minute: 660, scheduled_date: '2027-03-03',
+      }],
+    }));
+
+    await expect(f.service.execute(f.run.id)).resolves.toMatchObject({ scheduled: 1 });
+    expect(f.solve.mock.calls[0][0].visits[0].candidate_slots).toMatchObject([
+      { date: '2027-03-03', earliest_start_minute: 540, latest_start_minute: 930 },
+    ]);
+    expect((await prisma.generatedVisit.findUniqueOrThrow({ where: { id: f.visit.id } })).visitDate)
+      .toEqual(date('2027-03-03'));
+  });
+
   it('composes TIME, CREW, and SUPERVISOR locks against a real PostgreSQL replacement', async () => {
     const f = await fixture({
       allowedDays: [Weekday.WEDNESDAY, Weekday.THURSDAY], runEnd: '2027-03-07',

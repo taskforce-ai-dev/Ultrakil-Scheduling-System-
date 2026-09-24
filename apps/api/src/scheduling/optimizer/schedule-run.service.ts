@@ -17,6 +17,7 @@ import {
 
 import { AuditService } from '../../audit/audit.service';
 import { AuthenticatedUser } from '../../auth/auth.types';
+import { weekdayOf } from '../../catalog/schedule-preview';
 import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -34,7 +35,7 @@ import {
 import { SchedulerClient, SolveRequest } from './scheduler.client';
 import {
   lockScheduleResources,
-  assertScheduleSnapshot,
+  assertScheduleSnapshotRows,
   assertVisitRevision,
   lockScheduleVisits,
 } from './schedule-visit-lock';
@@ -161,6 +162,9 @@ interface SolveSnapshot {
 
 type SlotVisit = {
   visitDate: Date;
+  placement: VisitPlacement;
+  windowStartMinute: number;
+  windowEndMinute: number;
   durationMinutes: number;
   serviceAgreement: {
     startDate: Date;
@@ -184,8 +188,11 @@ function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
   const { allowedDays, preferredDays } = splitDayRules(
     visit.serviceAgreement.dayRules,
   );
-  return buildCandidateSlots({
-    allowedDays,
+  const booked = visit.placement === VisitPlacement.BOOKED;
+  const slots = buildCandidateSlots({
+    // The booked date is the customer's source commitment. It may override
+    // cadence and weekday selection, but never the site's time window.
+    allowedDays: booked ? [weekdayOf(visit.visitDate)] : allowedDays,
     preferredDays,
     siteWindows: visit.serviceAgreement.serviceSite.operatingHours.map((hours) => ({
       weekday: hours.weekday,
@@ -195,14 +202,25 @@ function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
     agreementStartMinute: visit.serviceAgreement.serviceWindowStartMinute,
     agreementEndMinute: visit.serviceAgreement.serviceWindowEndMinute,
     visitDate: visit.visitDate,
-    agreementStartDate: visit.serviceAgreement.startDate,
-    agreementEndDate: visit.serviceAgreement.endDate,
+    agreementStartDate: booked ? visit.visitDate : visit.serviceAgreement.startDate,
+    agreementEndDate: booked ? visit.visitDate : visit.serviceAgreement.endDate,
     frequencyUnit: visit.serviceAgreement.frequencyUnit,
     frequencyInterval: visit.serviceAgreement.frequencyInterval,
     durationMinutes: visit.durationMinutes,
-    from,
-    to,
+    from: booked ? visit.visitDate : from,
+    to: booked ? visit.visitDate : to,
   });
+  if (!booked) return slots;
+  return slots
+    .map((slot) => ({
+      ...slot,
+      earliestStartMinute: Math.max(slot.earliestStartMinute, visit.windowStartMinute),
+      latestStartMinute: Math.min(
+        slot.latestStartMinute,
+        visit.windowEndMinute - visit.durationMinutes,
+      ),
+    }))
+    .filter((slot) => slot.earliestStartMinute <= slot.latestStartMinute);
 }
 
 interface ProposedAssignment extends SolveSnapshot {
@@ -257,6 +275,11 @@ function parseDate(value: string): Date {
 
 function minuteOfDay(value: Date): number {
   return value.getUTCHours() * 60 + value.getUTCMinutes();
+}
+
+function minuteFromDayStart(value: Date, day: Date): number {
+  const start = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+  return Math.round((value.getTime() - start) / 60_000);
 }
 
 function isPrismaUniqueConstraint(error: unknown): boolean {
@@ -829,7 +852,7 @@ export class ScheduleRunService {
               : null,
           end_minute:
             lock.scope === LockScope.FULL || lock.scope === LockScope.TIME
-              ? minuteOfDay(live.plannedEnd)
+              ? minuteFromDayStart(live.plannedEnd, visit.visitDate)
               : null,
         });
       }
@@ -851,7 +874,7 @@ export class ScheduleRunService {
           assignment_id: assignment.id,
           scheduled_date: dateOnly(assignment.plannedStart),
           start_minute: minuteOfDay(assignment.plannedStart),
-          end_minute: minuteOfDay(assignment.plannedEnd),
+          end_minute: minuteFromDayStart(assignment.plannedEnd, assignment.plannedStart),
           employee_ids: assignment.crewMembers
             .map((member) => member.employeeId)
             .sort(),
@@ -998,7 +1021,7 @@ export class ScheduleRunService {
             ),
           ),
         ];
-        const pms = await this.prisma.employee.findMany({
+        const pms = await tx.employee.findMany({
           where: { id: { in: employeeIds } },
           select: { id: true, isPmsGrade: true },
         });
@@ -1012,54 +1035,75 @@ export class ScheduleRunService {
         if (!currentRun) {
           throw new AppException('RESOURCE_CONFLICT', 'The schedule run disappeared while it was being saved.', HttpStatus.CONFLICT, { runId });
         }
-        for (const entry of entries) {
-          await assertScheduleSnapshot(
-            tx,
-            entry.visitId,
-            entry.replaceAssignmentId,
-          );
-          const visit = await tx.generatedVisit.findUniqueOrThrow({
-            where: { id: entry.visitId },
-            select: {
-              updatedAt: true,
-              isManuallyAdjusted: true,
-              lockedAt: true,
-              visitDate: true,
-              durationMinutes: true,
-              placement: true,
-              assignments: {
-                select: {
-                  id: true,
-                  plannedStart: true,
-                  plannedEnd: true,
-                  crewMembers: { select: { employeeId: true, role: true, isPmsSupervisor: true } },
-                  vehicles: { select: { vehicleId: true, driverEmployeeId: true } },
-                  locks: {
-                    where: { releasedAt: null },
-                    select: { scope: true },
-                  },
+        // One post-lock read captures current cadence, opening hours, draft
+        // identity, published lineage, and active pins for the entire result.
+        // The same rows are used for every validation before any write begins.
+        const currentVisits = await tx.generatedVisit.findMany({
+          where: { id: { in: entries.map((entry) => entry.visitId) } },
+          select: {
+            id: true,
+            updatedAt: true,
+            isManuallyAdjusted: true,
+            lockedAt: true,
+            visitDate: true,
+            windowStartMinute: true,
+            windowEndMinute: true,
+            durationMinutes: true,
+            placement: true,
+            assignments: {
+              select: {
+                id: true,
+                status: true,
+                publishedAt: true,
+                _count: { select: { notificationOutboxEntries: true } },
+                plannedStart: true,
+                plannedEnd: true,
+                crewMembers: { select: { employeeId: true, role: true, isPmsSupervisor: true } },
+                vehicles: { select: { vehicleId: true, driverEmployeeId: true } },
+                locks: {
+                  where: { releasedAt: null },
+                  select: { scope: true },
                 },
               },
-              serviceAgreement: {
-                select: {
-                  startDate: true,
-                  endDate: true,
-                  frequencyUnit: true,
-                  frequencyInterval: true,
-                  serviceWindowStartMinute: true,
-                  serviceWindowEndMinute: true,
-                  dayRules: { select: { weekday: true, kind: true } },
-                  serviceSite: {
-                    select: {
-                      operatingHours: {
-                        select: { weekday: true, opensAtMinute: true, closesAtMinute: true },
-                      },
+            },
+            serviceAgreement: {
+              select: {
+                startDate: true,
+                endDate: true,
+                frequencyUnit: true,
+                frequencyInterval: true,
+                serviceWindowStartMinute: true,
+                serviceWindowEndMinute: true,
+                dayRules: { select: { weekday: true, kind: true } },
+                serviceSite: {
+                  select: {
+                    operatingHours: {
+                      select: { weekday: true, opensAtMinute: true, closesAtMinute: true },
                     },
                   },
                 },
               },
             },
-          });
+          },
+        });
+        const currentById = new Map(currentVisits.map((visit) => [visit.id, visit]));
+        const lockedAssignmentIds = new Set(
+          currentVisits.flatMap((visit) =>
+            visit.assignments.filter((assignment) => assignment.locks.length > 0)
+              .map((assignment) => assignment.id),
+          ),
+        );
+        for (const entry of entries) {
+          const visit = currentById.get(entry.visitId);
+          if (!visit) {
+            throw new AppException(
+              'RESOURCE_CONFLICT',
+              'A visit disappeared while this schedule was being saved. Refresh and run again.',
+              HttpStatus.CONFLICT,
+              { runId, visitId: entry.visitId },
+            );
+          }
+          assertScheduleSnapshotRows(entry.visitId, entry.replaceAssignmentId, visit.assignments);
           // Lock/unlock decisions also advance this revision under the same
           // visit lock, so a stale lock snapshot rejects the complete response.
           assertVisitRevision(
@@ -1078,10 +1122,11 @@ export class ScheduleRunService {
               { runId, visitId: entry.visitId },
             );
           }
+          const replaced = visit.assignments.find(
+            (assignment) => assignment.id === entry.replaceAssignmentId,
+          );
+          if (!('dto' in entry)) this.assertMayUnassign(runId, entry, lockedAssignmentIds);
           if ('dto' in entry) {
-            const replaced = visit.assignments.find(
-              (assignment) => assignment.id === entry.replaceAssignmentId,
-            );
             if (replaced) {
               const active = new Set(replaced.locks.map((lock) => lock.scope));
               const timePinned = active.has(LockScope.FULL) || active.has(LockScope.TIME);
@@ -1105,7 +1150,7 @@ export class ScheduleRunService {
                 (timePinned && (
                   entry.proposedVisit !== undefined ||
                   entry.dto.plannedStartMinute !== minuteOfDay(replaced.plannedStart) ||
-                  entry.dto.plannedEndMinute !== minuteOfDay(replaced.plannedEnd)
+                  entry.dto.plannedEndMinute !== minuteFromDayStart(replaced.plannedEnd, visit.visitDate)
                 )) ||
                 (crewPinned && JSON.stringify(sorted(replaced.crewMembers.map((member) => member.employeeId))) !==
                   JSON.stringify(sorted(entry.dto.crew.map((member) => member.employeeId)))) ||
@@ -1122,14 +1167,18 @@ export class ScheduleRunService {
               }
             }
           }
-          if ('proposedVisit' in entry && entry.proposedVisit) {
-            const target = entry.proposedVisit.visitDate;
-            const legal =
-              !Number.isNaN(target.getTime()) &&
-              visit.placement !== VisitPlacement.BOOKED &&
+          if ('dto' in entry) {
+            const target = entry.proposedVisit?.visitDate ?? visit.visitDate;
+            const validTarget = !Number.isNaN(target.getTime());
+            const sameDate = validTarget && dateOnly(target) === dateOnly(visit.visitDate);
+            const legal = validTarget &&
+              (sameDate || visit.placement !== VisitPlacement.BOOKED) &&
+              (!sameDate || (
+                entry.dto.plannedStartMinute >= visit.windowStartMinute &&
+                entry.dto.plannedEndMinute <= visit.windowEndMinute
+              )) &&
               candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd).some(
-                (slot) =>
-                  slot.date === dateOnly(target) &&
+                (slot) => slot.date === dateOnly(target) &&
                   entry.dto.plannedStartMinute >= slot.earliestStartMinute &&
                   entry.dto.plannedStartMinute <= slot.latestStartMinute,
               );
@@ -1222,7 +1271,7 @@ export class ScheduleRunService {
                   }),
                 ),
               },
-            ]);
+            ], lockedAssignmentIds);
             rejected += 1;
             continue;
           }
@@ -1237,7 +1286,7 @@ export class ScheduleRunService {
           }
           scheduled += 1;
         }
-        await this.recordUnassigned(tx, runId, unassigned);
+        await this.recordUnassigned(tx, runId, unassigned, lockedAssignmentIds);
         return this.finish(
           runId,
           scheduled,
@@ -1495,12 +1544,29 @@ export class ScheduleRunService {
     });
   }
 
+  private assertMayUnassign(
+    runId: string,
+    entry: UnassignedResult,
+    lockedAssignmentIds: Set<string>,
+  ) {
+    if (entry.replaceAssignmentId && lockedAssignmentIds.has(entry.replaceAssignmentId)) {
+      throw new AppException(
+        'RESOURCE_CONFLICT',
+        'A manager-locked assignment became infeasible. Keep it unchanged; a manager must unlock or repair it before rerunning the scheduler.',
+        HttpStatus.CONFLICT,
+        { runId, visitId: entry.visitId, assignmentId: entry.replaceAssignmentId },
+      );
+    }
+  }
+
   private async recordUnassigned(
     tx: Prisma.TransactionClient,
     runId: string,
     entries: UnassignedResult[],
+    lockedAssignmentIds: Set<string>,
   ) {
     for (const entry of entries) {
+      this.assertMayUnassign(runId, entry, lockedAssignmentIds);
       if (entry.replaceAssignmentId) {
         // Keep the rejected draft as history, but make it unpublishable in
         // the same transaction that puts its visit in the unassigned queue.
