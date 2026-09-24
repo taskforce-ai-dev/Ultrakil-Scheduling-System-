@@ -302,7 +302,15 @@ def solve(request: SolveRequest) -> SolveResponse:
 
     visits = sorted(request.visits, key=lambda v: v.id)
     if not visits:
-        return _solve_window(request)
+        return SolveResponse(
+            run_id=request.run_id,
+            status="OPTIMAL",
+            assignments=[],
+            unassigned=[],
+            solve_seconds=round(time.monotonic() - started, 3),
+            objective_value=0,
+            visits_considered=0,
+        )
 
     date_pinned = {
         lock.visit_id for lock in request.locks if lock.scope in ("FULL", "TIME")

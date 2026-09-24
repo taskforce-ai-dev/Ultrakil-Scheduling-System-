@@ -78,6 +78,13 @@ def request(**overrides) -> SolveRequest:
 
 
 class TestHappyPath:
+    def test_empty_request_returns_an_empty_schedule(self):
+        result = solve(request(visits=[]))
+
+        assert result.assignments == []
+        assert result.unassigned == []
+        assert result.visits_considered == 0
+
     def test_staffs_a_visit_with_an_eligible_crew(self):
         result = solve(request())
 
