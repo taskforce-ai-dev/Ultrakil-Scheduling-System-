@@ -14,11 +14,14 @@ details can differ from these examples, but the workflows and labels match the
 current release.
 
 **Current staging baseline (24 September 2026):** application release
-`6d7724ac3067480f9c02907be5c32cd585fefb93` plus ingress hotfix
-`2e678d357afce56989d2b4af6659e139496c3cd9`. All 11 manager routes passed the
-authenticated deployed smoke. Before a production handover, management still
-needs to confirm the uncertain site branches and the minimum different-site
-travel-time policy described in [Known limitations](known-limitations.md).
+`500daf80a85aea18ca5e5d74d2552739b7e3fb57` (PR #75) plus ingress update
+`a8174accb7d99248ba415fe78bb227c49aac23e9` (PR #76). All 11 manager routes
+passed the authenticated deployed smoke with zero console, page or API HTTP
+errors. The approved repair replaced 11 future published assignments and the
+post-repair audit found zero employee or vehicle overlaps, zero short crews,
+zero missing PMS supervisors and at most one vehicle per assignment. Before a
+production handover, management still needs to confirm uncertain site branches
+and real opening hours described in [Known limitations](known-limitations.md).
 
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS

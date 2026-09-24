@@ -5,13 +5,12 @@ before/during the pilot, versus what's tracked as an engineering follow-up.
 
 ## Current staging release — 24 September 2026
 
-The current application release is PR #72 merged as
-`6d7724ac3067480f9c02907be5c32cd585fefb93`, with the Caddy-only PR #73
-hotfix merged as `2e678d357afce56989d2b4af6659e139496c3cd9`. The exact-head pipelines
+The current application release is PR #75 merged as
+`500daf80a85aea18ca5e5d74d2552739b7e3fb57`, with the Caddy-only PR #76
+update merged as `a8174accb7d99248ba415fe78bb227c49aac23e9`. The exact-head pipelines
 passed, all six staging services are healthy with zero restarts, and an
 authenticated read-only browser smoke loaded all 11 manager routes with zero
-page errors, failed responses, unexpected console errors or unexpected console
-warnings.
+page exceptions, API HTTP errors or console errors.
 
 This proves the deployed release is ready for management testing. It does not
 close these operational decisions:
@@ -21,16 +20,18 @@ close these operational decisions:
    cannot close this automatically: 367 of those sites have no address and 174
    carry only a site name; only 41 carry an address or region string. They use
    the disclosed Colombo fallback until management confirms the correct branch.
-2. **Different-site travel time:** four published assignments currently begin
-   immediately after another job using at least one of the same resources at a
-   different site. A write-free 60-minute repair preview is valid for all four,
-   with no locks, conflicts, new overlaps or window violations, but it remains
-   unapplied pending Technical Director policy approval. Its plan hash is
-   `9a6df117641d38ef8d0078d3e58bb2ffc60636af421dbe03add7748476072bd1`.
-3. **Staffing horizon:** 1,501 future visits are still `PENDING`/Planned rather
-   than assigned. The current live assignments have zero short crews, zero
-   missing PMS supervisors and at most one vehicle each, so this is a staffing
-   cadence decision rather than evidence that more capacity is required.
+2. **Different-site travel time:** the Technical Director approved the
+   60-minute different-site rule and exact repair plan
+   `a34167e60fd3b47fb210d88ba372dd3687e47c4f113f407dd08c38583b414485`.
+   The repair replaced 11 future assignments and withdrew none. Post-repair,
+   all 150 published candidates were checked: zero current/future findings
+   remain selectable, employee overlap/travel pairs are zero, vehicle
+   overlap/travel pairs are zero, and 55 historical findings remain immutable.
+3. **Staffing horizon:** the repair covered already-published assignments; it
+   does not claim every future planned visit has already been dispatched. The
+   current live assignments have zero short crews, zero missing PMS supervisors
+   and at most one vehicle each, so no additional capacity is justified by the
+   current/future published workload.
 4. **Synthetic staging capacity:** the existing visible staging-only team is
    two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. No further
    synthetic resources should be added unless a new count-only run proves an
@@ -39,6 +40,14 @@ close these operational decisions:
    identity-safe in logs, but no failed-attempt throttle is implemented yet.
    Controlled staging UAT may continue; production sign-off must include an
    approved throttling policy and verified implementation.
+
+The final post-repair backup is
+`ultrakil-20260924T172439Z-b15614122c24.dump` with SHA-256
+`ed9bf91f6bcdb79fd06f6eb5a49919f6910311d9ff7cd076a5f11582b66105d1`.
+It passed manifest/archive verification and restored into an isolated marked
+database with 27 required tables, 18 successful migrations, zero failed
+migrations, zero duplicate outbox keys and the same clean scheduling
+invariants. The disposable restore database was removed after verification.
 
 The detailed findings below are the historical O08 record. Where an older
 commit, count or deployment is quoted, this current-release section takes
