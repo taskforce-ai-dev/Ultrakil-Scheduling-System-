@@ -157,15 +157,59 @@ test('Caddy runbook records host validation as author evidence rather than revie
   assert.match(runbook, /not an independent-reviewer\s+attestation/i);
 });
 
+function runbookShellBlock(runbook, anchor) {
+  const anchorOffset = runbook.indexOf(anchor);
+  assert.notEqual(anchorOffset, -1, `missing runbook section: ${anchor}`);
+  const fenceStart = runbook.indexOf('```bash\n', anchorOffset);
+  const fenceEnd = runbook.indexOf('\n```', fenceStart);
+  assert.notEqual(fenceStart, -1, `missing shell block after: ${anchor}`);
+  assert.notEqual(fenceEnd, -1, `unterminated shell block after: ${anchor}`);
+  return runbook.slice(fenceStart + '```bash\n'.length, fenceEnd).split('\n');
+}
+
+function commandIndex(lines, command, from = 0) {
+  const index = lines.indexOf(command, from);
+  assert.notEqual(index, -1, `missing command: ${command}`);
+  return index;
+}
+
+function expectOrderedCommands(lines, commands) {
+  let previous = -1;
+  for (const command of commands) {
+    const index = commandIndex(lines, command, previous + 1);
+    assert.ok(index > previous, `expected after ${lines[previous]}: ${command}`);
+    previous = index;
+  }
+}
+
 test('Caddy runbook snapshots and restores a matching wrapper-fragment pair across first and later rollbacks', () => {
   const runbook = readFileSync(stagingRunbookPath, 'utf8');
-  assert.match(runbook, /\.ultrakil-previous\/Caddyfile/);
-  assert.match(runbook, /\.ultrakil-previous\/Caddyfile\.ultrakil/);
-  assert.match(runbook, /\.ultrakil-previous\/fragment-absent/);
-  assert.match(runbook, /cp -a \/etc\/caddy\/Caddyfile \/etc\/caddy\/\.ultrakil-previous\/Caddyfile/);
-  assert.match(runbook, /cp -a \/etc\/caddy\/Caddyfile\.ultrakil \/etc\/caddy\/\.ultrakil-previous\/Caddyfile\.ultrakil/);
-  assert.match(runbook, /rm -f \/etc\/caddy\/Caddyfile\.ultrakil/);
-  assert.match(runbook, /No\s+reload occurs between replacing the fragment and wrapper/i);
-  assert.match(runbook, /cp -a \/etc\/caddy\/\.ultrakil-previous\/Caddyfile\.ultrakil \/etc\/caddy\/Caddyfile\.ultrakil/);
-  assert.match(runbook, /cp -a \/etc\/caddy\/\.ultrakil-previous\/Caddyfile \/etc\/caddy\/Caddyfile/);
+  const deploy = runbookShellBlock(runbook, 'For an UltraKIL-only host, install and reload only during a release window:');
+  const rollback = runbookShellBlock(runbook, 'restore the matching pre-change wrapper/fragment snapshot');
+
+  const createSnapshot = 'sudo install -d -o root -g root -m 0700 /etc/caddy/.ultrakil-candidate /etc/caddy/.ultrakil-previous';
+  const snapshotWrapper = 'sudo cp -a /etc/caddy/Caddyfile /etc/caddy/.ultrakil-previous/Caddyfile';
+  const fragmentExists = 'if sudo test -e /etc/caddy/Caddyfile.ultrakil; then';
+  const snapshotFragment = '  sudo cp -a /etc/caddy/Caddyfile.ultrakil /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil';
+  const firstDeployMarker = '  sudo install -o root -g root -m 0600 /dev/null /etc/caddy/.ultrakil-previous/fragment-absent';
+  const validateSnapshot = 'sudo caddy validate --config /etc/caddy/.ultrakil-previous/Caddyfile --adapter caddyfile';
+  const installFragment = 'sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil';
+  const installWrapper = 'sudo install -o root -g root -m 0644 /etc/caddy/.ultrakil-candidate/Caddyfile /etc/caddy/Caddyfile';
+  const validateLive = 'sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile';
+  const reload = 'sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile';
+
+  expectOrderedCommands(deploy, [createSnapshot, snapshotWrapper, fragmentExists, snapshotFragment, 'else', firstDeployMarker, 'fi', validateSnapshot, installFragment, installWrapper, validateLive, reload]);
+  assert.equal(deploy.filter(line => line === reload).length, 1, 'deploy must reload exactly once after both installs');
+  assert.ok(commandIndex(deploy, snapshotFragment) < commandIndex(deploy, 'else'), 'existing fragment must be copied before the absent-fragment branch');
+  assert.ok(commandIndex(deploy, firstDeployMarker) > commandIndex(deploy, 'else'), 'absence marker must only be created when the old fragment is absent');
+
+  const markerExists = 'if sudo test -f /etc/caddy/.ultrakil-previous/fragment-absent; then';
+  const removeIntroducedFragment = '  sudo rm -f /etc/caddy/Caddyfile.ultrakil';
+  const restoreFragment = '  sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil';
+  const restoreWrapper = 'sudo cp -a /etc/caddy/.ultrakil-previous/Caddyfile /etc/caddy/Caddyfile';
+
+  expectOrderedCommands(rollback, [validateSnapshot, markerExists, removeIntroducedFragment, 'else', restoreFragment, 'fi', restoreWrapper, validateLive, reload]);
+  assert.equal(rollback.filter(line => line === reload).length, 1, 'rollback must reload exactly once after both restores');
+  assert.ok(commandIndex(rollback, removeIntroducedFragment) < commandIndex(rollback, 'else'), 'marker branch must remove a first-deploy fragment');
+  assert.ok(commandIndex(rollback, restoreFragment) > commandIndex(rollback, 'else'), 'non-marker branch must restore the prior fragment');
 });
