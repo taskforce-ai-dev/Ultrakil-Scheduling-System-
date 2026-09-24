@@ -17,6 +17,7 @@ import { toDateOnly } from '../../catalog/schedule-preview';
 import { hashCanonical } from '../../common/canonical-hash';
 import { AppException } from '../../common/errors/app.exception';
 import { isUniqueConflict } from '../../common/prisma-errors';
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Conflict, sortConflicts } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
@@ -605,14 +606,22 @@ export class PublishedAssignmentRepairService {
         const right = replacements[rightIndex];
         const leftSource = sources.get(left.sourceAssignmentId)!;
         const rightSource = sources.get(right.sourceAssignmentId)!;
-        if (
-          !absoluteWindowsOverlap(
+        const overlap = absoluteWindowsOverlap(
+          leftSource.generatedVisit.visitDate,
+          left.replacement,
+          rightSource.generatedVisit.visitDate,
+          right.replacement,
+        );
+        const travelGapTooShort =
+          leftSource.generatedVisit.serviceAgreement.serviceSiteId !==
+            rightSource.generatedVisit.serviceAgreement.serviceSiteId &&
+          absoluteWindowGapMinutes(
             leftSource.generatedVisit.visitDate,
             left.replacement,
             rightSource.generatedVisit.visitDate,
             right.replacement,
-          )
-        ) {
+          ) < DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES;
+        if (!overlap && !travelGapTooShort) {
           continue;
         }
         const employeeIds = intersection(
@@ -625,9 +634,15 @@ export class PublishedAssignmentRepairService {
         );
         if (employeeIds.length > 0) {
           this.pushPairConflict(items, left, right, {
-            code: 'EMPLOYEE_DOUBLE_BOOKED',
-            message: 'The repair batch assigns the same crew member to overlapping visits.',
-            remediation: 'Use different crew or non-overlapping times before applying the repair.',
+            code: overlap
+              ? 'EMPLOYEE_DOUBLE_BOOKED'
+              : 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT',
+            message: overlap
+              ? 'The repair batch assigns the same crew member to overlapping visits.'
+              : `The repair batch gives the same crew member less than ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes between different sites.`,
+            remediation: overlap
+              ? 'Use different crew or non-overlapping times before applying the repair.'
+              : 'Use different crew or leave enough travel time before applying the repair.',
             resources: {
               employeeIds,
               assignmentIds: [left.sourceAssignmentId, right.sourceAssignmentId],
@@ -636,10 +651,15 @@ export class PublishedAssignmentRepairService {
         }
         if (vehicleIds.length > 0) {
           this.pushPairConflict(items, left, right, {
-            code: 'VEHICLE_DOUBLE_BOOKED',
-            message: 'The repair batch assigns the same vehicle to overlapping visits.',
-            remediation:
-              'Use different vehicles or non-overlapping times before applying the repair.',
+            code: overlap
+              ? 'VEHICLE_DOUBLE_BOOKED'
+              : 'VEHICLE_TRAVEL_GAP_TOO_SHORT',
+            message: overlap
+              ? 'The repair batch assigns the same vehicle to overlapping visits.'
+              : `The repair batch gives the same vehicle less than ${DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES} minutes between different sites.`,
+            remediation: overlap
+              ? 'Use different vehicles or non-overlapping times before applying the repair.'
+              : 'Use different vehicles or leave enough travel time before applying the repair.',
             resources: {
               vehicleIds,
               assignmentIds: [left.sourceAssignmentId, right.sourceAssignmentId],
@@ -1112,6 +1132,22 @@ function absoluteWindowsOverlap(
   const rightStart = atMinute(rightDate, right.plannedStartMinute).getTime();
   const rightEnd = atMinute(rightDate, right.plannedEndMinute).getTime();
   return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+function absoluteWindowGapMinutes(
+  leftDate: Date,
+  left: RepairReplacementInput,
+  rightDate: Date,
+  right: RepairReplacementInput,
+): number {
+  const leftStart = atMinute(leftDate, left.plannedStartMinute).getTime();
+  const leftEnd = atMinute(leftDate, left.plannedEndMinute).getTime();
+  const rightStart = atMinute(rightDate, right.plannedStartMinute).getTime();
+  const rightEnd = atMinute(rightDate, right.plannedEndMinute).getTime();
+  if (leftStart < rightEnd && rightStart < leftEnd) return 0;
+  return Math.max(leftStart, rightStart) - Math.min(leftEnd, rightEnd) > 0
+    ? (Math.max(leftStart, rightStart) - Math.min(leftEnd, rightEnd)) / 60_000
+    : 0;
 }
 
 function intersection(left: string[], right: string[]): string[] {

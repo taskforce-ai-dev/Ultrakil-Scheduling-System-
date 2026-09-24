@@ -22,6 +22,7 @@ import { AppException } from '../../common/errors/app.exception';
 import { lockAgreementRows } from '../../common/locks/agreement-lock';
 import { lockSiteRows } from '../../common/locks/site-lock';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES } from '../../config/constants';
 import { crewMinutesOf } from '../capacity';
 import { Conflict } from '../eligibility/conflict-codes';
 import { EligibilityService } from '../eligibility/eligibility.service';
@@ -152,6 +153,24 @@ const VEHICLE_FOR_SOLVE = {
 
 type VehicleForSolve = Prisma.VehicleGetPayload<{
   include: typeof VEHICLE_FOR_SOLVE;
+}>;
+
+const ASSIGNMENT_RESERVATION_FOR_SOLVE = {
+  id: true,
+  generatedVisitId: true,
+  plannedStart: true,
+  plannedEnd: true,
+  generatedVisit: {
+    select: {
+      serviceAgreement: { select: { serviceSiteId: true } },
+    },
+  },
+  crewMembers: { select: { employeeId: true } },
+  vehicles: { select: { vehicleId: true } },
+} satisfies Prisma.AssignmentSelect;
+
+type AssignmentReservationForSolve = Prisma.AssignmentGetPayload<{
+  select: typeof ASSIGNMENT_RESERVATION_FOR_SOLVE;
 }>;
 
 interface SolveSnapshot {
@@ -644,7 +663,19 @@ export class ScheduleRunService {
     await progress(20);
     if (await this.isCancelled(runId)) return this.markCancelled(runId, lease);
 
-    const [employees, vehicles] = await Promise.all([
+    const travelBufferMilliseconds =
+      DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES * 60_000;
+    const reservationRangeStart = new Date(
+      run.rangeStart.getTime() - travelBufferMilliseconds,
+    );
+    const dayAfterRangeEnd = new Date(run.rangeEnd);
+    dayAfterRangeEnd.setUTCDate(dayAfterRangeEnd.getUTCDate() + 1);
+    const reservationRangeEndExclusive = new Date(
+      dayAfterRangeEnd.getTime() + travelBufferMilliseconds,
+    );
+    const solveVisitIds = visits.map((visit) => visit.id).sort();
+
+    const [employees, vehicles, externalReservations] = await Promise.all([
       this.prisma.employee.findMany({
         where: { isActive: true, ...branchFilter },
         include: EMPLOYEE_FOR_SOLVE,
@@ -655,6 +686,18 @@ export class ScheduleRunService {
         include: VEHICLE_FOR_SOLVE,
         orderBy: { id: 'asc' },
       }),
+      solveVisitIds.length === 0
+        ? Promise.resolve([] as AssignmentReservationForSolve[])
+        : this.prisma.assignment.findMany({
+            where: {
+              generatedVisitId: { notIn: solveVisitIds },
+              status: { in: LIVE_STATUSES },
+              plannedStart: { lt: reservationRangeEndExclusive },
+              plannedEnd: { gt: reservationRangeStart },
+            },
+            select: ASSIGNMENT_RESERVATION_FOR_SOLVE,
+            orderBy: { id: 'asc' },
+          }),
     ]);
 
     // A sibling can be omitted from this solve because it is published,
@@ -692,6 +735,7 @@ export class ScheduleRunService {
         to: run.rangeEnd,
       },
       siblingKeys,
+      externalReservations,
     );
 
     await this.updateLeasedRun(runId, lease, {
@@ -882,6 +926,7 @@ export class ScheduleRunService {
       visitDate: Date;
       windowStartMinute: number;
     }[] = [],
+    externalReservations: AssignmentReservationForSolve[] = [],
   ): SolveRequest {
     const locks: SolveRequest['locks'] = [];
     const existing: SolveRequest['existing'] = [];
@@ -960,6 +1005,7 @@ export class ScheduleRunService {
           scheduled_date: dateOnly(assignment.plannedStart),
           start_minute: minuteOfDay(assignment.plannedStart),
           end_minute: minuteFromDayStart(assignment.plannedEnd, assignment.plannedStart),
+          service_site_id: visit.serviceAgreement.serviceSiteId,
           employee_ids: assignment.crewMembers
             .map((member) => member.employeeId)
             .sort(),
@@ -970,8 +1016,40 @@ export class ScheduleRunService {
       }
     }
 
+    const reservationIds = new Set(
+      reservations.map((reservation) => reservation.assignment_id),
+    );
+    for (const assignment of externalReservations) {
+      if (
+        excludedReservations.has(assignment.id) ||
+        reservationIds.has(assignment.id)
+      ) {
+        continue;
+      }
+      reservations.push({
+        assignment_id: assignment.id,
+        scheduled_date: dateOnly(assignment.plannedStart),
+        start_minute: minuteOfDay(assignment.plannedStart),
+        end_minute: minuteFromDayStart(
+          assignment.plannedEnd,
+          assignment.plannedStart,
+        ),
+        service_site_id:
+          assignment.generatedVisit.serviceAgreement.serviceSiteId,
+        employee_ids: assignment.crewMembers
+          .map((member) => member.employeeId)
+          .sort(),
+        vehicle_ids: assignment.vehicles
+          .map((vehicle) => vehicle.vehicleId)
+          .sort(),
+      });
+      reservationIds.add(assignment.id);
+    }
+
     return {
       run_id: runId,
+      minimum_travel_buffer_minutes:
+        DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES,
       visits: solvable.map((visit) => {
         // The day a visit was generated on is one legal option among several,
         // not a decision. Handing the solver all of them is what lets it settle

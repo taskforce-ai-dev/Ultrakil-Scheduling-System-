@@ -295,7 +295,7 @@ describe('eligibility engine', () => {
     it('accepts a crew whose other job finishes before this one starts', () => {
       const busy = employee({
         ...TECHNICIAN,
-        busy: [{ assignmentId: 'a-1', startMinute: 7 * 60, endMinute: 9 * 60 }],
+        busy: [{ assignmentId: 'a-1', startMinute: 7 * 60, endMinute: 9 * 60, serviceSiteId: SITE_ID }],
       });
 
       // Touching is not overlapping — 09:00 to 09:00 is fine.
@@ -310,7 +310,7 @@ describe('eligibility engine', () => {
     it('refuses an employee already out on an overlapping job', () => {
       const busy = employee({
         ...TECHNICIAN,
-        busy: [{ assignmentId: 'a-1', startMinute: 10 * 60, endMinute: 12 * 60 }],
+        busy: [{ assignmentId: 'a-1', startMinute: 10 * 60, endMinute: 12 * 60, serviceSiteId: SITE_ID }],
       });
 
       const result = evaluateAssignment(
@@ -324,7 +324,7 @@ describe('eligibility engine', () => {
 
     it('refuses a vehicle already out on an overlapping job', () => {
       const busyVan = vehicle({
-        busy: [{ assignmentId: 'a-2', startMinute: 10 * 60, endMinute: 12 * 60 }],
+        busy: [{ assignmentId: 'a-2', startMinute: 10 * 60, endMinute: 12 * 60, serviceSiteId: SITE_ID }],
       });
 
       const result = evaluateAssignment(
@@ -336,6 +336,112 @@ describe('eligibility engine', () => {
       );
 
       expect(codesOf(result)).toContain('VEHICLE_DOUBLE_BOOKED');
+    });
+
+    it('refuses an employee who cannot reach a different site before the next job', () => {
+      const busy = employee({
+        ...TECHNICIAN,
+        busy: [{
+          assignmentId: 'a-3',
+          startMinute: 7 * 60,
+          endMinute: 9 * 60,
+          serviceSiteId: 'site-2',
+        }],
+      });
+
+      const result = evaluateAssignment(
+        proposal(),
+        context({ employees: [SUPERVISOR, busy] }),
+      );
+
+      expect(codesOf(result)).toContain('EMPLOYEE_TRAVEL_GAP_TOO_SHORT');
+      expect(messageOf(result, 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT')).toContain('60 minutes');
+      expect(
+        result.conflicts.find(
+          (conflict) => conflict.code === 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT',
+        )?.resources.assignmentIds,
+      ).toEqual(['a-3']);
+    });
+
+    it('allows an employee to start immediately at the same service site', () => {
+      const busy = employee({
+        ...TECHNICIAN,
+        busy: [{
+          assignmentId: 'a-4',
+          startMinute: 7 * 60,
+          endMinute: 9 * 60,
+          serviceSiteId: SITE_ID,
+        }],
+      });
+
+      const result = evaluateAssignment(
+        proposal(),
+        context({ employees: [SUPERVISOR, busy] }),
+      );
+
+      expect(result.isEligible).toBe(true);
+    });
+
+    it('allows an employee with exactly sixty minutes between different sites', () => {
+      const busy = employee({
+        ...TECHNICIAN,
+        busy: [{
+          assignmentId: 'a-5',
+          startMinute: 6 * 60,
+          endMinute: 8 * 60,
+          serviceSiteId: 'site-2',
+        }],
+      });
+
+      const result = evaluateAssignment(
+        proposal(),
+        context({ employees: [SUPERVISOR, busy] }),
+      );
+
+      expect(result.isEligible).toBe(true);
+    });
+
+    it('refuses a vehicle that cannot reach a different site before the next job', () => {
+      const busyVan = vehicle({
+        busy: [{
+          assignmentId: 'a-6',
+          startMinute: 7 * 60,
+          endMinute: 9 * 60,
+          serviceSiteId: 'site-2',
+        }],
+      });
+
+      const result = evaluateAssignment(
+        proposal({ vehicles: [{ vehicleId: busyVan.id, driverEmployeeId: SUPERVISOR.id }] }),
+        context({
+          employees: [{ ...SUPERVISOR, authorizedVehicleIds: [busyVan.id] }, TECHNICIAN],
+          vehicles: [busyVan],
+        }),
+      );
+
+      expect(codesOf(result)).toContain('VEHICLE_TRAVEL_GAP_TOO_SHORT');
+    });
+
+    it('keeps the travel gap across midnight', () => {
+      const previousDay = employee({
+        ...TECHNICIAN,
+        busy: [{
+          assignmentId: 'a-7',
+          startMinute: -60,
+          endMinute: 0,
+          serviceSiteId: 'site-2',
+        }],
+      });
+
+      const result = evaluateAssignment(
+        proposal({ plannedStartMinute: 0, plannedEndMinute: 60 }),
+        context({
+          visit: visit({ windowStartMinute: 0, windowEndMinute: 120, durationMinutes: 60 }),
+          employees: [SUPERVISOR, previousDay],
+        }),
+      );
+
+      expect(codesOf(result)).toContain('EMPLOYEE_TRAVEL_GAP_TOO_SHORT');
     });
   });
 

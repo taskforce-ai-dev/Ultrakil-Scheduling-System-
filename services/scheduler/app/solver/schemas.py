@@ -139,6 +139,7 @@ class ReservationInput(BaseModel):
     scheduled_date: str
     start_minute: int
     end_minute: int
+    service_site_id: str | None = None
     employee_ids: list[str] = Field(default_factory=list)
     vehicle_ids: list[str] = Field(default_factory=list)
 
@@ -154,6 +155,8 @@ class SolveRequest(BaseModel):
     """Published work held fixed while draft work is re-solved."""
     excluded_reservation_assignment_ids: list[str] = Field(default_factory=list)
     """Repair callers may omit only the exact predecessor they supersede."""
+    minimum_travel_buffer_minutes: int = Field(default=60, ge=0, le=1440)
+    """Required between consecutive jobs at different known service sites."""
     time_limit_seconds: float = Field(default=20.0, ge=0.5, le=300.0)
     """Fixed seed and a single worker keep the same request reproducible.
     Managers rerun a schedule and compare; a different answer each time from

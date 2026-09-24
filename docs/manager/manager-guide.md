@@ -13,6 +13,13 @@ evidence retained only in the protected VPS release folder. Small visual
 details can differ from these examples, but the workflows and labels match the
 current release.
 
+**Current staging baseline (24 September 2026):** application release
+`6d7724ac3067480f9c02907be5c32cd585fefb93` plus ingress hotfix
+`2e678d357afce56989d2b4af6659e139496c3cd9`. All 11 manager routes passed the
+authenticated deployed smoke. Before a production handover, management still
+needs to confirm the uncertain site branches and the minimum different-site
+travel-time policy described in [Known limitations](known-limitations.md).
+
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS
 supervisors don't have a mobile view. That's planned for Phase 2, described
@@ -339,6 +346,7 @@ You never have to guess.
 | **Unavailable vehicle** `VEHICLE_CAPACITY_EXCEEDED` | The vehicle's seat count is smaller than the whole on-site crew. | Replace it with one vehicle large enough for the full crew. |
 | **Unavailable vehicle** `TOO_MANY_VEHICLES` | More than one vehicle is assigned to the visit. | Keep exactly one suitable vehicle and release the others. The current release does not split a crew across multiple vehicles. |
 | **Employee / Vehicle overlap** `EMPLOYEE_DOUBLE_BOOKED` / `VEHICLE_DOUBLE_BOOKED` | This person or vehicle is already committed elsewhere at an overlapping time. | Assign someone/something else, or move one of the two visits. |
+| **Employee / Vehicle travel gap** `EMPLOYEE_TRAVEL_GAP_TOO_SHORT` / `VEHICLE_TRAVEL_GAP_TOO_SHORT` | This person or vehicle has less than 60 minutes to move between different service sites. Same-site jobs may follow immediately. | Move one visit by enough time, or choose a different available person or vehicle. |
 
 None of these are colour-only — every one carries text, so they read
 correctly even in black-and-white or for a colour-blind reader.

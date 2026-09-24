@@ -7,8 +7,12 @@ refuses to schedule and explains why. Total time: under 5 minutes.
 The steps below use fabricated examples so this script is safe to share. Run
 them on the current staging portal at `https://ultrakil.taskforceai.tech`.
 The assignment-save timeout and reopen self-conflict found during the earlier
-pilot were fixed before the current release and reverified against deployed
-commit `b694823`.
+pilot were fixed before the current release. The current application release
+is `6d7724ac3067480f9c02907be5c32cd585fefb93`, with ingress hotfix
+`2e678d357afce56989d2b4af6659e139496c3cd9`; its authenticated deployed smoke
+loaded all 11 manager routes without an unexpected browser or request failure.
+Use a designated staging test visit for any save/publish demonstration, and do
+not alter a real published assignment outside an approved repair plan.
 
 ---
 

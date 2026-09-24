@@ -41,6 +41,7 @@ let http: string;
 let token: string;
 let colomboId: string;
 let kandyId: string;
+let otherAgreementId: string;
 const agreementIds: string[] = [];
 const customerIds: string[] = [];
 const siteIds: string[] = [];
@@ -81,8 +82,11 @@ async function vehicle(label: string, branchId: string | null = colomboId) {
   return row;
 }
 
-async function visit(date: string, windowStartMinute: number) {
-  const agreementId = agreementIds[0];
+async function visit(
+  date: string,
+  windowStartMinute: number,
+  agreementId = agreementIds[0],
+) {
   if (!agreementId) throw new Error('Candidate fixture agreement was not created.');
   const row = await prisma.generatedVisit.create({
     data: {
@@ -229,6 +233,35 @@ beforeAll(async () => {
     },
   });
   agreementIds.push(agreement.id);
+
+  const otherSite = await prisma.serviceSite.create({
+    data: {
+      customerId: customer.id,
+      name: `Candidate Other Site ${suffix}`,
+      branchId: colomboId,
+      branchCode: BranchCode.COLOMBO,
+    },
+  });
+  siteIds.push(otherSite.id);
+  const otherAgreement = await prisma.serviceAgreement.create({
+    data: {
+      customerId: customer.id,
+      serviceSiteId: otherSite.id,
+      jobTypeId: jobType.id,
+      branchId: colomboId,
+      branchCode: BranchCode.COLOMBO,
+      frequencyCount: 1,
+      frequencyUnit: FrequencyUnit.WEEK,
+      crewSize: 1,
+      durationMinutes: 60,
+      serviceWindowStartMinute: 0,
+      serviceWindowEndMinute: 1440,
+      startDate: at('2034-02-01'),
+      status: AgreementStatus.ACTIVE,
+    },
+  });
+  otherAgreementId = otherAgreement.id;
+  agreementIds.push(otherAgreement.id);
 });
 
 afterAll(async () => {
@@ -452,4 +485,97 @@ it('revalidates authoritatively when a resource is booked after the advisory rea
   expect(assignment.body.details.conflicts.map((row: { code: string }) => row.code))
     .toContain('EMPLOYEE_DOUBLE_BOOKED');
   expect(await prisma.assignment.count({ where: { generatedVisitId: target.id } })).toBe(0);
+});
+
+it('requires sixty minutes between different sites in candidates and authoritative assignment', async () => {
+  const date = '2034-02-04';
+  const [target, reservedVisit] = await Promise.all([
+    visit(date, 30),
+    visit(date, 31, otherAgreementId),
+  ]);
+  const worker = await employee('travel-gap');
+  const van = await vehicle('travel-gap');
+  await prisma.vehicleAuthorization.create({
+    data: { employeeId: worker.id, vehicleId: van.id },
+  });
+  await reservation({
+    visitId: reservedVisit.id,
+    date,
+    start: 9 * 60,
+    end: 10 * 60,
+    employeeId: worker.id,
+    vehicleId: van.id,
+  });
+
+  const candidates = await request(http)
+    .post(`/api/visits/${target.id}/assignment/candidates`)
+    .set(auth())
+    .send({ plannedStartMinute: 10 * 60, plannedEndMinute: 11 * 60 });
+  expect(candidates.status).toBe(200);
+  expect(candidates.body.employees.find((row: { id: string }) => row.id === worker.id))
+    .toMatchObject({
+      isAvailable: false,
+      unavailableReason: { code: 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT' },
+    });
+  expect(candidates.body.vehicles.find((row: { id: string }) => row.id === van.id))
+    .toMatchObject({
+      isAvailable: false,
+      unavailableReason: { code: 'VEHICLE_TRAVEL_GAP_TOO_SHORT' },
+    });
+
+  const refused = await request(http)
+    .put(`/api/visits/${target.id}/assignment`)
+    .set(auth())
+    .send({
+      plannedStartMinute: 10 * 60,
+      plannedEndMinute: 11 * 60,
+      crew: [{ employeeId: worker.id, role: CrewRole.SUPERVISOR }],
+      vehicles: [{ vehicleId: van.id, driverEmployeeId: worker.id }],
+    });
+  expect(refused.status).toBe(409);
+  expect(refused.body.details.conflicts.map((row: { code: string }) => row.code))
+    .toEqual(expect.arrayContaining([
+      'EMPLOYEE_TRAVEL_GAP_TOO_SHORT',
+      'VEHICLE_TRAVEL_GAP_TOO_SHORT',
+    ]));
+
+  const allowed = await request(http)
+    .put(`/api/visits/${target.id}/assignment`)
+    .set(auth())
+    .send({
+      plannedStartMinute: 11 * 60,
+      plannedEndMinute: 12 * 60,
+      crew: [{ employeeId: worker.id, role: CrewRole.SUPERVISOR }],
+      vehicles: [{ vehicleId: van.id, driverEmployeeId: worker.id }],
+    });
+  expect(allowed.status).toBe(200);
+});
+
+it('carries the different-site travel guard across midnight', async () => {
+  const previousDate = '2034-02-05';
+  const targetDate = '2034-02-06';
+  const [target, reservedVisit] = await Promise.all([
+    visit(targetDate, 40),
+    visit(previousDate, 41, otherAgreementId),
+  ]);
+  const worker = await employee('travel-midnight');
+  await reservation({
+    visitId: reservedVisit.id,
+    date: previousDate,
+    start: 23 * 60,
+    end: 24 * 60,
+    employeeId: worker.id,
+  });
+
+  const candidates = await request(http)
+    .post(`/api/visits/${target.id}/assignment/candidates`)
+    .set(auth())
+    .send({ plannedStartMinute: 0, plannedEndMinute: 60 });
+
+  expect(candidates.status).toBe(200);
+  expect(candidates.body.employees.find((row: { id: string }) => row.id === worker.id))
+    .toMatchObject({
+      isAvailable: false,
+      unavailableReason: { code: 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT' },
+    });
 });

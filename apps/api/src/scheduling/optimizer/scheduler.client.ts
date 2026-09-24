@@ -11,6 +11,7 @@ const SCHEDULER_UNAVAILABLE_MESSAGE =
 /** Mirrors `services/scheduler/app/solver/schemas.py`. */
 export interface SolveRequest {
   run_id: string;
+  minimum_travel_buffer_minutes: number;
   visits: {
     id: string;
     branch_code: string;
@@ -73,6 +74,7 @@ export interface SolveRequest {
     scheduled_date: string;
     start_minute: number;
     end_minute: number;
+    service_site_id: string;
     employee_ids: string[];
     vehicle_ids: string[];
   }[];

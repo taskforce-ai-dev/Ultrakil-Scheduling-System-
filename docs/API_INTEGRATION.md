@@ -99,14 +99,18 @@ The response contains two arrays:
   `isAvailable`, and the same nullable reason shape.
 
 Employee reason codes are `EMPLOYEE_UNAVAILABLE`,
-`EMPLOYEE_PERMANENTLY_STATIONED`, and `EMPLOYEE_DOUBLE_BOOKED`; the vehicle
-reason is `VEHICLE_DOUBLE_BOOKED`. The read model returns active employees from
-the visit's branch and active vehicles from that branch or with no branch. Its
-overlap check considers live resource-holding assignments (`DRAFT`, `PROPOSED`,
-`PUBLISHED`, `ACKNOWLEDGED`, and `IN_PROGRESS`) but excludes the visit's own
-single editable draft/proposed assignment, so reopening an assignment does not
-conflict with itself. Published lineage or multiple editable assignments make
-the visit non-editable and return `409 RESOURCE_CONFLICT`.
+`EMPLOYEE_PERMANENTLY_STATIONED`, `EMPLOYEE_DOUBLE_BOOKED`, and
+`EMPLOYEE_TRAVEL_GAP_TOO_SHORT`; vehicle reasons are
+`VEHICLE_DOUBLE_BOOKED` and `VEHICLE_TRAVEL_GAP_TOO_SHORT`. The read model
+returns active employees from the visit's branch and active vehicles from that
+branch or with no branch. Its availability check considers live
+resource-holding assignments (`DRAFT`, `PROPOSED`, `PUBLISHED`, `ACKNOWLEDGED`,
+and `IN_PROGRESS`) but excludes the visit's own single editable draft/proposed
+assignment, so reopening an assignment does not conflict with itself. It also
+requires 60 minutes between consecutive assignments at different service sites,
+including across midnight; assignments at the same site may touch. Published
+lineage or multiple editable assignments make the visit non-editable and return
+`409 RESOURCE_CONFLICT`.
 
 This endpoint judges individual time availability only. It does not prove that
 the proposed combination satisfies crew size, skills, PMS supervision, vehicle

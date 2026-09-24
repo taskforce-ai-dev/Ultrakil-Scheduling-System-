@@ -52,3 +52,12 @@ export const DEFAULT_DAILY_CAPACITY_MINUTES = 720;
  * actual shift lengths.
  */
 export const DEFAULT_EMPLOYEE_WORKDAY_MINUTES = 480;
+
+/**
+ * Minimum transfer time between jobs at different service sites.
+ *
+ * UltraKIL does not yet hold trustworthy coordinates for every site, so a
+ * deterministic company-wide allowance is safer than pretending to know an
+ * exact route time. Jobs at the same site need no transfer allowance.
+ */
+export const DEFAULT_DIFFERENT_SITE_TRAVEL_BUFFER_MINUTES = 60;

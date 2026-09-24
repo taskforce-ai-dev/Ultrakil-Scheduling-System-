@@ -46,6 +46,9 @@ function adapter(reservations: Array<{
   id: string;
   plannedStart: Date;
   plannedEnd: Date;
+  generatedVisit: {
+    serviceAgreement: { serviceSiteId: string };
+  };
   crewMembers: Array<{ employeeId: string }>;
   vehicles: Array<{ vehicleId: string }>;
 }> = []): PublishedAssignmentRepairPlannerAdapter {
@@ -91,6 +94,9 @@ describe('repair adapter through the real Python scheduler', () => {
       id: 'other-published-assignment',
       plannedStart: new Date('2027-03-03T23:00:00.000Z'),
       plannedEnd: new Date('2027-03-04T00:00:00.000Z'),
+      generatedVisit: {
+        serviceAgreement: { serviceSiteId: 'other-repair-site' },
+      },
       crewMembers: [{ employeeId: replacementEmployeeId }],
       vehicles: [],
     }]).solve([target(1350, 90)], ['repair-solver-published-source']);

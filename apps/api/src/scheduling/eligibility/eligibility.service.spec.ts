@@ -79,7 +79,8 @@ it('loads availability and bookings for the proposed visit date without writing 
         crewMemberships: expect.objectContaining({
           where: {
             assignment: expect.objectContaining({
-              generatedVisit: { visitDate: proposedDate },
+              plannedStart: { lt: new Date('2027-03-05T01:00:00.000Z') },
+              plannedEnd: { gt: new Date('2027-03-03T23:00:00.000Z') },
               id: { not: 'draft' },
             }),
           },
@@ -93,7 +94,8 @@ it('loads availability and bookings for the proposed visit date without writing 
         assignmentVehicles: expect.objectContaining({
           where: {
             assignment: expect.objectContaining({
-              generatedVisit: { visitDate: proposedDate },
+              plannedStart: { lt: new Date('2027-03-05T01:00:00.000Z') },
+              plannedEnd: { gt: new Date('2027-03-03T23:00:00.000Z') },
               id: { not: 'draft' },
             }),
           },
@@ -109,6 +111,7 @@ it('keeps a reservation ending at midnight as minute 1440 for authoritative empl
     id: 'late-booking',
     plannedStart: new Date('2027-03-04T22:00:00.000Z'),
     plannedEnd: new Date('2027-03-05T00:00:00.000Z'),
+    generatedVisit: { serviceAgreement: { serviceSiteId: 'site' } },
   };
   const prisma = {
     generatedVisit: { findUnique: jest.fn().mockResolvedValue({
@@ -132,8 +135,8 @@ it('keeps a reservation ending at midnight as minute 1440 for authoritative empl
   const proposal = { plannedStartMinute: 1410, plannedEndMinute: 1440, crew: [{ employeeId: 'employee', role: 'SUPERVISOR' as const }], vehicles: [{ vehicleId: 'vehicle', driverEmployeeId: 'employee' }] };
   const context = await service.buildContext('visit', proposal);
 
-  expect(context.employees[0].busy).toEqual([{ assignmentId: 'late-booking', startMinute: 1320, endMinute: 1440 }]);
-  expect(context.vehicles[0].busy).toEqual([{ assignmentId: 'late-booking', startMinute: 1320, endMinute: 1440 }]);
+  expect(context.employees[0].busy).toEqual([{ assignmentId: 'late-booking', startMinute: 1320, endMinute: 1440, serviceSiteId: 'site' }]);
+  expect(context.vehicles[0].busy).toEqual([{ assignmentId: 'late-booking', startMinute: 1320, endMinute: 1440, serviceSiteId: 'site' }]);
   expect(evaluateAssignment(proposal, context).conflicts.map((conflict) => conflict.code)).toEqual(
     expect.arrayContaining(['EMPLOYEE_DOUBLE_BOOKED', 'VEHICLE_DOUBLE_BOOKED']),
   );
@@ -197,7 +200,7 @@ describe('EligibilityService candidates', () => {
           {
             id: 'busy', fullName: 'Charlie Busy', availability: [], permanentAssignments: [],
             deploymentType: DeploymentType.MOBILE, isPmsGrade: false,
-            crewMemberships: [{ assignment: { id: 'busy-late', plannedStart: new Date('2026-09-23T10:00:00.000Z'), plannedEnd: new Date('2026-09-23T12:00:00.000Z') } }, { assignment: { id: 'busy-early', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z') } }],
+            crewMemberships: [{ assignment: { id: 'busy-late', plannedStart: new Date('2026-09-23T10:00:00.000Z'), plannedEnd: new Date('2026-09-23T12:00:00.000Z'), generatedVisit: { serviceAgreement: { serviceSiteId: 'site-here' } } } }, { assignment: { id: 'busy-early', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z'), generatedVisit: { serviceAgreement: { serviceSiteId: 'site-here' } } } }],
           },
           {
             id: 'self', fullName: 'Dina Self', availability: [],
@@ -209,7 +212,7 @@ describe('EligibilityService candidates', () => {
           {
             id: 'adjacent', fullName: 'Esha Adjacent', availability: [], permanentAssignments: [],
             deploymentType: DeploymentType.MOBILE, isPmsGrade: false,
-            crewMemberships: [{ assignment: { id: 'ends-midnight', plannedStart: new Date('2026-09-23T22:00:00.000Z'), plannedEnd: new Date('2026-09-24T00:00:00.000Z') } }],
+            crewMemberships: [{ assignment: { id: 'ends-midnight', plannedStart: new Date('2026-09-23T22:00:00.000Z'), plannedEnd: new Date('2026-09-24T00:00:00.000Z'), generatedVisit: { serviceAgreement: { serviceSiteId: 'site-here' } } } }],
           },
           {
             id: 'mobile-other', fullName: 'Fae Mobile', availability: [],
@@ -217,7 +220,17 @@ describe('EligibilityService candidates', () => {
             permanentAssignments: [{ serviceSiteId: 'site-away' }], crewMemberships: [],
           },
           {
-            id: 'multi-target', fullName: 'Gita Multi', availability: [],
+            id: 'travel', fullName: 'Gina Travel', availability: [], permanentAssignments: [],
+            deploymentType: DeploymentType.MOBILE, isPmsGrade: false,
+            crewMemberships: [{ assignment: {
+              id: 'travel-employee-booking',
+              plannedStart: new Date('2026-09-23T07:00:00.000Z'),
+              plannedEnd: new Date('2026-09-23T09:00:00.000Z'),
+              generatedVisit: { serviceAgreement: { serviceSiteId: 'site-away' } },
+            } }],
+          },
+          {
+            id: 'multi-target', fullName: 'Hira Multi', availability: [],
             deploymentType: DeploymentType.PERMANENTLY_STATIONED, isPmsGrade: false,
             permanentAssignments: [{ serviceSiteId: 'site-away' }, { serviceSiteId: 'site-here' }], crewMemberships: [],
           },
@@ -225,9 +238,15 @@ describe('EligibilityService candidates', () => {
       },
       vehicle: {
         findMany: jest.fn().mockResolvedValue([
-          { id: 'busy-vehicle', label: 'Van Busy', seatCapacity: 3, assignmentVehicles: [{ assignment: { id: 'v-busy', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z') } }] },
+          { id: 'busy-vehicle', label: 'Van Busy', seatCapacity: 3, assignmentVehicles: [{ assignment: { id: 'v-busy', plannedStart: new Date('2026-09-23T09:00:00.000Z'), plannedEnd: new Date('2026-09-23T11:00:00.000Z'), generatedVisit: { serviceAgreement: { serviceSiteId: 'site-here' } } } }] },
           { id: 'self-vehicle', label: 'Van Self', seatCapacity: null, assignmentVehicles: [] },
-          { id: 'adjacent-vehicle', label: 'Van Adjacent', seatCapacity: 2, assignmentVehicles: [{ assignment: { id: 'ends-midnight', plannedStart: new Date('2026-09-23T22:00:00.000Z'), plannedEnd: new Date('2026-09-24T00:00:00.000Z') } }] },
+          { id: 'travel-vehicle', label: 'Van Travel', seatCapacity: 2, assignmentVehicles: [{ assignment: {
+            id: 'travel-vehicle-booking',
+            plannedStart: new Date('2026-09-23T07:00:00.000Z'),
+            plannedEnd: new Date('2026-09-23T09:00:00.000Z'),
+            generatedVisit: { serviceAgreement: { serviceSiteId: 'site-away' } },
+          } }] },
+          { id: 'adjacent-vehicle', label: 'Van Adjacent', seatCapacity: 2, assignmentVehicles: [{ assignment: { id: 'ends-midnight', plannedStart: new Date('2026-09-23T22:00:00.000Z'), plannedEnd: new Date('2026-09-24T00:00:00.000Z'), generatedVisit: { serviceAgreement: { serviceSiteId: 'site-here' } } } }] },
         ]),
       },
     };
@@ -253,6 +272,13 @@ describe('EligibilityService candidates', () => {
     expect(byEmployeeId.get('self')).toMatchObject({ displayName: 'Dina Self', isPmsGrade: true, unavailableReason: null });
     expect(byEmployeeId.get('adjacent')?.isAvailable).toBe(true);
     expect(byEmployeeId.get('mobile-other')?.isAvailable).toBe(true);
+    expect(byEmployeeId.get('travel')).toMatchObject({
+      isAvailable: false,
+      unavailableReason: {
+        code: 'EMPLOYEE_TRAVEL_GAP_TOO_SHORT',
+        message: 'Needs 60 minutes between different sites',
+      },
+    });
     expect(byEmployeeId.get('multi-target')?.isAvailable).toBe(true);
     expect(byVehicleId.get('busy-vehicle')).toMatchObject({
       isAvailable: false,
@@ -260,8 +286,15 @@ describe('EligibilityService candidates', () => {
     });
     expect(byVehicleId.get('self-vehicle')?.isAvailable).toBe(true);
     expect(byVehicleId.get('self-vehicle')).toMatchObject({ displayName: 'Van Self', seatCapacity: null, unavailableReason: null });
+    expect(byVehicleId.get('travel-vehicle')).toMatchObject({
+      isAvailable: false,
+      unavailableReason: {
+        code: 'VEHICLE_TRAVEL_GAP_TOO_SHORT',
+        message: 'Needs 60 minutes between different sites',
+      },
+    });
     expect(byVehicleId.get('adjacent-vehicle')?.isAvailable).toBe(true);
-    expect(result.employees.map((candidate) => candidate.id)).toEqual(['self', 'adjacent', 'mobile-other', 'multi-target', 'absent', 'stationed', 'busy']);
+    expect(result.employees.map((candidate) => candidate.id)).toEqual(['self', 'adjacent', 'mobile-other', 'multi-target', 'absent', 'stationed', 'busy', 'travel']);
     expect(prisma.vehicle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ isActive: true, OR: expect.any(Array) }),
     }));
