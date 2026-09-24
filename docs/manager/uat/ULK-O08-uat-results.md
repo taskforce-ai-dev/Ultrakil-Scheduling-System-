@@ -43,11 +43,13 @@ added none: every current/future published assignment is fully staffed and
 transport-compliant, so fabricating more capacity would conceal rather than
 solve a data problem.
 
-**Browser and runtime acceptance:** an authenticated Chromium pass loaded all
-11 manager routes with zero console errors, zero page exceptions and zero API
-HTTP errors. All six services were healthy with zero restarts and no
-error/exception/fatal lines in the inspected post-repair window. Public portal
-and API readiness returned HTTP 200.
+**Deployed route smoke and runtime health:** an authenticated Chromium pass
+loaded all 11 manager routes with zero console errors, zero page exceptions and
+zero API HTTP errors. This was a read-only route smoke; it did not rerun every
+success, conflict, unassigned, stale-response, override, repair and recovery
+workflow against the deployed build. All six services were healthy with zero
+restarts and no error/exception/fatal lines in the inspected post-repair
+window. Public portal and API readiness returned HTTP 200.
 
 **Backup and restore:** final compressed backup
 `ultrakil-20260924T172439Z-b15614122c24.dump`, 463,056 bytes, SHA-256
