@@ -103,6 +103,7 @@ function fixture() {
     reason: string | null;
     lockedByUserId: string;
     releasedAt: Date | null;
+    createdAt: Date;
     updatedAt: Date;
   } | null = null;
   let beforeTransaction: () => Promise<void> = async () => undefined;
@@ -227,7 +228,7 @@ function fixture() {
       async ({ create, update }: { create: typeof heldLock; update: object }) => {
         heldLock = heldLock
           ? Object.assign(heldLock, update)
-          : { ...create!, releasedAt: null, updatedAt: new Date() };
+          : { ...create!, releasedAt: null, createdAt: new Date(), updatedAt: new Date() };
         return heldLock;
       },
     ),
@@ -298,6 +299,7 @@ function fixture() {
         reason: 'Existing lock',
         lockedByUserId: actor.id,
         releasedAt: null,
+        createdAt: new Date(),
         updatedAt: new Date(),
       };
     },
@@ -638,6 +640,27 @@ describe('standard writers preserve publication', () => {
     expect(f.prisma.assignmentLock.upsert).toHaveBeenCalledTimes(1);
     expect(f.prisma.assignmentLock.update).toHaveBeenCalledTimes(1);
     expect(f.heldLock()!.releasedAt).toBeInstanceOf(Date);
+  });
+
+  it('dates a re-pinned scope from the new pin action, while release preserves the prior pin time', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-24T09:00:00.000Z'));
+    try {
+      const f = fixture();
+      const first = await f.publishing.lock(f.original.id, LockScope.CREW, 'First decision', actor);
+      expect(first.createdAt).toEqual(new Date('2026-09-24T09:00:00.000Z'));
+
+      jest.setSystemTime(new Date('2026-09-24T09:15:00.000Z'));
+      const released = await f.publishing.unlock(f.original.id, LockScope.CREW, actor);
+      expect(released.createdAt).toEqual(first.createdAt);
+
+      jest.setSystemTime(new Date('2026-09-24T10:00:00.000Z'));
+      const rePinned = await f.publishing.lock(f.original.id, LockScope.CREW, 'New decision', actor);
+      expect(rePinned.createdAt).toEqual(new Date('2026-09-24T10:00:00.000Z'));
+      expect(rePinned.reason).toBe('New decision');
+      expect(rePinned.releasedAt).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('allows locking and unlocking a mutable draft when the visit has older publication history', async () => {
