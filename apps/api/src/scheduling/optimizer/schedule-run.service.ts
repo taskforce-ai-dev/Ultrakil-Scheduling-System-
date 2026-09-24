@@ -185,12 +185,7 @@ type SlotVisit = {
   };
 };
 
-function candidateSlotsForVisit(
-  visit: SlotVisit,
-  from: Date,
-  to: Date,
-  restrictToCurrentWindow = false,
-) {
+function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
   const { allowedDays, preferredDays } = splitDayRules(
     visit.serviceAgreement.dayRules,
   );
@@ -216,15 +211,22 @@ function candidateSlotsForVisit(
     from: booked ? visit.visitDate : from,
     to: booked ? visit.visitDate : to,
   });
-  if (!booked && !restrictToCurrentWindow) return slots;
+  const currentDate = dateOnly(visit.visitDate);
   return slots
     .map((slot) => ({
       ...slot,
-      earliestStartMinute: Math.max(slot.earliestStartMinute, visit.windowStartMinute),
-      latestStartMinute: Math.min(
-        slot.latestStartMinute,
-        visit.windowEndMinute - visit.durationMinutes,
-      ),
+      // A same-date solver result does not rewrite the visit window, so only
+      // advertise times the persistence fence can accept. Alternate dates use
+      // their full legal service window and carry a proposed visit update.
+      earliestStartMinute: slot.date === currentDate
+        ? Math.max(slot.earliestStartMinute, visit.windowStartMinute)
+        : slot.earliestStartMinute,
+      latestStartMinute: slot.date === currentDate
+        ? Math.min(
+          slot.latestStartMinute,
+          visit.windowEndMinute - visit.durationMinutes,
+        )
+        : slot.latestStartMinute,
     }))
     .filter((slot) => slot.earliestStartMinute <= slot.latestStartMinute);
 }
@@ -904,12 +906,7 @@ export class ScheduleRunService {
         // never silently becomes a TIME lock. Assignment TIME/FULL locks carry
         // their exact interval separately and use the legacy fixed-window
         // fallback (`null`). An explicit empty list remains "no legal slot".
-        const allCandidates = candidateSlotsForVisit(
-          visit,
-          options.from,
-          options.to,
-          datePinned.has(visit.id),
-        );
+        const allCandidates = candidateSlotsForVisit(visit, options.from, options.to);
         const keepDate = datePinned.has(visit.id) || visit.placement === VisitPlacement.BOOKED;
         const candidates = timePinned.has(visit.id)
           ? null

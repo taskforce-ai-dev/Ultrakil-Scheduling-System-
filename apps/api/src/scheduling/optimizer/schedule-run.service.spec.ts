@@ -999,7 +999,18 @@ describe('solver replacement lifecycle fence', () => {
       };
 
       expect(build('run', [{ ...target, isManuallyAdjusted: false, lockedAt: null }], [], [], options)
-        .visits[0].candidate_slots?.length).toBeGreaterThan(0);
+        .visits[0].candidate_slots).toEqual([
+        expect.objectContaining({
+          date: '2027-03-03',
+          earliest_start_minute: 540,
+          latest_start_minute: 630,
+        }),
+        expect.objectContaining({
+          date: '2027-03-04',
+          earliest_start_minute: 480,
+          latest_start_minute: 930,
+        }),
+      ]);
       const request = build('run', [target], [], [], options);
       expect(request.visits[0].candidate_slots).toEqual([
         expect.objectContaining({
