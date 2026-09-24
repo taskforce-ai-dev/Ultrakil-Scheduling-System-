@@ -6,9 +6,16 @@ refuses to schedule and explains why. Total time: under 5 minutes.
 
 The steps below use fabricated examples so this script is safe to share. Run
 them on the current staging portal at `https://ultrakil.taskforceai.tech`.
+
+**Release this script is verified against: `main@13b2456`.**
+
 The assignment-save timeout and reopen self-conflict found during the earlier
-pilot were fixed before the current release and reverified against deployed
-commit `b694823`.
+pilot were fixed before the `b694823` release and reverified there at the
+API. Both were **reconfirmed on `main@13b2456` on 2026-09-22 through this
+portal**, in the UI rather than at the API: a real assignment saved and then
+reopened from the Dispatch Board showed *"This crew is eligible to take the
+visit."* with no self-conflict. Evidence:
+`uat/ULK-O08-O09-deployed-uat-13b2456.md`.
 
 ---
 
@@ -42,9 +49,20 @@ red "No PMS supervisor" warning.
 An earlier screenshot showed the historical self-overlap defect rather than a
 clean save, so it was removed from the release documentation. That defect is
 fixed on current `main`.
-**Current staging update, 2026-09-10:** authenticated save, follow-up GET,
-and reopen eligibility checks all returned HTTP 200 on deployed commit
+**Staging update, 2026-09-10:** authenticated save, follow-up GET, and
+reopen eligibility checks all returned HTTP 200 on deployed commit
 `b694823`. The proposal remained eligible with no self-overlap conflict.
+**Current release, `main@13b2456`, 2026-09-22:** the same flow was run by
+hand in the portal. Save returned *"Assignment saved. The reason is on this
+visit's history."*, and reopening the visit showed the crew still eligible
+with neither `EMPLOYEE_DOUBLE_BOOKED` nor `VEHICLE_DOUBLE_BOOKED` raised
+against its own crew or vehicle.
+
+Two details a presenter should expect on this release, both observed during
+that pass and neither a fault: the **Reason** field at step 5 is mandatory
+and Save stays disabled until it is filled (see known limitation 8), and the
+**pinning section** — *"Pin parts of this assignment…"* — appears only
+*after* a save, since there is nothing to protect on an unassigned visit.
 Privacy-sensitive screenshots are retained in the protected VPS release
 evidence rather than this public repository.)*
 
