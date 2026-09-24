@@ -8,9 +8,11 @@ The steps below use fabricated examples so this script is safe to share. Run
 them on the current staging portal at `https://ultrakil.taskforceai.tech`.
 The assignment-save timeout and reopen self-conflict found during the earlier
 pilot were fixed before the current release. The current application release
-is `6d7724ac3067480f9c02907be5c32cd585fefb93`, with ingress hotfix
-`2e678d357afce56989d2b4af6659e139496c3cd9`; its authenticated deployed smoke
-loaded all 11 manager routes without an unexpected browser or request failure.
+is `500daf80a85aea18ca5e5d74d2552739b7e3fb57` (PR #75), with ingress update
+`a8174accb7d99248ba415fe78bb227c49aac23e9` (PR #76); its authenticated
+deployed smoke loaded all 11 manager routes with zero console, page or API HTTP
+errors. The approved 11-assignment repair left zero current/future employee or
+vehicle overlaps, zero short crews and no multi-vehicle assignments.
 Use a designated staging test visit for any save/publish demonstration, and do
 not alter a real published assignment outside an approved repair plan.
 

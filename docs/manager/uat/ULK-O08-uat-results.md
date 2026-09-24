@@ -2,11 +2,72 @@
 
 Status: the seven-scenario synthetic-data UAT and the O09 regression suite
 are complete. The current DigitalOcean staging release has also passed the
-privacy-safe API, deployment, and real-data regression checks below. Final
-business acceptance remains a named human sign-off step; it is not implied by
-this technical evidence.
+privacy-safe API, deployment, real-data, repair, browser and restore checks
+below. Final business acceptance remains a named human sign-off step; it is not
+implied by this technical evidence.
 
-## Current DigitalOcean staging verification — 2026-09-10
+## Final DigitalOcean staging acceptance — 2026-09-24
+
+**Portal:** `https://ultrakil.taskforceai.tech`
+
+**API readiness:** `https://ultrakil-api.taskforceai.tech/api/health/ready`
+
+**Tested release:** application merge
+`500daf80a85aea18ca5e5d74d2552739b7e3fb57` (PR #75) and Caddy-only merge
+`a8174accb7d99248ba415fe78bb227c49aac23e9` (PR #76). All exact-head API,
+PostgreSQL integration, contract, manager portal, scheduler, secret-scan, and
+Docker lifecycle/strict-browser jobs passed before merge.
+
+**Approved published-assignment repair:** Technical Director approval covered
+exact plan hash
+`a34167e60fd3b47fb210d88ba372dd3687e47c4f113f407dd08c38583b414485`.
+The atomic apply created one repair ledger entry, replaced all 11 future
+assignments, withdrew none, and produced zero lineage errors. All 150 published
+candidates were checked afterward: the 55 remaining findings are historical
+and immutable; zero current/future findings are selectable.
+
+**Post-repair real-data invariants:** 74 current/future published assignments;
+zero employee overlap or sub-60-minute different-site travel pairs; zero
+vehicle overlap or sub-60-minute different-site travel pairs; zero short crews;
+zero assignments without a PMS supervisor; zero assignments with multiple
+vehicles; maximum one vehicle; zero unauthorized/missing assigned drivers;
+zero invalid vehicleless transport; zero branch/permanent-deployment
+violations; and zero future visits referencing an inactive customer, site or
+agreement. The maximum future load is 12 jobs for one branch/day, with no day
+over 25. `DAC-2485` and `DAG-3284` each retain exactly their required three
+driver authorizations.
+
+**Synthetic capacity decision:** staging already contains two visibly labelled
+synthetic employees and one visibly labelled synthetic vehicle. This release
+added none: every current/future published assignment is fully staffed and
+transport-compliant, so fabricating more capacity would conceal rather than
+solve a data problem.
+
+**Deployed route smoke and runtime health:** an authenticated Chromium pass
+loaded all 11 manager routes with zero console errors, zero page exceptions and
+zero API HTTP errors. This was a read-only route smoke; it did not rerun every
+success, conflict, unassigned, stale-response, override, repair and recovery
+workflow against the deployed build. All six services were healthy with zero
+restarts and no error/exception/fatal lines in the inspected post-repair
+window. Public portal and API readiness returned HTTP 200.
+
+**Backup and restore:** final compressed backup
+`ultrakil-20260924T172439Z-b15614122c24.dump`, 463,056 bytes, SHA-256
+`ed9bf91f6bcdb79fd06f6eb5a49919f6910311d9ff7cd076a5f11582b66105d1`,
+passed its checksum/archive verification. The isolated restore contained 27
+required tables, 18 successful migrations, zero failed migrations, zero
+duplicate notification/dispatch keys, and reproduced the clean repair ledger
+and scheduling invariants. The marker-protected disposable database was then
+removed. Protected plan, result and final release records are mode 0600 under
+`/opt/ultrakil/releases/20260924T163842Z-main-500daf8/release-record/`.
+
+**Open management data limitations:** 408 sites still have uncertain branch
+provenance (394 active), affecting 826 future visits. Real opening hours remain
+unavailable and visibly unconfirmed. No live Kandy assignment exists in this
+dataset, and the workforce still has no Kandy PMS-qualified supervisor; no
+branch or qualification bypass was introduced.
+
+## Previous DigitalOcean staging verification — 2026-09-10
 
 **Portal:** `https://ultrakil.taskforceai.tech`
 
@@ -945,7 +1006,7 @@ instead of internal IDs. The obsolete screenshot was removed.
    demo data** — sub-scenario 1 used a demo vehicle with an equivalent
    shape (3 checked drivers) instead. **Resolved:** the deployed real-data
    pass confirms DAC-2485 directly, with its actual three authorized
-   drivers — see "Current DigitalOcean staging verification" above.
+   drivers — see "Final DigitalOcean staging acceptance" above.
 5. **[Fixed and independently confirmed] Deployed assignment save
    failed** — not a demo data gap, a real production defect.
    `PUT /api/visits/{id}/assignment` on the deployed API 500'd on every
