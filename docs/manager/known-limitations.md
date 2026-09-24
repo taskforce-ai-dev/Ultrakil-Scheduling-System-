@@ -27,27 +27,36 @@ close these operational decisions:
    all 150 published candidates were checked: zero current/future findings
    remain selectable, employee overlap/travel pairs are zero, vehicle
    overlap/travel pairs are zero, and 55 historical findings remain immutable.
-3. **Staffing horizon:** the repair covered already-published assignments; it
-   does not claim every future planned visit has already been dispatched. The
-   current live assignments have zero short crews, zero missing PMS supervisors
-   and at most one vehicle each, so no additional capacity is justified by the
-   current/future published workload.
+3. **Staffing horizon:** the repair covered already-published assignments; the
+   remaining future visits stay pending until a manager runs and publishes the
+   appropriate dispatch horizon. A 24 September full-year audit restored the
+   live database into an isolated disposable clone and ran six non-overlapping
+   optimizer windows from 24 September 2026 through 18 September 2027. All six
+   runs succeeded: 1,506 pending visits considered, 1,506 staffed and zero
+   unassigned. The resulting drafts also had zero employee/vehicle overlap or
+   travel conflicts, short or overstaffed crews, missing PMS supervisors,
+   missing skills, invalid transport, unauthorized drivers, branch/permanent-
+   site violations or absence violations. These drafts were audit evidence on
+   the clone, not schedules published to the live system.
 4. **Synthetic staging capacity:** the existing visible staging-only team is
-   two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. No further
-   synthetic resources should be added unless a new count-only run proves an
-   actual compliant-capacity refusal.
+   two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. The
+   full-year optimizer audit above proves the current future workload has no
+   compliant-capacity refusal, so this release added no synthetic resources.
+   A later workload must still prove an actual shortage before more are added.
 5. **Authentication hardening:** failed login attempts are constant-time and
    identity-safe in logs, but no failed-attempt throttle is implemented yet.
    Controlled staging UAT may continue; production sign-off must include an
    approved throttling policy and verified implementation.
 
-The final post-repair backup is
-`ultrakil-20260924T172439Z-b15614122c24.dump` with SHA-256
-`ed9bf91f6bcdb79fd06f6eb5a49919f6910311d9ff7cd076a5f11582b66105d1`.
+The final post-catch-up backup is
+`ultrakil-20260924T175533Z-310c0698fc7e.dump` with SHA-256
+`d504632d624db101e781488359a265a5901b2b920b386e81720d670ab5aa83fb`.
 It passed manifest/archive verification and restored into an isolated marked
 database with 27 required tables, 18 successful migrations, zero failed
 migrations, zero duplicate outbox keys and the same clean scheduling
-invariants. The disposable restore database was removed after verification.
+invariants. That clone supplied the full-year optimizer evidence above; its
+API container, Redis namespace and disposable database were removed after the
+count-only results were recorded.
 
 The detailed findings below are the historical O08 record. Where an older
 commit, count or deployment is quoted, this current-release section takes

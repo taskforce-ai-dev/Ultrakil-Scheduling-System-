@@ -43,6 +43,24 @@ added none: every current/future published assignment is fully staffed and
 transport-compliant, so fabricating more capacity would conceal rather than
 solve a data problem.
 
+**Rolling-horizon and full-capacity audit:** a read-only full-year generation
+preview initially found five missing visits, all ordinary Colombo work between
+December 2026 and February 2027. The idempotent confirmation added exactly
+those five visits, changed and removed none, and reported zero shortfalls,
+overloaded days, booking warnings or skipped periods. Repeating the preview
+then reported zero additions, updates or removals.
+
+The resulting database was backed up, verified and restored into an isolated
+disposable clone. Six non-overlapping optimizer runs covered 24 September 2026
+through 18 September 2027. All six succeeded: 1,506 pending visits considered,
+1,506 scheduled and zero unassigned. Count-only SQL over the 1,506 draft
+assignments found zero employee/vehicle overlap or travel conflicts, short or
+overstaffed crews, missing PMS supervisors, missing required skills, duplicate
+active visit assignments, invalid/undersized transport, unauthorized drivers,
+branch/permanent-site violations or employee-absence violations. Maximum
+vehicles per assignment was one. No clone proposal was published and no
+synthetic employee or vehicle was added to live staging.
+
 **Deployed route smoke and runtime health:** an authenticated Chromium pass
 loaded all 11 manager routes with zero console errors, zero page exceptions and
 zero API HTTP errors. This was a read-only route smoke; it did not rerun every
@@ -52,13 +70,14 @@ restarts and no error/exception/fatal lines in the inspected post-repair
 window. Public portal and API readiness returned HTTP 200.
 
 **Backup and restore:** final compressed backup
-`ultrakil-20260924T172439Z-b15614122c24.dump`, 463,056 bytes, SHA-256
-`ed9bf91f6bcdb79fd06f6eb5a49919f6910311d9ff7cd076a5f11582b66105d1`,
+`ultrakil-20260924T175533Z-310c0698fc7e.dump`, 463,455 bytes, SHA-256
+`d504632d624db101e781488359a265a5901b2b920b386e81720d670ab5aa83fb`,
 passed its checksum/archive verification. The isolated restore contained 27
 required tables, 18 successful migrations, zero failed migrations, zero
-duplicate notification/dispatch keys, and reproduced the clean repair ledger
-and scheduling invariants. The marker-protected disposable database was then
-removed. Protected plan, result and final release records are mode 0600 under
+duplicate notification/dispatch keys, and supplied the full-horizon optimizer
+audit above. The marker-protected database and its isolated API/Redis namespace
+were then removed. Protected plan, result, final release and capacity-audit
+records are mode 0600 under
 `/opt/ultrakil/releases/20260924T163842Z-main-500daf8/release-record/`.
 
 **Open management data limitations:** 408 sites still have uncertain branch
