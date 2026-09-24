@@ -3,6 +3,47 @@
 Compiled from the O08 UAT pass. Grouped by what a manager needs to know
 before/during the pilot, versus what's tracked as an engineering follow-up.
 
+## Current staging release — 24 September 2026
+
+The current application release is PR #72 merged as
+`6d7724ac3067480f9c02907be5c32cd585fefb93`, with the Caddy-only PR #73
+hotfix merged as `2e678d357afce56989d2b4af6659e139496c3cd9`. The exact-head pipelines
+passed, all six staging services are healthy with zero restarts, and an
+authenticated read-only browser smoke loaded all 11 manager routes with zero
+page errors, failed responses, unexpected console errors or unexpected console
+warnings.
+
+This proves the deployed release is ready for management testing. It does not
+close these operational decisions:
+
+1. **Site branch confirmation:** 408 imported sites retain uncertain branch
+   provenance: 394 active and 14 inactive, across 131 customers. The workbook
+   cannot close this automatically: 367 of those sites have no address and 174
+   carry only a site name; only 41 carry an address or region string. They use
+   the disclosed Colombo fallback until management confirms the correct branch.
+2. **Different-site travel time:** four published assignments currently begin
+   immediately after another job using at least one of the same resources at a
+   different site. A write-free 60-minute repair preview is valid for all four,
+   with no locks, conflicts, new overlaps or window violations, but it remains
+   unapplied pending Technical Director policy approval. Its plan hash is
+   `9a6df117641d38ef8d0078d3e58bb2ffc60636af421dbe03add7748476072bd1`.
+3. **Staffing horizon:** 1,501 future visits are still `PENDING`/Planned rather
+   than assigned. The current live assignments have zero short crews, zero
+   missing PMS supervisors and at most one vehicle each, so this is a staffing
+   cadence decision rather than evidence that more capacity is required.
+4. **Synthetic staging capacity:** the existing visible staging-only team is
+   two `SYNTHETIC/TEST` employees and one `SYNTHETIC/TEST` vehicle. No further
+   synthetic resources should be added unless a new count-only run proves an
+   actual compliant-capacity refusal.
+5. **Authentication hardening:** failed login attempts are constant-time and
+   identity-safe in logs, but no failed-attempt throttle is implemented yet.
+   Controlled staging UAT may continue; production sign-off must include an
+   approved throttling policy and verified implementation.
+
+The detailed findings below are the historical O08 record. Where an older
+commit, count or deployment is quoted, this current-release section takes
+precedence.
+
 ## Explicitly Phase 2 (not built, by design)
 
 Per the project's own rules, these are intentionally out of scope for
