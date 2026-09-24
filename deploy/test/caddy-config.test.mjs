@@ -9,6 +9,7 @@ const root = resolve(import.meta.dirname, '../..');
 const configPath = resolve(root, 'deploy/caddy/Caddyfile');
 const ultrakilFragmentPath = resolve(root, 'deploy/caddy/Caddyfile.ultrakil');
 const smokePath = resolve(root, 'deploy/caddy/smoke-test.sh');
+const stagingRunbookPath = resolve(root, 'docs/STAGING_RUNBOOK.md');
 
 function config() {
   assert.ok(existsSync(configPath), 'deploy/caddy/Caddyfile must exist');
@@ -134,4 +135,24 @@ test('Caddy template starts CSP in report-only mode without changing authenticat
   assert.match(caddyfile, /connect-src 'self' https:\/\/ultrakil-api\.taskforceai\.tech https:\/\/api\.ultrakil\.taskforceai\.tech/);
   assert.doesNotMatch(caddyfile, /\n\s*Content-Security-Policy "/);
   assert.doesNotMatch(caddyfile, /rate_limit|basicauth|forward_auth/i);
+});
+
+test('mixed-host Caddy runbook refuses an automated fragment merge to prevent duplicate UltraKIL routes', () => {
+  const runbook = readFileSync(stagingRunbookPath, 'utf8');
+  assert.match(runbook, /Automated mixed-host\s+merge is intentionally unsupported/i);
+  assert.match(runbook, /Do not use this path to replace existing UltraKIL blocks/i);
+  assert.match(runbook, /every transitive import/i);
+  assert.match(runbook, /exactly once/i);
+  assert.match(runbook, /If any\s+host appears other than exactly once(?: in that effective configuration)?, stop/i);
+  assert.doesNotMatch(runbook, /import \/etc\/caddy\/Caddyfile\.ultrakil\.next/);
+  assert.doesNotMatch(runbook, /Use the fragment merge path instead/i);
+});
+
+test('Caddy runbook records host validation as author evidence rather than reviewer approval', () => {
+  const runbook = readFileSync(stagingRunbookPath, 'utf8');
+  assert.match(runbook, /The 2026-09-24 recheck returned Caddy `v2\.6\.2`/);
+  assert.match(runbook, /17999a34c8de3fe8b141bfe0e87756b439d434f1e696eb2ae6c30463653c13b0/);
+  assert.match(runbook, /caddy\s+adapt --config \/dev\/stdin --adapter\s+caddyfile/);
+  assert.match(runbook, /caddy\s+validate --config \/dev\/stdin --adapter\s+caddyfile/);
+  assert.match(runbook, /not an independent-reviewer\s+attestation/i);
 });

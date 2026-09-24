@@ -317,7 +317,17 @@ this ingress template.
 The 2026-09-23 read-only staging inspection established Caddy `v2.6.2` and a
 global file containing only the email option plus these three UltraKIL proxy
 blocks (SHA-256 `17999a34c8de3fe8b141bfe0e87756b439d434f1e696eb2ae6c30463653c13b0`).
-That is evidence for that instant, not permission to overwrite the host later.
+The 2026-09-24 recheck returned Caddy `v2.6.2`, the same checksum, and the
+same email-plus-three-route configuration. This is evidence for those
+instants, not permission to overwrite the host later.
+On 2026-09-24, the author also streamed the exact source-controlled wrapper and
+fragment together over SSH to the authorized staging host: `sudo -n caddy
+version` returned `2.6.2`, and both `caddy adapt --config /dev/stdin --adapter
+caddyfile` and `caddy validate --config /dev/stdin --adapter caddyfile`
+succeeded. This was a read-only author validation: it did not write a host file,
+reload Caddy, or deploy this change, and it is not an independent-reviewer
+attestation. It proves parser compatibility for that version only; repeat the
+candidate validation below immediately before a release.
 Before each release, repeat the read-only inspection:
 
 ```bash
@@ -329,7 +339,8 @@ sudo sed -n '1,220p' /etc/caddy/Caddyfile
 Only use the complete-wrapper replacement path below if the current file still
 contains exactly the global email option and the three expected UltraKIL host
 blocks. If it contains another site, import, snippet, matcher, or global option,
-**do not replace `/etc/caddy/Caddyfile`**. Use the fragment merge path instead.
+**do not replace `/etc/caddy/Caddyfile`**. Stop for targeted configuration
+review; this runbook intentionally provides no automated mixed-host merge.
 
 For an UltraKIL-only host, install and reload only during a release window:
 
@@ -347,28 +358,21 @@ sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl is-active --quiet caddy
 ```
 
-For a host with unrelated Caddy configuration, preserve its global file. Copy
-the fragment and create a candidate copy of the global file; then add exactly
-one top-level directive to the candidate (outside every site block):
+For a host with unrelated Caddy configuration, do not use the wrapper
+replacement path or attempt an automated fragment merge. Automated mixed-host
+merge is intentionally unsupported: a direct block, imported file, snippet, or
+matcher can already define an UltraKIL hostname, and a second definition would
+make Caddy reject the candidate or route traffic unpredictably. This includes a
+host whose direct file appears to have no existing UltraKIL routes: that scan
+does not prove the effective configuration through every import and generated
+fragment.
 
-```bash
-cd /opt/ultrakil/app
-sudo install -o root -g root -m 0644 deploy/caddy/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil.next
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile /etc/caddy/Caddyfile.next
-sudoedit /etc/caddy/Caddyfile.next
-# Add exactly: import /etc/caddy/Caddyfile.ultrakil.next
-sudo caddy validate --config /etc/caddy/Caddyfile.next --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile /etc/caddy/Caddyfile.previous
-if sudo test -f /etc/caddy/Caddyfile.ultrakil; then
-  sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil /etc/caddy/Caddyfile.ultrakil.fragment.previous
-fi
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil.next /etc/caddy/Caddyfile.ultrakil
-sudoedit /etc/caddy/Caddyfile.next
-# Replace only that directive with: import /etc/caddy/Caddyfile.ultrakil
-sudo caddy validate --config /etc/caddy/Caddyfile.next --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.next /etc/caddy/Caddyfile
-sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-```
+Do not use this path to replace existing UltraKIL blocks. Preserve the current
+global configuration and collect a read-only evidence bundle (`caddy version`,
+the global file checksum and contents, every transitive import, and `caddy
+adapt` output) for a targeted, separately reviewed configuration change. If any
+host appears other than exactly once in that effective configuration, stop. Do
+not infer a safe replacement from line numbers or a broad text substitution.
 
 Do not guess how to merge an unfamiliar Caddyfile; stop for an authorized
 configuration review instead.
@@ -402,19 +406,8 @@ sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl is-active --quiet caddy
 ```
 
-For the fragment merge path, restore the fragment first when it was replaced,
-then validate and restore the saved global file:
-
-```bash
-if sudo test -f /etc/caddy/Caddyfile.ultrakil.fragment.previous; then
-  sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.ultrakil.fragment.previous /etc/caddy/Caddyfile.ultrakil
-fi
-sudo caddy validate --config /etc/caddy/Caddyfile.previous --adapter caddyfile
-sudo install -o root -g root -m 0644 /etc/caddy/Caddyfile.previous /etc/caddy/Caddyfile
-sudo caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-Do not use the complete-wrapper rollback on a host with unrelated sites.
+Do not use the complete-wrapper rollback on a host with unrelated sites. A
+targeted mixed-host change must carry its own reviewed rollback procedure.
 
 Every service must be healthy. API readiness must report database, queue and
 scheduler as `up`. Container logs rotate at 10 MB with five files per service.
