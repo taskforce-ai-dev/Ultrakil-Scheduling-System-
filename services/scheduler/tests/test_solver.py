@@ -16,6 +16,7 @@ from app.solver.schemas import (
     CandidateSlot,
     EmployeeInput,
     ExistingAssignmentInput,
+    LockedVehicleDriver,
     LockInput,
     OccupiedStartKey,
     ReservationInput,
@@ -131,9 +132,7 @@ class TestHardRules:
         assert result.assignments == []
 
     def test_keeps_permanently_stationed_staff_at_their_own_site(self):
-        stationed = employee(
-            id="perm-1", is_permanently_stationed=True, permanent_site_ids=[SITE]
-        )
+        stationed = employee(id="perm-1", is_permanently_stationed=True, permanent_site_ids=[SITE])
 
         result = solve(request(employees=[SUPERVISOR, stationed]))
 
@@ -235,9 +234,7 @@ class TestPublishedReservations:
                     latest_start_minute=10 * 60,
                 )
             ],
-            occupied_start_keys=[
-                OccupiedStartKey(date="2026-09-09", start_minute=9 * 60)
-            ],
+            occupied_start_keys=[OccupiedStartKey(date="2026-09-09", start_minute=9 * 60)],
         )
 
         result = solve(request(visits=[movable]))
@@ -272,7 +269,7 @@ class TestPublishedReservations:
                     earliest_start_minute=9 * 60,
                     latest_start_minute=10 * 60,
                 )
-            ]
+            ],
         )
         predecessor = ReservationInput(
             assignment_id="published-predecessor",
@@ -399,9 +396,7 @@ class TestOneVehiclePerVisit:
     ]
 
     def test_takes_one_vehicle_when_the_whole_fleet_is_free(self):
-        result = solve(
-            request(employees=[self.DRIVER, self.MATE], vehicles=self.FLEET)
-        )
+        result = solve(request(employees=[self.DRIVER, self.MATE], vehicles=self.FLEET))
 
         assert len(result.assignments) == 1
         assert len(result.assignments[0].vehicles) == 1
@@ -453,18 +448,14 @@ class TestGettingToSite:
     STRANDED = employee(id="tech-2", can_use_public_transport=False)
 
     def test_will_not_send_someone_who_cannot_get_there_without_a_vehicle(self):
-        result = solve(
-            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
-        )
+        result = solve(request(employees=[self.WALKER, self.STRANDED], vehicles=[]))
 
         assert result.assignments == []
         assert [u.visit_id for u in result.unassigned] == ["visit-1"]
 
     def test_one_crew_member_with_public_transport_does_not_carry_the_others(self):
         # Exactly the case UltraKIL asked about: one tick, one blank.
-        result = solve(
-            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
-        )
+        result = solve(request(employees=[self.WALKER, self.STRANDED], vehicles=[]))
 
         assert result.assignments == []
 
@@ -495,9 +486,7 @@ class TestGettingToSite:
         assert result.assignments[0].vehicles == []
 
     def test_explains_why_rather_than_leaving_it_blank(self):
-        result = solve(
-            request(employees=[self.WALKER, self.STRANDED], vehicles=[])
-        )
+        result = solve(request(employees=[self.WALKER, self.STRANDED], vehicles=[]))
 
         entry = result.unassigned[0]
         assert "CREW_CANNOT_TRAVEL" in entry.reason_codes
@@ -505,6 +494,124 @@ class TestGettingToSite:
 
 
 class TestLocks:
+    def test_time_lock_keeps_original_date_even_if_a_caller_sends_other_candidates(self):
+        movable = visit(
+            candidate_slots=[
+                CandidateSlot(
+                    date="2026-09-10", earliest_start_minute=9 * 60, latest_start_minute=10 * 60
+                ),
+                CandidateSlot(
+                    date="2026-09-11", earliest_start_minute=9 * 60, latest_start_minute=10 * 60
+                ),
+            ]
+        )
+        locked = LockInput(visit_id="visit-1", scope="TIME", start_minute=10 * 60)
+
+        result = solve(request(visits=[movable], locks=[locked]))
+
+        assert result.assignments[0].scheduled_date == "2026-09-09"
+        assert result.assignments[0].start_minute == 10 * 60
+
+    def test_supervisor_lock_pins_lead_without_pinning_entire_crew(self):
+        pool = [
+            SUPERVISOR,
+            employee(id="sup-2", is_pms_grade=True),
+            TECHNICIAN,
+            employee(id="tech-2"),
+        ]
+        lock = LockInput(visit_id="visit-1", scope="SUPERVISOR", employee_ids=["sup-2"])
+
+        result = solve(request(employees=pool, locks=[lock]))
+
+        assert len(result.assignments) == 1
+        assert "sup-2" in result.assignments[0].employee_ids
+        assert len(result.assignments[0].employee_ids) == 2
+
+    def test_supervisor_crew_and_time_locks_compose(self):
+        pool = [
+            SUPERVISOR,
+            employee(id="sup-2", is_pms_grade=True),
+            TECHNICIAN,
+            employee(id="tech-2"),
+        ]
+        locks = [
+            LockInput(visit_id="visit-1", scope="SUPERVISOR", employee_ids=["sup-2"]),
+            LockInput(visit_id="visit-1", scope="CREW", employee_ids=["sup-2", "tech-2"]),
+            LockInput(
+                visit_id="visit-1", scope="TIME", start_minute=11 * 60, end_minute=12 * 60 + 30
+            ),
+        ]
+
+        result = solve(request(employees=pool, locks=locks))
+
+        assert result.assignments[0].employee_ids == ["sup-2", "tech-2"]
+        assert result.assignments[0].start_minute == 11 * 60
+
+    def test_conflicting_supervisor_and_crew_locks_are_refused(self):
+        with pytest.raises(ValueError, match="conflicting supervisor and crew"):
+            request(
+                locks=[
+                    LockInput(visit_id="visit-1", scope="SUPERVISOR", employee_ids=["sup-1"]),
+                    LockInput(visit_id="visit-1", scope="CREW", employee_ids=["sup-2", "tech-2"]),
+                ]
+            )
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_time_and_crew_locks_compose_in_either_order(self, reverse):
+        pool = [
+            SUPERVISOR,
+            employee(id="sup-2", is_pms_grade=True),
+            TECHNICIAN,
+            employee(id="tech-2"),
+        ]
+        locks = [
+            LockInput(
+                visit_id="visit-1", scope="TIME", start_minute=11 * 60, end_minute=12 * 60 + 30
+            ),
+            LockInput(visit_id="visit-1", scope="CREW", employee_ids=["sup-2", "tech-2"]),
+        ]
+
+        result = solve(request(employees=pool, locks=list(reversed(locks)) if reverse else locks))
+
+        assert result.assignments[0].start_minute == 11 * 60
+        assert result.assignments[0].employee_ids == ["sup-2", "tech-2"]
+
+    def test_vehicle_lock_preserves_the_exact_driver(self):
+        van = VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4)
+        pool = [
+            employee(id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["van-1"]),
+            employee(id="tech-1", authorized_vehicle_ids=["van-1"]),
+        ]
+        lock = LockInput(
+            visit_id="visit-1",
+            scope="VEHICLE",
+            vehicle_ids=["van-1"],
+            vehicle_drivers=[LockedVehicleDriver(vehicle_id="van-1", driver_employee_id="sup-1")],
+        )
+
+        result = solve(request(employees=pool, vehicles=[van], locks=[lock]))
+
+        assert [
+            (vehicle.vehicle_id, vehicle.driver_employee_id)
+            for vehicle in result.assignments[0].vehicles
+        ] == [("van-1", "sup-1")]
+
+    def test_duplicate_or_conflicting_locks_are_rejected_at_the_boundary(self):
+        with pytest.raises(ValueError, match="duplicate lock scope"):
+            request(
+                locks=[
+                    LockInput(visit_id="visit-1", scope="TIME", start_minute=600),
+                    LockInput(visit_id="visit-1", scope="TIME", start_minute=660),
+                ]
+            )
+        with pytest.raises(ValueError, match="conflicting time locks"):
+            request(
+                locks=[
+                    LockInput(visit_id="visit-1", scope="FULL", start_minute=600),
+                    LockInput(visit_id="visit-1", scope="TIME", start_minute=660),
+                ]
+            )
+
     def test_a_locked_crew_survives_a_rerun(self):
         # Two equally good crews exist; the lock decides.
         pool = [
@@ -594,9 +701,7 @@ class TestLocks:
             VehicleInput(id="van-1", branch_code="COLOMBO", seat_capacity=4),
             VehicleInput(id="van-2", branch_code="COLOMBO", seat_capacity=4),
         ]
-        driver = employee(
-            id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["van-1", "van-2"]
-        )
+        driver = employee(id="sup-1", is_pms_grade=True, authorized_vehicle_ids=["van-1", "van-2"])
         lock = LockInput(visit_id="visit-1", scope="VEHICLE", vehicle_ids=["van-2"])
 
         result = solve(request(employees=[driver, TECHNICIAN], vehicles=vans, locks=[lock]))

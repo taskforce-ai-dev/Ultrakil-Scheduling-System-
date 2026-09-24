@@ -2045,7 +2045,7 @@ describe('publishing', () => {
                       : [supervisorIds[0], technicianIds[0]],
                   vehicles: [],
                   start_minute: 600,
-                  scheduled_date: '2027-03-04',
+                  scheduled_date: '2027-03-03',
                 },
               ],
         unassigned:

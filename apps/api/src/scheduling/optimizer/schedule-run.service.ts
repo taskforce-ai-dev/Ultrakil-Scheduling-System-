@@ -4,11 +4,15 @@ import {
   AssignmentStatus,
   BranchCode,
   CrewRole,
+  DayRuleKind,
+  FrequencyUnit,
   LockScope,
   Prisma,
   ScheduleRunDispatchStatus,
   ScheduleRunStatus,
+  VisitPlacement,
   VisitStatus,
+  Weekday,
 } from '@prisma/client';
 
 import { AuditService } from '../../audit/audit.service';
@@ -118,8 +122,8 @@ const VISIT_FOR_SOLVE = {
   assignments: {
     where: { status: { in: LIVE_STATUSES } },
     include: {
-      crewMembers: { select: { employeeId: true, isPmsSupervisor: true } },
-      vehicles: { select: { vehicleId: true } },
+      crewMembers: { select: { employeeId: true, role: true, isPmsSupervisor: true } },
+      vehicles: { select: { vehicleId: true, driverEmployeeId: true } },
       locks: { where: { releasedAt: null } },
     },
   },
@@ -153,6 +157,52 @@ interface SolveSnapshot {
   serviceAgreementId: string;
   expectedUpdatedAt: Date;
   replaceAssignmentId?: string;
+}
+
+type SlotVisit = {
+  visitDate: Date;
+  durationMinutes: number;
+  serviceAgreement: {
+    startDate: Date;
+    endDate: Date | null;
+    frequencyUnit: FrequencyUnit;
+    frequencyInterval: number;
+    serviceWindowStartMinute: number | null;
+    serviceWindowEndMinute: number | null;
+    dayRules: { weekday: Weekday; kind: DayRuleKind }[];
+    serviceSite: {
+      operatingHours: {
+        weekday: Weekday;
+        opensAtMinute: number;
+        closesAtMinute: number;
+      }[];
+    };
+  };
+};
+
+function candidateSlotsForVisit(visit: SlotVisit, from: Date, to: Date) {
+  const { allowedDays, preferredDays } = splitDayRules(
+    visit.serviceAgreement.dayRules,
+  );
+  return buildCandidateSlots({
+    allowedDays,
+    preferredDays,
+    siteWindows: visit.serviceAgreement.serviceSite.operatingHours.map((hours) => ({
+      weekday: hours.weekday,
+      startMinute: hours.opensAtMinute,
+      endMinute: hours.closesAtMinute,
+    })),
+    agreementStartMinute: visit.serviceAgreement.serviceWindowStartMinute,
+    agreementEndMinute: visit.serviceAgreement.serviceWindowEndMinute,
+    visitDate: visit.visitDate,
+    agreementStartDate: visit.serviceAgreement.startDate,
+    agreementEndDate: visit.serviceAgreement.endDate,
+    frequencyUnit: visit.serviceAgreement.frequencyUnit,
+    frequencyInterval: visit.serviceAgreement.frequencyInterval,
+    durationMinutes: visit.durationMinutes,
+    from,
+    to,
+  });
 }
 
 interface ProposedAssignment extends SolveSnapshot {
@@ -246,11 +296,17 @@ function isPrismaUniqueConstraint(error: unknown): boolean {
 export function solvedCrewRoles(
   employeeIds: readonly string[],
   isPmsGrade: (employeeId: string) => boolean,
+  preferredSupervisorIds: readonly string[] = [],
 ): { employeeId: string; role: CrewRole }[] {
+  const pinned = new Set(
+    preferredSupervisorIds.filter((id) => employeeIds.includes(id) && isPmsGrade(id)),
+  );
   const supervisorId = employeeIds.find(isPmsGrade) ?? employeeIds[0];
   return employeeIds.map((employeeId) => ({
     employeeId,
-    role: employeeId === supervisorId ? CrewRole.SUPERVISOR : CrewRole.TECHNICIAN,
+    role: (pinned.size > 0 ? pinned.has(employeeId) : employeeId === supervisorId)
+      ? CrewRole.SUPERVISOR
+      : CrewRole.TECHNICIAN,
   }));
 }
 
@@ -628,6 +684,15 @@ export class ScheduleRunService {
         crew: solvedCrewRoles(
           proposal.employee_ids,
           (employeeId) => pmsGradeById.get(employeeId) === true,
+          visit.assignments
+            .find((assignment) =>
+              REPLACEABLE_STATUSES.includes(assignment.status) &&
+              assignment.locks.some((lock) =>
+                lock.scope === LockScope.SUPERVISOR || lock.scope === LockScope.FULL,
+              ),
+            )
+            ?.crewMembers.filter((member) => member.role === CrewRole.SUPERVISOR)
+            .map((member) => member.employeeId),
         ),
         vehicles: proposal.vehicles.map((entry) => ({
           vehicleId: entry.vehicle_id,
@@ -711,8 +776,9 @@ export class ScheduleRunService {
   ): SolveRequest {
     const locks: SolveRequest['locks'] = [];
     const existing: SolveRequest['existing'] = [];
-    /** Visits a manager has fixed in time. These are never offered new slots. */
-    const pinned = new Set<string>();
+    /** Visit-level protection fixes only the date; TIME/FULL fixes date and time. */
+    const datePinned = new Set<string>();
+    const timePinned = new Set<string>();
     const excludedReservations = new Set(
       options.excludeReservationAssignmentIds ?? [],
     );
@@ -723,7 +789,7 @@ export class ScheduleRunService {
       // assignment exists. Assignment locks below retain their own time/crew
       // semantics; a visit-level pin does not invent a TIME or FULL lock.
       if (visit.isManuallyAdjusted || visit.lockedAt !== null) {
-        pinned.add(visit.id);
+        datePinned.add(visit.id);
       }
       const live = visit.assignments.find((a) =>
         LIVE_STATUSES.includes(a.status),
@@ -733,26 +799,37 @@ export class ScheduleRunService {
       // Published work is settled — the solver is not offered it at all.
       if (!REPLACEABLE_STATUSES.includes(live.status)) return false;
 
-      const lock = live.locks[0];
-      if (lock) {
-        // A lock on the time is a decision about when, so the visit stops being
-        // free to move. Any other scope still lets the day change.
+      for (const lock of [...live.locks].sort((left, right) => left.scope.localeCompare(right.scope))) {
+        // Every active manager pin must reach the solver. An assignment may
+        // carry separate TIME, CREW and VEHICLE decisions at once.
         if (lock.scope === LockScope.FULL || lock.scope === LockScope.TIME) {
-          pinned.add(visit.id);
+          datePinned.add(visit.id);
+          timePinned.add(visit.id);
         }
         locks.push({
           visit_id: visit.id,
-          scope: lock.scope === LockScope.SUPERVISOR ? 'CREW' : lock.scope,
+          scope: lock.scope,
           employee_ids:
             lock.scope === LockScope.SUPERVISOR
               ? live.crewMembers
-                  .filter((m) => m.isPmsSupervisor)
-                  .map((m) => m.employeeId)
-              : live.crewMembers.map((m) => m.employeeId),
-          vehicle_ids: live.vehicles.map((v) => v.vehicleId),
+                  .filter((member) => member.role === CrewRole.SUPERVISOR)
+                  .map((member) => member.employeeId)
+                  .sort()
+              : live.crewMembers.map((member) => member.employeeId).sort(),
+          vehicle_ids: live.vehicles.map((vehicle) => vehicle.vehicleId).sort(),
+          vehicle_drivers: live.vehicles
+            .map((vehicle) => ({
+              vehicle_id: vehicle.vehicleId,
+              driver_employee_id: vehicle.driverEmployeeId,
+            }))
+            .sort((left, right) => left.vehicle_id.localeCompare(right.vehicle_id)),
           start_minute:
             lock.scope === LockScope.FULL || lock.scope === LockScope.TIME
               ? minuteOfDay(live.plannedStart)
+              : null,
+          end_minute:
+            lock.scope === LockScope.FULL || lock.scope === LockScope.TIME
+              ? minuteOfDay(live.plannedEnd)
               : null,
         });
       }
@@ -793,31 +870,18 @@ export class ScheduleRunService {
         // date, time, crew and vehicle in one pass instead of taking the date
         // as given and hunting for people who happen to be free.
         //
-        // A visit a manager pinned in time keeps its date: an empty list means
-        // "stay exactly where you are", so their decision survives the rerun.
-        const { allowedDays, preferredDays } = splitDayRules(
-          visit.serviceAgreement.dayRules,
-        );
-        const candidates = pinned.has(visit.id)
-          ? []
-          : buildCandidateSlots({
-              allowedDays,
-              preferredDays,
-              siteWindows:
-                visit.serviceAgreement.serviceSite.operatingHours.map(
-                  (hours) => ({
-                    weekday: hours.weekday,
-                    startMinute: hours.opensAtMinute,
-                    endMinute: hours.closesAtMinute,
-                  }),
-                ),
-              agreementStartMinute:
-                visit.serviceAgreement.serviceWindowStartMinute,
-              agreementEndMinute: visit.serviceAgreement.serviceWindowEndMinute,
-              durationMinutes: visit.durationMinutes,
-              from: options.from,
-              to: options.to,
-            });
+        // A manual/visit-level or workbook BOOKED decision fixes only the
+        // calendar date. Keep every legal start on that date so a date pin
+        // never silently becomes a TIME lock. Assignment TIME/FULL locks carry
+        // their exact interval separately and use the legacy fixed-window
+        // fallback (`null`). An explicit empty list remains "no legal slot".
+        const allCandidates = candidateSlotsForVisit(visit, options.from, options.to);
+        const keepDate = datePinned.has(visit.id) || visit.placement === VisitPlacement.BOOKED;
+        const candidates = timePinned.has(visit.id)
+          ? null
+          : keepDate
+            ? allCandidates.filter((slot) => slot.date === dateOnly(visit.visitDate))
+            : allCandidates;
 
         return {
           id: visit.id,
@@ -843,12 +907,12 @@ export class ScheduleRunService {
               date: dateOnly(sibling.visitDate),
               start_minute: sibling.windowStartMinute,
             })),
-          candidate_slots: candidates.map((slot) => ({
+          candidate_slots: candidates?.map((slot) => ({
             date: slot.date,
             earliest_start_minute: slot.earliestStartMinute,
             latest_start_minute: slot.latestStartMinute,
             is_preferred: slot.isPreferred,
-          })),
+          })) ?? null,
         };
       }),
       employees: employees.map((employee) => ({
@@ -941,6 +1005,13 @@ export class ScheduleRunService {
         const pmsById = new Map(
           pms.map((row) => [row.id, row.isPmsGrade]),
         );
+        const currentRun = await tx.scheduleRun.findUnique({
+          where: { id: runId },
+          select: { rangeStart: true, rangeEnd: true },
+        });
+        if (!currentRun) {
+          throw new AppException('RESOURCE_CONFLICT', 'The schedule run disappeared while it was being saved.', HttpStatus.CONFLICT, { runId });
+        }
         for (const entry of entries) {
           await assertScheduleSnapshot(
             tx,
@@ -949,7 +1020,45 @@ export class ScheduleRunService {
           );
           const visit = await tx.generatedVisit.findUniqueOrThrow({
             where: { id: entry.visitId },
-            select: { updatedAt: true, isManuallyAdjusted: true, lockedAt: true },
+            select: {
+              updatedAt: true,
+              isManuallyAdjusted: true,
+              lockedAt: true,
+              visitDate: true,
+              durationMinutes: true,
+              placement: true,
+              assignments: {
+                select: {
+                  id: true,
+                  plannedStart: true,
+                  plannedEnd: true,
+                  crewMembers: { select: { employeeId: true, role: true, isPmsSupervisor: true } },
+                  vehicles: { select: { vehicleId: true, driverEmployeeId: true } },
+                  locks: {
+                    where: { releasedAt: null },
+                    select: { scope: true },
+                  },
+                },
+              },
+              serviceAgreement: {
+                select: {
+                  startDate: true,
+                  endDate: true,
+                  frequencyUnit: true,
+                  frequencyInterval: true,
+                  serviceWindowStartMinute: true,
+                  serviceWindowEndMinute: true,
+                  dayRules: { select: { weekday: true, kind: true } },
+                  serviceSite: {
+                    select: {
+                      operatingHours: {
+                        select: { weekday: true, opensAtMinute: true, closesAtMinute: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           });
           // Lock/unlock decisions also advance this revision under the same
           // visit lock, so a stale lock snapshot rejects the complete response.
@@ -968,6 +1077,70 @@ export class ScheduleRunService {
               HttpStatus.CONFLICT,
               { runId, visitId: entry.visitId },
             );
+          }
+          if ('dto' in entry) {
+            const replaced = visit.assignments.find(
+              (assignment) => assignment.id === entry.replaceAssignmentId,
+            );
+            if (replaced) {
+              const active = new Set(replaced.locks.map((lock) => lock.scope));
+              const timePinned = active.has(LockScope.FULL) || active.has(LockScope.TIME);
+              const crewPinned = active.has(LockScope.FULL) || active.has(LockScope.CREW);
+              const supervisorPinned = active.has(LockScope.FULL) || active.has(LockScope.SUPERVISOR);
+              const vehiclePinned = active.has(LockScope.FULL) || active.has(LockScope.VEHICLE);
+              const sorted = (values: string[]) => [...values].sort();
+              const currentVehicles = replaced.vehicles
+                .map(({ vehicleId, driverEmployeeId }) => [vehicleId, driverEmployeeId])
+                .sort(([left], [right]) => left!.localeCompare(right!));
+              const proposedVehicles = entry.dto.vehicles
+                .map(({ vehicleId, driverEmployeeId }) => [vehicleId, driverEmployeeId])
+                .sort(([left], [right]) => left!.localeCompare(right!));
+              const currentSupervisors = replaced.crewMembers
+                .filter((member) => member.role === CrewRole.SUPERVISOR)
+                .map((member) => member.employeeId);
+              const proposedSupervisors = entry.dto.crew
+                .filter((member) => member.role === CrewRole.SUPERVISOR)
+                .map((member) => member.employeeId);
+              const violatesLock =
+                (timePinned && (
+                  entry.proposedVisit !== undefined ||
+                  entry.dto.plannedStartMinute !== minuteOfDay(replaced.plannedStart) ||
+                  entry.dto.plannedEndMinute !== minuteOfDay(replaced.plannedEnd)
+                )) ||
+                (crewPinned && JSON.stringify(sorted(replaced.crewMembers.map((member) => member.employeeId))) !==
+                  JSON.stringify(sorted(entry.dto.crew.map((member) => member.employeeId)))) ||
+                (supervisorPinned && JSON.stringify(sorted(currentSupervisors)) !==
+                  JSON.stringify(sorted(proposedSupervisors))) ||
+                (vehiclePinned && JSON.stringify(currentVehicles) !== JSON.stringify(proposedVehicles));
+              if (violatesLock) {
+                throw new AppException(
+                  'RESOURCE_CONFLICT',
+                  'The solver changed a manager-locked time, crew, vehicle, or driver. Refresh and run the scheduler again.',
+                  HttpStatus.CONFLICT,
+                  { runId, visitId: entry.visitId },
+                );
+              }
+            }
+          }
+          if ('proposedVisit' in entry && entry.proposedVisit) {
+            const target = entry.proposedVisit.visitDate;
+            const legal =
+              !Number.isNaN(target.getTime()) &&
+              visit.placement !== VisitPlacement.BOOKED &&
+              candidateSlotsForVisit(visit, currentRun.rangeStart, currentRun.rangeEnd).some(
+                (slot) =>
+                  slot.date === dateOnly(target) &&
+                  entry.dto.plannedStartMinute >= slot.earliestStartMinute &&
+                  entry.dto.plannedStartMinute <= slot.latestStartMinute,
+              );
+            if (!legal) {
+              throw new AppException(
+                'RESOURCE_CONFLICT',
+                'The solver proposed a date outside this visit’s booked date, cadence period, agreement dates, or service window. Refresh and run the scheduler again.',
+                HttpStatus.CONFLICT,
+                { runId, visitId: entry.visitId },
+              );
+            }
           }
         }
         // What every branch-day this run would move work between carries

@@ -51,10 +51,14 @@ export interface SolveRequest {
   }[];
   locks: {
     visit_id: string;
-    scope: 'FULL' | 'CREW' | 'VEHICLE' | 'TIME';
+    scope: 'FULL' | 'CREW' | 'SUPERVISOR' | 'VEHICLE' | 'TIME';
     employee_ids: string[];
     vehicle_ids: string[];
+    /** Exact driver pins; older callers may omit this and leave driver choice open. */
+    vehicle_drivers?: { vehicle_id: string; driver_employee_id: string | null }[];
     start_minute: number | null;
+    /** Exact locked appointment end; older callers may omit this. */
+    end_minute?: number | null;
   }[];
   existing: {
     visit_id: string;

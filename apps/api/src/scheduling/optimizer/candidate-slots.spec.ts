@@ -1,4 +1,4 @@
-import { DayRuleKind, Weekday } from '@prisma/client';
+import { DayRuleKind, FrequencyUnit, Weekday } from '@prisma/client';
 
 import { buildCandidateSlots, splitDayRules } from './candidate-slots';
 
@@ -16,6 +16,11 @@ function slots(overrides: Partial<Parameters<typeof buildCandidateSlots>[0]> = {
     agreementStartMinute: null,
     agreementEndMinute: null,
     durationMinutes: 90,
+    visitDate: new Date('2026-09-08T00:00:00.000Z'),
+    agreementStartDate: WEEK.from,
+    agreementEndDate: null,
+    frequencyUnit: FrequencyUnit.WEEK,
+    frequencyInterval: 1,
     ...WEEK,
     ...overrides,
   });
@@ -108,16 +113,48 @@ describe('buildCandidateSlots', () => {
     ]);
   });
 
-  it('covers every occurrence of an allowed weekday across a longer horizon', () => {
+  it('keeps a weekly visit inside its own ISO week even across a longer run', () => {
     const result = slots({
       allowedDays: [Weekday.TUESDAY],
       to: new Date('2026-09-27T00:00:00.000Z'),
     });
 
+    expect(result.map((slot) => slot.date)).toEqual(['2026-09-08']);
+  });
+
+  it('keeps a monthly visit in its own calendar month', () => {
+    const result = slots({
+      frequencyUnit: FrequencyUnit.MONTH,
+      to: new Date('2026-10-10T00:00:00.000Z'),
+    });
+
     expect(result.map((slot) => slot.date)).toEqual([
-      '2026-09-08',
-      '2026-09-15',
-      '2026-09-22',
+      '2026-09-08', '2026-09-10', '2026-09-15', '2026-09-17',
+      '2026-09-22', '2026-09-24', '2026-09-29',
+    ]);
+  });
+
+  it('clips a visit to the agreement start and end dates', () => {
+    const result = slots({
+      frequencyUnit: FrequencyUnit.MONTH,
+      visitDate: new Date('2026-09-10T00:00:00.000Z'),
+      agreementStartDate: new Date('2026-09-09T00:00:00.000Z'),
+      agreementEndDate: new Date('2026-09-16T00:00:00.000Z'),
+      to: new Date('2026-09-30T00:00:00.000Z'),
+    });
+
+    expect(result.map((slot) => slot.date)).toEqual(['2026-09-10', '2026-09-15']);
+  });
+
+  it('keeps a fortnightly visit inside the agreement-anchored two-week cycle', () => {
+    const result = slots({
+      visitDate: new Date('2026-09-17T00:00:00.000Z'),
+      frequencyInterval: 2,
+      to: new Date('2026-10-04T00:00:00.000Z'),
+    });
+
+    expect(result.map((slot) => slot.date)).toEqual([
+      '2026-09-08', '2026-09-10', '2026-09-15', '2026-09-17',
     ]);
   });
 });

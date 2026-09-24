@@ -1,9 +1,11 @@
-import { DayRuleKind, Weekday } from '@prisma/client';
+import { DayRuleKind, FrequencyUnit, Weekday } from '@prisma/client';
 
 import {
   ASSUMED_DAY_WINDOW,
   DayWindow,
   effectiveWindows,
+  periodBoundsOf,
+  periodIndexOf,
   toDateOnly,
   weekdayOf,
 } from '../../catalog/schedule-preview';
@@ -36,6 +38,12 @@ export interface CandidateSlot {
 }
 
 export interface SlotInput {
+  /** The occurrence being staffed and its agreement-anchored cadence. */
+  visitDate: Date;
+  agreementStartDate: Date;
+  agreementEndDate: Date | null;
+  frequencyUnit: FrequencyUnit;
+  frequencyInterval: number;
   /** Days the agreement allows. A hard rule: nothing may be placed elsewhere. */
   allowedDays: Weekday[];
   /** Days the customer would rather have. A preference the solver scores. */
@@ -77,6 +85,35 @@ export function buildCandidateSlots(input: SlotInput): CandidateSlot[] {
   const allowed = new Set(input.allowedDays);
   if (allowed.size === 0) return [];
 
+  const interval = Math.max(1, input.frequencyInterval);
+  const periodIndex = periodIndexOf(
+    input.visitDate,
+    input.agreementStartDate,
+    input.frequencyUnit,
+    interval,
+  );
+  const period = periodBoundsOf(
+    periodIndex,
+    input.agreementStartDate,
+    input.frequencyUnit,
+    interval,
+  );
+  const first = new Date(
+    Math.max(
+      input.from.getTime(),
+      input.agreementStartDate.getTime(),
+      new Date(period.start).getTime(),
+    ),
+  );
+  const last = new Date(
+    Math.min(
+      input.to.getTime(),
+      input.agreementEndDate?.getTime() ?? Infinity,
+      new Date(period.end).getTime(),
+    ),
+  );
+  if (first > last) return [];
+
   const preferred = new Set(input.preferredDays);
   const windowsByDay = new Map<Weekday, DayWindow[]>();
   for (const window of input.siteWindows) {
@@ -87,7 +124,7 @@ export function buildCandidateSlots(input: SlotInput): CandidateSlot[] {
 
   const slots: CandidateSlot[] = [];
 
-  for (const date of datesBetween(input.from, input.to)) {
+  for (const date of datesBetween(first, last)) {
     const weekday = weekdayOf(date);
     if (!allowed.has(weekday)) continue;
 

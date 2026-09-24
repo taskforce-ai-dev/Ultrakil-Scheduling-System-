@@ -4,9 +4,11 @@ import {
   BranchCode,
   CrewRole,
   DayRuleKind,
+  FrequencyUnit,
   LockScope,
   Prisma,
   ScheduleRunStatus,
+  VisitPlacement,
   VisitStatus,
   Weekday,
 } from '@prisma/client';
@@ -31,7 +33,7 @@ import {
   BULLMQ_LEASE_HEARTBEAT_MILLISECONDS,
   SELF_HOSTED_EXECUTION_BUDGET_SECONDS,
 } from './schedule-run-execution-budget';
-import { SchedulerClient, SolveResponse } from './scheduler.client';
+import { SchedulerClient, SolveRequest, SolveResponse } from './scheduler.client';
 import { PublishingService } from './publishing.service';
 
 function deferred<T>() {
@@ -67,10 +69,18 @@ function fixture(
     durationMinutes: 90,
     requiredCrewSize: 1,
     status: VisitStatus.SCHEDULED,
+    placement: VisitPlacement.ANCHORED,
     serviceAgreementId: 'agreement',
     serviceAgreement: {
+      startDate: new Date('2027-03-01T00:00:00Z'),
+      endDate: null,
+      frequencyUnit: FrequencyUnit.WEEK,
+      frequencyInterval: 1,
       requiredSkills: [],
-      dayRules: [],
+      dayRules: [
+        { weekday: Weekday.WEDNESDAY, kind: DayRuleKind.ALLOWED },
+        { weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },
+      ] as { weekday: Weekday; kind: DayRuleKind }[],
       serviceSiteId: 'site',
       serviceWindowStartMinute: 540,
       serviceWindowEndMinute: 720,
@@ -82,9 +92,9 @@ function fixture(
     status: initialStatus,
     plannedStart: new Date('2027-03-03T10:00:00Z'),
     plannedEnd: new Date('2027-03-03T11:30:00Z'),
-    crewMembers: [{ employeeId: 'employee', isPmsSupervisor: true }],
+    crewMembers: [{ employeeId: 'employee', role: CrewRole.SUPERVISOR, isPmsSupervisor: true }],
     vehicles: [],
-    locks: [],
+    locks: [] as { scope: LockScope; releasedAt: Date | null }[],
   };
   const assignments = [oldAssignment];
   const outbox: {
@@ -208,9 +218,22 @@ function fixture(
       async (args?: { where?: { branchCode?: { in: BranchCode[] } | BranchCode } }) =>
         args?.where?.branchCode && typeof args.where.branchCode === 'object'
           ? dayLoadFindMany(args as never)
-          : [{ ...visit, assignments: assignments.map((a) => ({ ...a })) }],
+          : [{ ...visit, assignments: assignments.map((a) => ({
+            ...a,
+            locks: a.locks.filter((lock) => lock.releasedAt === null),
+          })) }],
     ),
-    findUniqueOrThrow: jest.fn(async () => ({ ...visit })),
+    findUniqueOrThrow: jest.fn(async (args?: {
+      select?: { assignments?: { select?: { locks?: { where?: { releasedAt: null } } } } };
+    }) => ({
+      ...visit,
+      assignments: assignments.map((assignment) => ({
+        ...assignment,
+        locks: args?.select?.assignments?.select?.locks?.where
+          ? assignment.locks.filter((lock) => lock.releasedAt === null)
+          : assignment.locks,
+      })),
+    })),
     update: jest.fn(async ({ data }: { data: Partial<typeof visit> }) =>
       Object.assign(visit, data),
     ),
@@ -520,6 +543,187 @@ function fixture(
 }
 
 describe('solver replacement lifecycle fence', () => {
+  it('keeps SUPERVISOR distinct from CREW when composing active locks', async () => {
+    const f = fixture();
+    f.oldAssignment.locks.push(
+      { scope: LockScope.SUPERVISOR, releasedAt: null },
+      { scope: LockScope.TIME, releasedAt: null },
+      { scope: LockScope.CREW, releasedAt: new Date('2027-02-02T00:00:00Z') },
+    );
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+    expect(request.locks.map((lock) => lock.scope)).toEqual(['SUPERVISOR', 'TIME']);
+    expect(request.locks[0].employee_ids).toEqual(['employee']);
+    f.release();
+    await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+  });
+
+  it('rejects a stale response that replaces a pinned supervisor while retaining a PMS-grade crew', async () => {
+    const f = fixture();
+    f.oldAssignment.locks.push({ scope: LockScope.SUPERVISOR, releasedAt: null });
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.answer.resolve({
+      run_id: f.run.id, status: 'OPTIMAL',
+      assignments: [{ visit_id: f.visit.id, employee_ids: ['other'], vehicles: [], start_minute: 600, scheduled_date: '2027-03-03' }],
+      unassigned: [], solve_seconds: 0, objective_value: 0, visits_considered: 1,
+    });
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'crew under combined TIME and CREW locks', scopes: [LockScope.TIME, LockScope.CREW], crew: ['other'], driver: null },
+    { name: 'driver under a VEHICLE lock', scopes: [LockScope.VEHICLE], crew: ['employee'], driver: 'other' },
+  ])('rejects a stale solver replacement of the $name', async ({ scopes, crew, driver }) => {
+    const f = fixture();
+    Object.assign(f.oldAssignment, {
+      locks: scopes.map((scope) => ({ scope, releasedAt: null })),
+      vehicles: driver ? [{ vehicleId: 'van', driverEmployeeId: 'employee' }] : [],
+    });
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.answer.resolve({
+      run_id: f.run.id,
+      status: 'OPTIMAL',
+      assignments: [{
+        visit_id: f.visit.id,
+        employee_ids: crew,
+        vehicles: driver ? [{ vehicle_id: 'van', driver_employee_id: driver }] : [],
+        start_minute: 600,
+        scheduled_date: '2027-03-03',
+      }],
+      unassigned: [],
+      solve_seconds: 0,
+      objective_value: 0,
+      visits_considered: 1,
+    });
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a solver move of a time-locked visit even when the new date fits its cadence', async () => {
+    const f = fixture('2027-03-04');
+    f.oldAssignment.locks.push({ scope: LockScope.TIME, releasedAt: null });
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+    expect(request.visits[0].candidate_slots).toEqual([]);
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+  });
+
+  it('allows a legal move after its time lock was released', async () => {
+    const f = fixture('2027-03-04');
+    f.oldAssignment.locks.push({
+      scope: LockScope.TIME,
+      releasedAt: new Date('2027-02-02T00:00:00Z'),
+    });
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    const request = (f.scheduler.solve.mock.calls as unknown as [SolveRequest][])[0][0];
+    expect(request.visits[0].candidate_slots.map((slot) => slot.date)).toContain('2027-03-04');
+    f.release();
+
+    await expect(pending).resolves.toMatchObject({ scheduled: 1 });
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-04T00:00:00Z'));
+  });
+
+  it.each([
+    {
+      name: 'a workbook BOOKED date',
+      scheduledDate: '2027-03-04',
+      placement: VisitPlacement.BOOKED,
+      unit: FrequencyUnit.WEEK,
+      endDate: null,
+      runEnd: '2027-03-07',
+      allowed: Weekday.THURSDAY,
+    },
+    {
+      name: 'a different ISO week',
+      scheduledDate: '2027-03-08',
+      placement: VisitPlacement.ANCHORED,
+      unit: FrequencyUnit.WEEK,
+      endDate: null,
+      runEnd: '2027-03-14',
+      allowed: Weekday.MONDAY,
+    },
+    {
+      name: 'a different calendar month',
+      scheduledDate: '2027-04-01',
+      placement: VisitPlacement.ANCHORED,
+      unit: FrequencyUnit.MONTH,
+      endDate: null,
+      runEnd: '2027-04-03',
+      allowed: Weekday.THURSDAY,
+    },
+    {
+      name: 'past the agreement end date',
+      scheduledDate: '2027-03-04',
+      placement: VisitPlacement.ANCHORED,
+      unit: FrequencyUnit.WEEK,
+      endDate: '2027-03-03',
+      runEnd: '2027-03-07',
+      allowed: Weekday.THURSDAY,
+    },
+  ])('rejects a stale solver move to $name before persistence', async ({
+    scheduledDate, placement, unit, endDate, runEnd, allowed,
+  }) => {
+    const f = fixture(scheduledDate);
+    Object.assign(f.visit, { placement });
+    Object.assign(f.visit.serviceAgreement, {
+      frequencyUnit: unit,
+      endDate: endDate ? new Date(`${endDate}T00:00:00Z`) : null,
+      dayRules: [{ weekday: allowed, kind: DayRuleKind.ALLOWED }],
+    });
+    f.run.rangeEnd = new Date(`${runEnd}T00:00:00Z`);
+
+    const pending = f.service.execute(f.run.id);
+    await f.started.promise;
+    f.release();
+
+    await expect(pending).rejects.toMatchObject({ code: 'RESOURCE_CONFLICT' });
+    expect(f.assignment.create).not.toHaveBeenCalled();
+    expect(f.visit.visitDate).toEqual(new Date('2027-03-03T00:00:00Z'));
+  });
+
+  it('pins a workbook BOOKED visit to its committed date even when other days are allowed', () => {
+    const f = fixture();
+    const target = {
+      ...f.visit,
+      placement: VisitPlacement.BOOKED,
+      assignments: [],
+      serviceAgreement: {
+        ...f.visit.serviceAgreement,
+        dayRules: [
+          { weekday: Weekday.WEDNESDAY, kind: DayRuleKind.ALLOWED },
+          { weekday: Weekday.THURSDAY, kind: DayRuleKind.ALLOWED },
+        ],
+      },
+    };
+    const request = (
+      f.service as unknown as {
+        buildSolveRequest: (
+          runId: string, visits: unknown[], employees: unknown[], vehicles: unknown[],
+          options: { timeLimitSeconds: number; from: Date; to: Date },
+        ) => { visits: { id: string; candidate_slots: { date: string }[] }[] };
+      }
+    ).buildSolveRequest('run', [target], [], [], {
+      timeLimitSeconds: 20,
+      from: new Date('2027-03-01T00:00:00Z'),
+      to: new Date('2027-03-07T00:00:00Z'),
+    });
+
+    expect(request.visits[0].candidate_slots).toEqual([]);
+  });
+
   it('sends published reservations and sibling keys while retaining the target own date', () => {
     const f = fixture();
     const target = {
@@ -779,6 +983,44 @@ describe('solver replacement lifecycle fence', () => {
       expect(f.generatedVisit.update).not.toHaveBeenCalled();
     },
   );
+
+  it('passes all active lock scopes and exact vehicle drivers to the solver in stable order', () => {
+    const f = fixture();
+    const target = {
+      ...f.visit,
+      assignments: [{
+        ...f.oldAssignment,
+        locks: [
+          { scope: LockScope.VEHICLE },
+          { scope: LockScope.TIME },
+          { scope: LockScope.CREW },
+        ],
+        vehicles: [{ vehicleId: 'van', driverEmployeeId: 'employee' }],
+      }],
+    };
+    const request = (
+      f.service as unknown as {
+        buildSolveRequest: (
+          runId: string, visits: unknown[], employees: unknown[], vehicles: unknown[],
+          options: { timeLimitSeconds: number; from: Date; to: Date },
+        ) => SolveRequest;
+      }
+    ).buildSolveRequest('run', [target], [], [], {
+      timeLimitSeconds: 20,
+      from: new Date('2027-03-03T00:00:00Z'),
+      to: new Date('2027-03-03T00:00:00Z'),
+    });
+
+    expect(request.locks).toEqual([
+      expect.objectContaining({ scope: 'CREW', employee_ids: ['employee'] }),
+      expect.objectContaining({ scope: 'TIME', start_minute: 600, end_minute: 690 }),
+      expect.objectContaining({
+        scope: 'VEHICLE', vehicle_ids: ['van'],
+        vehicle_drivers: [{ vehicle_id: 'van', driver_employee_id: 'employee' }],
+      }),
+    ]);
+    expect(request.visits[0].candidate_slots).toEqual([]);
+  });
 
   it('maps a final Prisma unique collision to a safe resource conflict', async () => {
     const f = fixture();
@@ -1446,8 +1688,8 @@ describe('at-least-once schedule-run delivery leases', () => {
     await pending;
 
     expect(f.scheduler.solve).toHaveBeenCalledWith(
-      expect.objectContaining({ time_limit_seconds: 9 }),
-      19_000,
+      expect.objectContaining({ time_limit_seconds: 4 }),
+      18_000,
     );
   });
 
@@ -2014,6 +2256,21 @@ describe('solvedCrewRoles', () => {
 
     expect(roles.filter((member) => member.role === CrewRole.SUPERVISOR)).toEqual([
       { employeeId: 'b', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('retains the exact pinned supervisor when another PMS-grade member sorts first', () => {
+    expect(solvedCrewRoles(['a', 'b'], pms('a', 'b'), ['b'])).toEqual([
+      { employeeId: 'a', role: CrewRole.TECHNICIAN },
+      { employeeId: 'b', role: CrewRole.SUPERVISOR },
+    ]);
+  });
+
+  it('retains every historical supervisor identity when a pinned crew had more than one', () => {
+    expect(solvedCrewRoles(['a', 'b', 'c'], pms('a', 'b'), ['a', 'b'])).toEqual([
+      { employeeId: 'a', role: CrewRole.SUPERVISOR },
+      { employeeId: 'b', role: CrewRole.SUPERVISOR },
+      { employeeId: 'c', role: CrewRole.TECHNICIAN },
     ]);
   });
 

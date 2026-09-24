@@ -82,8 +82,7 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
         # movable visit is only genuinely too tight when that is true of every
         # slot it could take.
         if not any(
-            slot.earliest_start_minute <= slot.latest_start_minute
-            for slot in visit.candidate_slots
+            slot.earliest_start_minute <= slot.latest_start_minute for slot in visit.candidate_slots
         ):
             reasons.append("WINDOW_TOO_SHORT")
     elif visit.window_end_minute - visit.window_start_minute < visit.duration_minutes:
@@ -97,9 +96,7 @@ def _why_unstaffable(request: SolveRequest, visit) -> list[str]:
     # between a manager seeing "nobody who can serve this is checked for any
     # van" and seeing an unexplained blank.
     usable = [v for v in request.vehicles if _vehicle_serves_branch(v, visit)]
-    authorized = [
-        v for v in usable if any(v.id in e.authorized_vehicle_ids for e in eligible)
-    ]
+    authorized = [v for v in usable if any(v.id in e.authorized_vehicle_ids for e in eligible)]
     if usable and not authorized:
         reasons.append("NO_AUTHORIZED_DRIVER")
 
@@ -202,7 +199,13 @@ def solve(request: SolveRequest) -> SolveResponse:
     if not visits:
         return _solve_window(request)
 
+    date_pinned = {
+        lock.visit_id for lock in request.locks if lock.scope in ("FULL", "TIME")
+    }
+
     def days_for(visit) -> list[str]:
+        if visit.id in date_pinned:
+            return [visit.visit_date]
         if not visit.candidate_slots:
             return [visit.visit_date]
         return sorted({slot.date for slot in visit.candidate_slots})
@@ -235,10 +238,11 @@ def solve(request: SolveRequest) -> SolveResponse:
         # day on its timeline and the start variable chooses the time within it.
         narrowed = []
         for visit in todays:
-            slots = [slot for slot in visit.candidate_slots if slot.date == day]
-            narrowed.append(
-                visit.model_copy(update={"visit_date": day, "candidate_slots": slots})
+            slots = (
+                [] if visit.id in date_pinned
+                else [slot for slot in visit.candidate_slots if slot.date == day]
             )
+            narrowed.append(visit.model_copy(update={"visit_date": day, "candidate_slots": slots}))
 
         ids = {visit.id for visit in narrowed}
         result = _solve_window(
@@ -316,7 +320,9 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     employees = sorted(request.employees, key=lambda e: e.id)
     vehicles = sorted(request.vehicles, key=lambda k: k.id)
 
-    locks_by_visit = {lock.visit_id: lock for lock in request.locks}
+    locks_by_visit = {}
+    for lock in sorted(request.locks, key=lambda entry: (entry.visit_id, entry.scope)):
+        locks_by_visit.setdefault(lock.visit_id, []).append(lock)
     existing_by_visit = {row.visit_id: row for row in request.existing}
 
     # --- Variables ----------------------------------------------------------
@@ -418,8 +424,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         | {
             reservation.scheduled_date
             for reservation in request.reservations
-            if reservation.assignment_id
-            not in set(request.excluded_reservation_assignment_ids)
+            if reservation.assignment_id not in set(request.excluded_reservation_assignment_ids)
         }
     )
     day_index = {date: index for index, date in enumerate(all_dates)}
@@ -431,12 +436,11 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         integer carries both the date and the time and two visits on different
         days can never be found to overlap.
         """
-        lock = locks_by_visit.get(v.id)
-        if (
-            lock is not None
-            and lock.scope in ("FULL", "TIME")
-            and lock.start_minute is not None
-        ):
+        lock = next(
+            (entry for entry in locks_by_visit.get(v.id, []) if entry.scope in ("FULL", "TIME")),
+            None,
+        )
+        if lock is not None and lock.scope in ("FULL", "TIME") and lock.start_minute is not None:
             return [day_index[v.visit_date] * 1440 + lock.start_minute]
         if not v.candidate_slots:
             base = day_index[v.visit_date] * 1440 + v.window_start_minute
@@ -551,9 +555,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     ]
 
     def reservation_interval(reservation, resource_id: str, kind: str):
-        resource_ids = (
-            reservation.employee_ids if kind == "employee" else reservation.vehicle_ids
-        )
+        resource_ids = reservation.employee_ids if kind == "employee" else reservation.vehicle_ids
         if resource_id not in resource_ids:
             return None
         duration = reservation.end_minute - reservation.start_minute
@@ -568,8 +570,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         intervals = [
             interval
             for reservation in reservations
-            if (interval := reservation_interval(reservation, employee.id, "employee"))
-            is not None
+            if (interval := reservation_interval(reservation, employee.id, "employee")) is not None
         ]
         for v in visits:
             var = assign.get((v.id, employee.id))
@@ -592,8 +593,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         intervals = [
             interval
             for reservation in reservations
-            if (interval := reservation_interval(reservation, vehicle.id, "vehicle"))
-            is not None
+            if (interval := reservation_interval(reservation, vehicle.id, "vehicle")) is not None
         ]
         for v in visits:
             var = uses_vehicle.get((v.id, vehicle.id))
@@ -691,25 +691,58 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
     # invalid assignment valid, though: the rules above still apply, so a lock
     # on an impossible crew simply leaves the visit unassigned.
     for visit in visits:
-        lock = locks_by_visit.get(visit.id)
-        if lock is None:
-            continue
+        for lock in locks_by_visit.get(visit.id, []):
+            if (
+                lock.scope in ("FULL", "TIME")
+                and lock.end_minute is not None
+                and (
+                    lock.start_minute is None
+                    or lock.end_minute - lock.start_minute != visit.duration_minutes
+                )
+            ):
+                model.Add(staffed[visit.id] == 0)
 
-        if lock.scope in ("FULL", "CREW"):
-            for employee in employees:
-                var = assign.get((visit.id, employee.id))
-                if var is None:
-                    continue
-                model.Add(var == (1 if employee.id in lock.employee_ids else 0))
-            if lock.employee_ids:
-                model.Add(staffed[visit.id] == 1)
+            if lock.scope in ("FULL", "CREW"):
+                for employee in employees:
+                    var = assign.get((visit.id, employee.id))
+                    if var is not None:
+                        model.Add(
+                            var == (1 if employee.id in lock.employee_ids else 0)
+                        ).OnlyEnforceIf(staffed[visit.id])
+                if any((visit.id, employee_id) not in assign for employee_id in lock.employee_ids):
+                    model.Add(staffed[visit.id] == 0)
 
-        if lock.scope in ("FULL", "VEHICLE"):
-            for vehicle in vehicles:
-                var = uses_vehicle.get((visit.id, vehicle.id))
-                if var is None:
-                    continue
-                model.Add(var == (1 if vehicle.id in lock.vehicle_ids else 0))
+            if lock.scope == "SUPERVISOR":
+                # Pin the manager's chosen lead, not every crew member. The API
+                # retains the role on write and checks it again under row lock.
+                for employee_id in lock.employee_ids:
+                    var = assign.get((visit.id, employee_id))
+                    employee = next((e for e in employees if e.id == employee_id), None)
+                    if var is None or employee is None or not employee.is_pms_grade:
+                        model.Add(staffed[visit.id] == 0)
+                    else:
+                        model.Add(var == 1).OnlyEnforceIf(staffed[visit.id])
+
+            if lock.scope in ("FULL", "VEHICLE"):
+                for vehicle in vehicles:
+                    var = uses_vehicle.get((visit.id, vehicle.id))
+                    if var is not None:
+                        model.Add(
+                            var == (1 if vehicle.id in lock.vehicle_ids else 0)
+                        ).OnlyEnforceIf(staffed[visit.id])
+                if any(
+                    (visit.id, vehicle_id) not in uses_vehicle for vehicle_id in lock.vehicle_ids
+                ):
+                    model.Add(staffed[visit.id] == 0)
+                for mapping in lock.vehicle_drivers:
+                    if mapping.driver_employee_id is None:
+                        model.Add(staffed[visit.id] == 0)
+                        continue
+                    drive = drives.get((visit.id, mapping.vehicle_id, mapping.driver_employee_id))
+                    if drive is None:
+                        model.Add(staffed[visit.id] == 0)
+                    else:
+                        model.Add(drive == 1).OnlyEnforceIf(staffed[visit.id])
 
     # --- Soft preferences ---------------------------------------------------
 
@@ -754,14 +787,10 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             # otherwise illegal time is absent from the variable's domain and
             # receives no term, so reservations and every hard rule still win.
             if existing.start_minute is not None:
-                wanted_start = (
-                    day_index[visit.visit_date] * 1440 + existing.start_minute
-                )
+                wanted_start = day_index[visit.visit_date] * 1440 + existing.start_minute
                 if wanted_start in slot_starts(visit):
                     kept_time = model.NewBoolVar(f"keep_time_{visit.id}")
-                    model.Add(start_of[visit.id] == wanted_start).OnlyEnforceIf(
-                        kept_time
-                    )
+                    model.Add(start_of[visit.id] == wanted_start).OnlyEnforceIf(kept_time)
                     model.AddImplication(kept_time, staffed[visit.id])
                     terms.append((WEIGHT_KEEP_EXISTING_TIME, kept_time))
 
@@ -837,7 +866,14 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
             # Where the solver put it. A time lock still wins outright: the
             # manager's decision is a hard constraint, and reporting anything
             # else would be reporting a schedule the crews were not given.
-            lock = locks_by_visit.get(visit.id)
+            lock = next(
+                (
+                    entry
+                    for entry in locks_by_visit.get(visit.id, [])
+                    if entry.scope in ("FULL", "TIME")
+                ),
+                None,
+            )
             pins_time = (
                 lock is not None
                 and lock.scope in ("FULL", "TIME")
@@ -876,9 +912,7 @@ def _solve_window(request: SolveRequest) -> SolveResponse:
         unassigned=sorted(unassigned, key=lambda u: u.visit_id),
         solve_seconds=round(time.monotonic() - started, 3),
         objective_value=(
-            int(solver.ObjectiveValue())
-            if status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
-            else 0
+            int(solver.ObjectiveValue()) if status in (cp_model.OPTIMAL, cp_model.FEASIBLE) else 0
         ),
         visits_considered=len(visits),
     )
@@ -901,9 +935,7 @@ _MESSAGES = {
         "No vehicle is available for this visit and too few of the people who "
         "could serve it can travel by public transport."
     ),
-    "NO_FEASIBLE_CREW": (
-        "No combination of available people satisfies every rule for this visit."
-    ),
+    "NO_FEASIBLE_CREW": ("No combination of available people satisfies every rule for this visit."),
 }
 
 
