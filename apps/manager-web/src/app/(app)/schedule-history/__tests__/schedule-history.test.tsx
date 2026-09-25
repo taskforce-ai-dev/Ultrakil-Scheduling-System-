@@ -995,6 +995,57 @@ describe("ScheduleHistoryPage pagination", () => {
     expect(screen.getByRole("region", { name: "Current schedule" }).textContent).toBe(inForceText);
   });
 
+  it("shows page-2 rows, not just an enabled pager, when a poll ticks mid-navigation", async () => {
+    // Fourth review pass: with the foreground fence decoupled, a poll starting
+    // mid-page-change still bumped the data fence. The navigation's own
+    // response was then discarded as stale, so the pager re-enabled while the
+    // page-1 rows sat under the page-2 number — until the poll answered, or
+    // forever if it hung.
+    //
+    // Two *separate* deferreds matter here. Sharing one lets the poll resolve
+    // with page-2 data as well, which papers over the mismatch; the poll's
+    // request is held open so the defect is actually reachable.
+    const queued = buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 });
+    const firstPage = [queued, ...Array.from({ length: 49 }, (_, i) => buildScheduleRun({ id: `p1-${i}` }))];
+    const secondPage = Array.from({ length: 50 }, (_, i) => buildScheduleRun({ id: `p2-${i}` }));
+    const foregroundPageTwo = deferredRun();
+    const pollPageTwo = deferredRun(); // deliberately never resolved
+    let pageTwoCalls = 0;
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) {
+        pageTwoCalls += 1;
+        return pageTwoCalls === 1 ? foregroundPageTwo.promise : pollPageTwo.promise;
+      }
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-queued");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // A poll tick lands while the navigation is still pending. It must stand
+    // aside rather than fire a competing request that invalidates it.
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    // The navigation's own response resolves first; the poll's stays open.
+    await act(async () => {
+      foregroundPageTwo.resolve({ items: secondPage, total: 150, page: 2, pageSize: 50 });
+    });
+
+    // The rows must actually be page 2's. An enabled pager over page-1 rows
+    // under a page-2 number is the defect, not the fix.
+    expect(await screen.findByTestId("run-p2-0")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-p1-0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51–100 of 150 runs");
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeEnabled();
+    expect(pageTwoCalls).toBe(1);
+  });
+
   it("ignores a poll that was overtaken by a page change", async () => {
     const slowFirstPage = deferredRun();
     vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {

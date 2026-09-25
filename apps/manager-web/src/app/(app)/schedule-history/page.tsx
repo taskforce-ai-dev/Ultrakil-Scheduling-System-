@@ -274,6 +274,10 @@ export default function ScheduleHistoryPage() {
   // Cleared by the newest *foreground* load only, so a background poll can
   // never strand the spinner (see `load`).
   const foregroundRequest = React.useRef(0);
+  // True while a page change is waiting for its rows. The poll reads it and
+  // stands aside, so a background refresh can never invalidate the navigation
+  // the manager is actually waiting on.
+  const foregroundPending = React.useRef(false);
   // Fences the separate page-1 summary fetch, and is bumped by a page-1 load
   // so an older summary response cannot overwrite a newer panel.
   const summaryRequest = React.useRef(0);
@@ -321,7 +325,10 @@ export default function ScheduleHistoryPage() {
     // generation and skipped, while the poll's own `finally` skipped because
     // it is silent — and `isLoading` stayed true, disabling the pager forever.
     const foreground = options?.silent ? null : ++foregroundRequest.current;
-    if (foreground !== null) setIsLoading(true);
+    if (foreground !== null) {
+      foregroundPending.current = true;
+      setIsLoading(true);
+    }
     setError(null);
     return fetchScheduleRuns({ page, pageSize: RUNS_PAGE_SIZE })
       .then((response) => {
@@ -356,7 +363,14 @@ export default function ScheduleHistoryPage() {
       .finally(() => {
         // Only the newest foreground request clears the spinner, and a poll
         // can no longer prevent it from doing so.
-        if (foreground !== null && foreground === foregroundRequest.current) setIsLoading(false);
+        // The newest foreground request owns both: with the poll standing
+        // aside, "this is the newest foreground request" and "its response was
+        // applied" are now the same condition, so the pager can only re-enable
+        // once the rows it was waiting for are on screen.
+        if (foreground !== null && foreground === foregroundRequest.current) {
+          foregroundPending.current = false;
+          setIsLoading(false);
+        }
       });
     },
     [page],
@@ -470,7 +484,17 @@ export default function ScheduleHistoryPage() {
     // summary is refreshed alongside the page so progress on a run that is
     // not on screen still reaches the Current schedule panel.
     const timer = setInterval(() => {
-      load({ silent: true });
+      // Skip the list refresh while a page change is still in flight. That
+      // request is already fetching this very page, so a poll adds nothing —
+      // and it would bump the data fence, discarding the navigation's own
+      // response. The pager would then re-enable (its foreground fence is
+      // satisfied) while the previous page's rows sat under the new page
+      // number, until the poll answered — or forever, if the poll hung.
+      //
+      // The summary keeps refreshing: it is a different request with its own
+      // fence, and the in-force panel should stay current even while the
+      // manager is waiting for a page.
+      if (!foregroundPending.current) load({ silent: true });
       loadSummary();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
