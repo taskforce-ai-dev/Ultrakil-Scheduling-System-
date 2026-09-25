@@ -733,3 +733,62 @@ describe("ServiceAgreementsPage", () => {
     });
   });
 });
+
+/**
+ * ULK-O12. The customer picker used to make one `pageSize: 200` request and
+ * offer whatever came back. On a book of work larger than that, a customer was
+ * simply not offerable — no message, no search, no way to reach them — so an
+ * agreement could not be created for them at all.
+ */
+describe("ServiceAgreementsPage customer selector completeness", () => {
+  function customerRange(from: number, count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      buildCustomer({
+        id: `customer-${from + index}`,
+        name: `Customer ${from + index}`,
+        sites: [buildServiceSite({ id: `site-${from + index}`, isActive: true })],
+      }),
+    );
+  }
+
+  it("offers a customer past the first page (customer 201)", async () => {
+    vi.mocked(fetchCustomers).mockImplementation(async (query) => {
+      const page = query?.page ?? 1;
+      const pageSize = query?.pageSize ?? 200;
+      const start = (page - 1) * pageSize;
+      return {
+        items: customerRange(start + 1, Math.max(0, Math.min(pageSize, 250 - start))),
+        total: 250,
+        page,
+        pageSize,
+      };
+    });
+
+    const user = userEvent.setup();
+    render(<ServiceAgreementsPage />);
+    await screen.findByRole("button", { name: "Add agreement" });
+    await user.click(screen.getByRole("button", { name: "Add agreement" }));
+    await user.click(screen.getByLabelText("Customer"));
+
+    // The row that the single-request version could never reach.
+    expect(await screen.findByRole("option", { name: "Customer 201" })).toBeInTheDocument();
+    expect(fetchCustomers).toHaveBeenCalledWith({ page: 2, pageSize: 200 });
+  });
+
+  it("surfaces an error rather than a silently short customer list", async () => {
+    // The server claims 500 customers but stops serving rows after page 1 —
+    // a partial list here would look exactly like a complete one.
+    vi.mocked(fetchCustomers).mockImplementation(async (query) => ({
+      items: (query?.page ?? 1) === 1 ? customerRange(1, 200) : [],
+      total: 500,
+      page: query?.page ?? 1,
+      pageSize: 200,
+    }));
+
+    render(<ServiceAgreementsPage />);
+
+    expect(
+      await screen.findByText(/Only 200 of 500 customers could be loaded/),
+    ).toBeInTheDocument();
+  });
+});

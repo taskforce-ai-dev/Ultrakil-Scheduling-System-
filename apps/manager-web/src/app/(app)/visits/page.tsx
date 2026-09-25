@@ -34,7 +34,6 @@ import {
   adjustVisit,
   ApiError,
   fetchBranches,
-  fetchCustomers,
   fetchJobTypes,
   fetchVisits,
   type BranchListItem,
@@ -43,6 +42,7 @@ import {
   type Visit,
   type VisitStatus,
 } from "@/lib/api-client";
+import { loadAllCustomers } from "@/lib/load-all-customers";
 import {
   addDays,
   addMonths,
@@ -316,15 +316,15 @@ export default function VisitsPage() {
         pageSize: 500,
         ...(branch === "ALL" ? {} : { branchCode: branch }),
       }),
-      fetchCustomers({ pageSize: 200 }),
+      loadAllCustomers(),
       fetchJobTypes(),
       fetchBranches(),
     ])
-      .then(([visitPage, customerPage, jobTypeList, branchList]) => {
+      .then(([visitPage, allCustomers, jobTypeList, branchList]) => {
         if (generation !== requestGeneration.current) return;
         setVisits(visitPage.items);
         setTotalInRange(visitPage.total);
-        setCustomers(customerPage.items);
+        setCustomers(allCustomers);
         setJobTypes(jobTypeList);
         setBranches(branchList);
       })

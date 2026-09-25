@@ -279,3 +279,167 @@ describe("CustomersPage", () => {
     });
   });
 });
+
+/**
+ * ULK-O12. This table used to ask for `pageSize: 200` and render whatever came
+ * back with nothing on screen to say more existed. A customer at position 201
+ * was not filtered out and not on a later page — the portal simply had no way
+ * to reach them, and no way to tell you so.
+ */
+describe("CustomersPage pagination", () => {
+  /** Customers named so the nth is identifiable by name alone. */
+  function customerRange(from: number, count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      buildCustomer({ id: `customer-${from + index}`, name: `Customer ${from + index}`, sites: [] })
+    );
+  }
+
+  /** Serves `total` customers in pages of 50, the way the API does. */
+  function servePages(total: number) {
+    vi.mocked(fetchCustomers).mockImplementation(async (query) => {
+      const page = query?.page ?? 1;
+      const pageSize = query?.pageSize ?? 50;
+      const start = (page - 1) * pageSize;
+      return {
+        items: customerRange(start + 1, Math.max(0, Math.min(pageSize, total - start))),
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
+  it("states the API's total and the range on screen", async () => {
+    servePages(250);
+    render(<CustomersPage />);
+
+    expect(await screen.findByTestId("pagination-range")).toHaveTextContent(
+      "Showing 1–50 of 250 customers"
+    );
+    expect(screen.getByText("Page 1 of 5")).toBeInTheDocument();
+  });
+
+  it("asks the API for one page, not two hundred rows", async () => {
+    servePages(250);
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    expect(fetchCustomers).toHaveBeenCalledWith({ page: 1, pageSize: 50, active: true });
+  });
+
+  it("reaches customer 201 through the pager", async () => {
+    servePages(250);
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    // Page 5 holds rows 201–250.
+    for (let click = 0; click < 4; click += 1) {
+      await user.click(screen.getByRole("button", { name: /Next/ }));
+      await screen.findByText(`Customer ${1 + (click + 1) * 50}`);
+    }
+
+    expect(screen.getByText("Customer 201")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent(
+      "Showing 201–250 of 250 customers"
+    );
+    expect(fetchCustomers).toHaveBeenCalledWith({ page: 5, pageSize: 50, active: true });
+  });
+
+  it("disables Previous on the first page and Next on the last", async () => {
+    servePages(60);
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Customer 51");
+
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Next/ })).toBeDisabled();
+  });
+
+  it("returns to page 1 when the status filter changes", async () => {
+    servePages(250);
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Customer 51");
+    expect(fetchCustomers).toHaveBeenCalledWith({ page: 2, pageSize: 50, active: true });
+
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Inactive" }));
+    await screen.findByText("Customer 1");
+
+    // Page 2 of Inactive is a different population and very likely empty —
+    // which would read as "there are no inactive customers".
+    expect(fetchCustomers).toHaveBeenLastCalledWith({ page: 1, pageSize: 50, active: false });
+  });
+
+  it("falls back to page 1 when the list shrank under an open page", async () => {
+    servePages(250);
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByText("Customer 51");
+
+    // Customers were deactivated while page 2 was open: page 2 no longer exists.
+    servePages(10);
+    await user.click(screen.getByRole("button", { name: /Previous/ }));
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    expect(await screen.findByText("Customer 1")).toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent(
+      "Showing 1–10 of 10 customers"
+    );
+  });
+
+  it("ignores a page whose request was overtaken by a filter change", async () => {
+    const slowSecondPage = deferred<Awaited<ReturnType<typeof fetchCustomers>>>();
+    vi.mocked(fetchCustomers).mockImplementation(async (query) => {
+      // Page 2 of the active list never answers until the test says so.
+      if (query?.page === 2 && query?.active === true) return slowSecondPage.promise;
+      if (query?.active === false) {
+        return {
+          items: [buildCustomer({ id: "inactive-1", name: "Closed Client Ltd", sites: [] })],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        };
+      }
+      return { items: customerRange(1, 50), total: 250, page: 1, pageSize: 50 };
+    });
+
+    const user = userEvent.setup();
+    render(<CustomersPage />);
+    await screen.findByText("Customer 1");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // The filter changes while page 2 is still in flight.
+    await user.click(screen.getByLabelText("Status"));
+    await user.click(await screen.findByRole("option", { name: "Inactive" }));
+    await screen.findByText("Closed Client Ltd");
+
+    // The overtaken page 2 lands last. Without a fence it would repaint the
+    // table with active customers under a control that reads Inactive.
+    await act(async () => {
+      slowSecondPage.resolve({
+        items: customerRange(51, 50),
+        total: 250,
+        page: 2,
+        pageSize: 50,
+      });
+    });
+
+    expect(screen.getByText("Closed Client Ltd")).toBeInTheDocument();
+    expect(screen.queryByText("Customer 51")).not.toBeInTheDocument();
+  });
+});

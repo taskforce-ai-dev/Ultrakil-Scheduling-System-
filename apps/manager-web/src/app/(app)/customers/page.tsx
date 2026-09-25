@@ -30,6 +30,7 @@ import { LoadingState } from "@/components/shared/loading-state";
 import { SiteHoursEditor, type SiteOperatingHours } from "@/components/shared/site-hours-editor";
 import { Badge } from "@/components/ui/badge";
 import { ActiveStatusBadge } from "@/components/shared/workforce-badges";
+import { Pagination } from "@/components/shared/pagination";
 import {
   ApiError,
   createCustomer,
@@ -62,6 +63,15 @@ interface CustomerFormValues {
 
 const EMPTY_SITE: SiteFormValues = { name: "", addressLine: "", city: "", operatingHours: [] };
 
+/**
+ * One screenful of rows, and the API's own default. This table used to ask for
+ * 200 and render whatever came back with nothing to say there were more, so a
+ * customer at position 201 was invisible — not filtered out, not on a later
+ * page, simply absent. Paging in 50s with the total on screen is what makes
+ * that boundary visible instead.
+ */
+const PAGE_SIZE = 50;
+
 const defaultValues: CustomerFormValues = {
   name: "",
   customerCode: "",
@@ -91,6 +101,8 @@ export default function CustomersPage() {
   // here: normal browsing (the default) never shows an inactive customer,
   // and switching to Inactive is a deliberate, separate look.
   const [status, setStatus] = React.useState<StatusFilter>("ACTIVE");
+  const [page, setPage] = React.useState(1);
+  const [total, setTotal] = React.useState(0);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   // A ref alongside the state: two submits fired in the same tick (a fast
@@ -112,9 +124,19 @@ export default function CustomersPage() {
     const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
-    fetchCustomers({ pageSize: 200, active: status === "ACTIVE" })
+    fetchCustomers({ page, pageSize: PAGE_SIZE, active: status === "ACTIVE" })
       .then((response) => {
-        if (generation === requestGeneration.current) setCustomers(response.items);
+        if (generation !== requestGeneration.current) return;
+        // A page that has run off the end of a list which shrank under us —
+        // a customer deactivated while this page was open — returns nothing,
+        // which reads on screen as "there are no customers". Fall back to the
+        // first page, which is where the remaining rows actually are.
+        if (response.items.length === 0 && response.total > 0 && page > 1) {
+          setPage(1);
+          return;
+        }
+        setCustomers(response.items);
+        setTotal(response.total);
       })
       .catch((caught: unknown) => {
         if (generation !== requestGeneration.current) return;
@@ -127,7 +149,7 @@ export default function CustomersPage() {
       .finally(() => {
         if (generation === requestGeneration.current) setIsLoading(false);
       });
-  }, [status]);
+  }, [status, page]);
 
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
@@ -206,7 +228,17 @@ export default function CustomersPage() {
       <div className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">
         <div className="space-y-1.5">
           <Label htmlFor="customers-status">Status</Label>
-          <Select value={status} onValueChange={(value) => setStatus(value as StatusFilter)}>
+          <Select
+            value={status}
+            onValueChange={(value) => {
+              // Back to the first page: the two filters are separate
+              // populations, so page 3 of Active says nothing about where
+              // page 3 of Inactive is — and on a shorter list it is very
+              // likely to be an empty page that reads as "no records".
+              setPage(1);
+              setStatus(value as StatusFilter);
+            }}
+          >
             <SelectTrigger id="customers-status" className="w-36">
               <SelectValue />
             </SelectTrigger>
@@ -218,7 +250,11 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      {isLoading ? (
+      {/* Only the *first* load replaces the table. A page change keeps the
+          previous rows on screen with the controls disabled, so the pager the
+          manager just clicked does not unmount under the cursor and take
+          keyboard focus with it. */}
+      {isLoading && customers.length === 0 ? (
         <LoadingState rows={3} />
       ) : error ? (
         <ErrorState
@@ -239,6 +275,7 @@ export default function CustomersPage() {
           onAction={status === "ACTIVE" ? () => setDrawerOpen(true) : undefined}
         />
       ) : (
+        <>
         <Table>
           <TableHeader>
             <TableRow>
@@ -303,6 +340,15 @@ export default function CustomersPage() {
             })}
           </TableBody>
         </Table>
+        <Pagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={total}
+          onPageChange={setPage}
+          noun="customers"
+          disabled={isLoading}
+        />
+        </>
       )}
 
       <AppDrawer

@@ -39,6 +39,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
+import { Pagination } from "@/components/shared/pagination";
 import {
   ApiError,
   cancelScheduleRun,
@@ -57,6 +58,15 @@ const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
 /** How often the run list is re-fetched while anything is queued or running. */
 const POLL_INTERVAL_MS = 3000;
+
+/**
+ * Runs per page. The list used to ask for the most recent 50 and say so, which
+ * was honest but left every earlier run unreachable — including one a
+ * `?run=<id>` deep link pointed at, which highlighted nothing and scrolled
+ * nowhere. Paging reaches them; the exact-ID fetch below reaches the linked one
+ * directly, whichever page it is really on.
+ */
+const RUNS_PAGE_SIZE = 50;
 
 /** True for the record a confirmed "Generate visits" leaves behind. */
 function isGeneration(run: ScheduleRun): boolean {
@@ -240,13 +250,37 @@ export default function ScheduleHistoryPage() {
   const focusRef = React.useRef<HTMLLIElement | null>(null);
 
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
+  // Page 1, held separately from whatever page is being browsed — see
+  // `loadSummary`. This is what the Current schedule panel reads.
+  const [summaryRuns, setSummaryRuns] = React.useState<ScheduleRun[]>([]);
   // Which day it is decides which schedule is in force, so it is read once per
   // render rather than captured when the page mounted — a portal left open
   // overnight would otherwise go on naming yesterday's week.
-  const { live, pending } = React.useMemo(() => currentSchedule(runs, todayIso()), [runs]);
+  const { live, pending } = React.useMemo(
+    () => currentSchedule(summaryRuns, todayIso()),
+    [summaryRuns],
+  );
   const [total, setTotal] = React.useState(0);
+  const [page, setPage] = React.useState(1);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+  // The run this page was linked to, fetched by id when it is not on the page
+  // being shown. Held separately so paging away from it does not lose it.
+  const [linkedRun, setLinkedRun] = React.useState<ScheduleRun | null>(null);
+  // Every load — the manual one, a page change, and the 3s poll — races the
+  // others. Without a fence the poll that left before a page change can land
+  // after it and repaint the previous page's rows under the new page number.
+  const requestGeneration = React.useRef(0);
+  // Cleared by the newest *foreground* load only, so a background poll can
+  // never strand the spinner (see `load`).
+  const foregroundRequest = React.useRef(0);
+  // True while a page change is waiting for its rows. The poll reads it and
+  // stands aside, so a background refresh can never invalidate the navigation
+  // the manager is actually waiting on.
+  const foregroundPending = React.useRef(false);
+  // Fences the separate page-1 summary fetch, and is bumped by a page-1 load
+  // so an older summary response cannot overwrite a newer panel.
+  const summaryRequest = React.useRef(0);
 
   const [from, setFrom] = React.useState(todayIso());
   const [to, setTo] = React.useState(addDays(todayIso(), 6));
@@ -275,32 +309,152 @@ export default function ScheduleHistoryPage() {
     (publishTarget?.visitsUnassigned ?? 0) > 0 ||
     unconfirmedSourceWarnings(publishTarget).length > 0;
 
-  const load = React.useCallback(() => {
+  /**
+   * `silent` is for the 3-second poll. A poll must not hold the pager down or
+   * blank the list every tick — it is a background refresh of rows already on
+   * screen. A page change is the opposite: it is the manager waiting for
+   * different rows, and the controls stay disabled until they arrive so a
+   * second click cannot skip a page while the old ones are still shown.
+   */
+  const load = React.useCallback(
+    (options?: { silent?: boolean }) => {
+    const generation = ++requestGeneration.current;
+    // Foreground loading is tracked separately from the data fence. Sharing
+    // one counter stranded the spinner: a poll starting mid-page-change bumps
+    // `requestGeneration`, so the page request's `finally` saw a newer
+    // generation and skipped, while the poll's own `finally` skipped because
+    // it is silent — and `isLoading` stayed true, disabling the pager forever.
+    const foreground = options?.silent ? null : ++foregroundRequest.current;
+    if (foreground !== null) {
+      foregroundPending.current = true;
+      setIsLoading(true);
+    }
     setError(null);
-    return fetchScheduleRuns({ pageSize: 50 })
-      .then((page) => {
-        setRuns(page.items);
-        setTotal(page.total);
+    return fetchScheduleRuns({ page, pageSize: RUNS_PAGE_SIZE })
+      .then((response) => {
+        if (generation !== requestGeneration.current) return;
+        // Same shrink-under-us case as the customers table: a page past the
+        // end of a list that lost rows returns nothing, which reads as "no
+        // runs" rather than "you have paged off the end".
+        if (response.items.length === 0 && response.total > 0 && page > 1) {
+          setPage(1);
+          return;
+        }
+        setRuns(response.items);
+        setTotal(response.total);
+        // On page 1 the browsing page and the summary source are the same
+        // rows, so this costs no extra request. Bumping the summary fence is
+        // what makes it safe: a page-1 summary request issued while the
+        // manager was on page 2 may still be in flight, and without this it
+        // would land afterwards and overwrite the newer panel with older rows.
+        if (page === 1) {
+          summaryRequest.current += 1;
+          setSummaryRuns(response.items);
+        }
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
-  }, []);
+      .finally(() => {
+        // Only the newest foreground request clears the spinner, and a poll
+        // can no longer prevent it from doing so.
+        // The newest foreground request owns both: with the poll standing
+        // aside, "this is the newest foreground request" and "its response was
+        // applied" are now the same condition, so the pager can only re-enable
+        // once the rows it was waiting for are on screen.
+        if (foreground !== null && foreground === foregroundRequest.current) {
+          foregroundPending.current = false;
+          setIsLoading(false);
+        }
+      });
+    },
+    [page],
+  );
+
+  /**
+   * The in-force and pending summary, kept independent of whichever history
+   * page is being browsed.
+   *
+   * Which schedule is in force is a fact about the system, not about the rows
+   * currently on screen. Deriving it from the browsed page meant that clicking
+   * Next — which changes no dispatch truth whatsoever — could make the panel
+   * announce that no schedule is in force, or name an older one, purely
+   * because the published run covering today had scrolled onto another page.
+   *
+   * The API returns runs newest-first, so page 1 is the same authoritative
+   * window this panel read before the list was paginated. It is re-read
+   * separately whenever the browsed page is not page 1.
+   */
+  const loadSummary = React.useCallback(() => {
+    if (page === 1) return Promise.resolve(); // `load` already set it from the same response.
+    const generation = ++summaryRequest.current;
+    return fetchScheduleRuns({ page: 1, pageSize: RUNS_PAGE_SIZE })
+      .then((response) => {
+        if (generation === summaryRequest.current) setSummaryRuns(response.items);
+      })
+      .catch(() => {
+        // The browsed page owns the visible error state. Leaving the last known
+        // summary standing is better than blanking a panel that says which
+        // schedule crews are working to.
+      });
+  }, [page]);
 
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
     // effects are for.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
-  }, [load]);
+    loadSummary();
+  }, [load, loadSummary]);
+
+  const runIsOnPage = focusRunId ? runs.some((run) => run.id === focusRunId) : false;
+
+  // A `?run=<id>` link is usually followed from somewhere else in the portal,
+  // and the run it names is very often an older one — which is exactly the run
+  // that is not on page 1. Rather than make the manager page around hunting
+  // for it, ask the API for that one id directly.
+  const linkedRequest = React.useRef(0);
+  React.useEffect(() => {
+    if (!focusRunId || runIsOnPage) return;
+    // Before the first page has answered, `runs` is empty and every run looks
+    // absent. Asking by id then would spend a request to re-fetch a row that
+    // is about to arrive anyway.
+    if (isLoading) return;
+    if (linkedRun?.id === focusRunId) return;
+    const generation = ++linkedRequest.current;
+    fetchScheduleRuns({ ids: [focusRunId], pageSize: 1 })
+      .then((response) => {
+        if (generation !== linkedRequest.current) return;
+        setLinkedRun(response.items[0] ?? null);
+      })
+      .catch(() => {
+        // A link to a run that no longer exists, or that this account cannot
+        // see, highlights nothing — the same as before. It is not worth
+        // replacing the whole list with an error.
+        if (generation === linkedRequest.current) setLinkedRun(null);
+      });
+  }, [focusRunId, runIsOnPage, isLoading, linkedRun?.id]);
+
+  // The linked run rides at the top only while it is genuinely absent from the
+  // page being shown. Paging onto its real page drops it from here, so it is
+  // never listed twice.
+  const displayRuns = React.useMemo(() => {
+    // Derived rather than cleared in an effect, so there is no window where a
+    // previously linked run is still in state and showing at the top: it is
+    // included only while it is both the run being asked for and genuinely
+    // absent from the page.
+    if (!linkedRun || linkedRun.id !== focusRunId) return runs;
+    if (runs.some((run) => run.id === linkedRun.id)) return runs;
+    return [linkedRun, ...runs];
+  }, [linkedRun, focusRunId, runs]);
 
   const focusedRun = focusRunId
-    ? (runs.find((run) => run.id === focusRunId)?.id ?? null)
+    ? (displayRuns.find((run) => run.id === focusRunId)?.id ?? null)
     : null;
 
   React.useEffect(() => {
@@ -311,16 +465,40 @@ export default function ScheduleHistoryPage() {
     focusRef.current?.scrollIntoView({ block: "center" });
   }, [focusedRun]);
 
-  const hasActiveRun = runs.some((run) => ACTIVE_STATUSES.has(run.status));
+  // Both sources, so paging away from a queued run does not silently stop its
+  // refresh. A newly started run is always on page 1 (the API orders runs
+  // newest-first), and the browsed page is checked too in case one is active
+  // further back.
+  const hasActiveRun = React.useMemo(
+    () =>
+      summaryRuns.some((run) => ACTIVE_STATUSES.has(run.status)) ||
+      runs.some((run) => ACTIVE_STATUSES.has(run.status)),
+    [summaryRuns, runs],
+  );
 
   React.useEffect(() => {
     if (!hasActiveRun) return;
     // Poll while anything is queued or running. This is what makes a
     // refresh or a lost connection "just work": the next tick re-asks the
-    // API for the truth instead of trusting stale in-memory state.
-    const timer = setInterval(load, POLL_INTERVAL_MS);
+    // API for the truth instead of trusting stale in-memory state. The
+    // summary is refreshed alongside the page so progress on a run that is
+    // not on screen still reaches the Current schedule panel.
+    const timer = setInterval(() => {
+      // Skip the list refresh while a page change is still in flight. That
+      // request is already fetching this very page, so a poll adds nothing —
+      // and it would bump the data fence, discarding the navigation's own
+      // response. The pager would then re-enable (its foreground fence is
+      // satisfied) while the previous page's rows sat under the new page
+      // number, until the poll answered — or forever, if the poll hung.
+      //
+      // The summary keeps refreshing: it is a different request with its own
+      // fence, and the in-force panel should stay current even while the
+      // manager is waiting for a page.
+      if (!foregroundPending.current) load({ silent: true });
+      loadSummary();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [hasActiveRun, load]);
+  }, [hasActiveRun, load, loadSummary]);
 
   async function handleStart() {
     if (isStartingRef.current) return; // Collapses a double-click into one request.
@@ -339,6 +517,7 @@ export default function ScheduleHistoryPage() {
       });
       notify.success("Schedule run queued.");
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not start the run.");
     } finally {
@@ -355,6 +534,7 @@ export default function ScheduleHistoryPage() {
       await cancelScheduleRun(run.id);
       notify.success("Cancellation requested.");
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not cancel this run.");
     } finally {
@@ -392,6 +572,7 @@ export default function ScheduleHistoryPage() {
       notify.success("Schedule published.");
       setPublishTarget(null);
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not publish this run.");
     } finally {
@@ -466,14 +647,17 @@ export default function ScheduleHistoryPage() {
         </Button>
       </section>
 
-      {isLoading ? (
+      {/* Only the first load replaces the list. A page change keeps the
+          previous runs on screen with the pager disabled, so the control the
+          manager just clicked does not unmount under the cursor. */}
+      {isLoading && runs.length === 0 ? (
         <LoadingState rows={4} />
       ) : error ? (
         <ErrorState
           title="Couldn't load schedule runs"
           description={error.message}
           code={error.code}
-          onRetry={load}
+          onRetry={() => load()}
         />
       ) : runs.length === 0 ? (
         <EmptyState
@@ -519,13 +703,16 @@ export default function ScheduleHistoryPage() {
           </section>
 
           <h2 className="text-sm font-semibold">Earlier runs</h2>
-          {total > runs.length && (
-            <p className="text-sm text-muted-foreground">
-              Showing the {runs.length} most recent of {total} runs.
-            </p>
-          )}
+          <Pagination
+            page={page}
+            pageSize={RUNS_PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+            noun="runs"
+            disabled={isLoading}
+          />
           <ul className="space-y-3">
-            {runs.map((run) => {
+            {displayRuns.map((run) => {
               const isActive = ACTIVE_STATUSES.has(run.status);
               const canCancel = isActive && !run.cancelRequested;
               const canPublish = canPublishRun(run);

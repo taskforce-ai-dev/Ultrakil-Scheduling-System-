@@ -660,3 +660,433 @@ describe("ScheduleHistoryPage, arrived at from a run link", () => {
     expect(await screen.findByTestId("run-older")).not.toHaveAttribute("aria-current");
   });
 });
+
+/**
+ * ULK-O12. The list asked for the 50 most recent runs and said so, which was
+ * honest but left every earlier run unreachable — including one a `?run=<id>`
+ * link pointed straight at, which highlighted nothing and scrolled nowhere.
+ */
+describe("ScheduleHistoryPage pagination", () => {
+  function runRange(from: number, count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      buildScheduleRun({ id: `r${from + index}` }),
+    );
+  }
+
+  /** Serves `total` runs in pages of 50, and answers an exact-id query. */
+  function servePages(total: number, byId: Record<string, ScheduleRun> = {}) {
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) {
+        const found = query.ids.map((id) => byId[id]).filter(Boolean);
+        return { items: found, total: found.length, page: 1, pageSize: 1 };
+      }
+      const page = query?.page ?? 1;
+      const pageSize = query?.pageSize ?? 50;
+      const start = (page - 1) * pageSize;
+      return {
+        items: runRange(start + 1, Math.max(0, Math.min(pageSize, total - start))),
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
+  it("states the API's total and range instead of a truncation notice", async () => {
+    servePages(120);
+    await renderPage();
+
+    expect(await screen.findByTestId("pagination-range")).toHaveTextContent(
+      "Showing 1–50 of 120 runs",
+    );
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+  });
+
+  it("asks the API for the next page when Next is used", async () => {
+    servePages(120);
+    const user = await renderPage();
+    await screen.findByTestId("run-r1");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    expect(await screen.findByTestId("run-r51")).toBeInTheDocument();
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ page: 2, pageSize: 50 });
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51–100 of 120 runs");
+  });
+
+  it("fetches a linked older run by id and highlights it (ULK-O12 deep link)", async () => {
+    const ancient = buildScheduleRun({ id: "ancient", rangeStart: "2026-01-05" });
+    // 300 runs: `ancient` is on no page this list would load first.
+    servePages(300, { ancient });
+    searchParamsRef.current = new URLSearchParams("run=ancient");
+    await renderPage();
+
+    const highlighted = await screen.findByTestId("run-ancient");
+    expect(highlighted).toHaveAttribute("aria-current", "true");
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ ids: ["ancient"], pageSize: 1 });
+  });
+
+  it("does not list the focused run twice when it is already on the page", async () => {
+    const onPage = buildScheduleRun({ id: "r3" });
+    servePages(120, { r3: onPage });
+    searchParamsRef.current = new URLSearchParams("run=r3");
+    await renderPage();
+
+    await screen.findByTestId("run-r3");
+    expect(screen.getAllByTestId("run-r3")).toHaveLength(1);
+    // The row is on the page already, so no exact-id request is needed.
+    expect(fetchScheduleRuns).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ["r3"] }),
+    );
+  });
+
+  it("drops the linked row once paging reaches the page it really lives on", async () => {
+    const linked = buildScheduleRun({ id: "r51" });
+    servePages(120, { r51: linked });
+    searchParamsRef.current = new URLSearchParams("run=r51");
+    const user = await renderPage();
+
+    // Page 1 does not hold it, so it is fetched by id and shown at the top.
+    await screen.findByTestId("run-r51");
+    expect(screen.getAllByTestId("run-r51")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // Page 2 genuinely contains it — still exactly one row.
+    expect(await screen.findByTestId("run-r52")).toBeInTheDocument();
+    expect(screen.getAllByTestId("run-r51")).toHaveLength(1);
+  });
+
+  it("keeps Current schedule unchanged when paging to unrelated older runs", async () => {
+    // The blocker Thiva caught on review: the in-force panel was derived from
+    // the browsed page, so clicking Next — which changes no dispatch truth —
+    // could make it announce that no schedule is in force.
+    const publishedToday = buildScheduleRun({
+      id: "in-force",
+      status: "SUCCEEDED",
+      isPublished: true,
+      publishedAt: "2026-09-20T00:00:00.000Z",
+      rangeStart: "2026-09-01",
+      rangeEnd: "2036-09-30",
+      visitsScheduled: 17,
+      visitsUnassigned: 0,
+    });
+    const oldUnrelated = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({
+        id: `old-${index}`,
+        isPublished: false,
+        rangeStart: "2024-01-01",
+        rangeEnd: "2024-01-07",
+      }),
+    );
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      const page = query?.page ?? 1;
+      return {
+        items: page === 1 ? [publishedToday, ...oldUnrelated.slice(0, 49)] : oldUnrelated,
+        total: 100,
+        page,
+        pageSize: 50,
+      };
+    });
+
+    const user = await renderPage();
+    const before = (await screen.findByRole("region", { name: "Current schedule" })).textContent;
+    expect(before).toContain("2026-09-01");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-old-49");
+
+    // Page 2 holds none of the published run, yet the panel must not move.
+    expect(screen.queryByTestId("run-in-force")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Current schedule" }).textContent).toBe(before);
+  });
+
+  it("keeps polling a queued run that is not on the browsed page", async () => {
+    const queued = buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 });
+    const oldUnrelated = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `old-${index}`, status: "SUCCEEDED" }),
+    );
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      const page = query?.page ?? 1;
+      return {
+        items: page === 1 ? [queued, ...oldUnrelated.slice(0, 49)] : oldUnrelated,
+        total: 100,
+        page,
+        pageSize: 50,
+      };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-queued");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-old-49");
+    expect(screen.queryByTestId("run-queued")).not.toBeInTheDocument();
+
+    const callsBefore = vi.mocked(fetchScheduleRuns).mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    // The run is off-page, but its refresh must not silently stop.
+    expect(vi.mocked(fetchScheduleRuns).mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("holds the pager down until a deferred page settles, without unmounting the rows", async () => {
+    // Second review finding: `load` never set isLoading on a page change, so
+    // `Pagination disabled={isLoading}` stayed false throughout the fetch and
+    // a rapid second Next could advance again over the old rows.
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `p1-${index}` }),
+    );
+    const secondPage = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `p2-${index}` }),
+    );
+    const deferredPageTwo = deferredRun();
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) return deferredPageTwo.promise;
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-p1-0");
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // Page 2 is in flight. Both controls are held down…
+    expect(screen.getByRole("button", { name: /Next/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeDisabled();
+    // …and the rows already on screen are still there, not a loading skeleton.
+    expect(screen.getByTestId("run-p1-0")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+
+    // A second click while disabled must not ask for page 3.
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    expect(vi.mocked(fetchScheduleRuns).mock.calls.filter((c) => c[0]?.page === 3)).toHaveLength(0);
+
+    await act(async () => {
+      deferredPageTwo.resolve({ items: secondPage, total: 150, page: 2, pageSize: 50 });
+    });
+
+    expect(await screen.findByTestId("run-p2-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+  });
+
+  it("does not hold the pager down for a background poll", async () => {
+    // The poll runs every 3s while a run is queued. Disabling the pager on
+    // each tick would make it unusable exactly when a manager is watching.
+    const runs = [
+      buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 }),
+      ...Array.from({ length: 49 }, (_, index) => buildScheduleRun({ id: `p1-${index}` })),
+    ];
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      return { items: runs, total: 150, page: query?.page ?? 1, pageSize: 50 };
+    });
+
+    await renderPage();
+    await screen.findByTestId("run-queued");
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+    expect(screen.getByTestId("run-queued")).toBeInTheDocument();
+  });
+
+  it("re-enables the pager when a poll starts mid-page-change", async () => {
+    // Third review finding (1): a silent poll bumped the shared generation, so
+    // the page request's finally skipped as stale and the poll's finally
+    // skipped as silent. `isLoading` stayed true and the pager never came back.
+    const queued = buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 });
+    const firstPage = [queued, ...Array.from({ length: 49 }, (_, i) => buildScheduleRun({ id: `p1-${i}` }))];
+    const secondPage = Array.from({ length: 50 }, (_, i) => buildScheduleRun({ id: `p2-${i}` }));
+    const deferredPageTwo = deferredRun();
+    let pageTwoCalls = 0;
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) {
+        pageTwoCalls += 1;
+        // Only the first page-2 request (the foreground one) is deferred; the
+        // poll that follows answers straight away.
+        if (pageTwoCalls === 1) return deferredPageTwo.promise;
+        return { items: secondPage, total: 150, page: 2, pageSize: 50 };
+      }
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-queued");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    expect(screen.getByRole("button", { name: /Next/ })).toBeDisabled();
+
+    // A poll tick lands while page 2 is still pending.
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    await act(async () => {
+      deferredPageTwo.resolve({ items: secondPage, total: 150, page: 2, pageSize: 50 });
+    });
+
+    // The pager must come back, not stay disabled forever.
+    expect(await screen.findByTestId("run-p2-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeEnabled();
+  });
+
+  it("does not let a page-2 summary response overwrite the panel after returning to page 1", async () => {
+    // Third review finding (2): `loadSummary` fired on page 2 stayed in flight
+    // while the manager went back to page 1. The page-1 load set the panel,
+    // then the older summary landed and replaced it with staler rows.
+    const inForce = buildScheduleRun({
+      id: "in-force",
+      isPublished: true,
+      publishedAt: "2026-09-20T00:00:00.000Z",
+      rangeStart: "2026-09-01",
+      rangeEnd: "2036-09-30",
+      visitsScheduled: 17,
+      visitsUnassigned: 0,
+    });
+    // What the stale page-2-era summary would put back: nothing in force.
+    const staleSummary = Array.from({ length: 50 }, (_, i) =>
+      buildScheduleRun({ id: `stale-${i}`, isPublished: false }),
+    );
+    const firstPage = [inForce, ...Array.from({ length: 49 }, (_, i) => buildScheduleRun({ id: `p1-${i}` }))];
+    const secondPage = Array.from({ length: 50 }, (_, i) => buildScheduleRun({ id: `p2-${i}` }));
+    const deferredSummary = deferredRun();
+    let summaryCalls = 0;
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) return { items: secondPage, total: 150, page: 2, pageSize: 50 };
+      // Page 1 is asked for both as the browsed page and as the summary
+      // source; the first call made while on page 2 is the summary one.
+      summaryCalls += 1;
+      if (summaryCalls === 2) return deferredSummary.promise;
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    const inForceText = (await screen.findByRole("region", { name: "Current schedule" })).textContent;
+    expect(inForceText).toContain("2026-09-01");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-p2-0");
+
+    // Back to page 1 while that page-2 summary request is still outstanding.
+    await user.click(screen.getByRole("button", { name: /Previous/ }));
+    await screen.findByTestId("run-in-force");
+
+    await act(async () => {
+      deferredSummary.resolve({ items: staleSummary, total: 150, page: 1, pageSize: 50 });
+    });
+
+    // The older response must not reinstate "nothing in force".
+    expect(screen.getByRole("region", { name: "Current schedule" }).textContent).toBe(inForceText);
+  });
+
+  it("shows page-2 rows, not just an enabled pager, when a poll ticks mid-navigation", async () => {
+    // Fourth review pass: with the foreground fence decoupled, a poll starting
+    // mid-page-change still bumped the data fence. The navigation's own
+    // response was then discarded as stale, so the pager re-enabled while the
+    // page-1 rows sat under the page-2 number — until the poll answered, or
+    // forever if it hung.
+    //
+    // Two *separate* deferreds matter here. Sharing one lets the poll resolve
+    // with page-2 data as well, which papers over the mismatch; the poll's
+    // request is held open so the defect is actually reachable.
+    const queued = buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 });
+    const firstPage = [queued, ...Array.from({ length: 49 }, (_, i) => buildScheduleRun({ id: `p1-${i}` }))];
+    const secondPage = Array.from({ length: 50 }, (_, i) => buildScheduleRun({ id: `p2-${i}` }));
+    const foregroundPageTwo = deferredRun();
+    const pollPageTwo = deferredRun(); // deliberately never resolved
+    let pageTwoCalls = 0;
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) {
+        pageTwoCalls += 1;
+        return pageTwoCalls === 1 ? foregroundPageTwo.promise : pollPageTwo.promise;
+      }
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-queued");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // A poll tick lands while the navigation is still pending. It must stand
+    // aside rather than fire a competing request that invalidates it.
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    // The navigation's own response resolves first; the poll's stays open.
+    await act(async () => {
+      foregroundPageTwo.resolve({ items: secondPage, total: 150, page: 2, pageSize: 50 });
+    });
+
+    // The rows must actually be page 2's. An enabled pager over page-1 rows
+    // under a page-2 number is the defect, not the fix.
+    expect(await screen.findByTestId("run-p2-0")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-p1-0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51–100 of 150 runs");
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeEnabled();
+    expect(pageTwoCalls).toBe(1);
+  });
+
+  it("ignores a poll that was overtaken by a page change", async () => {
+    const slowFirstPage = deferredRun();
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if ((query?.page ?? 1) === 1) return slowFirstPage.promise;
+      return { items: runRange(51, 50), total: 120, page: 2, pageSize: 50 };
+    });
+
+    render(<ScheduleHistoryPage />);
+    await screen.findByRole("heading", { name: "Assign Crew" });
+
+    // Resolve page 1 so the list and its pager are on screen.
+    await act(async () => {
+      slowFirstPage.resolve({ items: runRange(1, 50), total: 120, page: 1, pageSize: 50 });
+    });
+    await screen.findByTestId("run-r1");
+
+    // A second page-1 request (the poll) is now left hanging while page 2 is asked for.
+    const stalePoll = deferredRun();
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if ((query?.page ?? 1) === 1) return stalePoll.promise;
+      return { items: runRange(51, 50), total: 120, page: 2, pageSize: 50 };
+    });
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-r51");
+
+    await act(async () => {
+      stalePoll.resolve({ items: runRange(1, 50), total: 120, page: 1, pageSize: 50 });
+    });
+
+    // Page 1's rows must not reappear under a pager that reads page 2.
+    expect(screen.getByTestId("run-r51")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-r1")).not.toBeInTheDocument();
+  });
+});
+
+function deferredRun() {
+  let resolve!: (value: Awaited<ReturnType<typeof fetchScheduleRuns>>) => void;
+  const promise = new Promise<Awaited<ReturnType<typeof fetchScheduleRuns>>>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
