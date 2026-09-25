@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { addDays, formatDayRange, formatDurationMinutes, rangeForGeneration } from "@/lib/calendar";
+import { addDays, formatDayRange, formatDurationMinutes, rangeForGeneration, todayColomboIso } from "@/lib/calendar";
+
+describe("todayColomboIso", () => {
+  it("starts the operational day when Colombo passes midnight, not when UTC does", () => {
+    expect(todayColomboIso(new Date("2026-09-25T18:29:00.000Z"))).toBe("2026-09-25");
+    expect(todayColomboIso(new Date("2026-09-25T18:30:00.000Z"))).toBe("2026-09-26");
+  });
+});
 
 /**
  * Consecutive month grids have to overlap, or a fortnight can fall between them.
