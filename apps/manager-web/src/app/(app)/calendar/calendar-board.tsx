@@ -562,9 +562,9 @@ export function CalendarBoard({ initialView = "rolling30" }: { initialView?: Cal
               </div>
               <ul className="divide-y divide-border">
                 {dayEntries.map((entry) => (
-                  <li key={entry.visitId} className="grid gap-2 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-center">
+                  <li key={entry.visitId} className="grid grid-cols-[minmax(0,1fr)] gap-2 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-center">
                     <EntryChip entry={entry} onOpen={() => setOpenEntry(entry)} />
-                    <div className="min-w-0 text-xs text-muted-foreground">
+                    <div className="min-w-0 break-words text-xs text-muted-foreground">
                       <p><span className="font-medium text-foreground">{entry.siteName}</span> · {entry.jobTypeName}</p>
                       <p>Crew: {entry.assignment?.crew.length
                         ? entry.assignment.crew.map((member) => member.fullName).join(", ")

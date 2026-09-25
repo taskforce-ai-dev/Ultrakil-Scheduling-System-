@@ -80,6 +80,10 @@ describe("CalendarPage", () => {
     expect(screen.getByText(/Vehicle: Van — COL-4521/)).toBeInTheDocument();
     expect(screen.getByText(/Needs a crew \(1\)/)).toBeInTheDocument();
     expect(screen.getByText(/1 without crew · 1 without transport plan · 0 using public transport/)).toBeInTheDocument();
+    // A narrow viewport must not inherit an auto-minimum grid track from a
+    // long customer name and push the agenda beyond the screen.
+    expect(screen.getByRole("region", { name: "30-day plan" }).querySelector("li"))
+      .toHaveClass("grid-cols-[minmax(0,1fr)]");
   });
 
   it("names a vehicleless published crew as public transport, not a missing transport plan", async () => {
