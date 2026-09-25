@@ -1,11 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { addDays, formatDayRange, formatDurationMinutes, rangeForGeneration, todayColomboIso } from "@/lib/calendar";
+import { addDays, formatDayRange, formatDurationMinutes, rangeForGeneration, subscribeToColomboDay, todayColomboIso } from "@/lib/calendar";
+
+afterEach(() => vi.useRealTimers());
 
 describe("todayColomboIso", () => {
   it("starts the operational day when Colombo passes midnight, not when UTC does", () => {
     expect(todayColomboIso(new Date("2026-09-25T18:29:00.000Z"))).toBe("2026-09-25");
     expect(todayColomboIso(new Date("2026-09-25T18:30:00.000Z"))).toBe("2026-09-26");
+  });
+});
+
+describe("subscribeToColomboDay", () => {
+  it("notifies at each Colombo midnight and stops after unsubscribe", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T18:29:59.000Z"));
+    const onChange = vi.fn();
+    const unsubscribe = subscribeToColomboDay(onChange);
+
+    vi.advanceTimersByTime(999);
+    expect(onChange).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000);
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 });
 

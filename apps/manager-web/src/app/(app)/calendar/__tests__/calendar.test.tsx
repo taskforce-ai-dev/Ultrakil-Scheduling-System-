@@ -79,7 +79,25 @@ describe("CalendarPage", () => {
     expect(screen.getByText(/Crew: A Perera, B Silva/)).toBeInTheDocument();
     expect(screen.getByText(/Vehicle: Van — COL-4521/)).toBeInTheDocument();
     expect(screen.getByText(/Needs a crew \(1\)/)).toBeInTheDocument();
-    expect(screen.getByText(/1 without crew · 1 without vehicle/)).toBeInTheDocument();
+    expect(screen.getByText(/1 without crew · 1 without transport plan · 0 using public transport/)).toBeInTheDocument();
+  });
+
+  it("names a vehicleless published crew as public transport, not a missing transport plan", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [{
+        ...published,
+        assignment: buildCalendarAssignment({
+          crew: published.assignment!.crew,
+          vehicles: [],
+        }),
+      }],
+      total: 1,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByText("Transport: Public transport")).toBeInTheDocument();
+    expect(screen.getByText(/0 without transport plan · 1 using public transport/)).toBeInTheDocument();
+    expect(screen.queryByText("No vehicle")).not.toBeInTheDocument();
   });
 
   it("orders plan days and labels unconfirmed opening hours", async () => {

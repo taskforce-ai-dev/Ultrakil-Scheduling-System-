@@ -35,6 +35,7 @@ import {
   formatWeekRange,
   isSameMonth,
   rangeForView,
+  subscribeToColomboDay,
   todayColomboIso,
   WEEKDAY_INITIALS,
   type CalendarView,
@@ -308,7 +309,7 @@ export function CalendarBoard() {
   // Static HTML must not bake in the build day's date: the server snapshot is
   // deliberately empty, then hydration reads the current Colombo service day.
   const serviceToday = React.useSyncExternalStore(
-    () => () => {},
+    subscribeToColomboDay,
     todayColomboIso,
     () => "",
   );
@@ -405,7 +406,9 @@ export function CalendarBoard() {
     return result;
   }, [visible]);
   const withoutCrew = visible.filter((entry) => !entry.assignment?.crew.length).length;
-  const withoutVehicle = visible.filter((entry) => !entry.assignment?.vehicles.length).length;
+  const withoutTransportPlan = visible.filter((entry) => !entry.assignment).length;
+  const usingPublicTransport = visible.filter((entry) =>
+    entry.assignment && entry.assignment.vehicles.length === 0).length;
 
   return (
     <div className="space-y-6">
@@ -544,7 +547,8 @@ export function CalendarBoard() {
             <h2 className="font-semibold">30-day plan</h2>
             <p className="text-sm text-muted-foreground">
               {formatLongDate(from)} – {formatLongDate(to)} · {visible.length} visits shown ·{" "}
-              {withoutCrew} without crew · {withoutVehicle} without vehicle.
+              {withoutCrew} without crew · {withoutTransportPlan} without transport plan ·{" "}
+              {usingPublicTransport} using public transport.
               Select a visit for full details.
             </p>
           </div>
@@ -565,10 +569,12 @@ export function CalendarBoard() {
                       <p>Crew: {entry.assignment?.crew.length
                         ? entry.assignment.crew.map((member) => member.fullName).join(", ")
                         : "No crew"}</p>
-                      <p>Vehicle: {entry.assignment?.vehicles.length
-                        ? entry.assignment.vehicles.map((vehicle) =>
-                            `${vehicle.label}${vehicle.driverName ? ` (driver: ${vehicle.driverName})` : ""}`).join(", ")
-                        : "No vehicle"}</p>
+                      {entry.assignment?.vehicles.length ? (
+                        <p>Vehicle: {entry.assignment.vehicles.map((vehicle) =>
+                          `${vehicle.label}${vehicle.driverName ? ` (driver: ${vehicle.driverName})` : ""}`).join(", ")}</p>
+                      ) : (
+                        <p>Transport: {entry.assignment ? "Public transport" : "Not assigned"}</p>
+                      )}
                       {entry.hoursUnconfirmed && (
                         <p className="font-medium text-amber-700 dark:text-amber-300">
                           Opening hours unconfirmed
