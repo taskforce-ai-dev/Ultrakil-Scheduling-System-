@@ -271,6 +271,12 @@ export default function ScheduleHistoryPage() {
   // others. Without a fence the poll that left before a page change can land
   // after it and repaint the previous page's rows under the new page number.
   const requestGeneration = React.useRef(0);
+  // Cleared by the newest *foreground* load only, so a background poll can
+  // never strand the spinner (see `load`).
+  const foregroundRequest = React.useRef(0);
+  // Fences the separate page-1 summary fetch, and is bumped by a page-1 load
+  // so an older summary response cannot overwrite a newer panel.
+  const summaryRequest = React.useRef(0);
 
   const [from, setFrom] = React.useState(todayIso());
   const [to, setTo] = React.useState(addDays(todayIso(), 6));
@@ -309,7 +315,13 @@ export default function ScheduleHistoryPage() {
   const load = React.useCallback(
     (options?: { silent?: boolean }) => {
     const generation = ++requestGeneration.current;
-    if (!options?.silent) setIsLoading(true);
+    // Foreground loading is tracked separately from the data fence. Sharing
+    // one counter stranded the spinner: a poll starting mid-page-change bumps
+    // `requestGeneration`, so the page request's `finally` saw a newer
+    // generation and skipped, while the poll's own `finally` skipped because
+    // it is silent — and `isLoading` stayed true, disabling the pager forever.
+    const foreground = options?.silent ? null : ++foregroundRequest.current;
+    if (foreground !== null) setIsLoading(true);
     setError(null);
     return fetchScheduleRuns({ page, pageSize: RUNS_PAGE_SIZE })
       .then((response) => {
@@ -324,8 +336,14 @@ export default function ScheduleHistoryPage() {
         setRuns(response.items);
         setTotal(response.total);
         // On page 1 the browsing page and the summary source are the same
-        // rows, so this costs no extra request.
-        if (page === 1) setSummaryRuns(response.items);
+        // rows, so this costs no extra request. Bumping the summary fence is
+        // what makes it safe: a page-1 summary request issued while the
+        // manager was on page 2 may still be in flight, and without this it
+        // would land afterwards and overwrite the newer panel with older rows.
+        if (page === 1) {
+          summaryRequest.current += 1;
+          setSummaryRuns(response.items);
+        }
       })
       .catch((caught: unknown) => {
         if (generation !== requestGeneration.current) return;
@@ -336,7 +354,9 @@ export default function ScheduleHistoryPage() {
         );
       })
       .finally(() => {
-        if (generation === requestGeneration.current && !options?.silent) setIsLoading(false);
+        // Only the newest foreground request clears the spinner, and a poll
+        // can no longer prevent it from doing so.
+        if (foreground !== null && foreground === foregroundRequest.current) setIsLoading(false);
       });
     },
     [page],
@@ -356,7 +376,6 @@ export default function ScheduleHistoryPage() {
    * window this panel read before the list was paginated. It is re-read
    * separately whenever the browsed page is not page 1.
    */
-  const summaryRequest = React.useRef(0);
   const loadSummary = React.useCallback(() => {
     if (page === 1) return Promise.resolve(); // `load` already set it from the same response.
     const generation = ++summaryRequest.current;
