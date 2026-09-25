@@ -10,11 +10,11 @@ vi.mock("@/lib/api-client", async () => {
 import CalendarPage from "../page";
 import { fetchCalendar } from "@/lib/api-client";
 import { buildCalendarAssignment, buildCalendarEntry } from "@/test/fixtures";
-import { daysInView, todayIso, type CalendarView } from "@/lib/calendar";
+import { daysInView, formatLongDate, todayColomboIso, type CalendarView } from "@/lib/calendar";
 
 const unassigned = buildCalendarEntry({
   visitId: "visit-unassigned",
-  visitDate: todayIso(),
+  visitDate: todayColomboIso(),
   customerName: "Grandview Hotel",
   branchCode: "KANDY",
   visitStatus: "UNASSIGNED",
@@ -23,7 +23,7 @@ const unassigned = buildCalendarEntry({
 
 const published = buildCalendarEntry({
   visitId: "visit-published",
-  visitDate: todayIso(),
+  visitDate: todayColomboIso(),
   customerName: "Cinnamon Grand Colombo",
   branchCode: "COLOMBO",
   instructions: "Focus on the kitchen and store room.",
@@ -68,6 +68,71 @@ beforeEach(() => {
 });
 
 describe("CalendarPage", () => {
+  it("opens on an exact 30-day plan with crew and vehicle visible for each visit", async () => {
+    render(<CalendarPage />);
+
+    expect(fetchCalendar).toHaveBeenCalledWith({
+      from: todayColomboIso(),
+      to: daysFromToday(29),
+    });
+    expect(await screen.findByRole("heading", { name: "30-day plan" })).toBeInTheDocument();
+    expect(screen.getByText(/Crew: A Perera, B Silva/)).toBeInTheDocument();
+    expect(screen.getByText(/Vehicle: Van — COL-4521/)).toBeInTheDocument();
+    expect(screen.getByText(/Needs a crew \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/1 without crew · 1 without transport plan · 0 using public transport/)).toBeInTheDocument();
+  });
+
+  it("names a vehicleless published crew as public transport, not a missing transport plan", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [{
+        ...published,
+        assignment: buildCalendarAssignment({
+          crew: published.assignment!.crew,
+          vehicles: [],
+        }),
+      }],
+      total: 1,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByText("Transport: Public transport")).toBeInTheDocument();
+    expect(screen.getByText(/0 without transport plan · 1 using public transport/)).toBeInTheDocument();
+    expect(screen.queryByText("No vehicle")).not.toBeInTheDocument();
+  });
+
+  it("orders plan days and labels unconfirmed opening hours", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [
+        { ...published, visitId: "later", visitDate: daysFromToday(2), customerName: "Later customer" },
+        { ...published, visitId: "earlier", visitDate: todayColomboIso(), customerName: "Earlier customer", hoursUnconfirmed: true },
+      ],
+      total: 2,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByText("Earlier customer")).toBeInTheDocument();
+    const headings = screen.getAllByRole("heading", { level: 3 });
+    expect(headings.map((heading) => heading.textContent)).toEqual([
+      formatLongDate(todayColomboIso()),
+      formatLongDate(daysFromToday(2)),
+    ]);
+    expect(screen.getByText("Opening hours unconfirmed")).toBeInTheDocument();
+  });
+
+  it("keeps historical visits out of the rolling plan even if the API returns one", async () => {
+    vi.mocked(fetchCalendar).mockResolvedValue({
+      items: [
+        { ...published, visitId: "old", visitDate: daysFromToday(-1), customerName: "Historical customer" },
+        published,
+      ],
+      total: 2,
+    });
+    render(<CalendarPage />);
+
+    expect(await screen.findByText("Cinnamon Grand Colombo")).toBeInTheDocument();
+    expect(screen.queryByText("Historical customer")).not.toBeInTheDocument();
+    expect(screen.getByText("Post (1)")).toBeInTheDocument();
+  });
 
   /**
    * An unstaffed 60-minute visit rendered "08:00–17:00" — the fallback service
@@ -80,7 +145,7 @@ describe("CalendarPage", () => {
       items: [
         buildCalendarEntry({
           visitId: "visit-untimed",
-          visitDate: todayIso(),
+          visitDate: todayColomboIso(),
           customerName: "Grandview Hotel",
           windowStartMinute: 480,
           windowEndMinute: 1020,
@@ -116,14 +181,14 @@ describe("CalendarPage", () => {
         buildCalendarEntry({
           visitId: "visit-planned",
           customerName: "Planned customer",
-          visitDate: todayIso(),
+          visitDate: todayColomboIso(),
           visitStatus: "PENDING",
           assignment: null,
         }),
         buildCalendarEntry({
           visitId: "visit-assignment-required",
           customerName: "Assignment-required customer",
-          visitDate: todayIso(),
+          visitDate: todayColomboIso(),
           visitStatus: "UNASSIGNED",
           assignment: null,
         }),
@@ -137,16 +202,18 @@ describe("CalendarPage", () => {
   });
 
   it("says that the overflow link changes the view", async () => {
+    const user = userEvent.setup();
     const busy = Array.from({ length: 6 }, (_, index) =>
       buildCalendarEntry({
         visitId: `busy-${index}`,
-        visitDate: todayIso(),
+        visitDate: todayColomboIso(),
         customerName: `Customer ${index}`,
         windowStartMinute: 540 + index * 30,
       })
     );
     vi.mocked(fetchCalendar).mockResolvedValue({ items: busy, total: busy.length });
     render(<CalendarPage />);
+    await user.click(screen.getByRole("button", { name: "Month" }));
     await screen.findByText("Customer 0");
 
     // Clicking it switched the whole month view to Week without a word, and
@@ -158,12 +225,12 @@ describe("CalendarPage", () => {
     const user = userEvent.setup();
     render(<CalendarPage />);
     await screen.findByText("Cinnamon Grand Colombo");
-    if (view === "week") await user.click(screen.getByRole("button", { name: "Week" }));
+    await user.click(screen.getByRole("button", { name: view === "week" ? "Week" : "Month" }));
 
     const grid = await screen.findByRole("grid", { name: view === "month" ? "Month calendar" : "Week calendar" });
     expect(grid).toHaveAttribute("tabindex", "0");
     const rows = within(grid).getAllByRole("row");
-    const days = daysInView(todayIso(), view);
+    const days = daysInView(todayColomboIso(), view);
     expect(rows).toHaveLength(1 + days.length / 7);
     const headers = within(rows[0]).getAllByRole("columnheader");
     expect(headers.map((header) => header.textContent)).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
@@ -182,7 +249,7 @@ describe("CalendarPage", () => {
     const user = userEvent.setup();
     render(<CalendarPage />);
     const chip = await screen.findByRole("button", {
-      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayIso()}, post`,
+      name: `Cinnamon Grand Colombo at 09:00–11:30 on ${todayColomboIso()}, post`,
     });
     expect(within(chip).getByText("09:00–11:30")).toBeInTheDocument();
     await user.click(chip);
@@ -201,7 +268,7 @@ describe("CalendarPage", () => {
     // Ordered by the window it must fall in, but never *labelled* with it:
     // the window is a constraint, not a plan.
     const earlier = await screen.findByRole("button", {
-      name: `Grandview Hotel on ${todayIso()}, 90 minutes, time not set, no crew, Assignment required`,
+      name: `Grandview Hotel on ${todayColomboIso()}, 90 minutes, time not set, no crew, Assignment required`,
     });
     const later = screen.getByRole("button", { name: /Cinnamon Grand Colombo at 11:00–12:30/ });
     expect(earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -321,4 +388,10 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function daysFromToday(days: number): string {
+  const date = new Date(`${todayColomboIso()}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }

@@ -43,6 +43,36 @@ export function todayIso(): string {
   return toIsoDate(new Date());
 }
 
+/** The service day is the Sri Lankan calendar day, even before UTC midnight. */
+export function todayColomboIso(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Colombo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const value = (type: "year" | "month" | "day") =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+/** Keep an open operational plan current when the Sri Lankan service day changes. */
+export function subscribeToColomboDay(onChange: () => void): () => void {
+  let timer: ReturnType<typeof setTimeout>;
+  const schedule = () => {
+    const now = Date.now();
+    // Sri Lanka uses UTC+05:30, so its next local midnight is 18:30 UTC.
+    const nextDay = addDays(todayColomboIso(new Date(now)), 1);
+    const nextMidnight = Date.parse(`${nextDay}T00:00:00.000Z`) - 330 * 60_000;
+    timer = setTimeout(() => {
+      onChange();
+      schedule();
+    }, Math.max(1, nextMidnight - now));
+  };
+  schedule();
+  return () => clearTimeout(timer);
+}
+
 /** Monday of the week containing `iso`. UltraKIL's week starts Monday. */
 export function startOfWeek(iso: string): string {
   const date = parseDate(iso);

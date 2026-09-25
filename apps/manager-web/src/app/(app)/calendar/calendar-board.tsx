@@ -29,12 +29,14 @@ import {
   addDays,
   addMonths,
   daysInView,
+  formatDayRange,
   formatLongDate,
   formatMonthYear,
   formatWeekRange,
   isSameMonth,
   rangeForView,
-  todayIso,
+  subscribeToColomboDay,
+  todayColomboIso,
   WEEKDAY_INITIALS,
   type CalendarView,
 } from "@/lib/calendar";
@@ -302,9 +304,17 @@ function DetailDialog({
  * the two screens cannot drift into disagreeing about the same week. A copy
  * would have been quicker and would have been wrong within a fortnight.
  */
-export function CalendarBoard() {
-  const [view, setView] = React.useState<CalendarView>("month");
-  const [anchor, setAnchor] = React.useState<string>(todayIso);
+export function CalendarBoard({ initialView = "rolling30" }: { initialView?: CalendarView | "rolling30" }) {
+  const [view, setView] = React.useState<CalendarView | "rolling30">(initialView);
+  // Static HTML must not bake in the build day's date: the server snapshot is
+  // deliberately empty, then hydration reads the current Colombo service day.
+  const serviceToday = React.useSyncExternalStore(
+    subscribeToColomboDay,
+    todayColomboIso,
+    () => "",
+  );
+  const [chosenAnchor, setChosenAnchor] = React.useState<string | null>(null);
+  const anchor = chosenAnchor ?? serviceToday;
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [stage, setStage] = React.useState<StageFilter>("ALL");
 
@@ -314,9 +324,14 @@ export function CalendarBoard() {
   const [openEntry, setOpenEntry] = React.useState<CalendarEntry | null>(null);
   const requestGeneration = React.useRef(0);
 
-  const { from, to } = rangeForView(anchor, view);
+  const { from, to } = !anchor
+    ? { from: "", to: "" }
+    : view === "rolling30"
+      ? { from: anchor, to: addDays(anchor, 29) }
+      : rangeForView(anchor, view);
 
   const load = React.useCallback(() => {
+    if (!from || !to) return;
     const generation = ++requestGeneration.current;
     setIsLoading(true);
     setError(null);
@@ -353,8 +368,10 @@ export function CalendarBoard() {
   }, [load]);
 
   const visible = React.useMemo(
-    () => (stage === "ALL" ? entries : entries.filter((entry) => stageOf(entry) === stage)),
-    [entries, stage],
+    () => entries.filter((entry) =>
+      entry.visitDate >= from && entry.visitDate <= to &&
+      (stage === "ALL" || stageOf(entry) === stage)),
+    [entries, from, to, stage],
   );
 
   const byDay = React.useMemo(() => {
@@ -370,11 +387,12 @@ export function CalendarBoard() {
     return grouped;
   }, [visible]);
 
-  const days = daysInView(anchor, view);
-  const today = todayIso();
+  const days = !anchor || view === "rolling30" ? [] : daysInView(anchor, view);
+  const today = serviceToday;
 
   function step(direction: -1 | 1) {
-    setAnchor(view === "month" ? addMonths(anchor, direction) : addDays(anchor, direction * 7));
+    if (!anchor) return;
+    setChosenAnchor(view === "month" ? addMonths(anchor, direction) : addDays(anchor, direction * (view === "week" ? 7 : 30)));
   }
 
   const counts = React.useMemo(() => {
@@ -387,6 +405,10 @@ export function CalendarBoard() {
     for (const entry of visible) result[stageOf(entry)] += 1;
     return result;
   }, [visible]);
+  const withoutCrew = visible.filter((entry) => !entry.assignment?.crew.length).length;
+  const withoutTransportPlan = visible.filter((entry) => !entry.assignment).length;
+  const usingPublicTransport = visible.filter((entry) =>
+    entry.assignment && entry.assignment.vehicles.length === 0).length;
 
   return (
     <div className="space-y-6">
@@ -402,7 +424,7 @@ export function CalendarBoard() {
           <Button variant="outline" size="icon" aria-label="Previous" onClick={() => step(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="outline" onClick={() => setAnchor(todayIso())}>
+          <Button variant="outline" onClick={() => setChosenAnchor(null)}>
             Today
           </Button>
           <Button variant="outline" size="icon" aria-label="Next" onClick={() => step(1)}>
@@ -411,10 +433,18 @@ export function CalendarBoard() {
         </div>
 
         <p className="min-w-56 text-lg font-semibold">
-          {view === "month" ? formatMonthYear(anchor) : formatWeekRange(anchor)}
+          {!anchor ? "Loading dates…" : view === "rolling30" ? formatDayRange(from, to) :
+            view === "month" ? formatMonthYear(anchor) : formatWeekRange(anchor)}
         </p>
 
         <div className="flex items-center gap-1" role="group" aria-label="Calendar view">
+          <Button
+            variant={view === "rolling30" ? "default" : "outline"}
+            aria-pressed={view === "rolling30"}
+            onClick={() => { setChosenAnchor(null); setView("rolling30"); }}
+          >
+            30 days
+          </Button>
           <Button
             variant={view === "month" ? "default" : "outline"}
             aria-pressed={view === "month"}
@@ -511,6 +541,52 @@ export function CalendarBoard() {
               : "No visits fall in this range yet."
           }
         />
+      ) : view === "rolling30" ? (
+        <section aria-label="30-day plan" className="space-y-4">
+          <div className="rounded-lg border border-border bg-muted/30 px-4 py-3">
+            <h2 className="font-semibold">30-day plan</h2>
+            <p className="text-sm text-muted-foreground">
+              {formatLongDate(from)} – {formatLongDate(to)} · {visible.length} visits shown ·{" "}
+              {withoutCrew} without crew · {withoutTransportPlan} without transport plan ·{" "}
+              {usingPublicTransport} using public transport.
+              Select a visit for full details.
+            </p>
+          </div>
+          {Array.from(byDay).sort(([left], [right]) => left.localeCompare(right)).map(([day, dayEntries]) => (
+            <section key={day} aria-label={formatLongDate(day)} className="rounded-lg border border-border">
+              <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2">
+                <h3 className="font-medium">{formatLongDate(day)}</h3>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {dayEntries.length} {dayEntries.length === 1 ? "visit" : "visits"}
+                </span>
+              </div>
+              <ul className="divide-y divide-border">
+                {dayEntries.map((entry) => (
+                  <li key={entry.visitId} className="grid gap-2 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-center">
+                    <EntryChip entry={entry} onOpen={() => setOpenEntry(entry)} />
+                    <div className="min-w-0 text-xs text-muted-foreground">
+                      <p><span className="font-medium text-foreground">{entry.siteName}</span> · {entry.jobTypeName}</p>
+                      <p>Crew: {entry.assignment?.crew.length
+                        ? entry.assignment.crew.map((member) => member.fullName).join(", ")
+                        : "No crew"}</p>
+                      {entry.assignment?.vehicles.length ? (
+                        <p>Vehicle: {entry.assignment.vehicles.map((vehicle) =>
+                          `${vehicle.label}${vehicle.driverName ? ` (driver: ${vehicle.driverName})` : ""}`).join(", ")}</p>
+                      ) : (
+                        <p>Transport: {entry.assignment ? "Public transport" : "Not assigned"}</p>
+                      )}
+                      {entry.hoursUnconfirmed && (
+                        <p className="font-medium text-amber-700 dark:text-amber-300">
+                          Opening hours unconfirmed
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </section>
       ) : (
         <div
           className="overflow-x-auto rounded-lg border border-border"
@@ -573,7 +649,7 @@ export function CalendarBoard() {
                       <button
                         type="button"
                         onClick={() => {
-                          setAnchor(day);
+                          setChosenAnchor(day);
                           setView("week");
                         }}
                         className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-success hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

@@ -248,7 +248,7 @@ export default function DispatchBoardPage() {
         </div>
       </div>
 
-      {view === "calendar" && <CalendarBoard />}
+      {view === "calendar" && <CalendarBoard initialView="month" />}
 
       {operations && view === "list" && (
         <OperationsDayPanel data={operations} onSelect={setSelectedVisitId} />

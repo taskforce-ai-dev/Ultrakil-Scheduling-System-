@@ -396,6 +396,7 @@ describe("dispatch board", () => {
     await user.click(screen.getByRole("button", { name: "Calendar" }));
 
     expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Month" })).toHaveAttribute("aria-pressed", "true");
 
     await user.click(screen.getByRole("button", { name: "List" }));
 
