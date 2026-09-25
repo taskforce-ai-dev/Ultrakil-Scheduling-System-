@@ -250,10 +250,16 @@ export default function ScheduleHistoryPage() {
   const focusRef = React.useRef<HTMLLIElement | null>(null);
 
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
+  // Page 1, held separately from whatever page is being browsed — see
+  // `loadSummary`. This is what the Current schedule panel reads.
+  const [summaryRuns, setSummaryRuns] = React.useState<ScheduleRun[]>([]);
   // Which day it is decides which schedule is in force, so it is read once per
   // render rather than captured when the page mounted — a portal left open
   // overnight would otherwise go on naming yesterday's week.
-  const { live, pending } = React.useMemo(() => currentSchedule(runs, todayIso()), [runs]);
+  const { live, pending } = React.useMemo(
+    () => currentSchedule(summaryRuns, todayIso()),
+    [summaryRuns],
+  );
   const [total, setTotal] = React.useState(0);
   const [page, setPage] = React.useState(1);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -308,6 +314,9 @@ export default function ScheduleHistoryPage() {
         }
         setRuns(response.items);
         setTotal(response.total);
+        // On page 1 the browsing page and the summary source are the same
+        // rows, so this costs no extra request.
+        if (page === 1) setSummaryRuns(response.items);
       })
       .catch((caught: unknown) => {
         if (generation !== requestGeneration.current) return;
@@ -322,12 +331,42 @@ export default function ScheduleHistoryPage() {
       });
   }, [page]);
 
+  /**
+   * The in-force and pending summary, kept independent of whichever history
+   * page is being browsed.
+   *
+   * Which schedule is in force is a fact about the system, not about the rows
+   * currently on screen. Deriving it from the browsed page meant that clicking
+   * Next — which changes no dispatch truth whatsoever — could make the panel
+   * announce that no schedule is in force, or name an older one, purely
+   * because the published run covering today had scrolled onto another page.
+   *
+   * The API returns runs newest-first, so page 1 is the same authoritative
+   * window this panel read before the list was paginated. It is re-read
+   * separately whenever the browsed page is not page 1.
+   */
+  const summaryRequest = React.useRef(0);
+  const loadSummary = React.useCallback(() => {
+    if (page === 1) return Promise.resolve(); // `load` already set it from the same response.
+    const generation = ++summaryRequest.current;
+    return fetchScheduleRuns({ page: 1, pageSize: RUNS_PAGE_SIZE })
+      .then((response) => {
+        if (generation === summaryRequest.current) setSummaryRuns(response.items);
+      })
+      .catch(() => {
+        // The browsed page owns the visible error state. Leaving the last known
+        // summary standing is better than blanking a panel that says which
+        // schedule crews are working to.
+      });
+  }, [page]);
+
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
     // effects are for.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
-  }, [load]);
+    loadSummary();
+  }, [load, loadSummary]);
 
   const runIsOnPage = focusRunId ? runs.some((run) => run.id === focusRunId) : false;
 
@@ -382,16 +421,30 @@ export default function ScheduleHistoryPage() {
     focusRef.current?.scrollIntoView({ block: "center" });
   }, [focusedRun]);
 
-  const hasActiveRun = runs.some((run) => ACTIVE_STATUSES.has(run.status));
+  // Both sources, so paging away from a queued run does not silently stop its
+  // refresh. A newly started run is always on page 1 (the API orders runs
+  // newest-first), and the browsed page is checked too in case one is active
+  // further back.
+  const hasActiveRun = React.useMemo(
+    () =>
+      summaryRuns.some((run) => ACTIVE_STATUSES.has(run.status)) ||
+      runs.some((run) => ACTIVE_STATUSES.has(run.status)),
+    [summaryRuns, runs],
+  );
 
   React.useEffect(() => {
     if (!hasActiveRun) return;
     // Poll while anything is queued or running. This is what makes a
     // refresh or a lost connection "just work": the next tick re-asks the
-    // API for the truth instead of trusting stale in-memory state.
-    const timer = setInterval(load, POLL_INTERVAL_MS);
+    // API for the truth instead of trusting stale in-memory state. The
+    // summary is refreshed alongside the page so progress on a run that is
+    // not on screen still reaches the Current schedule panel.
+    const timer = setInterval(() => {
+      load();
+      loadSummary();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [hasActiveRun, load]);
+  }, [hasActiveRun, load, loadSummary]);
 
   async function handleStart() {
     if (isStartingRef.current) return; // Collapses a double-click into one request.
@@ -410,6 +463,7 @@ export default function ScheduleHistoryPage() {
       });
       notify.success("Schedule run queued.");
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not start the run.");
     } finally {
@@ -426,6 +480,7 @@ export default function ScheduleHistoryPage() {
       await cancelScheduleRun(run.id);
       notify.success("Cancellation requested.");
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not cancel this run.");
     } finally {
@@ -463,6 +518,7 @@ export default function ScheduleHistoryPage() {
       notify.success("Schedule published.");
       setPublishTarget(null);
       load();
+      loadSummary();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not publish this run.");
     } finally {

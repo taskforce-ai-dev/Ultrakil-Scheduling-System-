@@ -757,6 +757,84 @@ describe("ScheduleHistoryPage pagination", () => {
     expect(screen.getAllByTestId("run-r51")).toHaveLength(1);
   });
 
+  it("keeps Current schedule unchanged when paging to unrelated older runs", async () => {
+    // The blocker Thiva caught on review: the in-force panel was derived from
+    // the browsed page, so clicking Next — which changes no dispatch truth —
+    // could make it announce that no schedule is in force.
+    const publishedToday = buildScheduleRun({
+      id: "in-force",
+      status: "SUCCEEDED",
+      isPublished: true,
+      publishedAt: "2026-09-20T00:00:00.000Z",
+      rangeStart: "2026-09-01",
+      rangeEnd: "2036-09-30",
+      visitsScheduled: 17,
+      visitsUnassigned: 0,
+    });
+    const oldUnrelated = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({
+        id: `old-${index}`,
+        isPublished: false,
+        rangeStart: "2024-01-01",
+        rangeEnd: "2024-01-07",
+      }),
+    );
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      const page = query?.page ?? 1;
+      return {
+        items: page === 1 ? [publishedToday, ...oldUnrelated.slice(0, 49)] : oldUnrelated,
+        total: 100,
+        page,
+        pageSize: 50,
+      };
+    });
+
+    const user = await renderPage();
+    const before = (await screen.findByRole("region", { name: "Current schedule" })).textContent;
+    expect(before).toContain("2026-09-01");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-old-49");
+
+    // Page 2 holds none of the published run, yet the panel must not move.
+    expect(screen.queryByTestId("run-in-force")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Current schedule" }).textContent).toBe(before);
+  });
+
+  it("keeps polling a queued run that is not on the browsed page", async () => {
+    const queued = buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 });
+    const oldUnrelated = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `old-${index}`, status: "SUCCEEDED" }),
+    );
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      const page = query?.page ?? 1;
+      return {
+        items: page === 1 ? [queued, ...oldUnrelated.slice(0, 49)] : oldUnrelated,
+        total: 100,
+        page,
+        pageSize: 50,
+      };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-queued");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-old-49");
+    expect(screen.queryByTestId("run-queued")).not.toBeInTheDocument();
+
+    const callsBefore = vi.mocked(fetchScheduleRuns).mock.calls.length;
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    // The run is off-page, but its refresh must not silently stop.
+    expect(vi.mocked(fetchScheduleRuns).mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
   it("ignores a poll that was overtaken by a page change", async () => {
     const slowFirstPage = deferredRun();
     vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
