@@ -304,8 +304,8 @@ function DetailDialog({
  * the two screens cannot drift into disagreeing about the same week. A copy
  * would have been quicker and would have been wrong within a fortnight.
  */
-export function CalendarBoard() {
-  const [view, setView] = React.useState<CalendarView | "rolling30">("rolling30");
+export function CalendarBoard({ initialView = "rolling30" }: { initialView?: CalendarView | "rolling30" }) {
+  const [view, setView] = React.useState<CalendarView | "rolling30">(initialView);
   // Static HTML must not bake in the build day's date: the server snapshot is
   // deliberately empty, then hydration reads the current Colombo service day.
   const serviceToday = React.useSyncExternalStore(
@@ -424,7 +424,7 @@ export function CalendarBoard() {
           <Button variant="outline" size="icon" aria-label="Previous" onClick={() => step(-1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="outline" onClick={() => setChosenAnchor(todayColomboIso())}>
+          <Button variant="outline" onClick={() => setChosenAnchor(null)}>
             Today
           </Button>
           <Button variant="outline" size="icon" aria-label="Next" onClick={() => step(1)}>
@@ -441,7 +441,7 @@ export function CalendarBoard() {
           <Button
             variant={view === "rolling30" ? "default" : "outline"}
             aria-pressed={view === "rolling30"}
-            onClick={() => { setChosenAnchor(todayColomboIso()); setView("rolling30"); }}
+            onClick={() => { setChosenAnchor(null); setView("rolling30"); }}
           >
             30 days
           </Button>
