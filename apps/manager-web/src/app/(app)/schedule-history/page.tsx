@@ -299,8 +299,17 @@ export default function ScheduleHistoryPage() {
     (publishTarget?.visitsUnassigned ?? 0) > 0 ||
     unconfirmedSourceWarnings(publishTarget).length > 0;
 
-  const load = React.useCallback(() => {
+  /**
+   * `silent` is for the 3-second poll. A poll must not hold the pager down or
+   * blank the list every tick — it is a background refresh of rows already on
+   * screen. A page change is the opposite: it is the manager waiting for
+   * different rows, and the controls stay disabled until they arrive so a
+   * second click cannot skip a page while the old ones are still shown.
+   */
+  const load = React.useCallback(
+    (options?: { silent?: boolean }) => {
     const generation = ++requestGeneration.current;
+    if (!options?.silent) setIsLoading(true);
     setError(null);
     return fetchScheduleRuns({ page, pageSize: RUNS_PAGE_SIZE })
       .then((response) => {
@@ -327,9 +336,11 @@ export default function ScheduleHistoryPage() {
         );
       })
       .finally(() => {
-        if (generation === requestGeneration.current) setIsLoading(false);
+        if (generation === requestGeneration.current && !options?.silent) setIsLoading(false);
       });
-  }, [page]);
+    },
+    [page],
+  );
 
   /**
    * The in-force and pending summary, kept independent of whichever history
@@ -440,7 +451,7 @@ export default function ScheduleHistoryPage() {
     // summary is refreshed alongside the page so progress on a run that is
     // not on screen still reaches the Current schedule panel.
     const timer = setInterval(() => {
-      load();
+      load({ silent: true });
       loadSummary();
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
@@ -593,14 +604,17 @@ export default function ScheduleHistoryPage() {
         </Button>
       </section>
 
-      {isLoading ? (
+      {/* Only the first load replaces the list. A page change keeps the
+          previous runs on screen with the pager disabled, so the control the
+          manager just clicked does not unmount under the cursor. */}
+      {isLoading && runs.length === 0 ? (
         <LoadingState rows={4} />
       ) : error ? (
         <ErrorState
           title="Couldn't load schedule runs"
           description={error.message}
           code={error.code}
-          onRetry={load}
+          onRetry={() => load()}
         />
       ) : runs.length === 0 ? (
         <EmptyState

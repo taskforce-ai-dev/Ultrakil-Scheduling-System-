@@ -835,6 +835,73 @@ describe("ScheduleHistoryPage pagination", () => {
     expect(vi.mocked(fetchScheduleRuns).mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
+  it("holds the pager down until a deferred page settles, without unmounting the rows", async () => {
+    // Second review finding: `load` never set isLoading on a page change, so
+    // `Pagination disabled={isLoading}` stayed false throughout the fetch and
+    // a rapid second Next could advance again over the old rows.
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `p1-${index}` }),
+    );
+    const secondPage = Array.from({ length: 50 }, (_, index) =>
+      buildScheduleRun({ id: `p2-${index}` }),
+    );
+    const deferredPageTwo = deferredRun();
+
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      if ((query?.page ?? 1) === 2) return deferredPageTwo.promise;
+      return { items: firstPage, total: 150, page: 1, pageSize: 50 };
+    });
+
+    const user = await renderPage();
+    await screen.findByTestId("run-p1-0");
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // Page 2 is in flight. Both controls are held down…
+    expect(screen.getByRole("button", { name: /Next/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeDisabled();
+    // …and the rows already on screen are still there, not a loading skeleton.
+    expect(screen.getByTestId("run-p1-0")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+
+    // A second click while disabled must not ask for page 3.
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    expect(vi.mocked(fetchScheduleRuns).mock.calls.filter((c) => c[0]?.page === 3)).toHaveLength(0);
+
+    await act(async () => {
+      deferredPageTwo.resolve({ items: secondPage, total: 150, page: 2, pageSize: 50 });
+    });
+
+    expect(await screen.findByTestId("run-p2-0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+  });
+
+  it("does not hold the pager down for a background poll", async () => {
+    // The poll runs every 3s while a run is queued. Disabling the pager on
+    // each tick would make it unusable exactly when a manager is watching.
+    const runs = [
+      buildScheduleRun({ id: "queued", status: "RUNNING", progressPercent: 20 }),
+      ...Array.from({ length: 49 }, (_, index) => buildScheduleRun({ id: `p1-${index}` })),
+    ];
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
+      return { items: runs, total: 150, page: query?.page ?? 1, pageSize: 50 };
+    });
+
+    await renderPage();
+    await screen.findByTestId("run-queued");
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(3500);
+    });
+
+    expect(screen.getByRole("button", { name: /Next/ })).toBeEnabled();
+    expect(screen.getByTestId("run-queued")).toBeInTheDocument();
+  });
+
   it("ignores a poll that was overtaken by a page change", async () => {
     const slowFirstPage = deferredRun();
     vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
