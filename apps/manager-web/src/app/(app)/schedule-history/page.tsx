@@ -39,6 +39,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
+import { Pagination } from "@/components/shared/pagination";
 import {
   ApiError,
   cancelScheduleRun,
@@ -57,6 +58,15 @@ const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
 /** How often the run list is re-fetched while anything is queued or running. */
 const POLL_INTERVAL_MS = 3000;
+
+/**
+ * Runs per page. The list used to ask for the most recent 50 and say so, which
+ * was honest but left every earlier run unreachable — including one a
+ * `?run=<id>` deep link pointed at, which highlighted nothing and scrolled
+ * nowhere. Paging reaches them; the exact-ID fetch below reaches the linked one
+ * directly, whichever page it is really on.
+ */
+const RUNS_PAGE_SIZE = 50;
 
 /** True for the record a confirmed "Generate visits" leaves behind. */
 function isGeneration(run: ScheduleRun): boolean {
@@ -245,8 +255,16 @@ export default function ScheduleHistoryPage() {
   // overnight would otherwise go on naming yesterday's week.
   const { live, pending } = React.useMemo(() => currentSchedule(runs, todayIso()), [runs]);
   const [total, setTotal] = React.useState(0);
+  const [page, setPage] = React.useState(1);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
+  // The run this page was linked to, fetched by id when it is not on the page
+  // being shown. Held separately so paging away from it does not lose it.
+  const [linkedRun, setLinkedRun] = React.useState<ScheduleRun | null>(null);
+  // Every load — the manual one, a page change, and the 3s poll — races the
+  // others. Without a fence the poll that left before a page change can land
+  // after it and repaint the previous page's rows under the new page number.
+  const requestGeneration = React.useRef(0);
 
   const [from, setFrom] = React.useState(todayIso());
   const [to, setTo] = React.useState(addDays(todayIso(), 6));
@@ -276,21 +294,33 @@ export default function ScheduleHistoryPage() {
     unconfirmedSourceWarnings(publishTarget).length > 0;
 
   const load = React.useCallback(() => {
+    const generation = ++requestGeneration.current;
     setError(null);
-    return fetchScheduleRuns({ pageSize: 50 })
-      .then((page) => {
-        setRuns(page.items);
-        setTotal(page.total);
+    return fetchScheduleRuns({ page, pageSize: RUNS_PAGE_SIZE })
+      .then((response) => {
+        if (generation !== requestGeneration.current) return;
+        // Same shrink-under-us case as the customers table: a page past the
+        // end of a list that lost rows returns nothing, which reads as "no
+        // runs" rather than "you have paged off the end".
+        if (response.items.length === 0 && response.total > 0 && page > 1) {
+          setPage(1);
+          return;
+        }
+        setRuns(response.items);
+        setTotal(response.total);
       })
       .catch((caught: unknown) => {
+        if (generation !== requestGeneration.current) return;
         setError(
           caught instanceof ApiError
             ? caught
             : new ApiError({ code: "UNKNOWN_ERROR", message: "Something went wrong." })
         );
       })
-      .finally(() => setIsLoading(false));
-  }, []);
+      .finally(() => {
+        if (generation === requestGeneration.current) setIsLoading(false);
+      });
+  }, [page]);
 
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
@@ -299,8 +329,49 @@ export default function ScheduleHistoryPage() {
     load();
   }, [load]);
 
+  const runIsOnPage = focusRunId ? runs.some((run) => run.id === focusRunId) : false;
+
+  // A `?run=<id>` link is usually followed from somewhere else in the portal,
+  // and the run it names is very often an older one — which is exactly the run
+  // that is not on page 1. Rather than make the manager page around hunting
+  // for it, ask the API for that one id directly.
+  const linkedRequest = React.useRef(0);
+  React.useEffect(() => {
+    if (!focusRunId || runIsOnPage) return;
+    // Before the first page has answered, `runs` is empty and every run looks
+    // absent. Asking by id then would spend a request to re-fetch a row that
+    // is about to arrive anyway.
+    if (isLoading) return;
+    if (linkedRun?.id === focusRunId) return;
+    const generation = ++linkedRequest.current;
+    fetchScheduleRuns({ ids: [focusRunId], pageSize: 1 })
+      .then((response) => {
+        if (generation !== linkedRequest.current) return;
+        setLinkedRun(response.items[0] ?? null);
+      })
+      .catch(() => {
+        // A link to a run that no longer exists, or that this account cannot
+        // see, highlights nothing — the same as before. It is not worth
+        // replacing the whole list with an error.
+        if (generation === linkedRequest.current) setLinkedRun(null);
+      });
+  }, [focusRunId, runIsOnPage, isLoading, linkedRun?.id]);
+
+  // The linked run rides at the top only while it is genuinely absent from the
+  // page being shown. Paging onto its real page drops it from here, so it is
+  // never listed twice.
+  const displayRuns = React.useMemo(() => {
+    // Derived rather than cleared in an effect, so there is no window where a
+    // previously linked run is still in state and showing at the top: it is
+    // included only while it is both the run being asked for and genuinely
+    // absent from the page.
+    if (!linkedRun || linkedRun.id !== focusRunId) return runs;
+    if (runs.some((run) => run.id === linkedRun.id)) return runs;
+    return [linkedRun, ...runs];
+  }, [linkedRun, focusRunId, runs]);
+
   const focusedRun = focusRunId
-    ? (runs.find((run) => run.id === focusRunId)?.id ?? null)
+    ? (displayRuns.find((run) => run.id === focusRunId)?.id ?? null)
     : null;
 
   React.useEffect(() => {
@@ -519,13 +590,16 @@ export default function ScheduleHistoryPage() {
           </section>
 
           <h2 className="text-sm font-semibold">Earlier runs</h2>
-          {total > runs.length && (
-            <p className="text-sm text-muted-foreground">
-              Showing the {runs.length} most recent of {total} runs.
-            </p>
-          )}
+          <Pagination
+            page={page}
+            pageSize={RUNS_PAGE_SIZE}
+            total={total}
+            onPageChange={setPage}
+            noun="runs"
+            disabled={isLoading}
+          />
           <ul className="space-y-3">
-            {runs.map((run) => {
+            {displayRuns.map((run) => {
               const isActive = ACTIVE_STATUSES.has(run.status);
               const canCancel = isActive && !run.cancelRequested;
               const canPublish = canPublishRun(run);

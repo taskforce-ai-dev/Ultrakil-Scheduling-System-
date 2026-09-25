@@ -37,7 +37,6 @@ import {
   ApiError,
   changeAgreementStatus,
   createServiceAgreement,
-  fetchCustomers,
   fetchJobTypes,
   fetchServiceAgreements,
   fetchSkills,
@@ -47,6 +46,7 @@ import {
   type ServiceSite,
   type SkillListItem,
 } from "@/lib/api-client";
+import { loadAllCustomers } from "@/lib/load-all-customers";
 import { describeFrequency } from "@/lib/cadence";
 import { formatDurationMinutes, formatLongDate } from "@/lib/calendar";
 import { WEEKDAYS, type Weekday } from "@/lib/weekdays";
@@ -287,14 +287,14 @@ export default function ServiceAgreementsPage() {
         ...(statusFilter === "ARCHIVED" ? { status: "ARCHIVED" as const } : {}),
         ...(visitsFilter === "NONE" ? { withoutVisits: true } : {}),
       }),
-      fetchCustomers({ pageSize: 200 }),
+      loadAllCustomers(),
       fetchJobTypes(),
       fetchSkills(),
     ])
-      .then(([agreementPage, customerPage, jobTypeList, skillList]) => {
+      .then(([agreementPage, allCustomers, jobTypeList, skillList]) => {
         if (generation !== requestGeneration.current) return;
         setAgreements(agreementPage.items);
-        setCustomers(customerPage.items);
+        setCustomers(allCustomers);
         setJobTypes(jobTypeList);
         setSkills(skillList);
       })

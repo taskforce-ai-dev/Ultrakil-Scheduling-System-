@@ -660,3 +660,144 @@ describe("ScheduleHistoryPage, arrived at from a run link", () => {
     expect(await screen.findByTestId("run-older")).not.toHaveAttribute("aria-current");
   });
 });
+
+/**
+ * ULK-O12. The list asked for the 50 most recent runs and said so, which was
+ * honest but left every earlier run unreachable — including one a `?run=<id>`
+ * link pointed straight at, which highlighted nothing and scrolled nowhere.
+ */
+describe("ScheduleHistoryPage pagination", () => {
+  function runRange(from: number, count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      buildScheduleRun({ id: `r${from + index}` }),
+    );
+  }
+
+  /** Serves `total` runs in pages of 50, and answers an exact-id query. */
+  function servePages(total: number, byId: Record<string, ScheduleRun> = {}) {
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.ids?.length) {
+        const found = query.ids.map((id) => byId[id]).filter(Boolean);
+        return { items: found, total: found.length, page: 1, pageSize: 1 };
+      }
+      const page = query?.page ?? 1;
+      const pageSize = query?.pageSize ?? 50;
+      const start = (page - 1) * pageSize;
+      return {
+        items: runRange(start + 1, Math.max(0, Math.min(pageSize, total - start))),
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
+  it("states the API's total and range instead of a truncation notice", async () => {
+    servePages(120);
+    await renderPage();
+
+    expect(await screen.findByTestId("pagination-range")).toHaveTextContent(
+      "Showing 1–50 of 120 runs",
+    );
+    expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
+  });
+
+  it("asks the API for the next page when Next is used", async () => {
+    servePages(120);
+    const user = await renderPage();
+    await screen.findByTestId("run-r1");
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    expect(await screen.findByTestId("run-r51")).toBeInTheDocument();
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ page: 2, pageSize: 50 });
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 51–100 of 120 runs");
+  });
+
+  it("fetches a linked older run by id and highlights it (ULK-O12 deep link)", async () => {
+    const ancient = buildScheduleRun({ id: "ancient", rangeStart: "2026-01-05" });
+    // 300 runs: `ancient` is on no page this list would load first.
+    servePages(300, { ancient });
+    searchParamsRef.current = new URLSearchParams("run=ancient");
+    await renderPage();
+
+    const highlighted = await screen.findByTestId("run-ancient");
+    expect(highlighted).toHaveAttribute("aria-current", "true");
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ ids: ["ancient"], pageSize: 1 });
+  });
+
+  it("does not list the focused run twice when it is already on the page", async () => {
+    const onPage = buildScheduleRun({ id: "r3" });
+    servePages(120, { r3: onPage });
+    searchParamsRef.current = new URLSearchParams("run=r3");
+    await renderPage();
+
+    await screen.findByTestId("run-r3");
+    expect(screen.getAllByTestId("run-r3")).toHaveLength(1);
+    // The row is on the page already, so no exact-id request is needed.
+    expect(fetchScheduleRuns).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ["r3"] }),
+    );
+  });
+
+  it("drops the linked row once paging reaches the page it really lives on", async () => {
+    const linked = buildScheduleRun({ id: "r51" });
+    servePages(120, { r51: linked });
+    searchParamsRef.current = new URLSearchParams("run=r51");
+    const user = await renderPage();
+
+    // Page 1 does not hold it, so it is fetched by id and shown at the top.
+    await screen.findByTestId("run-r51");
+    expect(screen.getAllByTestId("run-r51")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+
+    // Page 2 genuinely contains it — still exactly one row.
+    expect(await screen.findByTestId("run-r52")).toBeInTheDocument();
+    expect(screen.getAllByTestId("run-r51")).toHaveLength(1);
+  });
+
+  it("ignores a poll that was overtaken by a page change", async () => {
+    const slowFirstPage = deferredRun();
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if ((query?.page ?? 1) === 1) return slowFirstPage.promise;
+      return { items: runRange(51, 50), total: 120, page: 2, pageSize: 50 };
+    });
+
+    render(<ScheduleHistoryPage />);
+    await screen.findByRole("heading", { name: "Assign Crew" });
+
+    // Resolve page 1 so the list and its pager are on screen.
+    await act(async () => {
+      slowFirstPage.resolve({ items: runRange(1, 50), total: 120, page: 1, pageSize: 50 });
+    });
+    await screen.findByTestId("run-r1");
+
+    // A second page-1 request (the poll) is now left hanging while page 2 is asked for.
+    const stalePoll = deferredRun();
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if ((query?.page ?? 1) === 1) return stalePoll.promise;
+      return { items: runRange(51, 50), total: 120, page: 2, pageSize: 50 };
+    });
+
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: /Next/ }));
+    await screen.findByTestId("run-r51");
+
+    await act(async () => {
+      stalePoll.resolve({ items: runRange(1, 50), total: 120, page: 1, pageSize: 50 });
+    });
+
+    // Page 1's rows must not reappear under a pager that reads page 2.
+    expect(screen.getByTestId("run-r51")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-r1")).not.toBeInTheDocument();
+  });
+});
+
+function deferredRun() {
+  let resolve!: (value: Awaited<ReturnType<typeof fetchScheduleRuns>>) => void;
+  const promise = new Promise<Awaited<ReturnType<typeof fetchScheduleRuns>>>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
