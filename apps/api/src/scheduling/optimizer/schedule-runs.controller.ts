@@ -29,6 +29,7 @@ import { AuthenticatedUser } from '../../auth/auth.types';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { AppException } from '../../common/errors/app.exception';
+import { parseDateOnly } from '../../catalog/schedule-preview';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   LockAssignmentDto,
@@ -217,9 +218,15 @@ export class ScheduleRunsController {
     await this.reconcileSelfHosted();
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
-    const where = {
+    const currentDate = query.currentOn ? parseDateOnly(query.currentOn) : null;
+    const where: Prisma.ScheduleRunWhereInput = {
       ...(query.status ? { status: query.status } : {}),
       ...(query.ids?.length ? { id: { in: query.ids } } : {}),
+      ...(currentDate ? {
+        publishedAt: { not: null },
+        rangeStart: { lte: currentDate },
+        rangeEnd: { gte: currentDate },
+      } : {}),
     };
 
     const [total, rows] = await Promise.all([
@@ -227,7 +234,9 @@ export class ScheduleRunsController {
       this.prisma.scheduleRun.findMany({
         where,
         include: RUN_KIND_INCLUDE,
-        orderBy: { createdAt: 'desc' },
+        orderBy: currentDate
+          ? [{ publishedAt: 'desc' }, { id: 'desc' }]
+          : { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),

@@ -5162,6 +5162,8 @@ export interface operations {
             query?: {
                 /** @description 1-based page number. */
                 page?: number;
+                /** @description Only published runs whose range covers this service date, newest publication first. */
+                currentOn?: string;
                 /** @description Up to 100 per page. */
                 pageSize?: number;
                 status?: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "SUPERSEDED";

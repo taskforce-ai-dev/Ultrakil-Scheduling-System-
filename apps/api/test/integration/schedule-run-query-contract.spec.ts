@@ -133,3 +133,37 @@ it('accepts one id the same way it accepts several', async () => {
     new Set([first.id, second.id]),
   );
 }, 60_000);
+
+it('finds the published run covering a day even after more than 50 newer generation runs', async () => {
+  const live = await prisma.scheduleRun.create({
+    data: {
+      status: 'SUCCEEDED', branchCode: BranchCode.COLOMBO,
+      rangeStart: at(WEEK.from), rangeEnd: at(WEEK.to),
+      createdAt: new Date('2028-04-01T00:00:00Z'),
+      publishedAt: new Date('2028-04-02T00:00:00Z'),
+      visitsScheduled: 6,
+    },
+  });
+  await prisma.scheduleRun.createMany({
+    data: Array.from({ length: 60 }, (_, index) => ({
+      status: 'SUCCEEDED' as const, branchCode: BranchCode.COLOMBO,
+      rangeStart: at(WEEK.from), rangeEnd: at(WEEK.to),
+      createdAt: new Date(Date.UTC(2030, 0, 1, 0, index)),
+    })),
+  });
+
+  const recent = await request(http).get('/api/schedule-runs')
+    .query({ pageSize: 50 }).set(auth());
+  expect(recent.status).toBe(200);
+  expect(recent.body.items.some((run: { id: string }) => run.id === live.id)).toBe(false);
+
+  const current = await request(http).get('/api/schedule-runs')
+    .query({ currentOn: '2029-04-05', pageSize: 1 }).set(auth());
+  expect(current.status).toBe(200);
+  expect(current.body.items.map((run: { id: string }) => run.id)).toEqual([live.id]);
+  expect(current.body.total).toBe(1);
+
+  const invalid = await request(http).get('/api/schedule-runs')
+    .query({ currentOn: '2029-04-05garbage', pageSize: 1 }).set(auth());
+  expect(invalid.status).toBe(400);
+}, 60_000);

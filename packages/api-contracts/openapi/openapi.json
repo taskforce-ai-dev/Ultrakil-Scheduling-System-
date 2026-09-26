@@ -3003,6 +3003,16 @@
             }
           },
           {
+            "name": "currentOn",
+            "required": false,
+            "in": "query",
+            "description": "Only published runs whose range covers this service date, newest publication first.",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
             "name": "pageSize",
             "required": false,
             "in": "query",

@@ -23,6 +23,13 @@ export const ApiScheduleRunQuery = () =>
       description: '1-based page number.',
     }),
     ApiQuery({
+      name: 'currentOn',
+      required: false,
+      type: String,
+      format: 'date',
+      description: 'Only published runs whose range covers this service date, newest publication first.',
+    }),
+    ApiQuery({
       name: 'pageSize',
       required: false,
       type: Number,

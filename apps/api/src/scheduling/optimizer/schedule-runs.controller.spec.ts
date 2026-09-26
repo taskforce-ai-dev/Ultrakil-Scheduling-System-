@@ -111,6 +111,34 @@ describe('ScheduleRunsController QStash bounds', () => {
     expect(dispatches.reconcilePending).not.toHaveBeenCalled();
   });
 
+  it('asks PostgreSQL for published runs covering the requested day, ordered by publication', async () => {
+    const prisma = {
+      scheduleRun: {
+        count: jest.fn(async () => 0),
+        findMany: jest.fn(async () => []),
+      },
+    };
+    const controller = new ScheduleRunsController(
+      {} as ScheduleRunService,
+      { provider: 'qstash', enqueue: jest.fn(), cancel: jest.fn() },
+      {} as PublishingService,
+      prisma as unknown as PrismaService,
+      {} as ScheduleRunDispatchService,
+    );
+    await controller.list({ currentOn: '2029-04-05', pageSize: 1 });
+    expect(prisma.scheduleRun.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        publishedAt: { not: null },
+        rangeStart: { lte: new Date('2029-04-05T00:00:00Z') },
+        rangeEnd: { gte: new Date('2029-04-05T00:00:00Z') },
+      }),
+    });
+    expect(prisma.scheduleRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      take: 1,
+      orderBy: [{ publishedAt: 'desc' }, { id: 'desc' }],
+    }));
+  });
+
   it('invokes durable BullMQ recovery from a polling read', async () => {
     const dispatches = {
       reconcilePending: jest.fn(async () => undefined),
