@@ -47,6 +47,7 @@ vi.mock("@/lib/api-client", async () => {
     fetchCustomers: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 200 }),
     fetchJobTypes: vi.fn().mockResolvedValue([]),
     fetchCalendar: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    fetchCoverage: vi.fn().mockResolvedValue(null),
     fetchPublishedAssignmentRepairFindings: vi.fn().mockResolvedValue({
       items: [],
       page: 1,

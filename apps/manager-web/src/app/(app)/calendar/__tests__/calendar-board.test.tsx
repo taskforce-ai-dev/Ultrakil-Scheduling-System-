@@ -7,6 +7,7 @@ vi.mock("@/lib/api-client", async () => {
   return {
     ...actual,
     fetchCalendar: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    fetchCoverage: vi.fn().mockResolvedValue(null),
   };
 });
 

@@ -67,6 +67,11 @@ export type CalendarAssignment = NonNullable<CalendarEntry["assignment"]>;
 export type CalendarQuery = NonNullable<
   paths["/api/schedule/calendar"]["get"]["parameters"]["query"]
 >;
+export type CoverageResponse = components["schemas"]["CoverageResponseDto"];
+export type CoverageDay = components["schemas"]["CoverageDayDto"];
+export type CoverageQuery = NonNullable<
+  paths["/api/scheduling/coverage"]["get"]["parameters"]["query"]
+>;
 
 export type Conflict = components["schemas"]["ConflictDto"];
 export type ConflictCode = Conflict["code"];
@@ -1189,6 +1194,13 @@ export function publishScheduleRun(
 export function fetchCalendar(query: CalendarQuery): Promise<CalendarResponse> {
   return request<CalendarResponse>(
     `/schedule/calendar${buildQuery(query as Record<string, unknown>)}`,
+  );
+}
+
+/** Verified published dispatch coverage; draft work never makes a day green. */
+export function fetchCoverage(query: CoverageQuery): Promise<CoverageResponse> {
+  return request<CoverageResponse>(
+    `/scheduling/coverage${buildQuery(query as Record<string, unknown>)}`,
   );
 }
 

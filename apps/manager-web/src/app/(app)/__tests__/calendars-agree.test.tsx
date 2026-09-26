@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("@/lib/api-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
-  return { ...actual, fetchCalendar: vi.fn(), fetchVisits: vi.fn(), fetchBranches: vi.fn(), fetchCustomers: vi.fn(), fetchJobTypes: vi.fn() };
+  return { ...actual, fetchCalendar: vi.fn(), fetchCoverage: vi.fn().mockResolvedValue(null), fetchVisits: vi.fn(), fetchBranches: vi.fn(), fetchCustomers: vi.fn(), fetchJobTypes: vi.fn() };
 });
 
 import CalendarPage from "../calendar/page";

@@ -24,7 +24,7 @@ import { Label } from "@/components/ui/label";
 import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { LoadingState } from "@/components/shared/loading-state";
-import { ApiError, fetchCalendar, type CalendarEntry } from "@/lib/api-client";
+import { ApiError, fetchCalendar, fetchCoverage, type CalendarEntry, type CoverageResponse } from "@/lib/api-client";
 import {
   addDays,
   addMonths,
@@ -50,6 +50,7 @@ import {
   type VisitTileFacts,
 } from "@/lib/visit-tile";
 import { cn } from "@/lib/utils";
+import { CoverageBanner } from "./coverage-banner";
 
 type StageFilter = "ALL" | "UNASSIGNED" | "DRAFT" | "PUBLISHED" | "DONE";
 
@@ -323,6 +324,10 @@ export function CalendarBoard({ initialView = "rolling30" }: { initialView?: Cal
   const [error, setError] = React.useState<ApiError | null>(null);
   const [openEntry, setOpenEntry] = React.useState<CalendarEntry | null>(null);
   const requestGeneration = React.useRef(0);
+  const [coverage, setCoverage] = React.useState<CoverageResponse | null>(null);
+  const [coverageLoading, setCoverageLoading] = React.useState(true);
+  const [coverageError, setCoverageError] = React.useState(false);
+  const coverageGeneration = React.useRef(0);
 
   const { from, to } = !anchor
     ? { from: "", to: "" }
@@ -333,6 +338,7 @@ export function CalendarBoard({ initialView = "rolling30" }: { initialView?: Cal
   const load = React.useCallback(() => {
     if (!from || !to) return;
     const generation = ++requestGeneration.current;
+    setEntries([]);
     setIsLoading(true);
     setError(null);
     fetchCalendar({
@@ -366,6 +372,33 @@ export function CalendarBoard({ initialView = "rolling30" }: { initialView?: Cal
       requestGeneration.current += 1;
     };
   }, [load]);
+
+  React.useEffect(() => {
+    if (view !== "rolling30" || !from || !to) return;
+    const generation = ++coverageGeneration.current;
+    // Clear old range/branch immediately; a stale all-clear would be unsafe.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCoverage(null);
+    setCoverageLoading(true);
+    setCoverageError(false);
+    fetchCoverage({ from, to, ...(branch === "ALL" ? {} : { branchCode: branch }) })
+      .then((response) => {
+        if (generation !== coverageGeneration.current) return;
+        if (response.windowStart !== from || response.windowEnd !== to ||
+          response.branchCode !== (branch === "ALL" ? null : branch)) {
+          setCoverageError(true);
+          return;
+        }
+        setCoverage(response);
+      })
+      .catch(() => {
+        if (generation === coverageGeneration.current) setCoverageError(true);
+      })
+      .finally(() => {
+        if (generation === coverageGeneration.current) setCoverageLoading(false);
+      });
+    return () => { coverageGeneration.current += 1; };
+  }, [view, from, to, branch]);
 
   const visible = React.useMemo(
     () => entries.filter((entry) =>
@@ -501,6 +534,16 @@ export function CalendarBoard({ initialView = "rolling30" }: { initialView?: Cal
           </div>
         </div>
       </div>
+
+      {view === "rolling30" && (
+        coverageLoading ? (
+          <p role="status" className="text-sm text-muted-foreground">Checking published coverage…</p>
+        ) : coverageError || !coverage ? (
+          <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+            Published coverage status is unavailable. Do not treat visible draft crews as published dispatch; retry this page or ask the manager to check Assign Crew.
+          </p>
+        ) : <CoverageBanner coverage={coverage} />
+      )}
 
       {/* Legend — colour is doing real work on this screen, so it is spelled out once. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
