@@ -1359,13 +1359,27 @@ model DayCoverage {
   visitsDue     Int @default(0)
   visitsStaffed Int @default(0)
 
-  /// Fingerprint of the due set this evaluation was made against: the sorted
-  /// due visit ids, hashed. Demand can arrive after a day is resolved — a new
-  /// agreement generating a visit onto a date already marked COVERED — and a
-  /// unique key alone would call that day finished forever. Reconciliation
-  /// recomputes this; a mismatch moves the day to STALE and it is prepared
-  /// again. Null only while IN_PROGRESS, before the first read completes.
-  dueSetDigest String?
+  /// What this evaluation was made against. Two fingerprints, because
+  /// coverage has two preconditions and one hash cannot express both.
+  ///
+  /// `demandDigest` covers the agreements that could place work on this date:
+  /// each active agreement's id, currentVersion and updatedAt, hashed. It
+  /// catches demand that does not exist as a visit yet — a new agreement
+  /// whose due visit generation has not produced, which no digest over visit
+  /// ids can see, because there is no id to hash.
+  ///
+  /// `supplyDigest` covers what is actually on the date: each due visit's id,
+  /// status and updatedAt, and each assignment's id, status and updatedAt. It
+  /// catches an edit to a visit or an assignment that leaves the set of ids
+  /// identical — a changed duration, crew size, window or lock — which an
+  /// id-only digest would read as unchanged.
+  ///
+  /// Reconciliation recomputes both. Either mismatching moves the day to
+  /// STALE. A demand mismatch means generation must run again before the day
+  /// can be re-prepared; a supply mismatch means only re-preparation is
+  /// needed. Null while IN_PROGRESS, before the first read completes.
+  demandDigest String?
+  supplyDigest String?
 
   /// The run that staffed the day, once there is one.
   scheduleRunId String?      @db.Uuid
