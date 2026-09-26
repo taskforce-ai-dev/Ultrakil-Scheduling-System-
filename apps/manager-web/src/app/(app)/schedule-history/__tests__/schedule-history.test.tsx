@@ -55,6 +55,45 @@ async function renderPage() {
 }
 
 describe("ScheduleHistoryPage", () => {
+  it('finds a published run beyond the newest 50 without treating page 1 as dispatch truth', async () => {
+    vi.setSystemTime(new Date('2026-09-26T08:00:00.000Z'));
+    const live = buildScheduleRun({
+      id: 'run-live', isPublished: true, status: 'SUCCEEDED',
+      rangeStart: '2026-09-26', rangeEnd: '2026-09-26',
+      publishedAt: '2026-09-24T17:56:00.000Z', visitsScheduled: 6, visitsUnassigned: 0,
+    });
+    const recent = Array.from({ length: 50 }, (_, index) => buildScheduleRun({
+      id: `generation-${index}`, kind: 'VISIT_GENERATION',
+      isPublished: false, visitsScheduled: 0, visitsUnassigned: 0,
+    }));
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => query?.currentOn
+      ? { items: [live], total: 1, page: 1, pageSize: 1 }
+      : { items: recent, total: 367, page: 1, pageSize: 50 });
+    await renderPage();
+    const current = await screen.findByRole('region', { name: 'Current schedule' });
+    expect(await within(current).findByText(/6 of 6 visits have a crew/)).toBeInTheDocument();
+    expect(within(current).queryByText(/Nothing is published yet/)).not.toBeInTheDocument();
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ currentOn: '2026-09-26', pageSize: 1 });
+  });
+
+  it('asks for the Colombo service day before UTC midnight', async () => {
+    vi.setSystemTime(new Date('2026-09-25T19:00:00.000Z'));
+    mockRuns([]);
+    await renderPage();
+    expect(fetchScheduleRuns).toHaveBeenCalledWith({ currentOn: '2026-09-26', pageSize: 1 });
+  });
+
+  it('does not claim no schedule is in force when its lookup fails', async () => {
+    vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.currentOn) throw new Error('lookup failed');
+      return { items: [buildScheduleRun({ id: 'recent-draft' })], total: 1, page: 1, pageSize: 50 };
+    });
+    await renderPage();
+    const current = await screen.findByRole('region', { name: 'Current schedule' });
+    expect(await within(current).findByText(/could not be verified/)).toBeInTheDocument();
+    expect(within(current).queryByText(/no schedule is in force/)).not.toBeInTheDocument();
+  });
+
   it("picks up a running run's progress on a refresh (refresh/reconnect)", async () => {
     // The API has no push channel — a manager who reloads the page mid-run
     // must see the current truth on the very next poll, not a stale 0%.
@@ -781,6 +820,7 @@ describe("ScheduleHistoryPage pagination", () => {
     );
 
     vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.currentOn) return { items: [publishedToday], total: 1, page: 1, pageSize: 1 };
       if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
       const page = query?.page ?? 1;
       return {
@@ -967,6 +1007,7 @@ describe("ScheduleHistoryPage pagination", () => {
     let summaryCalls = 0;
 
     vi.mocked(fetchScheduleRuns).mockImplementation(async (query) => {
+      if (query?.currentOn) return { items: [inForce], total: 1, page: 1, pageSize: 1 };
       if (query?.ids?.length) return { items: [], total: 0, page: 1, pageSize: 1 };
       if ((query?.page ?? 1) === 2) return { items: secondPage, total: 150, page: 2, pageSize: 50 };
       // Page 1 is asked for both as the browsed page and as the summary
@@ -977,7 +1018,9 @@ describe("ScheduleHistoryPage pagination", () => {
     });
 
     const user = await renderPage();
-    const inForceText = (await screen.findByRole("region", { name: "Current schedule" })).textContent;
+    const current = await screen.findByRole("region", { name: "Current schedule" });
+    await within(current).findByText(/2026-09-01/);
+    const inForceText = current.textContent;
     expect(inForceText).toContain("2026-09-01");
 
     await user.click(screen.getByRole("button", { name: /Next/ }));

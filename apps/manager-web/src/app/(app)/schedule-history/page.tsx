@@ -48,7 +48,7 @@ import {
   startScheduleRun,
   type ScheduleRun,
 } from "@/lib/api-client";
-import { addDays, todayIso } from "@/lib/calendar";
+import { addDays, todayColomboIso } from "@/lib/calendar";
 import { BRANCH_FILTER_LABELS, type BranchFilter } from "@/lib/branches";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
@@ -251,15 +251,17 @@ export default function ScheduleHistoryPage() {
 
   const [runs, setRuns] = React.useState<ScheduleRun[]>([]);
   // Page 1, held separately from whatever page is being browsed — see
-  // `loadSummary`. This is what the Current schedule panel reads.
+  // `loadSummary`. It supplies the pending-run hint, never the in-force claim.
   const [summaryRuns, setSummaryRuns] = React.useState<ScheduleRun[]>([]);
-  // Which day it is decides which schedule is in force, so it is read once per
-  // render rather than captured when the page mounted — a portal left open
-  // overnight would otherwise go on naming yesterday's week.
-  const { live, pending } = React.useMemo(
-    () => currentSchedule(summaryRuns, todayIso()),
+  // The pending-run hint can come from page 1. Published truth is fetched by
+  // service day below, because it can be many pages older than recent runs.
+  const { pending } = React.useMemo(
+    () => currentSchedule(summaryRuns, todayColomboIso()),
     [summaryRuns],
   );
+  const [live, setLive] = React.useState<ScheduleRun | null>(null);
+  const [currentStatus, setCurrentStatus] = React.useState<'CHECKING' | 'READY' | 'ERROR'>('CHECKING');
+  const currentRequest = React.useRef(0);
   const [total, setTotal] = React.useState(0);
   const [page, setPage] = React.useState(1);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -282,8 +284,8 @@ export default function ScheduleHistoryPage() {
   // so an older summary response cannot overwrite a newer panel.
   const summaryRequest = React.useRef(0);
 
-  const [from, setFrom] = React.useState(todayIso());
-  const [to, setTo] = React.useState(addDays(todayIso(), 6));
+  const [from, setFrom] = React.useState(todayColomboIso());
+  const [to, setTo] = React.useState(addDays(todayColomboIso(), 6));
   const [branch, setBranch] = React.useState<BranchFilter>("ALL");
   const [timeLimitSeconds, setTimeLimitSeconds] = React.useState(20);
   const [isStarting, setIsStarting] = React.useState(false);
@@ -377,18 +379,14 @@ export default function ScheduleHistoryPage() {
   );
 
   /**
-   * The in-force and pending summary, kept independent of whichever history
-   * page is being browsed.
+   * The pending-run summary, kept independent of whichever history page is
+   * being browsed.
    *
-   * Which schedule is in force is a fact about the system, not about the rows
-   * currently on screen. Deriving it from the browsed page meant that clicking
-   * Next — which changes no dispatch truth whatsoever — could make the panel
-   * announce that no schedule is in force, or name an older one, purely
-   * because the published run covering today had scrolled onto another page.
+   * Which schedule is in force is a separate bounded query in `loadCurrent`.
+   * The history page still supplies a manager-actionable pending draft hint.
    *
-   * The API returns runs newest-first, so page 1 is the same authoritative
-   * window this panel read before the list was paginated. It is re-read
-   * separately whenever the browsed page is not page 1.
+   * The API returns runs newest-first. This page is re-read separately when
+   * browsing older history so paging cannot alter the pending hint.
    */
   const loadSummary = React.useCallback(() => {
     if (page === 1) return Promise.resolve(); // `load` already set it from the same response.
@@ -404,6 +402,22 @@ export default function ScheduleHistoryPage() {
       });
   }, [page]);
 
+  /** Query dispatch truth directly; the newest 50 history rows are not authoritative. */
+  const loadCurrent = React.useCallback(() => {
+    const generation = ++currentRequest.current;
+    const serviceDay = todayColomboIso();
+    setCurrentStatus('CHECKING');
+    return fetchScheduleRuns({ currentOn: serviceDay, pageSize: 1 })
+      .then((response) => {
+        if (generation !== currentRequest.current) return;
+        setLive(currentSchedule(response.items, serviceDay).live);
+        setCurrentStatus('READY');
+      })
+      .catch(() => {
+        if (generation === currentRequest.current) setCurrentStatus('ERROR');
+      });
+  }, []);
+
   React.useEffect(() => {
     // Fetching from the API on mount — an external system, which is what
     // effects are for.
@@ -411,6 +425,14 @@ export default function ScheduleHistoryPage() {
     load();
     loadSummary();
   }, [load, loadSummary]);
+
+  React.useEffect(() => {
+    // A portal left open across Colombo midnight must not keep yesterday's run.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadCurrent();
+    const timer = setInterval(loadCurrent, 60_000);
+    return () => { clearInterval(timer); currentRequest.current += 1; };
+  }, [loadCurrent]);
 
   const runIsOnPage = focusRunId ? runs.some((run) => run.id === focusRunId) : false;
 
@@ -573,6 +595,7 @@ export default function ScheduleHistoryPage() {
       setPublishTarget(null);
       load();
       loadSummary();
+      loadCurrent();
     } catch (caught) {
       notify.error(caught instanceof ApiError ? caught.message : "Could not publish this run.");
     } finally {
@@ -673,23 +696,23 @@ export default function ScheduleHistoryPage() {
             <h2 id="current-schedule" className="text-sm font-semibold">
               Current schedule
             </h2>
-            {live ? (
+            {currentStatus === 'CHECKING' ? (
+              <p className="mt-1 text-sm text-muted-foreground">Checking the published schedule for today…</p>
+            ) : currentStatus === 'ERROR' ? (
+              <p className="mt-1 text-sm text-destructive">
+                The current published schedule could not be verified. Check Operations before publishing another run.
+              </p>
+            ) : live ? (
               <p className="mt-1 text-sm text-muted-foreground">
                 Post {new Date(live.publishedAt ?? live.createdAt).toLocaleString()} for{" "}
                 {live.rangeStart} – {live.rangeEnd}. {live.visitsScheduled} of{" "}
                 {live.visitsScheduled + live.visitsUnassigned} visits have a crew. This is what
                 the crews were given.
               </p>
-            ) : runs.some((run) => run.isPublished) ? (
-              <p className="mt-1 text-sm text-muted-foreground">
-                No published schedule covers today, so no schedule is in force. Published runs
-                for other weeks are listed below; publish a run covering today and it becomes
-                the one the crews work to.
-              </p>
             ) : (
               <p className="mt-1 text-sm text-muted-foreground">
-                Nothing is published yet, so no schedule is in force. Publish a run below and it
-                becomes the one the crews work to.
+                No published schedule covers today, so no schedule is in force. Check Operations
+                before publishing a run for this day.
               </p>
             )}
 
