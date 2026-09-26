@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchCode, LockScope, ScheduleRunStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
+import { IsDateOnly } from '../../common/validation/is-date-only';
 import {
   ArrayMaxSize,
   IsArray,
@@ -119,6 +120,11 @@ export class PublishReadinessDto implements PublishReadiness {
 }
 
 export class ScheduleRunQueryDto {
+  @ApiPropertyOptional({ type: String, format: 'date', description: 'Only published runs whose range covers this service date.' })
+  @IsOptional()
+  @IsDateOnly()
+  currentOn?: string;
+
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()
   @Type(() => Number)
