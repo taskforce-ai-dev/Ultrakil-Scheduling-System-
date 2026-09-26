@@ -59,8 +59,30 @@ export class DayStaffingAdapter implements DayStaffingPort {
       succeeded = false;
     }
 
+    return {
+      scheduleRunId: run.id,
+      succeeded,
+      assignments: await this.collectDraftAssignments(run.id),
+    };
+  }
+
+  /**
+   * Everything the run drafted, unfiltered.
+   *
+   * Deliberately not narrowed to the due set. `ScheduleRunService` solves a
+   * branch-day filtering inactive sites and completed or cancelled visits,
+   * but it knows nothing about paused or ended agreements, locks or manual
+   * adjustment — so this can legitimately return an assignment for a visit
+   * the day must not touch. Hiding that here would make the day look clean
+   * while the run still carried the extra assignment into publication, since
+   * publication freezes the run rather than the list this returns. Handing
+   * the real contents to the guard is what lets it withhold the whole day.
+   */
+  async collectDraftAssignments(
+    scheduleRunId: string,
+  ): Promise<StaffedDay['assignments']> {
     const assignments = await this.prisma.assignment.findMany({
-      where: { scheduleRunId: run.id, status: AssignmentStatus.DRAFT },
+      where: { scheduleRunId, status: AssignmentStatus.DRAFT },
       select: {
         id: true,
         generatedVisitId: true,
@@ -69,16 +91,12 @@ export class DayStaffingAdapter implements DayStaffingPort {
       },
     });
 
-    return {
-      scheduleRunId: run.id,
-      succeeded,
-      assignments: assignments.map((assignment) => ({
-        id: assignment.id,
-        generatedVisitId: assignment.generatedVisitId,
-        crewEmployeeIds: assignment.crewMembers.map((c) => c.employeeId),
-        vehicleIds: assignment.vehicles.map((v) => v.vehicleId),
-      })),
-    };
+    return assignments.map((assignment) => ({
+      id: assignment.id,
+      generatedVisitId: assignment.generatedVisitId,
+      crewEmployeeIds: assignment.crewMembers.map((c) => c.employeeId),
+      vehicleIds: assignment.vehicles.map((v) => v.vehicleId),
+    }));
   }
 
   /**

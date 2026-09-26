@@ -44,6 +44,8 @@ export const SHORTFALL_CODES = [
   'NO_AUTHORIZED_DRIVER',
   /** The vehicle has no recorded seat count, so capacity cannot be checked. */
   'VEHICLE_CAPACITY_UNKNOWN',
+  /** The run staffed a visit that is not in the due set for this day. */
+  'UNEXPECTED_ASSIGNMENT',
 ] as const;
 
 export type ShortfallCode = (typeof SHORTFALL_CODES)[number];
@@ -59,6 +61,8 @@ const MESSAGES: Record<ShortfallCode, string> = {
     'Nobody in the assigned crew is authorised to drive the assigned vehicle.',
   VEHICLE_CAPACITY_UNKNOWN:
     'The assigned vehicle has no recorded seat count, so it cannot be checked against the crew size.',
+  UNEXPECTED_ASSIGNMENT:
+    'A crew was assigned to work that is not due on this day, such as a paused, locked or manually adjusted visit.',
 };
 
 export interface DueVisit {
@@ -216,6 +220,26 @@ export function evaluateDueSet(input: GuardInput): GuardVerdict {
       if (!hasDriver) {
         shortfalls.push(shortfall(visit.id, 'NO_AUTHORIZED_DRIVER'));
       }
+    }
+  }
+
+  // The run is not scoped by the due-set predicate: `ScheduleRunService`
+  // solves a branch-day, filtering inactive sites and completed or cancelled
+  // visits, but it does not know about paused or ended agreements, locks or
+  // manual adjustment. So it can legitimately return an assignment for a
+  // visit this day must not touch, and checking only that every due visit is
+  // covered would let that ride along into publication.
+  //
+  // Withholding the whole day is the conservative reading and the one that
+  // matches all-or-nothing: an assignment nobody asked for is a reason to
+  // stop, not something to quietly drop, because dropping it would publish a
+  // run whose contents no longer match what was judged.
+  const dueIds = new Set(input.dueVisits.map((visit) => visit.id));
+  for (const assignment of input.assignments) {
+    if (!dueIds.has(assignment.generatedVisitId)) {
+      shortfalls.push(
+        shortfall(assignment.generatedVisitId, 'UNEXPECTED_ASSIGNMENT'),
+      );
     }
   }
 

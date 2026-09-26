@@ -198,16 +198,45 @@ describe('evaluateDueSet', () => {
     expect(only.message).not.toContain(VAN);
   });
 
-  it('ignores an assignment for a visit that is not due', () => {
+  // This test previously asserted the opposite, and was wrong. The run is
+  // not scoped by the due-set predicate, so it can staff a paused, ended,
+  // locked or manually adjusted visit on the same day. Ignoring that
+  // assignment would let it ride along into publication with the rest of the
+  // run.
+  it('withholds the day when the run staffed something that is not due', () => {
     const verdict = evaluateDueSet(
       input({
         dueVisits: [{ id: VISIT_A, requiredCrewSize: 1 }],
-        assignments: [assignmentFor(VISIT_A), assignmentFor(VISIT_B, { vehicleIds: [] })],
+        assignments: [assignmentFor(VISIT_A), assignmentFor(VISIT_B)],
       }),
     );
 
-    expect(verdict.decision).toBe('PUBLISHABLE');
+    expect(verdict.decision).toBe('WITHHOLD');
+    expect(verdict.shortfalls).toEqual([
+      expect.objectContaining({
+        generatedVisitId: VISIT_B,
+        code: 'UNEXPECTED_ASSIGNMENT',
+      }),
+    ]);
     expect(verdict.visitsStaffed).toBe(1);
+  });
+
+  it('names every out-of-scope assignment, not just the first', () => {
+    const verdict = evaluateDueSet(
+      input({
+        dueVisits: [{ id: VISIT_A, requiredCrewSize: 1 }],
+        assignments: [
+          assignmentFor(VISIT_A),
+          assignmentFor(VISIT_B),
+          assignmentFor(VISIT_C),
+        ],
+      }),
+    );
+
+    expect(codes(verdict)).toEqual([
+      'UNEXPECTED_ASSIGNMENT',
+      'UNEXPECTED_ASSIGNMENT',
+    ]);
   });
 });
 

@@ -27,6 +27,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import { AuditService } from '../../src/audit/audit.service';
+import { DayStaffingAdapter } from '../../src/scheduling/day-coverage/day-staffing.adapter';
 import { PrismaService } from '../../src/prisma/prisma.service';
 import {
   type DayStaffingPort,
@@ -911,5 +912,117 @@ describe('lease fencing', () => {
     expect((await coverageRow())?.state).toBe(
       DayCoverageState.PREPARED_AWAITING_MANAGER,
     );
+  });
+});
+
+
+describe('run scope versus due set, at the real adapter boundary', () => {
+  // Review blocker: `dueVisitsWhere()` excludes paused/ended agreements and
+  // locked or manually adjusted visits, but the run that actually staffs the
+  // day does not. `ScheduleRunService` solves a branch-day filtering inactive
+  // sites and completed or cancelled visits only, so it can draft an
+  // assignment for a visit this day must not touch. Checking only that every
+  // due visit is covered let that ride along into publication, because
+  // publication freezes the run, not the list the guard looked at.
+  //
+  // Exercised through the adapter's own query and the publication decision,
+  // not the predicate alone.
+  it('the adapter returns an out-of-scope draft, and the day is withheld unpublished', async () => {
+    const agreementId = await makeAgreement();
+    const dueVisit = await makeVisit(agreementId);
+    // Same branch-day, but locked — excluded from the due set by predicate.
+    const lockedVisit = await makeVisit(agreementId);
+    await prisma.generatedVisit.update({
+      where: { id: lockedVisit },
+      data: { lockedAt: new Date(), lockReason: 'protected for this test' },
+    });
+
+    const runId = await makeRun();
+    // What a real solve leaves behind: drafts for both visits on the run,
+    // because the solver was never told about the lock.
+    for (const visitId of [dueVisit, lockedVisit]) {
+      await prisma.assignment.create({
+        data: {
+          generatedVisitId: visitId,
+          scheduleRunId: runId,
+          branchId,
+          branchCode: BRANCH,
+          status: AssignmentStatus.DRAFT,
+          plannedStart: new Date(`${DAY}T02:30:00.000Z`),
+          plannedEnd: new Date(`${DAY}T03:30:00.000Z`),
+          crewMembers: {
+            create: [{ employeeId: driverId, role: CrewRole.TECHNICIAN }],
+          },
+          vehicles: { create: [{ vehicleId }] },
+        },
+      });
+    }
+
+    // The real adapter query, not a stub: it must hand over both, including
+    // the one outside the due set. Hiding it here would hide the problem
+    // while publication still carried it.
+    const adapter = new DayStaffingAdapter(
+      asService,
+      {} as never,
+      {} as never,
+    );
+    const drafted = await adapter.collectDraftAssignments(runId);
+    expect(drafted.map((a) => a.generatedVisitId).sort()).toEqual(
+      [dueVisit, lockedVisit].sort(),
+    );
+
+    // Hand exactly that to the worker and require it to refuse the day.
+    staffing.staffed = { scheduleRunId: runId, assignments: drafted, succeeded: true };
+    staffing.publishable = true;
+
+    const outcome = await service.prepareDay(BRANCH, DAY);
+
+    expect(outcome.state).toBe(DayCoverageState.SHORTFALL);
+    expect(staffing.published).toEqual([]);
+
+    const row = await coverageRow();
+    expect(row?.shortfalls).toEqual([
+      expect.objectContaining({
+        generatedVisitId: lockedVisit,
+        reasonCode: 'UNEXPECTED_ASSIGNMENT',
+      }),
+    ]);
+
+    await prisma.assignment.deleteMany({ where: { scheduleRunId: runId } });
+  });
+
+  it('publishes normally when the run stays inside the due set', async () => {
+    const agreementId = await makeAgreement();
+    const dueVisit = await makeVisit(agreementId);
+    const runId = await makeRun();
+    await prisma.assignment.create({
+      data: {
+        generatedVisitId: dueVisit,
+        scheduleRunId: runId,
+        branchId,
+        branchCode: BRANCH,
+        status: AssignmentStatus.DRAFT,
+        plannedStart: new Date(`${DAY}T02:30:00.000Z`),
+        plannedEnd: new Date(`${DAY}T03:30:00.000Z`),
+        crewMembers: {
+          create: [{ employeeId: driverId, role: CrewRole.TECHNICIAN }],
+        },
+        vehicles: { create: [{ vehicleId }] },
+      },
+    });
+
+    const adapter = new DayStaffingAdapter(asService, {} as never, {} as never);
+    const drafted = await adapter.collectDraftAssignments(runId);
+
+    staffing.staffed = { scheduleRunId: runId, assignments: drafted, succeeded: true };
+    staffing.publishable = true;
+
+    const outcome = await service.prepareDay(BRANCH, DAY);
+
+    // Proves the rejection above is about scope, not about the fixture.
+    expect(outcome.state).toBe(DayCoverageState.COVERED_PUBLISHED);
+    expect(staffing.published).toEqual([runId]);
+
+    await prisma.assignment.deleteMany({ where: { scheduleRunId: runId } });
   });
 });
