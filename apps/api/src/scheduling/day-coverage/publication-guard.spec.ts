@@ -1,6 +1,7 @@
 import {
   type CandidateAssignment,
   type GuardInput,
+  NO_VEHICLE_POLICY,
   evaluateDueSet,
 } from './publication-guard';
 
@@ -206,5 +207,27 @@ describe('evaluateDueSet', () => {
 
     expect(verdict.decision).toBe('PUBLISHABLE');
     expect(verdict.visitsStaffed).toBe(1);
+  });
+});
+
+describe('NO_VEHICLE_POLICY', () => {
+  // Sol asked for the current reading to be kept explicit and unshipped
+  // while the three-way public-transport decision goes to Thivarrakesh.
+  // Explicit means a change to it cannot pass silently, so the value is
+  // asserted here rather than only described in a comment.
+  it('is still the strict reading, pending the relayed decision', () => {
+    expect(NO_VEHICLE_POLICY).toEqual({
+      decision: 'SHORTFALL_PENDING_DECISION',
+      code: 'NO_VEHICLE',
+    });
+  });
+
+  it('is the code the guard actually emits for a crew with no vehicle', () => {
+    const verdict = evaluateDueSet(
+      input({ assignments: [assignmentFor(VISIT_A, { vehicleIds: [] })] }),
+    );
+
+    expect(codes(verdict)).toEqual([NO_VEHICLE_POLICY.code]);
+    expect(verdict.decision).toBe('WITHHOLD');
   });
 });

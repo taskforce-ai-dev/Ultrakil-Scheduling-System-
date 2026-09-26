@@ -103,6 +103,35 @@ export interface GuardVerdict {
   visitsStaffed: number;
 }
 
+/**
+ * PROVISIONAL — awaiting a decision from Thivarrakesh, relayed through Sol.
+ *
+ * ULK-C13 says auto-publish requires "exactly one appropriately sized
+ * vehicle". The codebase also carries a public-transport allowance —
+ * `canUsePublicTransport`, held by six active employees — under which a crew
+ * with no vehicle is valid, and PR #72 recorded six such assignments as
+ * correct. The two rules contradict each other.
+ *
+ * They do not collide on today's data: ULK-C12 confirmed zero no-vehicle
+ * assignments across the verified 25 Sep - 24 Oct window. But replenishment
+ * runs on days nobody has inspected, and the first public-transport crew it
+ * meets would otherwise settle the question by accident.
+ *
+ * So the reading is named here rather than buried in a branch, and it is the
+ * strict one the task text states: a crew with no vehicle is a shortfall and
+ * the whole day waits for a manager. That is deliberately conservative — it
+ * will withhold days that may be perfectly valid — and it is not shipped:
+ * nothing schedules this guard yet.
+ *
+ * `publication-guard.spec.ts` asserts this value, so the policy cannot be
+ * changed without a test saying so out loud. When the decision is relayed,
+ * changing it is this constant and that assertion.
+ */
+export const NO_VEHICLE_POLICY = {
+  decision: 'SHORTFALL_PENDING_DECISION',
+  code: 'NO_VEHICLE',
+} as const satisfies { decision: string; code: ShortfallCode };
+
 const shortfall = (generatedVisitId: string, code: ShortfallCode): Shortfall => ({
   generatedVisitId,
   code,
@@ -147,13 +176,7 @@ export function evaluateDueSet(input: GuardInput): GuardVerdict {
     }
 
     if (assignment.vehicleIds.length === 0) {
-      // ULK-C13 requires exactly one vehicle. Note that the codebase also
-      // carries a public-transport allowance (`canUsePublicTransport`, six
-      // active employees) under which a no-vehicle crew is valid. No visit in
-      // the verified 30-day window uses it, so the two rules do not collide
-      // today — but they would, and which wins is not this function's call to
-      // make quietly. Raised separately rather than decided here.
-      shortfalls.push(shortfall(visit.id, 'NO_VEHICLE'));
+      shortfalls.push(shortfall(visit.id, NO_VEHICLE_POLICY.code));
     } else if (assignment.vehicleIds.length > 1) {
       shortfalls.push(shortfall(visit.id, 'TOO_MANY_VEHICLES'));
     } else {
