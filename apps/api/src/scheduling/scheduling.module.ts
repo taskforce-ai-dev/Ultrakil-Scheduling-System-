@@ -5,6 +5,11 @@ import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
 import { OperationsController } from './operations/operations.controller';
 import { OperationsService } from './operations/operations.service';
+import {
+  DAY_STAFFING_PORT,
+  DayCoverageService,
+} from './day-coverage/day-coverage.service';
+import { DayStaffingAdapter } from './day-coverage/day-staffing.adapter';
 import { PublishingService } from './optimizer/publishing.service';
 import {
   ScheduleRunProcessor,
@@ -81,6 +86,12 @@ export class SchedulingModule {
         PublishedAssignmentRepairService,
         PublishedAssignmentRepairPlannerAdapter,
         PublishedAssignmentRepairPlannerService,
+        // ULK-C13. Registered as providers only: nothing schedules
+        // replenishment, so the capability exists and nothing runs it
+        // unattended. Enabling that is a release decision, not a wiring one.
+        DayStaffingAdapter,
+        { provide: DAY_STAFFING_PORT, useExisting: DayStaffingAdapter },
+        DayCoverageService,
         ...(qstash
           ? [
               {
