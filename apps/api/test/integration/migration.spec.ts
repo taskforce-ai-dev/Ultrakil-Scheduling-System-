@@ -22,6 +22,8 @@ const EXPECTED_TABLES = [
   'audit_events',
   'branches',
   'customers',
+  'day_coverage',
+  'day_coverage_shortfalls',
   'employee_availability',
   'employee_skills',
   'employees',
@@ -113,6 +115,8 @@ describe('migrations against an empty database', () => {
       prisma.repairBunchingBatch.count(),
       prisma.scheduleRunDispatchOutbox.count(),
       prisma.scheduleRun.count(),
+      prisma.dayCoverage.count(),
+      prisma.dayCoverageShortfall.count(),
       prisma.auditEvent.count(),
       prisma.user.count(),
     ]);

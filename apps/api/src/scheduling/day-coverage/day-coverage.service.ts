@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   BranchCode,
   DayCoverageState,
@@ -106,14 +107,34 @@ export interface DayStaffingPort {
   publish(scheduleRunId: string, actor: AuthenticatedUser): Promise<void>;
 }
 
+/**
+ * One attempt's ownership of a branch-day: which row, and which attempt.
+ *
+ * The id alone is not enough for an unattended worker. It is stable across
+ * takeovers, so a worker whose lease expired mid-attempt still holds a
+ * perfectly valid id and could publish and write its outcome over the new
+ * owner's. The token says which attempt, and every state-changing step
+ * presents it.
+ */
+interface Claim {
+  id: string;
+  token: string;
+}
+
 export interface CoverageOutcome {
   branchCode: BranchCode;
   coverageDate: CivilDate;
   state: DayCoverageState;
   visitsDue: number;
   visitsStaffed: number;
-  /** Absent when another attempt held the claim and this one stood aside. */
-  skipped?: 'ALREADY_CLAIMED';
+  /**
+   * Why this attempt did nothing.
+   *
+   * ALREADY_CLAIMED: it never got the day. SUPERSEDED: it held the day, lost
+   * it to a takeover mid-attempt, and its result was discarded rather than
+   * written over the new owner's.
+   */
+  skipped?: 'ALREADY_CLAIMED' | 'SUPERSEDED';
 }
 
 const asDate = (date: CivilDate): Date => new Date(`${date}T00:00:00.000Z`);
@@ -150,16 +171,7 @@ export class DayCoverageService {
     for (const branchCode of branches) {
       // One branch's difficult day is not a reason the others never get their
       // turn — the same reasoning the horizon sweep already applies.
-      try {
-        outcomes.push(await this.prepareDay(branchCode, target, actor));
-      } catch (error) {
-        this.logger.error(
-          `Replenishment failed for ${branchCode} on ${target}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        outcomes.push(await this.markFailed(branchCode, target));
-      }
+      outcomes.push(await this.prepareDay(branchCode, target, actor));
     }
     return outcomes;
   }
@@ -189,6 +201,27 @@ export class DayCoverageService {
       };
     }
 
+    try {
+      return await this.prepareClaimedDay(branchCode, date, actor, claim);
+    } catch (error) {
+      // Recorded against this attempt's token: a worker that threw after
+      // losing its lease must not mark another worker's day FAILED.
+      this.logger.error(
+        `Replenishment failed for ${branchCode} on ${date}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return this.markFailed(branchCode, date, claim);
+    }
+  }
+
+  private async prepareClaimedDay(
+    branchCode: BranchCode,
+    date: CivilDate,
+    actor: AuthenticatedUser,
+    claim: Claim,
+  ): Promise<CoverageOutcome> {
     const day = asDate(date);
     const due = await this.prisma.generatedVisit.findMany({
       where: dueVisitsWhere(branchCode, day),
@@ -198,10 +231,26 @@ export class DayCoverageService {
     const digests = await this.digestsFor(branchCode, day);
 
     if (due.length === 0) {
-      return this.resolve(claim.id, {
+      // "No visits exist" and "nothing is due" are different facts that look
+      // identical in generated_visits. An active agreement can be due on this
+      // date with its visit not generated yet, and resolving that green would
+      // also freeze the mistake: reconciliation compares the same digests,
+      // finds them unchanged, and never revisits the day.
+      //
+      // Whether an agreement is due on a given date is the generation
+      // planner's judgement, not something this worker can re-derive. What it
+      // can establish is whether generation has reached the date at all, so
+      // that is the prerequisite: every agreement bearing on the day must be
+      // planned through it. Otherwise the answer is unknown, and unknown is
+      // recorded as unknown.
+      const ungenerated = await this.agreementsNotPlannedThrough(branchCode, day);
+      return this.resolve(claim, {
         branchCode,
         date,
-        state: DayCoverageState.NOTHING_DUE,
+        state:
+          ungenerated > 0
+            ? DayCoverageState.AWAITING_GENERATION
+            : DayCoverageState.NOTHING_DUE,
         visitsDue: 0,
         visitsStaffed: 0,
         digests,
@@ -211,7 +260,7 @@ export class DayCoverageService {
 
     const staffed = await this.staffing.staffDay({ branchCode, date, actor });
     if (!staffed.succeeded) {
-      return this.resolve(claim.id, {
+      return this.resolve(claim, {
         branchCode,
         date,
         state: DayCoverageState.FAILED,
@@ -226,7 +275,7 @@ export class DayCoverageService {
     const verdict = await this.judge(branchCode, day, due, staffed);
 
     if (verdict.decision === 'WITHHOLD') {
-      return this.resolve(claim.id, {
+      return this.resolve(claim, {
         branchCode,
         date,
         state: DayCoverageState.SHORTFALL,
@@ -242,14 +291,32 @@ export class DayCoverageService {
     // Every due visit is satisfiable. Whether that publishes itself is the
     // existing gate's call, not this one's, and it will say no whenever the
     // source data behind the day is still unconfirmed.
-    const publishable = await this.staffing.isPublishableWithoutManager(
-      staffed.scheduleRunId,
-    );
+    // Fence BEFORE publication, not only before the write. Publication is
+    // the irreversible half: a superseded worker that published and then
+    // failed to record it would have sent a crew a schedule nobody owns.
+    if (!(await this.stillOwns(claim))) {
+      this.logger.warn(
+        `Superseded before publication on ${branchCode} ${date}; publishing nothing.`,
+      );
+      return {
+        branchCode,
+        coverageDate: date,
+        state: DayCoverageState.IN_PROGRESS,
+        visitsDue: verdict.visitsDue,
+        visitsStaffed: verdict.visitsStaffed,
+        skipped: 'SUPERSEDED',
+      };
+    }
+
+    // Policy (c): a public-transport crew is valid and still never automatic.
+    const publishable =
+      !verdict.requiresManagerReview &&
+      (await this.staffing.isPublishableWithoutManager(staffed.scheduleRunId));
     if (publishable) {
       await this.staffing.publish(staffed.scheduleRunId, actor);
     }
 
-    return this.resolve(claim.id, {
+    return this.resolve(claim, {
       branchCode,
       date,
       state: publishable
@@ -289,6 +356,7 @@ export class DayCoverageService {
         state: {
           in: [
             DayCoverageState.NOTHING_DUE,
+            DayCoverageState.AWAITING_GENERATION,
             DayCoverageState.COVERED_PUBLISHED,
             DayCoverageState.PREPARED_AWAITING_MANAGER,
             DayCoverageState.SHORTFALL,
@@ -303,10 +371,26 @@ export class DayCoverageService {
     for (const row of rows) {
       const date = row.coverageDate.toISOString().slice(0, 10);
       const current = await this.digestsFor(row.branchCode, row.coverageDate);
-      const drift = coverageDrift(
+      let drift: string | null = coverageDrift(
         { demandDigest: row.demandDigest, supplyDigest: row.supplyDigest },
         current,
       );
+
+      // A day left unverified needs re-checking on its own terms, not only
+      // on drift. If generation reaches the date and finds nothing due for
+      // it, no visit is created, so neither digest moves — and the day would
+      // sit AWAITING_GENERATION forever while the answer is now knowable.
+      if (
+        !drift &&
+        row.state === DayCoverageState.AWAITING_GENERATION &&
+        (await this.agreementsNotPlannedThrough(
+          row.branchCode,
+          row.coverageDate,
+        )) === 0
+      ) {
+        drift = 'GENERATION_CAUGHT_UP';
+      }
+
       if (!drift) continue;
 
       await this.prisma.dayCoverage.update({
@@ -325,6 +409,43 @@ export class DayCoverageService {
     }
 
     return stale;
+  }
+
+  /**
+   * How many agreements bearing on `day` have not been planned through it.
+   *
+   * "Planned through" is the latest non-cancelled visit the agreement has,
+   * the same measure `extendRollingHorizons` uses to decide what to extend,
+   * so the two agree on what "caught up" means. A non-zero count means
+   * generation has not reached this date for someone, and an empty due set
+   * therefore proves nothing.
+   */
+  private async agreementsNotPlannedThrough(
+    branchCode: BranchCode,
+    day: Date,
+  ): Promise<number> {
+    const agreements = await this.prisma.serviceAgreement.findMany({
+      where: demandAgreementsWhere(branchCode, day),
+      select: { id: true },
+    });
+    if (agreements.length === 0) return 0;
+
+    const plannedThrough = await this.prisma.generatedVisit.groupBy({
+      by: ['serviceAgreementId'],
+      where: {
+        serviceAgreementId: { in: agreements.map((a) => a.id) },
+        status: { not: 'CANCELLED' },
+      },
+      _max: { visitDate: true },
+    });
+    const reach = new Map(
+      plannedThrough.map((row) => [row.serviceAgreementId, row._max.visitDate]),
+    );
+
+    return agreements.filter((agreement) => {
+      const furthest = reach.get(agreement.id);
+      return !furthest || furthest < day;
+    }).length;
   }
 
   /** Both fingerprints for one branch-day, read as they stand now. */
@@ -379,26 +500,43 @@ export class DayCoverageService {
   private async claim(
     branchCode: BranchCode,
     date: CivilDate,
-  ): Promise<{ id: string } | null> {
+  ): Promise<Claim | null> {
     const expires = new Date(Date.now() + CLAIM_LEASE_SECONDS * 1000);
+    const token = randomUUID();
     const rows = await this.prisma.$queryRaw<{ id: string }[]>`
       INSERT INTO day_coverage ("id", "branchCode", "coverageDate", "state",
                                 "claimedAt", "claimExpiresAt", "attempt",
-                                "createdAt", "updatedAt")
+                                "claimToken", "createdAt", "updatedAt")
       VALUES (gen_random_uuid(), ${branchCode}::"BranchCode", ${date}::date,
-              'IN_PROGRESS', now(), ${expires}, 1, now(), now())
+              'IN_PROGRESS', now(), ${expires}, 1, ${token}::uuid, now(), now())
       ON CONFLICT ("branchCode", "coverageDate") DO UPDATE
         SET "state" = 'IN_PROGRESS',
             "claimedAt" = now(),
             "claimExpiresAt" = ${expires},
             "attempt" = day_coverage."attempt" + 1,
+            "claimToken" = ${token}::uuid,
             "updatedAt" = now()
         WHERE day_coverage."state" IN ('STALE', 'FAILED')
            OR (day_coverage."state" = 'IN_PROGRESS'
                AND day_coverage."claimExpiresAt" < now())
       RETURNING "id"
     `;
-    return rows[0] ?? null;
+    const row = rows[0];
+    return row ? { id: row.id, token } : null;
+  }
+
+  /**
+   * Whether this attempt still owns the day.
+   *
+   * A takeover mints a new token, so the displaced worker's token no longer
+   * matches and it can prove, before it acts, that it has been superseded.
+   */
+  private async stillOwns(claim: Claim): Promise<boolean> {
+    const row = await this.prisma.dayCoverage.findUnique({
+      where: { id: claim.id },
+      select: { claimToken: true },
+    });
+    return row?.claimToken === claim.token;
   }
 
   private async judge(
@@ -408,7 +546,10 @@ export class DayCoverageService {
     staffed: StaffedDay,
   ): Promise<GuardVerdict> {
     const vehicleIds = staffed.assignments.flatMap((a) => [...a.vehicleIds]);
-    const [vehicles, authorizations] = await Promise.all([
+    const crewIds = [
+      ...new Set(staffed.assignments.flatMap((a) => [...a.crewEmployeeIds])),
+    ];
+    const [vehicles, authorizations, publicTransport] = await Promise.all([
       this.prisma.vehicle.findMany({
         where: { id: { in: vehicleIds } },
         select: { id: true, seatCapacity: true },
@@ -416,6 +557,10 @@ export class DayCoverageService {
       this.prisma.vehicleAuthorization.findMany({
         where: { vehicleId: { in: vehicleIds } },
         select: { vehicleId: true, employeeId: true },
+      }),
+      this.prisma.employee.findMany({
+        where: { id: { in: crewIds }, canUsePublicTransport: true },
+        select: { id: true },
       }),
     ]);
 
@@ -433,12 +578,13 @@ export class DayCoverageService {
         vehicles.map((v) => [v.id, { seats: v.seatCapacity ?? null }]),
       ),
       authorizedDrivers,
+      publicTransportEmployeeIds: new Set(publicTransport.map((e) => e.id)),
     });
   }
 
   /** Writes the outcome and its shortfalls in one transaction. */
   private async resolve(
-    coverageId: string,
+    claim: Claim,
     input: {
       branchCode: BranchCode;
       date: CivilDate;
@@ -455,20 +601,33 @@ export class DayCoverageService {
       actor: AuthenticatedUser;
     },
   ): Promise<CoverageOutcome> {
-    await this.prisma.$transaction(async (tx) => {
+    const written = await this.prisma.$transaction(async (tx) => {
+      // Fencing. `updateMany` with the token in the predicate either matches
+      // this attempt's row or matches nothing; a displaced worker writes
+      // zero rows instead of overwriting the new owner's outcome. `update`
+      // by id alone could not express this.
+      const claimed = await tx.dayCoverage.updateMany({
+        where: { id: claim.id, claimToken: claim.token },
+        data: { updatedAt: new Date() },
+      });
+      if (claimed.count === 0) return false;
+
       // A re-attempt of a day that previously fell short must not inherit the
       // old reasons; they described a state that no longer exists.
       await tx.dayCoverageShortfall.deleteMany({
-        where: { dayCoverageId: coverageId },
+        where: { dayCoverageId: claim.id },
       });
 
       await tx.dayCoverage.update({
-        where: { id: coverageId },
+        where: { id: claim.id },
         data: {
           state: input.state,
           visitsDue: input.visitsDue,
           visitsStaffed: input.visitsStaffed,
-          scheduleRunId: input.scheduleRunId ?? null,
+          // `??` would let an empty string through to a uuid column, which
+          // fails at the database with a message that says nothing about the
+          // day it belongs to. A blank id is no id.
+          scheduleRunId: input.scheduleRunId?.trim() ? input.scheduleRunId : null,
           demandDigest: input.digests.demandDigest,
           supplyDigest: input.digests.supplyDigest,
           resolvedAt: new Date(),
@@ -487,7 +646,7 @@ export class DayCoverageService {
       await this.audit.record(
         {
           entityType: 'DayCoverage',
-          entityId: coverageId,
+          entityId: claim.id,
           action: 'day_coverage.resolved',
           actor: input.actor,
           before: null,
@@ -502,7 +661,22 @@ export class DayCoverageService {
         },
         tx,
       );
+      return true;
     });
+
+    if (!written) {
+      this.logger.warn(
+        `Discarded a superseded attempt on ${input.branchCode} ${input.date}: another worker took the day over.`,
+      );
+      return {
+        branchCode: input.branchCode,
+        coverageDate: input.date,
+        state: input.state,
+        visitsDue: input.visitsDue,
+        visitsStaffed: input.visitsStaffed,
+        skipped: 'SUPERSEDED',
+      };
+    }
 
     return {
       branchCode: input.branchCode,
@@ -513,20 +687,41 @@ export class DayCoverageService {
     };
   }
 
+  /**
+   * Records a failed attempt, only if this attempt still owns the day.
+   *
+   * Conditioned on the token for the same reason `resolve` is: a worker that
+   * threw after losing its lease must not mark another worker's day FAILED,
+   * which would also make it claimable again and undo their work.
+   */
   private async markFailed(
     branchCode: BranchCode,
     date: CivilDate,
+    claim: Claim | null,
   ): Promise<CoverageOutcome> {
-    await this.prisma.dayCoverage.updateMany({
-      where: { branchCode, coverageDate: asDate(date) },
+    if (!claim) {
+      return {
+        branchCode,
+        coverageDate: date,
+        state: DayCoverageState.IN_PROGRESS,
+        visitsDue: 0,
+        visitsStaffed: 0,
+        skipped: 'ALREADY_CLAIMED',
+      };
+    }
+
+    const marked = await this.prisma.dayCoverage.updateMany({
+      where: { id: claim.id, claimToken: claim.token },
       data: { state: DayCoverageState.FAILED, resolvedAt: new Date() },
     });
+
     return {
       branchCode,
       coverageDate: date,
       state: DayCoverageState.FAILED,
       visitsDue: 0,
       visitsStaffed: 0,
+      ...(marked.count === 0 ? { skipped: 'SUPERSEDED' as const } : {}),
     };
   }
 }

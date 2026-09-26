@@ -84,6 +84,8 @@ export interface GuardInput {
   vehicles: ReadonlyMap<string, VehicleFacts>;
   /** `employeeId` values authorised for each vehicle id. */
   authorizedDrivers: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Employees who may travel to a visit without a vehicle. */
+  publicTransportEmployeeIds: ReadonlySet<string>;
 }
 
 export interface Shortfall {
@@ -95,42 +97,43 @@ export interface Shortfall {
 export interface GuardVerdict {
   /**
    * PUBLISHABLE means every due visit is satisfiable. It does not mean
-   * "publish" — the provenance gate still decides that.
+   * "publish" — the provenance gate still decides that, and
+   * {@link requiresManagerReview} can veto automation on its own.
    */
   decision: 'PUBLISHABLE' | 'WITHHOLD';
+  /**
+   * The day is valid but must not publish itself.
+   *
+   * Set when a crew travels by public transport: allowed under policy (c),
+   * and never automatic. Separate from `decision` because "this day is fine"
+   * and "a machine may act on it" are different questions, and collapsing
+   * them is how a review requirement gets lost.
+   */
+  requiresManagerReview: boolean;
   shortfalls: Shortfall[];
   visitsDue: number;
   visitsStaffed: number;
 }
 
 /**
- * PROVISIONAL — awaiting a decision from Thivarrakesh, relayed through Sol.
+ * DECIDED by Thivarrakesh, 26 Sep 2026: policy (c).
  *
- * ULK-C13 says auto-publish requires "exactly one appropriately sized
- * vehicle". The codebase also carries a public-transport allowance —
- * `canUsePublicTransport`, held by six active employees — under which a crew
- * with no vehicle is valid, and PR #72 recorded six such assignments as
- * correct. The two rules contradict each other.
+ * A crew with no vehicle is **valid** when every member is authorised for
+ * public transport — it is not a shortfall and does not withhold the day.
+ * But it may never auto-publish: the day goes to a manager for review.
  *
- * They do not collide on today's data: ULK-C12 confirmed zero no-vehicle
- * assignments across the verified 25 Sep - 24 Oct window. But replenishment
- * runs on days nobody has inspected, and the first public-transport crew it
- * meets would otherwise settle the question by accident.
+ * A crew with no vehicle where any member lacks that authorisation stays a
+ * shortfall, exactly as before.
  *
- * So the reading is named here rather than buried in a branch, and it is the
- * strict one the task text states: a crew with no vehicle is a shortfall and
- * the whole day waits for a manager. That is deliberately conservative — it
- * will withhold days that may be perfectly valid — and it is not shipped:
- * nothing schedules this guard yet.
- *
- * `publication-guard.spec.ts` asserts this value, so the policy cannot be
- * changed without a test saying so out loud. When the decision is relayed,
- * changing it is this constant and that assertion.
+ * This reconciles ULK-C13's "exactly one appropriately sized vehicle" with
+ * the existing `canUsePublicTransport` allowance (six active employees; PR
+ * #72 recorded six such assignments as correct) without either rule
+ * silently overriding the other.
  */
 export const NO_VEHICLE_POLICY = {
-  decision: 'SHORTFALL_PENDING_DECISION',
-  code: 'NO_VEHICLE',
-} as const satisfies { decision: string; code: ShortfallCode };
+  decision: 'PUBLIC_TRANSPORT_VALID_MANAGER_REVIEW',
+  unauthorizedCode: 'NO_VEHICLE',
+} as const satisfies { decision: string; unauthorizedCode: ShortfallCode };
 
 const shortfall = (generatedVisitId: string, code: ShortfallCode): Shortfall => ({
   generatedVisitId,
@@ -157,6 +160,7 @@ export function evaluateDueSet(input: GuardInput): GuardVerdict {
 
   const shortfalls: Shortfall[] = [];
   let staffed = 0;
+  let requiresManagerReview = false;
 
   for (const visit of input.dueVisits) {
     const assignment = byVisit.get(visit.id);
@@ -176,7 +180,20 @@ export function evaluateDueSet(input: GuardInput): GuardVerdict {
     }
 
     if (assignment.vehicleIds.length === 0) {
-      shortfalls.push(shortfall(visit.id, NO_VEHICLE_POLICY.code));
+      // Policy (c). An empty crew is not a public-transport crew, so `every`
+      // on an empty list must not be allowed to wave it through; the crew
+      // size rule above has already flagged it, and it stays a shortfall.
+      const travelsByPublicTransport =
+        assignment.crewEmployeeIds.length > 0 &&
+        assignment.crewEmployeeIds.every((employeeId) =>
+          input.publicTransportEmployeeIds.has(employeeId),
+        );
+
+      if (travelsByPublicTransport) {
+        requiresManagerReview = true;
+      } else {
+        shortfalls.push(shortfall(visit.id, NO_VEHICLE_POLICY.unauthorizedCode));
+      }
     } else if (assignment.vehicleIds.length > 1) {
       shortfalls.push(shortfall(visit.id, 'TOO_MANY_VEHICLES'));
     } else {
@@ -204,6 +221,7 @@ export function evaluateDueSet(input: GuardInput): GuardVerdict {
 
   return {
     decision: shortfalls.length === 0 ? 'PUBLISHABLE' : 'WITHHOLD',
+    requiresManagerReview,
     shortfalls,
     visitsDue: input.dueVisits.length,
     visitsStaffed: staffed,

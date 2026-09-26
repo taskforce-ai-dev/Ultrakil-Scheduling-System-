@@ -28,6 +28,7 @@ const input = (over: Partial<GuardInput> = {}): GuardInput => ({
   assignments: [assignmentFor(VISIT_A)],
   vehicles: new Map([[VAN, { seats: 4 }]]),
   authorizedDrivers: new Map([[VAN, new Set([DRIVER])]]),
+  publicTransportEmployeeIds: new Set<string>(),
   ...over,
 });
 
@@ -215,19 +216,60 @@ describe('NO_VEHICLE_POLICY', () => {
   // while the three-way public-transport decision goes to Thivarrakesh.
   // Explicit means a change to it cannot pass silently, so the value is
   // asserted here rather than only described in a comment.
-  it('is still the strict reading, pending the relayed decision', () => {
+  it('records the decided policy, so a change cannot pass silently', () => {
     expect(NO_VEHICLE_POLICY).toEqual({
-      decision: 'SHORTFALL_PENDING_DECISION',
-      code: 'NO_VEHICLE',
+      decision: 'PUBLIC_TRANSPORT_VALID_MANAGER_REVIEW',
+      unauthorizedCode: 'NO_VEHICLE',
     });
   });
 
-  it('is the code the guard actually emits for a crew with no vehicle', () => {
+  // Policy (c): valid, and never automatic.
+  it('accepts a no-vehicle crew that may use public transport, but forces review', () => {
     const verdict = evaluateDueSet(
-      input({ assignments: [assignmentFor(VISIT_A, { vehicleIds: [] })] }),
+      input({
+        assignments: [assignmentFor(VISIT_A, { vehicleIds: [] })],
+        publicTransportEmployeeIds: new Set([DRIVER]),
+      }),
     );
 
-    expect(codes(verdict)).toEqual([NO_VEHICLE_POLICY.code]);
+    expect(verdict.decision).toBe('PUBLISHABLE');
+    expect(verdict.shortfalls).toEqual([]);
+    expect(verdict.requiresManagerReview).toBe(true);
+  });
+
+  it('still refuses a no-vehicle crew where anyone lacks the authorisation', () => {
+    const verdict = evaluateDueSet(
+      input({
+        dueVisits: [{ id: VISIT_A, requiredCrewSize: 2 }],
+        assignments: [
+          assignmentFor(VISIT_A, { crewEmployeeIds: [DRIVER, MATE], vehicleIds: [] }),
+        ],
+        // MATE is not authorised, so the crew as a whole is not.
+        publicTransportEmployeeIds: new Set([DRIVER]),
+      }),
+    );
+
     expect(verdict.decision).toBe('WITHHOLD');
+    expect(codes(verdict)).toEqual([NO_VEHICLE_POLICY.unauthorizedCode]);
+  });
+
+  // `every` on an empty list is true, which would wave an empty crew through
+  // as a public-transport team. It is not one.
+  it('does not treat an empty crew as a public-transport crew', () => {
+    const verdict = evaluateDueSet(
+      input({
+        assignments: [
+          assignmentFor(VISIT_A, { crewEmployeeIds: [], vehicleIds: [] }),
+        ],
+        publicTransportEmployeeIds: new Set([DRIVER]),
+      }),
+    );
+
+    expect(verdict.decision).toBe('WITHHOLD');
+    expect(codes(verdict).sort()).toEqual(['CREW_TOO_SMALL', 'NO_VEHICLE']);
+  });
+
+  it('leaves an ordinary vehicle day free to publish automatically', () => {
+    expect(evaluateDueSet(input()).requiresManagerReview).toBe(false);
   });
 });

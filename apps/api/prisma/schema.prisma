@@ -1304,7 +1304,22 @@ enum DayCoverageState {
   IN_PROGRESS
 
   /// No visit was due. A quiet day is covered, not a failure.
+  ///
+  /// Only reachable when generation is known to have covered this date for
+  /// every agreement that could place work on it. "No visits exist" on its
+  /// own does not mean nothing is due; it can equally mean nothing has been
+  /// generated yet, and those must never resolve to the same answer.
   NOTHING_DUE
+
+  /// Demand may exist but generation has not reached this date yet, so
+  /// whether anything is due is unknown rather than no.
+  ///
+  /// Recorded as its own state rather than folded into NOTHING_DUE because a
+  /// day nobody has planned and a day with genuinely nothing on it look
+  /// identical in `generated_visits` and are opposite facts. Leaving it
+  /// explicitly unverified is the honest answer until the horizon sweep has
+  /// caught up.
+  AWAITING_GENERATION
 
   /// Every due visit was staffed and published automatically: the gate
   /// returned READY on confirmed provenance with no shortfall.
@@ -1391,6 +1406,16 @@ model DayCoverage {
   claimedAt      DateTime @default(now())
   claimExpiresAt DateTime
   attempt        Int      @default(0)
+
+  /// Fences the claim. A new token is minted every time the day is taken,
+  /// including a takeover of an expired claim, and every state-changing step
+  /// must present it.
+  ///
+  /// Without this, a worker whose lease expired mid-attempt still holds the
+  /// row's stable id: it could finish staffing, publish, and write its
+  /// outcome over the new owner's. The id says which day; only the token says
+  /// which attempt, and an unattended worker needs both.
+  claimToken String? @db.Uuid
 
   resolvedAt DateTime?
 

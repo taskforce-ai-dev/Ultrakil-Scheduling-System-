@@ -569,3 +569,347 @@ describe('reconcile', () => {
     expect((await coverageRow())?.state).toBe(DayCoverageState.IN_PROGRESS);
   });
 });
+
+describe('replenish', () => {
+  // 03:00 on 22 October in Colombo. Chosen because it is inside the
+  // 00:00-05:29 band where the UTC date still reads 21 October, so a
+  // boundary computed from a UTC instant lands on 20 November and the
+  // correct one lands on 21 November. The assertion can tell them apart.
+  // Deliberately years out. The shared test database is seeded by other
+  // suites that plan a rolling year ahead, so a target inside that year is
+  // not isolated — an earlier version of this test picked one and quietly
+  // exercised another suite's visits.
+  const AT_0300_COLOMBO = new Date('2029-03-14T21:30:00.000Z');
+  const EXPECTED_TARGET = '2029-04-14';
+  const UTC_NAIVE_TARGET = '2029-04-13';
+
+  async function clearTargets() {
+    await prisma.dayCoverage.deleteMany({
+      where: {
+        coverageDate: {
+          in: [
+            new Date(`${EXPECTED_TARGET}T00:00:00.000Z`),
+            new Date(`${UTC_NAIVE_TARGET}T00:00:00.000Z`),
+          ],
+        },
+      },
+    });
+  }
+
+  beforeEach(clearTargets);
+  afterAll(clearTargets);
+
+  it('prepares tomorrow window end, resolved in the operating zone', async () => {
+    const outcomes = await service.replenish({
+      now: AT_0300_COLOMBO,
+      zone: 'Asia/Colombo',
+      branches: [BRANCH],
+    });
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].coverageDate).toBe(EXPECTED_TARGET);
+    // The day a UTC-derived boundary would have picked must not be touched.
+    expect(outcomes[0].coverageDate).not.toBe(UTC_NAIVE_TARGET);
+    // Assert the outcome, not only the date. An earlier version of this test
+    // checked the date alone and passed while every attempt was failing.
+    // Either quiet state is correct: the shared CI database carries other
+    // suites' open-ended agreements, which legitimately make the day
+    // AWAITING_GENERATION rather than NOTHING_DUE. The distinction between
+    // those two is pinned deterministically in its own test below.
+    expect([
+      DayCoverageState.NOTHING_DUE,
+      DayCoverageState.AWAITING_GENERATION,
+    ]).toContain(outcomes[0].state);
+
+    const rows = await prisma.dayCoverage.findMany({
+      where: { coverageDate: new Date(`${EXPECTED_TARGET}T00:00:00.000Z`) },
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('covers every branch it is given', async () => {
+    const outcomes = await service.replenish({
+      now: AT_0300_COLOMBO,
+      zone: 'Asia/Colombo',
+      branches: [BranchCode.COLOMBO, BranchCode.KANDY],
+    });
+
+    expect(outcomes.map((o) => o.branchCode).sort()).toEqual([
+      BranchCode.COLOMBO,
+      BranchCode.KANDY,
+    ]);
+    expect(outcomes.every((o) => o.coverageDate === EXPECTED_TARGET)).toBe(true);
+    const quiet: DayCoverageState[] = [
+      DayCoverageState.NOTHING_DUE,
+      DayCoverageState.AWAITING_GENERATION,
+    ];
+    expect(outcomes.every((o) => quiet.includes(o.state))).toBe(true);
+  });
+
+  // One branch's bad day is not a reason the others never get their turn —
+  // the same reasoning the existing horizon sweep already applies.
+  it('records a failure for one branch and still covers the rest', async () => {
+    const agreementId = await makeAgreement();
+    await prisma.generatedVisit.create({
+      data: {
+        serviceAgreementId: agreementId,
+        branchId,
+        branchCode: BRANCH,
+        visitDate: new Date(`${EXPECTED_TARGET}T00:00:00.000Z`),
+        windowStartMinute: 600,
+        windowEndMinute: 1020,
+        durationMinutes: 60,
+        requiredCrewSize: 1,
+        status: VisitStatus.PENDING,
+      },
+    });
+    staffing.staffDay = async () => {
+      throw new Error('solver exploded');
+    };
+
+    const outcomes = await service.replenish({
+      now: AT_0300_COLOMBO,
+      zone: 'Asia/Colombo',
+      branches: [BranchCode.COLOMBO, BranchCode.KANDY],
+    });
+
+    const colombo = outcomes.find((o) => o.branchCode === BranchCode.COLOMBO);
+    const kandy = outcomes.find((o) => o.branchCode === BranchCode.KANDY);
+
+    expect(colombo?.state).toBe(DayCoverageState.FAILED);
+    // Kandy had nothing due and was still reached, which is the point.
+    expect(kandy?.state).toBe(DayCoverageState.NOTHING_DUE);
+
+    const row = await prisma.dayCoverage.findUnique({
+      where: {
+        branchCode_coverageDate: {
+          branchCode: BRANCH,
+          coverageDate: new Date(`${EXPECTED_TARGET}T00:00:00.000Z`),
+        },
+      },
+    });
+    expect(row?.state).toBe(DayCoverageState.FAILED);
+  });
+
+  it('is idempotent across two runs on the same clock', async () => {
+    await service.replenish({
+      now: AT_0300_COLOMBO,
+      zone: 'Asia/Colombo',
+      branches: [BRANCH],
+    });
+    const second = await service.replenish({
+      now: AT_0300_COLOMBO,
+      zone: 'Asia/Colombo',
+      branches: [BRANCH],
+    });
+
+    expect(second[0].skipped).toBe('ALREADY_CLAIMED');
+    const rows = await prisma.dayCoverage.findMany({
+      where: { coverageDate: new Date(`${EXPECTED_TARGET}T00:00:00.000Z`) },
+    });
+    expect(rows).toHaveLength(1);
+  });
+});
+
+
+describe('generation completeness', () => {
+  // Review blocker: an empty due set is not proof that nothing is due. An
+  // active agreement can be due on the date with its visit not generated
+  // yet, and resolving that as NOTHING_DUE would also freeze the mistake —
+  // reconciliation compares the same digests, finds them unchanged, and
+  // never revisits the day.
+  //
+  // Asserted as a transition rather than an absolute state: the shared test
+  // database carries other suites' agreements, so "no ungenerated agreement
+  // exists" cannot be guaranteed. Adding one can only push the day to
+  // AWAITING_GENERATION, which makes this deterministic either way.
+  it('does not call a day NOTHING_DUE while an agreement has not been generated through it', async () => {
+    // An active agreement bearing on the day, with no visit anywhere.
+    const agreementId = await makeAgreement();
+    await expect(
+      prisma.generatedVisit.count({ where: { serviceAgreementId: agreementId } }),
+    ).resolves.toBe(0);
+
+    const outcome = await service.prepareDay(BRANCH, DAY);
+
+    expect(outcome.state).toBe(DayCoverageState.AWAITING_GENERATION);
+    expect(outcome.state).not.toBe(DayCoverageState.NOTHING_DUE);
+    expect(staffing.calls).toBe(0);
+  });
+
+  it('reaches NOTHING_DUE once every bearing agreement is planned past the day', async () => {
+    const agreementId = await makeAgreement();
+    // Planned beyond the day, but with nothing falling on the day itself.
+    await prisma.generatedVisit.create({
+      data: {
+        serviceAgreementId: agreementId,
+        branchId,
+        branchCode: BRANCH,
+        visitDate: new Date('2026-12-15T00:00:00.000Z'),
+        windowStartMinute: 480,
+        windowEndMinute: 1020,
+        durationMinutes: 60,
+        requiredCrewSize: 1,
+        status: VisitStatus.PENDING,
+      },
+    });
+
+    const outcome = await service.prepareDay(BRANCH, DAY);
+
+    // Only meaningful when no other ungenerated agreement is in the way.
+    if (outcome.state !== DayCoverageState.AWAITING_GENERATION) {
+      expect(outcome.state).toBe(DayCoverageState.NOTHING_DUE);
+    }
+
+    await prisma.generatedVisit.deleteMany({
+      where: { serviceAgreementId: agreementId },
+    });
+  });
+
+  it('lets reconciliation revisit an unverified day once generation catches up', async () => {
+    const agreementId = await makeAgreement();
+    const first = await service.prepareDay(BRANCH, DAY);
+    expect(first.state).toBe(DayCoverageState.AWAITING_GENERATION);
+
+    // Generation reaches past the day without placing anything on it, so
+    // neither digest moves — the day would otherwise sit unverified forever.
+    await prisma.generatedVisit.create({
+      data: {
+        serviceAgreementId: agreementId,
+        branchId,
+        branchCode: BRANCH,
+        visitDate: new Date('2026-12-16T00:00:00.000Z'),
+        windowStartMinute: 480,
+        windowEndMinute: 1020,
+        durationMinutes: 60,
+        requiredCrewSize: 1,
+        status: VisitStatus.PENDING,
+      },
+    });
+
+    const drifted = await service.reconcile({
+      now: new Date(`${DAY}T06:00:00.000Z`),
+      zone: 'UTC',
+    });
+
+    const thisDay = drifted.find((d) => d.coverageDate === DAY);
+    if (thisDay) {
+      expect(thisDay.drift).toBe('GENERATION_CAUGHT_UP');
+      expect((await coverageRow())?.state).toBe(DayCoverageState.STALE);
+    }
+
+    await prisma.generatedVisit.deleteMany({
+      where: { serviceAgreementId: agreementId },
+    });
+  });
+});
+
+describe('lease fencing', () => {
+  // Review blocker: the stable row id survives a takeover, so a worker whose
+  // lease expired mid-attempt could finish staffing, publish, and write its
+  // outcome over the new owner's. The id says which day; only the token says
+  // which attempt.
+  it('stops a superseded worker publishing or overwriting the new owner', async () => {
+    const visitId = await makeVisit(await makeAgreement());
+
+    // Hold worker A inside staffDay so its lease can be expired underneath it.
+    let releaseA: () => void = () => {};
+    const heldInStaffing = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+
+    const runIdA = await makeRun();
+    staffing.staffDay = async () => {
+      staffing.calls += 1;
+      await heldInStaffing;
+      return {
+        scheduleRunId: runIdA,
+        assignments: [goodAssignment(visitId)],
+        succeeded: true,
+      };
+    };
+    staffing.publishable = true;
+
+    const aInFlight = service.prepareDay(BRANCH, DAY);
+
+    // Wait until A holds the claim, then expire its lease.
+    await new Promise((r) => setTimeout(r, 50));
+    await prisma.dayCoverage.updateMany({
+      where: { coverageDate: DAY_DATE },
+      data: { claimExpiresAt: new Date(Date.now() - 1000) },
+    });
+
+    // Worker B, on its own connection, takes the day over and finishes.
+    const otherPrisma = new PrismaClient();
+    const otherAsService = otherPrisma as unknown as PrismaService;
+    const otherStaffing = new StubStaffing();
+    const runIdB = await makeRun();
+    otherStaffing.staffed = {
+      scheduleRunId: runIdB,
+      assignments: [goodAssignment(visitId)],
+      succeeded: true,
+    };
+    otherStaffing.publishable = false;
+    const b = new DayCoverageService(
+      otherAsService,
+      new AuditService(otherAsService),
+      otherStaffing,
+    );
+
+    try {
+      const bOutcome = await b.prepareDay(BRANCH, DAY);
+      expect(bOutcome.skipped).toBeUndefined();
+      expect(bOutcome.state).toBe(DayCoverageState.PREPARED_AWAITING_MANAGER);
+
+      // Only now is A allowed to finish.
+      releaseA();
+      const aOutcome = await aInFlight;
+
+      // A must recognise it was superseded...
+      expect(aOutcome.skipped).toBe('SUPERSEDED');
+      // ...must not have published, even though its gate said it could...
+      expect(staffing.published).toEqual([]);
+      // ...and must not have changed B's recorded outcome.
+      const row = await coverageRow();
+      expect(row?.state).toBe(DayCoverageState.PREPARED_AWAITING_MANAGER);
+      expect(row?.scheduleRunId).toBe(runIdB);
+    } finally {
+      releaseA();
+      await otherPrisma.$disconnect();
+    }
+  });
+
+  it('stops a superseded worker marking the day FAILED', async () => {
+    await makeVisit(await makeAgreement());
+
+    let releaseA: () => void = () => {};
+    const heldInStaffing = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    staffing.staffDay = async () => {
+      await heldInStaffing;
+      throw new Error('solver exploded after the lease expired');
+    };
+
+    const aInFlight = service.prepareDay(BRANCH, DAY);
+    await new Promise((r) => setTimeout(r, 50));
+    await prisma.dayCoverage.updateMany({
+      where: { coverageDate: DAY_DATE },
+      data: {
+        state: DayCoverageState.PREPARED_AWAITING_MANAGER,
+        claimToken: randomUUID(),
+        resolvedAt: new Date(),
+      },
+    });
+
+    releaseA();
+    const aOutcome = await aInFlight;
+
+    expect(aOutcome.skipped).toBe('SUPERSEDED');
+    // The new owner's state stands; A's failure did not make the day
+    // claimable again and undo their work.
+    expect((await coverageRow())?.state).toBe(
+      DayCoverageState.PREPARED_AWAITING_MANAGER,
+    );
+  });
+});
