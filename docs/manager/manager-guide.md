@@ -13,15 +13,13 @@ evidence retained only in the protected VPS release folder. Small visual
 details can differ from these examples, but the workflows and labels match the
 current release.
 
-**Current staging baseline (24 September 2026):** application release
-`500daf80a85aea18ca5e5d74d2552739b7e3fb57` (PR #75) plus ingress update
-`a8174accb7d99248ba415fe78bb227c49aac23e9` (PR #76). All 11 manager routes
-passed the authenticated deployed smoke with zero console, page or API HTTP
-errors. The approved repair replaced 11 future published assignments and the
-post-repair audit found zero employee or vehicle overlaps, zero short crews,
-zero missing PMS supervisors and at most one vehicle per assignment. Before a
-production handover, management still needs to confirm uncertain site branches
-and real opening hours described in [Known limitations](known-limitations.md).
+**Verified staging baseline (25 September 2026):** application release
+`47dc253d5e731ad3d642a8ac4c9415c4a3e96a13` (PRs #81–#83 integrated),
+with a manually staffed 25 October buffer. The 26 September–25 October view
+had 149 visits with no missing crew or transport when checked. That is a fixed
+staging snapshot, **not an automatic rolling-staffing guarantee or production
+sign-off**. Management still needs to confirm uncertain site branches and real
+opening hours described in [Known limitations](known-limitations.md).
 
 **What this covers today:** the manager portal (this web app), used from a
 desktop or laptop browser. There is no phone app yet — technicians and PMS
@@ -85,6 +83,45 @@ without deleting it — useful if a customer temporarily suspends service.
 Service agreements describe recurring *demand*; they don't create anything
 on the calendar by themselves. Go to **Visit Calendar → Generate visits**.
 
+### Reading the rolling 30-day Calendar
+
+Open **Calendar → 30 days** to see today through the next 29 Colombo calendar
+days. The visit tiles show the current planning view, including drafts; a crew
+on a tile is **not** proof that the crew has been dispatched. The separate
+published-coverage banner answers that question. A green banner means each day
+in the visible window has a completed staffing verification and published
+dispatch for every due visit (or a verified day with nothing due). Its
+covered-through date is the last uninterrupted verified day.
+
+If the banner says **Prepared, awaiting manager review**, proposals exist but
+have not been published. Open **Assign Crew**, inspect the run and its
+source-data warnings, and publish only after a real manager has reviewed them,
+acknowledged the warnings and entered a reason. The automatic worker must not
+acknowledge provenance on your behalf. **Staffing shortfall** points to the
+first affected day and the **Unassigned Visits** queue. **Coverage has not
+been verified** means the day has not had a successful current sweep — even
+if the calendar happens to show no visits. **Automatic staffing needs
+attention** means the sweep failed; ask an administrator to investigate before
+treating the day as ready. If the coverage service itself is unavailable,
+the Calendar explicitly withholds an all-clear.
+**Automatic staffing is checking this day** means the worker has not resolved
+the day yet. **Coverage needs rechecking** means the visit set or publication
+changed after the previous verification; do not treat the old result as an
+all-clear.
+
+The intended rolling policy is to prepare a newly exposed day before it enters
+the visible window. The system may publish it unattended **only** when every
+due visit has a valid crew, one suitable vehicle and authorized driver, all
+other hard rules pass, and source provenance is confirmed. Otherwise it
+publishes none of that day's proposals and alerts a manager. New agreements
+add demand and require the affected day to be rechecked; an older green sweep
+must not stand for the new work. An audited manual date/crew/vehicle override
+remains available from the existing editor, with a reason and all hard rules
+still enforced.
+
+**Rollout note:** this banner and automatic replenishment are under ULK-O13/O14
+and ULK-C13 review. The staging baseline named above does not yet contain them.
+
 ![Generate visits preview](uat/screenshots/generate-visits-preview.png)
 
 This is always a **preview first** — nothing is written until you click
@@ -93,11 +130,11 @@ a safe change to an existing visit, what's no longer required (because an
 agreement changed or was paused), and what's protected and won't be
 touched (see "Locks," section 6).
 
-**Generation shows up in Schedule History.** Confirming a run writes a record
+**Generation shows up in Assign Crew.** Confirming a run writes a record
 there, badged **Visit generation** and counted as *"105 visits generated."* It
 is not a schedule: generation creates the visits, and staffs nobody. There is
 nothing to publish on it, and no Publish button on it. To staff those visits,
-solve the range from the Schedule History page as usual.
+solve the range from the Assign Crew page as usual.
 
 **What range gets generated, and what each view can plan.** A run plans only
 the periods it can see **whole**, and a period is a whole week (Monday to
@@ -271,7 +308,7 @@ and changed.
 
 Under each visit the board names the schedule run its assignment came from by
 the weeks that run covered and when it was published — *"Published schedule
-15–21 Sep, published 15 Sep 20:05"* — and links to Schedule History for the
+15–21 Sep, published 15 Sep 20:05"* — and links to Assign Crew for the
 rest of that run's story.
 
 In the editor:
@@ -377,11 +414,11 @@ overwriting it.
 
 ## 8. Publishing a schedule
 
-Go to **Schedule History**. This is where the automated optimizer runs —
+Go to **Assign Crew** (the `/schedule-history` route). This is where the automated optimizer runs —
 give it a date range and a branch, click **Start run**, and it proposes a
 schedule.
 
-![Schedule History](uat/screenshots/schedule-history-publish.png)
+![Assign Crew schedule-run screen](uat/screenshots/schedule-history-publish.png)
 
 A run stays a **draft** until you review it and click **Publish**.
 Publishing is one-way: a published run is never edited in place — running

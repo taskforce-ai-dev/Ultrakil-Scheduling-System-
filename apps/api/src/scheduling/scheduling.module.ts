@@ -3,6 +3,8 @@ import { ConfigService } from '@nestjs/config';
 
 import { CalendarController } from './calendar/calendar.controller';
 import { CalendarService } from './calendar/calendar.service';
+import { CoverageController } from './coverage-status/coverage.controller';
+import { COVERAGE_SWEEP_READER, CoverageService, UnavailableCoverageSweepReader } from './coverage-status/coverage.service';
 import { OperationsController } from './operations/operations.controller';
 import { OperationsService } from './operations/operations.service';
 import { PublishingService } from './optimizer/publishing.service';
@@ -62,6 +64,7 @@ export class SchedulingModule {
         AssignmentsController,
         ScheduleRunsController,
         CalendarController,
+        CoverageController,
         OperationsController,
         PublishedAssignmentRepairController,
         ...(qstash ? [ScheduleRunQStashController] : []),
@@ -77,6 +80,8 @@ export class SchedulingModule {
         ScheduleRunDispatchService,
         PublishingService,
         CalendarService,
+        CoverageService,
+        { provide: COVERAGE_SWEEP_READER, useClass: UnavailableCoverageSweepReader },
         OperationsService,
         PublishedAssignmentRepairService,
         PublishedAssignmentRepairPlannerAdapter,

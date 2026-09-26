@@ -272,6 +272,40 @@ beforeAll(async () => {
   siteId = site.body.id;
 });
 
+describe('read-only rolling coverage', () => {
+  it('returns unchecked, not a false all-clear, without a durable sweep', async () => {
+    const response = await request(http)
+      .get('/api/scheduling/coverage')
+      .set(auth(managerToken))
+      .query({ from: HORIZON.from, to: HORIZON.to });
+    expect(response.status).toBe(200);
+    expect(response.body.days).toHaveLength(7);
+    expect(response.body.fullyPublished).toBe(false);
+    expect(response.body.coveredThrough).toBeNull();
+    expect(response.body.boundaryDay).toMatchObject({ date: HORIZON.to, state: 'UNCHECKED' });
+    expect(JSON.stringify(response.body)).not.toContain(`C07 Customer ${suffix}`);
+  });
+
+  it.each([
+    { from: '2026-09-13', to: '2026-09-07' },
+    { from: '2026-09-07', to: '2026-10-09' },
+    { from: '2026-09-7', to: '2026-09-13' },
+  ])('rejects invalid coverage range %#', async (range) => {
+    const response = await request(http)
+      .get('/api/scheduling/coverage')
+      .set(auth(adminToken))
+      .query(range);
+    expect(response.status).toBe(400);
+  });
+
+  it('requires authentication for the coverage read model', async () => {
+    const response = await request(http)
+      .get('/api/scheduling/coverage')
+      .query(HORIZON);
+    expect(response.status).toBe(401);
+  });
+});
+
 beforeEach(async () => {
   await cleanupCapturedIds([supervisorId, technicianId], (ids) =>
     prisma.assignment.deleteMany({

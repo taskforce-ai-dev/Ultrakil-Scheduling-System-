@@ -4,12 +4,13 @@ import userEvent from "@testing-library/user-event";
 
 vi.mock("@/lib/api-client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client");
-  return { ...actual, fetchCalendar: vi.fn() };
+  return { ...actual, fetchCalendar: vi.fn(), fetchCoverage: vi.fn() };
 });
 
 import CalendarPage from "../page";
-import { fetchCalendar } from "@/lib/api-client";
+import { fetchCalendar, fetchCoverage } from "@/lib/api-client";
 import { buildCalendarAssignment, buildCalendarEntry } from "@/test/fixtures";
+import { buildCoverageResponse } from "@/test/coverage-fixture";
 import { daysInView, formatLongDate, todayColomboIso, type CalendarView } from "@/lib/calendar";
 
 const unassigned = buildCalendarEntry({
@@ -61,6 +62,8 @@ const published = buildCalendarEntry({
 
 beforeEach(() => {
   vi.mocked(fetchCalendar).mockReset();
+  vi.mocked(fetchCoverage).mockReset();
+  vi.mocked(fetchCoverage).mockResolvedValue(buildCoverageResponse());
   vi.mocked(fetchCalendar).mockResolvedValue({
     items: [unassigned, published],
     total: 2,
@@ -68,6 +71,53 @@ beforeEach(() => {
 });
 
 describe("CalendarPage", () => {
+  it('queries the same rolling window for published coverage and warns when unchecked', async () => {
+    render(<CalendarPage />);
+    expect(fetchCoverage).toHaveBeenCalledWith({ from: todayColomboIso(), to: daysFromToday(29) });
+    expect(await screen.findByRole('alert', { name: 'Coverage needs attention' }))
+      .toHaveTextContent('Coverage has not been verified');
+  });
+
+  it('discards a late coverage response from a previous range', async () => {
+    const user = userEvent.setup();
+    const older = deferred<ReturnType<typeof buildCoverageResponse>>();
+    const newer = deferred<ReturnType<typeof buildCoverageResponse>>();
+    vi.mocked(fetchCoverage).mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    render(<CalendarPage />);
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await act(async () => {
+      newer.resolve(buildCoverageResponse({
+        windowStart: daysFromToday(30), windowEnd: daysFromToday(59),
+        coveredThrough: daysFromToday(59), fullyPublished: true,
+        boundaryDay: { date: daysFromToday(59), state: 'NOTHING_DUE',
+          visitsDue: 0, visitsPublished: 0, visitsPrepared: 0, shortfalls: [] },
+        days: Array.from({ length: 30 }, (_, index) => ({ date: daysFromToday(30 + index),
+          state: 'NOTHING_DUE' as const,
+          visitsDue: 0, visitsPublished: 0, visitsPrepared: 0, shortfalls: [] })),
+      }));
+    });
+    expect(await screen.findByRole('status', { name: 'Published coverage' })).toHaveTextContent(daysFromToday(59).slice(0, 4));
+    await act(async () => {
+      older.resolve(buildCoverageResponse());
+    });
+    expect(screen.getByRole('status', { name: 'Published coverage' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert', { name: 'Coverage needs attention' })).not.toBeInTheDocument();
+  });
+
+  it('withholds an all-clear from a response for the wrong window', async () => {
+    vi.mocked(fetchCoverage).mockResolvedValue(buildCoverageResponse({
+      windowStart: '2026-01-01', windowEnd: '2026-01-30',
+      coveredThrough: '2026-01-30', fullyPublished: true,
+      boundaryDay: { date: '2026-01-30', state: 'COVERED_PUBLISHED',
+        visitsDue: 0, visitsPublished: 0, visitsPrepared: 0, shortfalls: [] },
+      days: [{ date: '2026-01-30', state: 'COVERED_PUBLISHED',
+        visitsDue: 0, visitsPublished: 0, visitsPrepared: 0, shortfalls: [] }],
+    }));
+    render(<CalendarPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Published coverage status is unavailable');
+    expect(screen.queryByRole('status', { name: 'Published coverage' })).not.toBeInTheDocument();
+  });
+
   it("opens on an exact 30-day plan with crew and vehicle visible for each visit", async () => {
     render(<CalendarPage />);
 
@@ -369,6 +419,24 @@ describe("CalendarPage", () => {
     expect(fetchCalendar).toHaveBeenLastCalledWith(
       expect.objectContaining({ branchCode: "KANDY" }),
     );
+  });
+
+  it("clears old branch counts while the replacement day is loading", async () => {
+    const user = userEvent.setup();
+    const next = deferred<Awaited<ReturnType<typeof fetchCalendar>>>();
+    vi.mocked(fetchCalendar).mockResolvedValueOnce({ items: [published], total: 1 })
+      .mockReturnValueOnce(next.promise);
+    render(<CalendarPage />);
+    await screen.findByText("Cinnamon Grand Colombo");
+    expect(screen.getByText("Post (1)")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Branch"));
+    await user.click(await screen.findByRole("option", { name: "Kandy" }));
+    expect(screen.getByText("Post (0)")).toBeInTheDocument();
+    expect(screen.queryByText("Cinnamon Grand Colombo")).not.toBeInTheDocument();
+
+    await act(async () => next.resolve({ items: [unassigned], total: 1 }));
+    expect(screen.getByText("Needs a crew (1)")).toBeInTheDocument();
   });
 
   it("filters by stage on the client", async () => {
