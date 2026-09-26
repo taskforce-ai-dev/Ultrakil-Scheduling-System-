@@ -1212,6 +1212,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scheduling/coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verified published coverage for a bounded rolling window
+         * @description Read-only. Drafts never count as dispatch. A day without a current completed staffing sweep is UNCHECKED, even when it has no generated visits.
+         */
+        get: operations["CoverageController_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/operations/day": {
         parameters: {
             query?: never;
@@ -2623,6 +2643,33 @@ export interface components {
         CalendarResponseDto: {
             items: components["schemas"]["CalendarEntryDto"][];
             total: number;
+        };
+        CoverageShortfallDto: {
+            code: string;
+            message: string;
+        };
+        CoverageDayDto: {
+            /** Format: date */
+            date: string;
+            /** @enum {string} */
+            state: "UNCHECKED" | "IN_PROGRESS" | "NOTHING_DUE" | "FAILED" | "SHORTFALL" | "STALE" | "PREPARED_AWAITING_MANAGER" | "COVERED_PUBLISHED";
+            visitsDue: number;
+            visitsPublished: number;
+            visitsPrepared: number;
+            shortfalls: components["schemas"]["CoverageShortfallDto"][];
+        };
+        CoverageResponseDto: {
+            /** Format: date */
+            windowStart: string;
+            /** Format: date */
+            windowEnd: string;
+            /** @enum {string|null} */
+            branchCode: "COLOMBO" | "KANDY" | null;
+            /** Format: date */
+            coveredThrough: string | null;
+            fullyPublished: boolean;
+            boundaryDay: components["schemas"]["CoverageDayDto"];
+            days: components["schemas"]["CoverageDayDto"][];
         };
         OperationsSummaryDto: {
             total: number;
@@ -5398,6 +5445,36 @@ export interface operations {
             };
             /** @description Missing or invalid token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    CoverageController_list: {
+        parameters: {
+            query: {
+                branchCode?: "COLOMBO" | "KANDY";
+                to: string;
+                from: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageResponseDto"];
+                };
+            };
+            /** @description Invalid date or range wider than 31 days. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

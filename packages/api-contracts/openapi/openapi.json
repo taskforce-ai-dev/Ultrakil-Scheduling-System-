@@ -3289,6 +3289,68 @@
         ]
       }
     },
+    "/api/scheduling/coverage": {
+      "get": {
+        "description": "Read-only. Drafts never count as dispatch. A day without a current completed staffing sweep is UNCHECKED, even when it has no generated visits.",
+        "operationId": "CoverageController_list",
+        "parameters": [
+          {
+            "name": "branchCode",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "COLOMBO",
+                "KANDY"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "date",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid date or range wider than 31 days."
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Verified published coverage for a bounded rolling window",
+        "tags": [
+          "coverage"
+        ]
+      }
+    },
     "/api/operations/day": {
       "get": {
         "description": "Server-calculated dispatch state. Published work is dispatch truth; draft proposals remain separate.",
@@ -7470,6 +7532,113 @@
         "required": [
           "items",
           "total"
+        ]
+      },
+      "CoverageShortfallDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "CoverageDayDto": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "UNCHECKED",
+              "IN_PROGRESS",
+              "NOTHING_DUE",
+              "FAILED",
+              "SHORTFALL",
+              "STALE",
+              "PREPARED_AWAITING_MANAGER",
+              "COVERED_PUBLISHED"
+            ]
+          },
+          "visitsDue": {
+            "type": "number"
+          },
+          "visitsPublished": {
+            "type": "number"
+          },
+          "visitsPrepared": {
+            "type": "number"
+          },
+          "shortfalls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageShortfallDto"
+            }
+          }
+        },
+        "required": [
+          "date",
+          "state",
+          "visitsDue",
+          "visitsPublished",
+          "visitsPrepared",
+          "shortfalls"
+        ]
+      },
+      "CoverageResponseDto": {
+        "type": "object",
+        "properties": {
+          "windowStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "windowEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "branchCode": {
+            "type": "string",
+            "enum": [
+              "COLOMBO",
+              "KANDY"
+            ],
+            "nullable": true
+          },
+          "coveredThrough": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "fullyPublished": {
+            "type": "boolean"
+          },
+          "boundaryDay": {
+            "$ref": "#/components/schemas/CoverageDayDto"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageDayDto"
+            }
+          }
+        },
+        "required": [
+          "windowStart",
+          "windowEnd",
+          "branchCode",
+          "coveredThrough",
+          "fullyPublished",
+          "boundaryDay",
+          "days"
         ]
       },
       "OperationsSummaryDto": {
