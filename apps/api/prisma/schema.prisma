@@ -508,9 +508,9 @@ model ServiceSite {
   addressLine String?
   city        String?
 
-  branchId   String     @db.Uuid
-  branch     Branch     @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  branchCode BranchCode
+  branchId         String               @db.Uuid
+  branch           Branch               @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  branchCode       BranchCode
   branchConfidence SiteBranchConfidence @default(UNCERTAIN)
   branchSource     SiteBranchSource     @default(FALLBACK_DEFAULT)
 
@@ -554,7 +554,7 @@ model SiteOperatingHours {
   /// Actual hours are manager-entered facts. No row is fabricated for the
   /// master schedule's missing hours; the generation fallback is recorded on
   /// GeneratedVisit instead.
-  provenance DataProvenance @default(MANAGER_CONFIRMED)
+  provenance     DataProvenance @default(MANAGER_CONFIRMED)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -624,11 +624,11 @@ model ServiceAgreement {
   frequencyInterval Int @default(1)
 
   /// Crew size is variable per agreement.
-  crewSize        Int
-  durationMinutes Int
+  crewSize           Int
+  durationMinutes    Int
   crewSizeProvenance DataProvenance @default(UNKNOWN)
   durationProvenance DataProvenance @default(UNKNOWN)
-  dayRuleProvenance DataProvenance @default(UNKNOWN)
+  dayRuleProvenance  DataProvenance @default(UNKNOWN)
 
   /// Service window within the day, as minutes from midnight. Null falls back to
   /// the site's operating hours for that weekday.
@@ -832,9 +832,10 @@ model GeneratedVisit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assignments       Assignment[]
-  unassignedReasons VisitUnassignedReason[]
-  repairItems       PublishedAssignmentRepairItem[]
+  assignments        Assignment[]
+  unassignedReasons  VisitUnassignedReason[]
+  repairItems        PublishedAssignmentRepairItem[]
+  coverageShortfalls DayCoverageShortfall[]
 
   // Idempotency: one visit per agreement, date and start time. Generating the
   // same horizon twice therefore updates rather than duplicating.
@@ -905,8 +906,8 @@ model Assignment {
   supersedesAssignment   Assignment? @relation("AssignmentSupersession", fields: [supersedesAssignmentId], references: [id], onDelete: Restrict)
   supersededByAssignment Assignment? @relation("AssignmentSupersession")
 
-  publishedByRepairId String?                      @db.Uuid
-  publishedByRepair   PublishedAssignmentRepair?  @relation("RepairPublishedAssignments", fields: [publishedByRepairId], references: [id], onDelete: Restrict)
+  publishedByRepairId String?                    @db.Uuid
+  publishedByRepair   PublishedAssignmentRepair? @relation("RepairPublishedAssignments", fields: [publishedByRepairId], references: [id], onDelete: Restrict)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1004,7 +1005,7 @@ enum RepairBunchingStatus {
 model RepairBunchingBatch {
   id String @id @default(uuid()) @db.Uuid
 
-  idempotencyKey String @unique
+  idempotencyKey String  @unique
   requestHash    String
   planHash       String
   reason         String?
@@ -1163,10 +1164,11 @@ model ScheduleRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  generatedVisits   GeneratedVisit[]        @relation("ScheduleRunGeneratedVisits")
+  generatedVisits   GeneratedVisit[]           @relation("ScheduleRunGeneratedVisits")
   assignments       Assignment[]
   unassignedReasons VisitUnassignedReason[]
   auditEvents       AuditEvent[]
+  dayCoverage       DayCoverage[]
   dispatchOutbox    ScheduleRunDispatchOutbox?
 
   @@index([status, createdAt])
@@ -1184,12 +1186,12 @@ model ScheduleRunDispatchOutbox {
   scheduleRun   ScheduleRun @relation(fields: [scheduleRunId], references: [id], onDelete: Cascade)
 
   provider ScheduleRunDispatchProvider
-  status   ScheduleRunDispatchStatus @default(PENDING)
+  status   ScheduleRunDispatchStatus   @default(PENDING)
 
-  messageId String?
-  attempts  Int @default(0)
+  messageId     String?
+  attempts      Int       @default(0)
   lastAttemptAt DateTime?
-  lastError String?
+  lastError     String?
 
   /// A signed QStash failure callback is recorded before the active lease is
   /// touched. If that lease is still live, the callback can retry without
@@ -1275,4 +1277,144 @@ model AuditEvent {
   @@index([entityType, entityId, createdAt])
   @@index([action, createdAt])
   @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------------
+// Rolling 30-day coverage (ULK-C13)
+// ---------------------------------------------------------------------------
+
+/// What the daily replenishment decided about one branch-day.
+///
+/// These names are the manager's, not the job's, because this state is what
+/// the portal renders and what ULK-O13/O14 read. The approved policy is:
+/// prepare automatically; publish automatically only when the whole due set
+/// passes every hard rule AND the existing publication gate is READY with
+/// confirmed provenance; otherwise publish nothing and alert a manager. The
+/// outcomes below are that policy enumerated.
+///
+/// The distinction between PREPARED_AWAITING_MANAGER and COVERED_PUBLISHED is
+/// load-bearing and must never be collapsed. `CalendarService`'s
+/// `CALENDAR_STATUSES` (calendar/calendar.service.ts:14) includes DRAFT and
+/// PROPOSED, so a prepared day already looks fully crewed on the Calendar
+/// while nothing has been published. A crew/vehicle summary is not
+/// publication proof; only COVERED_PUBLISHED is.
+enum DayCoverageState {
+  /// Claimed, attempt in flight. Persisting past `claimExpiresAt` means the
+  /// worker died, not that the work is slow.
+  IN_PROGRESS
+
+  /// No visit was due. A quiet day is covered, not a failure.
+  NOTHING_DUE
+
+  /// Every due visit was staffed and published automatically: the gate
+  /// returned READY on confirmed provenance with no shortfall.
+  COVERED_PUBLISHED
+
+  /// Every due visit was staffed, but publication needs a real manager —
+  /// today that is every day carrying work, because no service window or site
+  /// branch in the database is confirmed yet. Drafts are staged and waiting.
+  /// The manager acknowledges the displayed warnings and gives a reason; the
+  /// worker never supplies either.
+  PREPARED_AWAITING_MANAGER
+
+  /// At least one due visit could not be staffed compliantly, so nothing for
+  /// this day was published. `shortfalls` says which visits and why.
+  SHORTFALL
+
+  /// The due set changed after this day was resolved — a new agreement, or an
+  /// agreement edited into this date. The day must be prepared again. A
+  /// coverage row is a record of one evaluation, never a permanent claim that
+  /// the day is finished.
+  STALE
+
+  /// The attempt errored. Separate from SHORTFALL: a shortfall is an answer
+  /// about the schedule, this is an answer about the job.
+  FAILED
+}
+
+/// One branch-day of the rolling window, and what replenishment made of it.
+///
+/// A day inside the window with no row here is UNCHECKED — never evaluated.
+/// That is deliberately the absence of a row rather than a seventh state, so
+/// a day cannot be silently reported as checked by a row nobody wrote.
+///
+/// The unique key is the mutual exclusion: two replenishers racing the same
+/// day both insert, one wins, the other stops. A status column read and then
+/// written would be a read-modify-write with a race inside it.
+model DayCoverage {
+  id String @id @default(uuid()) @db.Uuid
+
+  branchCode BranchCode
+
+  /// The civil date in Asia/Colombo, matching `GeneratedVisit.visitDate`.
+  /// Resolved through the configured-zone helper, never from a UTC instant:
+  /// `toDateOnly()` returns the UTC date and the app runs at UTC+5:30, so
+  /// between local midnight and 05:30 it names the previous day.
+  coverageDate DateTime @db.Date
+
+  state DayCoverageState @default(IN_PROGRESS)
+
+  /// Visits due when the attempt read them, and how many ended up staffed.
+  /// Equal on every state except SHORTFALL, STALE and FAILED.
+  visitsDue     Int @default(0)
+  visitsStaffed Int @default(0)
+
+  /// Fingerprint of the due set this evaluation was made against: the sorted
+  /// due visit ids, hashed. Demand can arrive after a day is resolved — a new
+  /// agreement generating a visit onto a date already marked COVERED — and a
+  /// unique key alone would call that day finished forever. Reconciliation
+  /// recomputes this; a mismatch moves the day to STALE and it is prepared
+  /// again. Null only while IN_PROGRESS, before the first read completes.
+  dueSetDigest String?
+
+  /// The run that staffed the day, once there is one.
+  scheduleRunId String?      @db.Uuid
+  scheduleRun   ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+
+  /// Held as a lease rather than a flag, so a worker killed mid-attempt does
+  /// not strand the day: a claim past its expiry may be taken again, and
+  /// `attempt` records how often that happened.
+  claimedAt      DateTime @default(now())
+  claimExpiresAt DateTime
+  attempt        Int      @default(0)
+
+  resolvedAt DateTime?
+
+  shortfalls DayCoverageShortfall[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchCode, coverageDate])
+  @@index([coverageDate, state])
+  @@index([state, claimExpiresAt])
+  @@map("day_coverage")
+}
+
+/// Why one due visit could not be staffed, in words a manager can act on.
+///
+/// A visit can fail several rules at once and a manager deserves all of them,
+/// so the key is the visit and the code together, not the visit alone. Reason
+/// codes reuse the existing eligibility vocabulary, so the same words appear
+/// here and on Unassigned Visits.
+model DayCoverageShortfall {
+  id String @id @default(uuid()) @db.Uuid
+
+  dayCoverageId String      @db.Uuid
+  dayCoverage   DayCoverage @relation(fields: [dayCoverageId], references: [id], onDelete: Cascade)
+
+  generatedVisitId String         @db.Uuid
+  generatedVisit   GeneratedVisit @relation(fields: [generatedVisitId], references: [id], onDelete: Cascade)
+
+  reasonCode String
+
+  /// Manager-readable and free of personal data: it names the rule that could
+  /// not be met, never an employee.
+  message String
+
+  createdAt DateTime @default(now())
+
+  @@unique([dayCoverageId, generatedVisitId, reasonCode])
+  @@index([generatedVisitId])
+  @@map("day_coverage_shortfalls")
 }
