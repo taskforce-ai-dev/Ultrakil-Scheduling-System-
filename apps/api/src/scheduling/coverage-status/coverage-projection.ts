@@ -32,6 +32,12 @@ export interface CoverageDay {
 }
 
 const REASON_MESSAGES: Record<string, string> = {
+  NOT_STAFFED: 'A due visit has no assigned crew.',
+  CREW_TOO_SMALL: 'Fewer people are assigned than this visit requires.',
+  NO_VEHICLE: 'No vehicle is assigned to this visit.',
+  TOO_MANY_VEHICLES: 'More than one vehicle is assigned to this visit.',
+  VEHICLE_CAPACITY_EXCEEDED: 'The assigned crew does not fit in the vehicle.',
+  VEHICLE_CAPACITY_UNKNOWN: 'The vehicle seat count must be confirmed before use.',
   NO_PMS_SUPERVISOR_AVAILABLE: 'No qualified PMS supervisor is available.',
   NO_AUTHORIZED_DRIVER: 'No authorized driver is available for the crew and vehicle.',
   NO_VEHICLE_AVAILABLE: 'No suitable vehicle is available.',

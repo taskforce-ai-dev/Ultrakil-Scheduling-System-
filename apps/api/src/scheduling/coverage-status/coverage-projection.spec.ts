@@ -100,6 +100,18 @@ describe('rolling coverage projection', () => {
     }]);
   });
 
+  it('keeps C13 staffing reason codes manager-readable without stored free text', () => {
+    const result = projectCoverageDay('2026-10-26', [visit('a')], {
+      state: 'SHORTFALL', verifiedAgainstCurrentData: true,
+      shortfallCodes: ['NOT_STAFFED', 'CREW_TOO_SMALL', 'VEHICLE_CAPACITY_UNKNOWN'],
+    });
+    expect(result.shortfalls).toEqual([
+      { code: 'CREW_TOO_SMALL', message: 'Fewer people are assigned than this visit requires.' },
+      { code: 'NOT_STAFFED', message: 'A due visit has no assigned crew.' },
+      { code: 'VEHICLE_CAPACITY_UNKNOWN', message: 'The vehicle seat count must be confirmed before use.' },
+    ]);
+  });
+
   it('shows an active attempt without pretending it is verified', () => {
     expect(projectCoverageDay('2026-10-26', [], {
       state: 'IN_PROGRESS', verifiedAgainstCurrentData: false, shortfallCodes: [],
