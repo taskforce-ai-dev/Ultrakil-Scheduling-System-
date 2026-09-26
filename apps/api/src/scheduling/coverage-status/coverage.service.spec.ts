@@ -8,14 +8,29 @@ const query = { from: '2026-09-26', to: '2026-10-25' };
 function setup(visits: unknown[] = [], sweeps: unknown[] = []) {
   const findMany = jest.fn().mockResolvedValue(visits);
   const reader: CoverageSweepReader = { list: jest.fn().mockResolvedValue(sweeps) };
+  const transaction = jest.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback({ generatedVisit: { findMany } }));
   const service = new CoverageService(
-    { generatedVisit: { findMany } } as unknown as PrismaService,
+    { $transaction: transaction } as unknown as PrismaService,
     reader,
   );
   return { service, findMany, reader };
 }
 
 describe('read-only rolling coverage', () => {
+  it('reads visit counts and sweep verification from one repeatable-read snapshot', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const tx = { generatedVisit: { findMany } };
+    const transaction = jest.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx));
+    const reader: CoverageSweepReader = { list: jest.fn().mockResolvedValue([]) };
+    const service = new CoverageService({ $transaction: transaction } as unknown as PrismaService, reader);
+
+    await service.list({ from: query.from, to: query.from, branchCode: BranchCode.COLOMBO });
+
+    expect(transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'RepeatableRead' });
+    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(reader.list).toHaveBeenCalledWith(tx, expect.any(Date), expect.any(Date), BranchCode.COLOMBO);
+  });
+
   it('rejects reversed and wider-than-31-day ranges before touching the database', async () => {
     const { service, findMany } = setup();
     await expect(service.list({ from: query.to, to: query.from })).rejects.toThrow();

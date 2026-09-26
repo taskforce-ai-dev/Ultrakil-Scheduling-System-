@@ -31,7 +31,7 @@ export interface CoverageSweepRecord extends CoverageSweepFact {
 }
 
 export interface CoverageSweepReader {
-  list(from: Date, to: Date, branchCode?: BranchCode): Promise<CoverageSweepRecord[]>;
+  list(tx: Prisma.TransactionClient, from: Date, to: Date, branchCode?: BranchCode): Promise<CoverageSweepRecord[]>;
 }
 
 /** Safe until the C13 durable sweep table and reader are integrated. */
@@ -78,15 +78,21 @@ export class CoverageService {
       status: { not: VisitStatus.CANCELLED },
       ...(query.branchCode ? { branchCode: query.branchCode } : {}),
     };
-    const [visits, sweepRows] = await Promise.all([
-      this.prisma.generatedVisit.findMany({
-        where,
-        select: VISIT_SELECT,
-        orderBy: [{ visitDate: 'asc' }, { id: 'asc' }],
-        take: MAX_VISITS + 1,
-      }),
-      this.sweeps.list(from, to, query.branchCode),
-    ]);
+    // A sweep's fingerprints and the visible visit counts must describe the
+    // same database instant. Otherwise a concurrent publish or new agreement
+    // can leave an all-clear beside counts from another state of the day.
+    const [visits, sweepRows] = await this.prisma.$transaction(
+      (tx) => Promise.all([
+        tx.generatedVisit.findMany({
+          where,
+          select: VISIT_SELECT,
+          orderBy: [{ visitDate: 'asc' }, { id: 'asc' }],
+          take: MAX_VISITS + 1,
+        }),
+        this.sweeps.list(tx, from, to, query.branchCode),
+      ]),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
     if (visits.length > MAX_VISITS) {
       throw new AppException(
         'VALIDATION_FAILED',
